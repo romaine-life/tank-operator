@@ -564,6 +564,19 @@ All metric names are prefixed `tank_`. The full namespace:
   did not absorb the rotated leaf" and "SDS stats are no longer observable."
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
+- `tank_nats_auth_callout_total{result}` — outcomes of the per-session NATS
+  credential issuer (`backend-go/cmd/nats-auth-callout`, #1128). `result` is
+  bounded to `session` (per-session JWT issued), `legacy` (shared fleet-token
+  transition grant), `denied_no_credentials`, `denied_token_invalid`,
+  `denied_pod_unbound`, `denied_identity_mismatch`, and `error`. The callout
+  has no Service — it answers NATS `$SYS.REQ.USER.AUTH`, not HTTP — so it is
+  scraped by the `tank-nats-auth-callout` **PodMonitor**, not a ServiceMonitor.
+  `TankNatsAuthCalloutDenials` alerts on the rejection/error results (the #1148
+  new-pod auth-failure class that wedges submitted turns);
+  `TankNatsAuthCalloutLegacyTokenInUse` surfaces the `legacy` result, which is
+  both the migration audit checklist's "old path is being used again" counter
+  and the #1128 stage-4 gate — the legacy grant cannot be removed until it
+  flatlines at zero for a full pre-stage-3 pod-age window.
 - `tank_schema_migration*` — startup schema-migration engine
   (`pgstore.RunMigrationsWithMetrics`) counters emitted once per boot,
   before the HTTP/`/metrics` server comes up. `tank_schema_migrations_pending`
@@ -1131,6 +1144,16 @@ declares one rule group per subsystem:
   `docs/tank-conversation-protocol.md` → "Durable turn interruption"
   for the architecture they protect.
 - **NATS**: disconnect storm (>6/min for 5m).
+- **NATS auth-callout** (#1128): `TankNatsAuthCalloutDenials` (warning) fires
+  when the per-session credential issuer rejects session-pod auth
+  (`denied_token_invalid`/`denied_pod_unbound`/`denied_identity_mismatch`/
+  `error`) — the #1148 class where a pod cannot reach the session bus and its
+  turns stay stuck with no terminal. `TankNatsAuthCalloutLegacyTokenInUse`
+  (info) is the migration's "old path still in use" signal and the stage-4
+  gate: while the callout still issues the legacy shared-token grant, removing
+  it would strand pre-stage-3 pods. Both depend on the `tank-nats-auth-callout`
+  PodMonitor scraping the callout `/metrics` — without it the issuer (the only
+  fleet component with no Service) was invisible to Prometheus.
 - **api-proxy**: upstream 401 rate (refresh-storm signature), refresh
   failures (any non-success result), and sustained upstream 429s
   (`TankApiProxyRateLimited` — the shared provider account's usage cap is

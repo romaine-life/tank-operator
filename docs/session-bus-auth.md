@@ -46,7 +46,11 @@ account nkey:
 Outcomes are counted in `tank_nats_auth_callout_total{result}`:
 `session` / `legacy` / `denied_*` / `error`. `legacy` hitting zero for a
 full pod-age window is the signal that stage 4 (drop the legacy grant) is
-safe.
+safe. The callout has no Service (it answers NATS, not HTTP), so the counter
+is scraped by the `tank-nats-auth-callout` PodMonitor in
+`k8s/templates/observability.yaml`; `TankNatsAuthCalloutLegacyTokenInUse`
+surfaces the stage-4 gate and `TankNatsAuthCalloutDenials` surfaces the
+`denied_*`/`error` new-pod auth-failure class.
 
 ## Staged rollout
 
