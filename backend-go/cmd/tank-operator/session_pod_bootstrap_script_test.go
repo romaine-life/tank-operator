@@ -262,7 +262,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 		{
 			mode: "config",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"theme":"dark"`,
+				".claude/settings.json": `"theme": "dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
 			},
 		},
