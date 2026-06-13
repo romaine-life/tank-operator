@@ -708,13 +708,23 @@ func (b *Bus) ensureStream(ctx context.Context) error {
 	// caps the stream within that budget so a runaway producer can't
 	// fill memory and OOM the NATS pod. ScheduleWakeup is backend-owned
 	// durable Postgres state, so JetStream message scheduling stays off.
+	// MaxAge 48h (was 7d): with commands on their own WorkQueue stream,
+	// this stream is transit + short replay history for EVENTS only —
+	// Postgres is the durable store and the persister consumes within
+	// seconds. 7d of events never fit the 128MiB byte cap anyway: on
+	// 2026-06-12 the stream pinned at 99.99% of MaxBytes in steady
+	// DiscardOld churn, which kept TankSessionBusStreamNearCapacity
+	// firing forever and erased its guardrail value (truncation past the
+	// persister's ack floor stayed zero — the eviction only consumed
+	// already-persisted history). 48h is still orders of magnitude past
+	// every consumer's redelivery window.
 	_, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:        b.stream,
 		Description: "Tank session command and event delivery bus",
 		Subjects:    []string{subjectRoot + ".>"},
 		Retention:   jetstream.LimitsPolicy,
 		Discard:     jetstream.DiscardOld,
-		MaxAge:      7 * 24 * time.Hour,
+		MaxAge:      48 * time.Hour,
 		MaxBytes:    128 * 1024 * 1024,
 		MaxMsgs:     100_000,
 		MaxMsgSize:  2 * 1024 * 1024,
