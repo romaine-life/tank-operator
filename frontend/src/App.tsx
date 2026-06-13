@@ -377,6 +377,7 @@ import {
   sessionFilesTabTitle,
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
+import { READABLE_ROOTS, joinDir, parentDir } from "./workspaceRoots";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
@@ -4699,15 +4700,8 @@ interface McpServerEntry {
   enabled: boolean;
 }
 
-function joinFilesPath(parent: string, name: string): string {
-  if (!parent) return name;
-  return `${parent}/${name}`;
-}
-
-function parentFilesPath(path: string): string {
-  const idx = path.lastIndexOf("/");
-  return idx <= 0 ? "" : path.slice(0, idx);
-}
+// Files-panel path joining/parenting now operate on ABSOLUTE pod paths and live
+// in ./workspaceRoots (joinDir / parentDir), shared with the route layer.
 
 function humanFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -15072,13 +15066,15 @@ function ChatPane({
   // Composer text mirror — used to know when the input has content (drives
   // hint fade + clear-X visibility) without making the textarea controlled.
   const [composerText, setComposerText] = useState("");
-  // Files-tab state — read-only browse of /workspace inside the session pod.
+  // Files-tab state — read-only browse of the session pod. Default-allow minus
+  // the secret denylist (enforced server-side); absolute pod paths throughout.
+  // Default landing dir is /workspace; bookmarks jump to ~/.claude, /opt/tank, etc.
   const initialRouteFilePath =
     initialRunRoute?.tab === "files" ? initialRunRoute.filePath : null;
   const initialRouteFileLine =
     initialRunRoute?.tab === "files" ? initialRunRoute.fileLine : null;
   const [filesPath, setFilesPath] = useState<string>(
-    initialRouteFilePath ? parentFilesPath(initialRouteFilePath) : "",
+    initialRouteFilePath ? parentDir(initialRouteFilePath) : "/workspace",
   );
   const [filesEntries, setFilesEntries] = useState<FileEntry[] | null>(null);
   const [filesLoading, setFilesLoading] = useState(false);
@@ -16339,7 +16335,7 @@ function ChatPane({
     if (route.tab === "files") {
       setActiveTab("files");
       if (route.filePath) {
-        setFilesPath(parentFilesPath(route.filePath));
+        setFilesPath(parentDir(route.filePath));
         setSelectedFile({
           path: route.filePath,
           size: 0,
@@ -16349,7 +16345,7 @@ function ChatPane({
         });
         setSelectedFileLine(route.fileLine);
       } else {
-        setFilesPath("");
+        setFilesPath("/workspace");
         setSelectedFile(null);
         setSelectedFileLine(null);
       }
@@ -17026,7 +17022,16 @@ function ChatPane({
     )
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error(`${res.status} ${await res.text()}`);
+          const detail = await res.text();
+          throw new Error(
+            res.status === 403
+              ? "This location is blocked."
+              : res.status === 404
+                ? "This folder no longer exists."
+                : res.status === 503
+                  ? "The session container isn't ready yet."
+                  : `${res.status} ${detail}`,
+          );
         }
         return (await res.json()) as { path: string; entries: FileEntry[] };
       })
@@ -17176,7 +17181,7 @@ function ChatPane({
   }, [readOnly, session.id, session.status]);
 
   function openFileEntry(name: string, type: FileEntry["type"]) {
-    const next = joinFilesPath(filesPath, name);
+    const next = joinDir(filesPath, name);
     if (type === "dir") {
       setFilesPath(next);
       setSelectedFile(null);
@@ -17205,10 +17210,13 @@ function ChatPane({
         ? normalizeWorkspacePathTarget(target)
         : target;
     if (!normalized) return;
+    // The prose linkifier yields absolute pod paths under the browsable roots
+    // (/workspace, ~/.claude, /opt/tank, /tmp), already deny-prefix filtered.
+    const absPath = normalized.path;
     setActiveTab("files");
-    setFilesPath(parentFilesPath(normalized.path));
+    setFilesPath(parentDir(absPath));
     setSelectedFile({
-      path: normalized.path,
+      path: absPath,
       size: 0,
       truncated: false,
       text: "",
@@ -20053,23 +20061,43 @@ function ChatPane({
           <>
             {activeTab === "files" ? (
               <div className="run-files">
+                <div className="run-files-bookmarks">
+                  {READABLE_ROOTS.map((bm) => (
+                    <button
+                      key={bm.path}
+                      type="button"
+                      className={`run-files-bookmark${
+                        filesPath === bm.path ? " run-files-bookmark-current" : ""
+                      }`}
+                      title={bm.title}
+                      onClick={() => {
+                        setFilesPath(bm.path);
+                        setSelectedFile(null);
+                        setSelectedFileLine(null);
+                      }}
+                    >
+                      {bm.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="run-files-breadcrumb">
                   <button
                     type="button"
                     className="run-files-crumb"
+                    title="Filesystem root"
                     onClick={() => {
-                      setFilesPath("");
+                      setFilesPath("/");
                       setSelectedFile(null);
                       setSelectedFileLine(null);
                     }}
                   >
-                    /workspace
+                    /
                   </button>
                   {(selectedFile?.path ?? filesPath)
                     .split("/")
                     .filter(Boolean)
                     .map((seg, i, arr) => {
-                      const target = arr.slice(0, i + 1).join("/");
+                      const target = `/${arr.slice(0, i + 1).join("/")}`;
                       const selectedFileCrumb = selectedFile?.path === target;
                       return (
                         <span key={target} className="run-files-crumb-wrap">
@@ -20095,12 +20123,12 @@ function ChatPane({
                 </div>
                 <div className="run-files-body">
                   <div className="run-files-list">
-                    {filesPath && (
+                    {filesPath !== "/" && (
                       <button
                         type="button"
                         className="run-files-row"
                         onClick={() => {
-                          setFilesPath(parentFilesPath(filesPath));
+                          setFilesPath(parentDir(filesPath));
                           setSelectedFile(null);
                           setSelectedFileLine(null);
                         }}
@@ -20138,7 +20166,7 @@ function ChatPane({
                             key={e.name}
                             className={`run-files-row${
                               selectedFile?.path ===
-                              joinFilesPath(filesPath, e.name)
+                              joinDir(filesPath, e.name)
                                 ? " run-files-row-active"
                                 : ""
                             }`}
@@ -20185,9 +20213,8 @@ function ChatPane({
                     {!filesLoading &&
                       !filesError &&
                       filesEntries &&
-                      filesEntries.length === 0 &&
-                      !filesPath && (
-                        <div className="run-files-status">empty workspace</div>
+                      filesEntries.length === 0 && (
+                        <div className="run-files-status">empty directory</div>
                       )}
                   </div>
                   <div className="run-files-viewer">

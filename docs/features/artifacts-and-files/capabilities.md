@@ -54,3 +54,44 @@ Named behaviors in the artifacts-and-files surface. See
 - **Evidence:** `frontend/src/FileImageViewer.test.tsx`,
   `frontend/src/appRoutes.test.ts`, and a browser validation of a
   `/sessions/{id}/files/<workspace-path>` image preview route.
+
+## workspace-read-denylist
+
+- **Status:** shipped
+- **Intent:** Let the pod owner browse anything the (bypass-permissions) agent
+  wrote in the session pod — `~/.claude` plans, agent state, `/opt/tank` bundled
+  skills/docs, `/tmp` scratch, or wherever else the agent wandered — instead of
+  being fenced to `/workspace`. Motivated by agents writing plans/output outside
+  `/workspace` that the owner then could not view in the files panel.
+- **Boundary (load-bearing security invariant):** the read/browse file API is
+  default-allow; the ONLY fence is `sessionmodel.SecretMountDenyPrefixes`
+  (`/var/run/secrets/`, its `/run/secrets` realpath form, `/proc/`, `/sys/`),
+  applied by `sessionmodel.PathReadable` to the in-pod **realpath**. The realpath
+  is resolved in-pod (`resolveInPodReadablePath`) and the allow/deny decision is
+  made in Go — single source of truth — so a `/workspace/leak -> /var/run/secrets`
+  symlink is refused. `safeReadablePath` is a lexical pre-filter only. Writes and
+  uploads keep `safeWorkspacePath` (`/workspace`-fenced); reads outside
+  `/workspace` are read-only.
+- **Fail-safe:** `TestProjectedSecretMountsAreDenied` asserts every projected
+  serviceAccountToken / Secret mountPath in the generated pod spec (plus the
+  implicit kubelet-injected default-SA mount) is denied, so a future secret
+  mounted at a novel path fails CI instead of silently becoming browsable. The
+  denylist lives next to the mount construction in `sessionmodel.go`.
+- **Surface:** absolute pod paths throughout the read API and files panel
+  (`/api/sessions/{id}/files`, `/files/content`, `/files/raw`, `/files/walk`, the
+  `/sessions/{id}/files/<abs-path>` route, and the file-raw stream-ticket resource
+  id — keyed on the absolute path so it matches the raw read). The panel lands on
+  `/workspace` with bookmark chips for `~`, `/opt/tank`, `/tmp`; 403 (denied) is
+  distinct from 404.
+- **Observability:** `tank_file_read_total{operation,path_class,result}`; the
+  `denied` result is the token-probe signal.
+- **Non-goals (v1):** writes outside `/workspace` via the UI; linkifying
+  non-`/workspace` paths in chat prose; static-page "Open as page" outside
+  `/workspace`.
+- **Evidence:** `backend-go/internal/sessionmodel/sessionmodel_test.go`
+  (`TestProjectedSecretMountsAreDenied`, `TestPathReadable`),
+  `backend-go/cmd/tank-operator/handlers_files_test.go` (`TestSafeReadablePath`,
+  `TestRealpathResolveAndDenylist`), `frontend/src/appRoutes.test.ts`,
+  `frontend/src/workspaceRoots.test.ts`, and a test-slot browser validation
+  (browse `~/.claude`, a `/var/tmp` agent-write, a denied `/var/run/secrets`
+  probe, and a symlink-escape).

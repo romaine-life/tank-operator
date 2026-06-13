@@ -167,7 +167,10 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, "path is required for file raw tickets")
 			return
 		}
-		absPath, err := safeWorkspacePath(body.Path)
+		// Reads are default-allow minus the secret denylist; key the ticket on
+		// the absolute path so it matches handleGetFileRaw's resource id exactly
+		// (a divergent key would 401 every image preview).
+		absPath, err := safeReadablePath(body.Path)
 		if err != nil {
 			recordStreamAuthTicket("create", streamKind, "invalid")
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -178,7 +181,7 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 			writeError(w, status, err.Error())
 			return
 		}
-		sessionID = fileRawTicketResourceID(sessionID, workspaceRelPath(absPath))
+		sessionID = fileRawTicketResourceID(sessionID, absPath)
 	default:
 		recordStreamAuthTicket("create", streamKind, "invalid")
 		writeError(w, http.StatusBadRequest, "unknown stream")

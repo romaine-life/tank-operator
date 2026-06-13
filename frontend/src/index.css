@@ -8627,6 +8627,38 @@ button:disabled {
   font-family: var(--font-primary);
 }
 
+.run-files-bookmarks {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: var(--space-3) var(--space-5) 0;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.run-files-bookmark {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-files-bookmark:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.run-files-bookmark-current {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--text-primary);
+}
+
 .run-files-breadcrumb {
   display: flex;
   align-items: center;

@@ -11,6 +11,18 @@ should be able to inspect and retrieve outputs without leaking protected URLs,
 depending on stale browser auth, or confusing a transient preview with durable
 session state.
 
+The read/browse surface is **default-allow minus a secret denylist**, not a
+`/workspace` fence. The (bypass-permissions) agent can write anywhere in the pod,
+so the owner can browse anywhere — `/workspace`, `~/.claude`, `/opt/tank`,
+`/tmp`, or wherever the agent wandered — and the only refused locations are the
+projected SA token mounts (`sessionmodel.SecretMountDenyPrefixes`:
+`/var/run/secrets/**`, its `/run/secrets` realpath form, plus `/proc`/`/sys`),
+checked against the symlink-resolved realpath. Writes/uploads through the browser
+file API stay fenced to `/workspace` (reads outside it are read-only via the UI;
+the agent writes anywhere via its own tools). Linkifying non-`/workspace` paths
+in chat prose, and static-page "Open as page" outside `/workspace`, are v1
+non-goals.
+
 ## Sources Of Truth
 
 - The live session pod filesystem owns files while the pod is alive.
@@ -51,6 +63,10 @@ session state.
 
 ## Observability
 
+- `tank_file_read_total{operation,path_class,result}` covers list/content/raw/walk
+  reads. The `denied` result counts secret-denylist rejections (the token-probe
+  signal); `path_class` buckets the resolved path
+  (workspace/home/tooling/tmp/other).
 - Metrics should cover raw file fetches, preview blob fetches, auth failures,
   not-found responses, pod-gone responses, and download failures.
 - Logs should identify session id, file identifier/path class, route, and

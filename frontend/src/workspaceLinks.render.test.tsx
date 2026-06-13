@@ -15,11 +15,12 @@ function renderMarkdown(markdown: string) {
   );
 }
 
-test("renders workspace file markdown links without Streamdown blocked markers", () => {
+test("renders browsable file links, leaves secret-path links blocked", () => {
   renderMarkdown(
     [
       "Please check [visual_verification_report.md](file:///workspace/chess-tactics/visual_verification_report.md) for full details.",
-      "Keep [host file](file:///home/node/secret.txt) blocked.",
+      "Open [the plan](file:///home/node/.claude/plan.md) too.",
+      "Keep [token](file:///var/run/secrets/auth.romaine.life/token) blocked.",
     ].join("\n"),
   );
 
@@ -30,5 +31,11 @@ test("renders workspace file markdown links without Streamdown blocked markers",
     "href",
     "/workspace/chess-tactics/visual_verification_report.md",
   );
-  expect(screen.getByText("host file [blocked]")).toBeInTheDocument();
+  // ~/.claude is a browsable root now → its file link renders as a real link.
+  expect(screen.getByRole("link", { name: "the plan" })).toHaveAttribute(
+    "href",
+    "/home/node/.claude/plan.md",
+  );
+  // A secret-mount path is never linkified, so Streamdown keeps it blocked.
+  expect(screen.getByText("token [blocked]")).toBeInTheDocument();
 });

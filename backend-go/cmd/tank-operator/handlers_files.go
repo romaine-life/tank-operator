@@ -217,12 +217,20 @@ finally:
 print(json.dumps({"abs_path": abs_path, "id": candidate}))
 `
 
-const workspacePathBoundaryCheckScript = `import json
+// realpathResolveScript resolves a target to its symlink-resolved absolute path
+// inside the pod and prints {"resolved_path": "..."}. It makes NO policy
+// decision: the caller applies the boundary in Go on the returned realpath —
+// resolveInPodWorkspacePath enforces the /workspace write fence,
+// resolveInPodReadablePath enforces the read denylist. Resolution must run
+// in-pod (that is where the symlinks and mounts live); keeping the decision in
+// Go gives a single source of truth. A not-yet-existing target (new-file write)
+// resolves the parent and rejoins the basename, preserving the write-path
+// semantics the previous boundary script had.
+const realpathResolveScript = `import json
 import os
 import sys
 
-root = os.path.realpath(sys.argv[1])
-target = sys.argv[2]
+target = sys.argv[1]
 
 if os.path.lexists(target):
     resolved = os.path.realpath(target)
@@ -230,15 +238,7 @@ else:
     parent = os.path.realpath(os.path.dirname(target) or ".")
     resolved = os.path.normpath(os.path.join(parent, os.path.basename(target)))
 
-if resolved != root and not resolved.startswith(root + os.sep):
-    print(json.dumps({
-        "ok": False,
-        "error": "path escapes workspace",
-        "resolved_path": resolved,
-    }))
-    raise SystemExit(0)
-
-print(json.dumps({"ok": True, "resolved_path": resolved}))
+print(json.dumps({"resolved_path": resolved}))
 `
 
 type mcpServerEntry struct {
@@ -307,16 +307,23 @@ func (s *appServer) handleListFiles(w http.ResponseWriter, r *http.Request) {
 
 	dirPath := r.URL.Query().Get("path")
 	if dirPath == "" {
-		dirPath = "/workspace"
+		dirPath = workspaceRoot
 	}
-	absPath, err := safeWorkspacePath(dirPath)
+	absPath, err := safeReadablePath(dirPath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		recordFileRead("list", "other", "denied")
+		writeError(w, http.StatusForbidden, "this location is blocked")
 		return
 	}
-	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	resolvedPath, err := s.resolveInPodReadablePath(r.Context(), podName, absPath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, errPathDenied) {
+			recordFileRead("list", pathClassLabel(absPath), "denied")
+			writeError(w, http.StatusForbidden, "this location is blocked")
+			return
+		}
+		recordFileRead("list", pathClassLabel(absPath), "exec_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -363,10 +370,11 @@ entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
 print(json.dumps({"path": rel_path, "entries": entries}))
 PY`,
 		shellQuote(resolvedPath),
-		shellQuote(workspaceRelPath(absPath)),
+		shellQuote(resolvedPath),
 	)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
 	if err != nil {
+		recordFileRead("list", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -377,17 +385,22 @@ PY`,
 		Error   string              `json:"error"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
+		recordFileRead("list", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, "parse dir listing: "+err.Error())
 		return
 	}
 	switch body.Error {
 	case "":
+		recordFileRead("list", pathClassLabel(resolvedPath), "ok")
 		writeJSON(w, http.StatusOK, fileListResponse{Path: body.Path, Entries: body.Entries})
 	case "not_found":
+		recordFileRead("list", pathClassLabel(resolvedPath), "not_found")
 		writeError(w, http.StatusNotFound, "path not found: "+body.Path)
 	case "not_directory":
+		recordFileRead("list", pathClassLabel(resolvedPath), "bad_request")
 		writeError(w, http.StatusBadRequest, "path is not a directory: "+body.Path)
 	default:
+		recordFileRead("list", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, "list dir: "+body.Error)
 	}
 }
@@ -410,14 +423,21 @@ func (s *appServer) handleGetFileContent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "missing path")
 		return
 	}
-	absPath, err := safeWorkspacePath(filePath)
+	absPath, err := safeReadablePath(filePath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		recordFileRead("content", "other", "denied")
+		writeError(w, http.StatusForbidden, "this location is blocked")
 		return
 	}
-	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	resolvedPath, err := s.resolveInPodReadablePath(r.Context(), podName, absPath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, errPathDenied) {
+			recordFileRead("content", pathClassLabel(absPath), "denied")
+			writeError(w, http.StatusForbidden, "this location is blocked")
+			return
+		}
+		recordFileRead("content", pathClassLabel(absPath), "exec_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -451,19 +471,22 @@ print(json.dumps({
 PY`,
 		shellQuote(resolvedPath),
 		maxFileBytes,
-		shellQuote(workspaceRelPath(absPath)),
+		shellQuote(resolvedPath),
 	)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
 	if err != nil {
+		recordFileRead("content", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	var body selectedFileResponse
 	if err := json.Unmarshal(out, &body); err != nil {
+		recordFileRead("content", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, "parse file content: "+err.Error())
 		return
 	}
+	recordFileRead("content", pathClassLabel(resolvedPath), "ok")
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -475,16 +498,16 @@ func (s *appServer) handleGetFileRaw(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing path")
 		return
 	}
-	absPath, err := safeWorkspacePath(filePath)
+	absPath, err := safeReadablePath(filePath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		recordFileRead("raw", "other", "denied")
+		writeError(w, http.StatusForbidden, "this location is blocked")
 		return
 	}
-	relPath := workspaceRelPath(absPath)
 
 	var user auth.User
 	if strings.TrimSpace(r.URL.Query().Get("stream_ticket")) != "" {
-		ticketUser, _, ok := s.requireBrowserStreamAuth(w, r, streamKindFileRaw, fileRawTicketResourceID(sessionID, relPath))
+		ticketUser, _, ok := s.requireBrowserStreamAuth(w, r, streamKindFileRaw, fileRawTicketResourceID(sessionID, absPath))
 		if !ok {
 			return
 		}
@@ -502,19 +525,27 @@ func (s *appServer) handleGetFileRaw(w http.ResponseWriter, r *http.Request) {
 		writeError(w, herr.status, herr.msg)
 		return
 	}
-	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	resolvedPath, err := s.resolveInPodReadablePath(r.Context(), podName, absPath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, errPathDenied) {
+			recordFileRead("raw", pathClassLabel(absPath), "denied")
+			writeError(w, http.StatusForbidden, "this location is blocked")
+			return
+		}
+		recordFileRead("raw", pathClassLabel(absPath), "exec_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName,
 		[]string{"head", "-c", fmt.Sprintf("%d", maxRawBytes), "--", resolvedPath})
 	if err != nil {
+		recordFileRead("raw", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	recordFileRead("raw", pathClassLabel(resolvedPath), "ok")
 	w.Header().Set("Content-Type", rawFileContentType(absPath))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -535,43 +566,70 @@ func (s *appServer) handleWalkFiles(w http.ResponseWriter, r *http.Request) {
 
 	dirPath := r.URL.Query().Get("path")
 	if dirPath == "" {
-		dirPath = "/workspace"
+		dirPath = workspaceRoot
 	}
-	absPath, err := safeWorkspacePath(dirPath)
+	absPath, err := safeReadablePath(dirPath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		recordFileRead("walk", "other", "denied")
+		writeError(w, http.StatusForbidden, "this location is blocked")
 		return
 	}
-	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	resolvedPath, err := s.resolveInPodReadablePath(r.Context(), podName, absPath)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, errPathDenied) {
+			recordFileRead("walk", pathClassLabel(absPath), "denied")
+			writeError(w, http.StatusForbidden, "this location is blocked")
+			return
+		}
+		recordFileRead("walk", pathClassLabel(absPath), "exec_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	// Walk returns absolute paths. Prune denied subtrees and symlinked dirs (the
+	// latter could point out of the requested root, e.g. into /var/run/secrets)
+	// before descending, so the denylist holds even when the walk root is high
+	// enough to contain one. The deny-prefix list is injected from the same
+	// sessionmodel.SecretMountDenyPrefixes the per-file reads enforce.
+	denyJSON, _ := json.Marshal(sessionmodel.SecretMountDenyPrefixes)
 	script := fmt.Sprintf(
-		`python3 - %s <<'PY'
+		`python3 - %s %s <<'PY'
 import json
 import os
 import sys
 
 p = sys.argv[1]
-root = "/workspace"
+deny_prefixes = json.loads(sys.argv[2])
+
+def is_denied(path):
+    for dp in deny_prefixes:
+        if path == dp.rstrip("/") or path.startswith(dp):
+            return True
+    return False
+
 paths = []
 for current, dirs, files in os.walk(p):
     dirs[:] = sorted(
-        [d for d in dirs if d not in {".git", "node_modules"}],
+        [
+            d for d in dirs
+            if d not in {".git", "node_modules"}
+            and not os.path.islink(os.path.join(current, d))
+            and not is_denied(os.path.join(current, d))
+        ],
         key=lambda s: s.lower(),
     )
     for name in sorted(files, key=lambda s: s.lower()):
-        rel = os.path.relpath(os.path.join(current, name), root)
-        if not rel.startswith(".." + os.sep) and rel != "..":
-            paths.append(rel)
+        full = os.path.join(current, name)
+        if not is_denied(full):
+            paths.append(full)
 print(json.dumps({"paths": paths}))
 PY`,
 		shellQuote(resolvedPath),
+		shellQuote(string(denyJSON)),
 	)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
 	if err != nil {
+		recordFileRead("walk", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -580,12 +638,14 @@ PY`,
 		Paths []string `json:"paths"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
+		recordFileRead("walk", pathClassLabel(resolvedPath), "exec_error")
 		writeError(w, http.StatusInternalServerError, "parse walk: "+err.Error())
 		return
 	}
 	if body.Paths == nil {
 		body.Paths = []string{}
 	}
+	recordFileRead("walk", pathClassLabel(resolvedPath), "ok")
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -1193,35 +1253,61 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-func (s *appServer) resolveInPodWorkspacePath(ctx context.Context, podName, absPath string) (string, error) {
+// errPathDenied marks a read rejected by the secret denylist. The read handlers
+// map it to HTTP 403 (distinct from a 404 not-found). Returned by
+// safeReadablePath (lexical pre-filter) and resolveInPodReadablePath
+// (authoritative, on the symlink-resolved realpath).
+var errPathDenied = errors.New("location is blocked")
+
+// resolveRealpathInPod returns the symlink-resolved absolute path for absPath as
+// seen inside the pod. The boundary decision is the caller's — see
+// resolveInPodWorkspacePath (write fence) and resolveInPodReadablePath (read
+// denylist).
+func (s *appServer) resolveRealpathInPod(ctx context.Context, podName, absPath string) (string, error) {
 	out, err := kubeexec.Capture(ctx, s.k8s, s.restCfg, s.namespace, podName, []string{
-		"python3",
-		"-c",
-		workspacePathBoundaryCheckScript,
-		workspaceRoot,
-		absPath,
+		"python3", "-c", realpathResolveScript, absPath,
 	})
 	if err != nil {
-		return "", fmt.Errorf("validate workspace path: %w", err)
+		return "", fmt.Errorf("resolve in-pod path: %w", err)
 	}
 	var body struct {
-		OK           bool   `json:"ok"`
-		Error        string `json:"error"`
 		ResolvedPath string `json:"resolved_path"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
-		return "", fmt.Errorf("parse workspace path validation: %w", err)
-	}
-	if !body.OK {
-		if strings.TrimSpace(body.Error) != "" {
-			return "", fmt.Errorf("%s: %s", body.Error, absPath)
-		}
-		return "", fmt.Errorf("path escapes workspace: %s", absPath)
+		return "", fmt.Errorf("parse path resolution: %w", err)
 	}
 	if body.ResolvedPath == "" {
-		return "", fmt.Errorf("workspace path validation returned empty path")
+		return "", fmt.Errorf("path resolution returned empty path")
 	}
 	return body.ResolvedPath, nil
+}
+
+// resolveInPodWorkspacePath resolves absPath in-pod and enforces the /workspace
+// write fence on the realpath (symlink-escape safe). Used by the write handlers.
+func (s *appServer) resolveInPodWorkspacePath(ctx context.Context, podName, absPath string) (string, error) {
+	resolved, err := s.resolveRealpathInPod(ctx, podName, absPath)
+	if err != nil {
+		return "", err
+	}
+	if resolved != workspaceRoot && !strings.HasPrefix(resolved, workspaceRoot+"/") {
+		return "", fmt.Errorf("path escapes workspace: %s", absPath)
+	}
+	return resolved, nil
+}
+
+// resolveInPodReadablePath resolves absPath in-pod and enforces the read denylist
+// (sessionmodel.PathReadable) on the realpath — the authoritative check that
+// catches a symlink pointing into /var/run/secrets. Returns errPathDenied when
+// the resolved path is under a secret deny-prefix.
+func (s *appServer) resolveInPodReadablePath(ctx context.Context, podName, absPath string) (string, error) {
+	resolved, err := s.resolveRealpathInPod(ctx, podName, absPath)
+	if err != nil {
+		return "", err
+	}
+	if !sessionmodel.PathReadable(resolved) {
+		return "", errPathDenied
+	}
+	return resolved, nil
 }
 
 func workspaceRelPath(absPath string) string {

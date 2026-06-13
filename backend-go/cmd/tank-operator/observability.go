@@ -735,6 +735,36 @@ var controlActionEventTotal = promauto.NewCounterVec(
 	[]string{"source_service", "source_tool", "action", "status", "result"},
 )
 
+var fileReadTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_file_read_total",
+		Help: "Session files-viewer read attempts, labeled by operation (list/content/raw/walk), path class (workspace/home/tooling/tmp/other), and bounded result (ok/bad_request/denied/not_found/pod_unavailable/exec_error). The denied result counts secret-denylist rejections — a sustained rate can indicate a probing client.",
+	},
+	[]string{"operation", "path_class", "result"},
+)
+
+// pathClassLabel buckets an absolute path into a bounded class for fileReadTotal.
+// Mirrors the FE nav bookmarks; "other" is everything outside them (e.g. an agent
+// that wrote to /var/tmp or a /data dir it created — still readable, just unbucketed).
+func pathClassLabel(absPath string) string {
+	switch {
+	case absPath == "/workspace" || strings.HasPrefix(absPath, "/workspace/"):
+		return "workspace"
+	case absPath == "/home/node" || strings.HasPrefix(absPath, "/home/node/"):
+		return "home"
+	case absPath == "/opt/tank" || strings.HasPrefix(absPath, "/opt/tank/"):
+		return "tooling"
+	case absPath == "/tmp" || strings.HasPrefix(absPath, "/tmp/"):
+		return "tmp"
+	default:
+		return "other"
+	}
+}
+
+func recordFileRead(operation, pathClass, result string) {
+	fileReadTotal.WithLabelValues(operation, pathClass, result).Inc()
+}
+
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),

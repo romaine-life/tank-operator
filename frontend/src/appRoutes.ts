@@ -1,3 +1,5 @@
+import { isDeniedPath } from "./workspaceRoots";
+
 export type SettingsTab = "preferences" | "admin";
 export type AdminView =
   | "controls"
@@ -42,7 +44,7 @@ export type SessionRoute = SettingsRoute & {
   // Workspace-relative path of the HTML file to render full-page in the
   // sandboxed "static" view. Non-null only when tab === "static".
   staticPath: string | null;
-  // Workspace-relative file selected in the files view. Non-null only when
+  // Absolute pod path of the file selected in the files view. Non-null only when
   // tab === "files" and the route includes a file target.
   filePath: string | null;
   fileLine: number | null;
@@ -136,6 +138,19 @@ function splitFileLineSuffix(path: string): {
 
 function validWorkspaceRoutePath(path: string): boolean {
   return Boolean(path) && !path.split("/").some((seg) => seg === "..");
+}
+
+// validReadableRoutePath validates an ABSOLUTE pod path carried in a /files
+// route: reject empty, non-absolute, `..` traversal, and secret deny-prefixes.
+// The server re-checks on the symlink-resolved realpath; this only avoids
+// routing to an obviously-blocked target.
+function validReadableRoutePath(path: string): boolean {
+  return (
+    Boolean(path) &&
+    path.startsWith("/") &&
+    !path.split("/").some((seg) => seg === "..") &&
+    !isDeniedPath(path)
+  );
 }
 
 export function readSessionRouteFromPathname(pathname: string): SessionRoute | null {
@@ -232,8 +247,10 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
   // workspace-relative file path so transcript file links can open the same
   // preview in a new tab.
   if (parts[2] === "files" && parts.length >= 3) {
-    const target = parts.length > 3 ? parts.slice(3).join("/") : "";
-    if (target && !validWorkspaceRoutePath(target)) return null;
+    // Everything after /files/ is the absolute pod path. The build side drops
+    // the leading slash so it survives routeParts; restore it here.
+    const target = parts.length > 3 ? `/${parts.slice(3).join("/")}` : "";
+    if (target && !validReadableRoutePath(target)) return null;
     const fileTarget = target ? splitFileLineSuffix(target) : null;
     return {
       sessionId: parts[1],
@@ -317,8 +334,10 @@ export function buildSessionRouteUrl(
   } else if (tab === "session-data") {
     suffix = "/session-data";
   } else if (tab === "files") {
+    // filePath is an absolute pod path; drop the leading slash before encoding
+    // so the route is /files/<segments> (the parser restores the slash).
     const routedFilePath = filePath
-      ? filePath.split("/").map(encodeURIComponent).join("/")
+      ? filePath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")
       : "";
     suffix = `/files${
       routedFilePath

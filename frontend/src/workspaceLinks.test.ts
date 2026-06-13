@@ -63,26 +63,34 @@ test("splits plain text workspace paths without dropping newlines", () => {
         ]);
 });
 
-test("parses workspace markdown hrefs with line numbers", () => {
-  expect(workspacePathFromHref("/workspace/src/App.tsx:42")).toEqual({ path: "src/App.tsx", line: 42 });
-  expect(workspacePathFromHref("workspace/src/App.tsx:42")).toEqual({ path: "src/App.tsx", line: 42 });
-  expect(workspacePathFromHref("/workspace/src/App.tsx")).toEqual({ path: "src/App.tsx", line: null });
+test("parses workspace markdown hrefs into absolute paths with line numbers", () => {
+  expect(workspacePathFromHref("/workspace/src/App.tsx:42")).toEqual({ path: "/workspace/src/App.tsx", line: 42 });
+  expect(workspacePathFromHref("workspace/src/App.tsx:42")).toEqual({ path: "/workspace/src/App.tsx", line: 42 });
+  expect(workspacePathFromHref("/workspace/src/App.tsx")).toEqual({ path: "/workspace/src/App.tsx", line: null });
   expect(workspacePathFromHref("https://example.test/workspace/src/App.tsx:42")).toBe(null);
 });
 
 test("parses same-origin absolute workspace hrefs from browser-normalized anchors", () => {
   const origin = "https://tank-operator-slot-3.tank.dev.romaine.life";
 
-  expect(workspacePathFromHref(`${origin}/workspace/src/App.tsx:42`, origin)).toEqual({ path: "src/App.tsx", line: 42 });
-  expect(workspacePathFromHref(`${origin}/workspace/screenshots/one%20two.png`, origin)).toEqual({ path: "screenshots/one two.png", line: null });
+  expect(workspacePathFromHref(`${origin}/workspace/src/App.tsx:42`, origin)).toEqual({ path: "/workspace/src/App.tsx", line: 42 });
+  expect(workspacePathFromHref(`${origin}/workspace/screenshots/one%20two.png`, origin)).toEqual({ path: "/workspace/screenshots/one two.png", line: null });
   expect(workspacePathFromHref(`${origin}/api/sessions/479`, origin)).toBe(null);
   expect(workspacePathFromHref("https://example.test/workspace/src/App.tsx:42", origin)).toBe(null);
 });
 
-test("does not treat arbitrary absolute paths as workspace hrefs", () => {
-  expect(workspacePathFromHref("/home/node/.codex/skills/test/SKILL.md")).toBe(null);
+test("linkifies the browsable roots and ~, but not arbitrary paths or secrets", () => {
+  // Home, tooling, and tmp are browsable roots now → linkable (absolute path).
+  expect(workspacePathFromHref("/home/node/.claude/plan.md")).toEqual({ path: "/home/node/.claude/plan.md", line: null });
+  expect(workspacePathFromHref("~/.claude/plan.md")).toEqual({ path: "/home/node/.claude/plan.md", line: null });
+  expect(workspacePathFromHref("/opt/tank/session-config/skills__x.md")).toEqual({ path: "/opt/tank/session-config/skills__x.md", line: null });
+  expect(workspacePathFromHref("file:///home/node/.codex/skills/test/SKILL.md")).toEqual({ path: "/home/node/.codex/skills/test/SKILL.md", line: null });
+  // Outside every readable root → plain text.
   expect(workspacePathFromHref("/src/App.tsx")).toBe(null);
-  expect(workspacePathFromHref("file:///home/node/.codex/skills/test/SKILL.md")).toBe(null);
+  expect(workspacePathFromHref("/etc/passwd")).toBe(null);
+  // Secret deny-prefixes are never linkified.
+  expect(workspacePathFromHref("/var/run/secrets/auth.romaine.life/token")).toBe(null);
+  expect(workspacePathFromHref("/proc/1/environ")).toBe(null);
 });
 
 test("does not rewrite inline or fenced code while preprocessing markdown", () => {
@@ -106,17 +114,19 @@ test("does not rewrite existing markdown links", () => {
   expect(linkTextTargetsInMarkdown(markdown)).toBe(markdown);
 });
 
-test("rewrites workspace file markdown links before hardening", () => {
+test("rewrites browsable-root file markdown links, leaves secrets blocked", () => {
   const markdown = [
     "See [visual_verification_report.md](file:///workspace/chess-tactics/visual_verification_report.md).",
     "Open [app.js](<file:///workspace/chess-tactics/frontend/app.js:42> \"source\").",
-    "Keep [host file](file:///home/node/secret.txt) blocked.",
+    "Open [the plan](file:///home/node/.claude/plan.md) too.",
+    "Keep [token](file:///var/run/secrets/auth.romaine.life/token) blocked.",
   ].join("\n");
 
   expect(linkTextTargetsInMarkdown(markdown)).toBe([
     "See [visual_verification_report.md](</workspace/chess-tactics/visual_verification_report.md>).",
     "Open [app.js](</workspace/chess-tactics/frontend/app.js:42> \"source\").",
-    "Keep [host file](file:///home/node/secret.txt) blocked.",
+    "Open [the plan](</home/node/.claude/plan.md>) too.",
+    "Keep [token](file:///var/run/secrets/auth.romaine.life/token) blocked.",
   ].join("\n"));
 });
 

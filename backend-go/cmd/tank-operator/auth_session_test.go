@@ -274,8 +274,11 @@ func TestHandleCreateStreamTicketScopesFileRawTicketToPath(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
+	// The ticket resource id is keyed on the ABSOLUTE path so it matches
+	// handleGetFileRaw's lookup exactly (a relative/absolute mismatch would 401
+	// every image preview). Reads are default-allow minus the secret denylist.
 	if tickets.created.StreamKind != streamKindFileRaw ||
-		tickets.created.SessionID != fileRawTicketResourceID("63", "screenshots/result.png") ||
+		tickets.created.SessionID != fileRawTicketResourceID("63", "/workspace/screenshots/result.png") ||
 		tickets.created.SessionScope != "default" ||
 		tickets.created.Email != otherUser {
 		t.Fatalf("created ticket = %#v", tickets.created)

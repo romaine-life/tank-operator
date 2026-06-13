@@ -127,7 +127,9 @@ test("session routes parse only session-scoped pages", () => {
     settingsTab: "preferences",
     adminView: "controls",
   });
-  expect(readSessionRouteFromPathname("/sessions/s-1/files/src/App.tsx:42")).toEqual({
+  // File routes carry an ABSOLUTE pod path (leading slash dropped in the URL,
+  // restored on parse) so the panel can address ~/.claude, /opt/tank, etc.
+  expect(readSessionRouteFromPathname("/sessions/s-1/files/workspace/src/App.tsx:42")).toEqual({
     sessionId: "s-1",
     tab: "files",
     turnNumber: null,
@@ -135,12 +137,19 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
-    filePath: "src/App.tsx",
+    filePath: "/workspace/src/App.tsx",
     fileLine: 42,
     settingsTab: "preferences",
     adminView: "controls",
   });
+  expect(
+    readSessionRouteFromPathname("/sessions/s-1/files/home/node/.claude/plan.md")?.filePath,
+  ).toBe("/home/node/.claude/plan.md");
+  // `..` traversal and secret deny-prefixes are rejected (the server re-checks).
   expect(readSessionRouteFromPathname("/sessions/s-1/files/../secret")).toBe(null);
+  expect(
+    readSessionRouteFromPathname("/sessions/s-1/files/var/run/secrets/auth.romaine.life/token"),
+  ).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/settings")).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability")).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/help")).toBe(null);
@@ -181,10 +190,10 @@ test("static page route urls embed the workspace path per segment", () => {
       null,
       null,
       null,
-      "screenshots/main menu.png",
+      "/workspace/screenshots/main menu.png",
       3,
     ),
-  ).toBe("https://tank.example.test/sessions/s-1/files/screenshots/main%20menu.png:3");
+  ).toBe("https://tank.example.test/sessions/s-1/files/workspace/screenshots/main%20menu.png:3");
 });
 
 test("session route urls broadcast only session-owned pages", () => {
