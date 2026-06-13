@@ -378,6 +378,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// tombstones; this raw-ledger surface is for audit/debug detail
 	// when the projection is not enough.
 	mux.HandleFunc("GET /api/debug/session-event-ledger", s.handleDebugSessionEventLedger)
+	// Admin-only picker surface for soft-deleted/hidden session transcripts.
+	mux.HandleFunc("GET /api/admin/hidden-sessions", s.handleAdminHiddenSessions)
+	mux.HandleFunc("GET /api/admin/hidden-sessions/{session_id}/timeline", s.handleAdminHiddenSessionTimeline)
 	// Admin-only debug surface for the durable conversation_read_state
 	// cursor + sessions.activity_summary view. Pairs with the
 	// TankChatScrollUserAtBottomLatched alert: when the alert fires,

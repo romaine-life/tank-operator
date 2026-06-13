@@ -1650,6 +1650,23 @@ interface AdminAppVersion {
   fetched_at: string;
 }
 
+interface AdminHiddenSession {
+  owner: string;
+  session_id: string;
+  name: string;
+  mode: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  transcript_row_count: number;
+}
+
+interface AdminHiddenSessionsBody {
+  scope: string;
+  owner?: string;
+  sessions?: AdminHiddenSession[];
+}
+
 interface TestSlotSessionDefaults {
   mode: DefaultSessionMode;
   model: string;
@@ -13352,6 +13369,251 @@ function AdminTestSlotDefaultsPanel({
   );
 }
 
+function AdminHiddenTranscriptsPanel({ sessionScope }: { sessionScope: string }) {
+  const [sessions, setSessions] = useState<AdminHiddenSession[]>([]);
+  const [selectedKey, setSelectedKey] = useState("");
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const [prevCursor, setPrevCursor] = useState<string | null>(null);
+  const [foundOldest, setFoundOldest] = useState(false);
+  const [foundNewest, setFoundNewest] = useState(false);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+
+  const selectedSession = useMemo(
+    () => sessions.find((session) => adminHiddenSessionKey(session) === selectedKey) ?? null,
+    [sessions, selectedKey],
+  );
+
+  const refreshList = useCallback(async () => {
+    setListLoading(true);
+    try {
+      const params = new URLSearchParams({
+        session_scope: sessionScope,
+        limit: "200",
+      });
+      const res = await authedFetch(`/api/admin/hidden-sessions?${params}`);
+      if (!res.ok) {
+        throw new Error(`hidden sessions returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminHiddenSessionsBody;
+      const nextSessions = Array.isArray(body.sessions) ? body.sessions : [];
+      setSessions(nextSessions);
+      setSelectedKey((current) => {
+        if (current && nextSessions.some((session) => adminHiddenSessionKey(session) === current)) {
+          return current;
+        }
+        return nextSessions[0] ? adminHiddenSessionKey(nextSessions[0]) : "";
+      });
+      setListError(null);
+    } catch (err) {
+      setListError(errorMessage(err));
+    } finally {
+      setListLoading(false);
+    }
+  }, [sessionScope]);
+
+  const loadTimeline = useCallback(
+    async (session: AdminHiddenSession, cursor?: string | null) => {
+      setTimelineLoading(true);
+      try {
+        const params = new URLSearchParams({
+          session_scope: sessionScope,
+          owner: session.owner,
+          rows: "80",
+        });
+        if (cursor) {
+          params.delete("rows");
+          params.set("before_cursor", cursor);
+          params.set("rows", "80");
+        } else {
+          params.set("anchor", "newest");
+        }
+        const res = await authedFetch(
+          `/api/admin/hidden-sessions/${encodeURIComponent(session.session_id)}/timeline?${params}`,
+        );
+        if (!res.ok) {
+          throw new Error(`hidden session transcript returned ${res.status}`);
+        }
+        const body = (await res.json()) as TranscriptTimelineBody;
+        setEntries(transcriptRowsFromTimelineBody(body));
+        setPrevCursor(typeof body.prev_cursor === "string" ? body.prev_cursor : null);
+        setFoundOldest(body.found_oldest === true);
+        setFoundNewest(body.found_newest === true);
+        setTimelineError(null);
+      } catch (err) {
+        setTimelineError(errorMessage(err));
+        setEntries([]);
+        setPrevCursor(null);
+        setFoundOldest(false);
+        setFoundNewest(false);
+      } finally {
+        setTimelineLoading(false);
+      }
+    },
+    [sessionScope],
+  );
+
+  useEffect(() => {
+    void refreshList();
+  }, [refreshList]);
+
+  useEffect(() => {
+    if (!selectedSession) {
+      setEntries([]);
+      setPrevCursor(null);
+      setFoundOldest(false);
+      setFoundNewest(false);
+      return;
+    }
+    void loadTimeline(selectedSession);
+  }, [loadTimeline, selectedSession]);
+
+  return (
+    <div className="run-settings-diagnostics admin-hidden-transcripts">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <SearchIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Hidden transcripts</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={() => void refreshList()}
+          disabled={listLoading}
+          aria-label="Refresh hidden sessions"
+        >
+          <RotateCcwIcon aria-hidden="true" />
+        </button>
+      </div>
+      <div className="admin-hidden-transcripts-toolbar">
+        <label>
+          <span>Session</span>
+          <select
+            value={selectedKey}
+            disabled={listLoading || sessions.length === 0}
+            onChange={(event) => setSelectedKey(event.target.value)}
+          >
+            {sessions.length === 0 ? (
+              <option value="">No hidden sessions</option>
+            ) : (
+              sessions.map((session) => (
+                <option key={adminHiddenSessionKey(session)} value={adminHiddenSessionKey(session)}>
+                  {adminHiddenSessionOptionLabel(session)}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+        {selectedSession && (
+          <div className="admin-hidden-transcripts-meta">
+            <span>{hiddenSessionModeLabel(selectedSession.mode)}</span>
+            <span>{selectedSession.status || "unknown"}</span>
+            <span>{selectedSession.transcript_row_count} rows</span>
+            <span>{formatToolFullTime(selectedSession.updated_at)}</span>
+          </div>
+        )}
+      </div>
+      {listError && (
+        <div className="run-settings-observability-note" role="status">
+          {listError}
+        </div>
+      )}
+      {selectedSession ? (
+        <>
+          <div className="admin-hidden-transcripts-actions">
+            <button
+              type="button"
+              className="run-settings-test-btn"
+              disabled={timelineLoading || foundOldest || !prevCursor}
+              onClick={() => void loadTimeline(selectedSession, prevCursor)}
+            >
+              Older
+            </button>
+            <button
+              type="button"
+              className="run-settings-test-btn"
+              disabled={timelineLoading || foundNewest}
+              onClick={() => void loadTimeline(selectedSession)}
+            >
+              Newest
+            </button>
+            {timelineLoading && <span className="run-settings-scope-value">Loading</span>}
+          </div>
+          {timelineError && (
+            <div className="run-settings-observability-note" role="status">
+              {timelineError}
+            </div>
+          )}
+          <div className="admin-hidden-transcript-list" aria-live="polite">
+            {entries.length === 0 && !timelineLoading ? (
+              <div className="admin-hidden-transcript-empty">No transcript rows</div>
+            ) : (
+              entries.map((entry) => (
+                <div className="admin-hidden-transcript-row" data-kind={entry.kind} key={entry.id}>
+                  <div className="admin-hidden-transcript-row-head">
+                    <span>{adminTranscriptEntryTitle(entry)}</span>
+                    <span>{adminTranscriptEntryTime(entry)}</span>
+                  </div>
+                  <pre>{adminTranscriptEntryText(entry)}</pre>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="admin-hidden-transcript-empty">No hidden sessions</div>
+      )}
+    </div>
+  );
+}
+
+function adminHiddenSessionKey(session: AdminHiddenSession): string {
+  return `${session.owner}\n${session.session_id}`;
+}
+
+function adminHiddenSessionOptionLabel(session: AdminHiddenSession): string {
+  const updated = formatToolFullTime(session.updated_at);
+  return [session.name || session.session_id, session.owner, updated].filter(Boolean).join(" / ");
+}
+
+function hiddenSessionModeLabel(mode: string): string {
+  return MODE_LABELS[mode as SessionMode] ?? mode;
+}
+
+function adminTranscriptEntryTitle(entry: TranscriptEntry): string {
+  const role = entry.role ? `${entry.role} ` : "";
+  const turn = entry.turnNumber ? `turn ${entry.turnNumber}` : entry.turnId;
+  return [role + entry.kind, turn].filter(Boolean).join(" / ");
+}
+
+function adminTranscriptEntryTime(entry: TranscriptEntry): string {
+  return (
+    formatToolFullTime(entry.completedAt) ||
+    formatToolFullTime(entry.updatedAt) ||
+    formatToolFullTime(entry.startedAt)
+  );
+}
+
+function adminTranscriptEntryText(entry: TranscriptEntry): string {
+  const record = entry as unknown as Record<string, unknown>;
+  for (const key of ["text", "taskOutput", "taskSummary", "taskDescription", "summary"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  if (entry.awaitingInput) {
+    return `${entry.awaitingInput.questionCount} question${entry.awaitingInput.questionCount === 1 ? "" : "s"}`;
+  }
+  if (entry.activity) {
+    return JSON.stringify(entry.activity, null, 2);
+  }
+  if (entry.turnUsage) {
+    return JSON.stringify(entry.turnUsage, null, 2);
+  }
+  return JSON.stringify(entry, null, 2);
+}
+
 function AdminVersionValue({ image }: { image: AdminVersionImage }) {
   const links = [
     image.pr_url
@@ -13886,6 +14148,7 @@ function RunSettingsPanel({
     showAdminTab &&
     (adminView === "avatars" ||
       adminView === "report" ||
+      adminView === "hidden-transcripts" ||
       adminView === "observability")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
@@ -13991,6 +14254,23 @@ function RunSettingsPanel({
               onRefresh={adminControls.onRefreshObservability}
             />
           </>
+        ) : adminView === "hidden-transcripts" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Hidden transcripts</h2>
+              </div>
+            </section>
+            <AdminHiddenTranscriptsPanel sessionScope={adminControls.reportScope} />
+          </>
         ) : adminView === "version" ? (
           <>
             <section className="run-settings-section">
@@ -14078,6 +14358,20 @@ function RunSettingsPanel({
                   <span>Session repo report</span>
                 </span>
                 <span className="run-settings-scope-value">Draft</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "hidden-transcripts")}
+              >
+                <span className="run-settings-link-label">
+                  <SearchIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Hidden transcripts</span>
+                </span>
+                <span className="run-settings-scope-value">Open</span>
               </button>
               <button
                 type="button"
