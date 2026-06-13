@@ -93,10 +93,12 @@ from envoy.service.ext_proc.v3 import external_processor_pb2_grpc as ext_proc_gr
 from envoy.config.core.v3 import base_pb2
 from envoy.type.v3 import http_status_pb2
 
+from .lease import LeaseUnavailable, RefreshLease
 from .metrics import (
     record_ext_proc_request,
     record_kv_persist,
     record_refresh,
+    record_refresh_lease,
     record_single_flight_wait,
     record_upstream_status,
 )
@@ -739,72 +741,138 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 record_refresh("no_refresh_token")
                 self._record_health_result("no_refresh_token", "no_refresh_token", "No refresh token available; the OAuth blob is missing or unreadable.")
                 return
-            log.info("calling %s to rotate %s token", self._config.token_url, self._config.provider)
-            refresh_start = time.monotonic()
-            self._health_last_attempted_at = time.time()
-            self._health_attempt_id += 1
+            # Cross-replica exclusivity (issue #1079 item 6): with more than
+            # one replica, two pods rotating the same single-use
+            # refresh_token risks provider reuse detection revoking the
+            # whole grant family. Take the rotation lease; a loser waits
+            # for the winner's rotation to arrive through KV → ESO → file
+            # instead of calling the provider. FAIL OPEN: any
+            # lease-infrastructure failure proceeds exactly as the
+            # pre-lease code did.
+            #
+            # The lease is scoped to the CREDENTIAL CHAIN (kv_secret_name),
+            # not the provider name: claude-api-proxy and
+            # claude-secondary-api-proxy both run PROXY_PROVIDER=claude but
+            # rotate unrelated refresh chains backed by different KV
+            # secrets. A provider-named lease would falsely serialize them
+            # — and the loser's _await_peer_rotation would stall its full
+            # timeout because the winner's rotation never lands in the
+            # loser's mounted file.
+            held_lease: RefreshLease | None = None
             try:
-                async with httpx.AsyncClient(timeout=30.0) as http:
-                    payload = {
-                        "grant_type": "refresh_token",
-                        "refresh_token": self._cached_refresh,
-                        "client_id": self._config.client_id,
-                    }
-                    if self._config.client_secret is not None:
-                        payload["client_secret"] = self._config.client_secret
-                    if self._config.token_request_form:
-                        # Google's OAuth2 /token endpoint requires
-                        # application/x-www-form-urlencoded; httpx sets the
-                        # content-type from data=.
-                        resp = await http.post(self._config.token_url, data=payload)
-                    else:
-                        resp = await http.post(
-                            self._config.token_url,
-                            json=payload,
-                            headers={"Content-Type": "application/json"},
-                        )
-            except Exception:
-                log.exception("refresh request crashed; keeping existing tokens")
-                record_refresh("request_failed", time.monotonic() - refresh_start)
-                self._record_health_result("request_failed", "request_failed", "Upstream OAuth token endpoint unreachable.")
-                return
-            if resp.status_code != 200:
-                log.error("refresh failed: status=%s body=%s", resp.status_code, resp.text[:500])
-                record_refresh("http_error", time.monotonic() - refresh_start)
-                reason, text = _classify_refresh_failure(resp)
-                self._record_health_result("http_error", reason, text)
-                return
-            data = resp.json()
-            new_access = data["access_token"]
-            new_refresh = data.get("refresh_token") or self._cached_refresh
-            new_id = data.get("id_token")
-            expires_in = int(data.get("expires_in", 3600))
-            # Update in-memory state FIRST so concurrent waiters see the
-            # fresh access token without depending on KV+ESO+kubelet.
-            self._cached_access = new_access
-            self._cached_refresh = new_refresh
-            if self._cached_blob is not None:
-                self._cached_blob = _patch_blob(
-                    self._cached_blob,
-                    new_access,
-                    new_refresh,
-                    expires_in,
-                    new_id=new_id,
-                    patch_last_refresh=self._config.patch_last_refresh,
+                lease = RefreshLease(
+                    f"api-proxy-refresh-{self._config.kv_secret_name.strip().lower()}"
                 )
-                self._cached_account_id = self._blob_account_id(self._cached_blob)
-                self._cached_fedramp = self._blob_fedramp(self._cached_blob)
-            self._access_invalidated = False
-            log.info(
-                "rotated %s successfully (access prefix=%s, expires in %ds)",
-                self._config.provider,
-                new_access[:12],
+                if await lease.try_acquire():
+                    record_refresh_lease("acquired")
+                    held_lease = lease
+                else:
+                    if await self._await_peer_rotation():
+                        record_refresh_lease("deferred_to_peer")
+                        record_refresh("deferred_to_peer")
+                        return
+                    record_refresh_lease("proceeded_after_timeout")
+                    log.warning(
+                        "refresh lease held by a peer but no fresh blob arrived; rotating anyway"
+                    )
+            except LeaseUnavailable as exc:
+                record_refresh_lease("unavailable")
+                log.warning("refresh lease unavailable (%s); rotating without it", exc)
+            try:
+                await self._rotate_with_provider()
+            finally:
+                if held_lease is not None:
+                    await held_lease.release()
+            return
+
+    async def _await_peer_rotation(self) -> bool:
+        """A peer holds the rotation lease: poll the mounted credentials
+        file (the tail of the winner's KV write-back) until a usably fresh
+        blob lands. True = adopted the peer's rotation; False = timed out
+        (the caller rotates anyway — availability over strict exclusivity,
+        e.g. when the winner crashed before persisting)."""
+        deadline = time.monotonic() + 45.0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(2.0)
+            self._reload_from_file()
+            if self._access_invalidated:
+                continue
+            fresh = self._cached_freshness_ms()
+            if fresh is not None and fresh - int(time.time() * 1000) > REFRESH_SKEW_MS:
+                return True
+        return False
+
+    async def _rotate_with_provider(self) -> None:
+        """The provider token exchange + rotation bookkeeping, extracted
+        from _refresh so the lease wrapper above owns acquire/release
+        around exactly the provider-touching span. Runs with self._lock
+        held (called only from _refresh)."""
+        log.info("calling %s to rotate %s token", self._config.token_url, self._config.provider)
+        refresh_start = time.monotonic()
+        self._health_last_attempted_at = time.time()
+        self._health_attempt_id += 1
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                payload = {
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._cached_refresh,
+                    "client_id": self._config.client_id,
+                }
+                if self._config.client_secret is not None:
+                    payload["client_secret"] = self._config.client_secret
+                if self._config.token_request_form:
+                    # Google's OAuth2 /token endpoint requires
+                    # application/x-www-form-urlencoded; httpx sets the
+                    # content-type from data=.
+                    resp = await http.post(self._config.token_url, data=payload)
+                else:
+                    resp = await http.post(
+                        self._config.token_url,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                    )
+        except Exception:
+            log.exception("refresh request crashed; keeping existing tokens")
+            record_refresh("request_failed", time.monotonic() - refresh_start)
+            self._record_health_result("request_failed", "request_failed", "Upstream OAuth token endpoint unreachable.")
+            return
+        if resp.status_code != 200:
+            log.error("refresh failed: status=%s body=%s", resp.status_code, resp.text[:500])
+            record_refresh("http_error", time.monotonic() - refresh_start)
+            reason, text = _classify_refresh_failure(resp)
+            self._record_health_result("http_error", reason, text)
+            return
+        data = resp.json()
+        new_access = data["access_token"]
+        new_refresh = data.get("refresh_token") or self._cached_refresh
+        new_id = data.get("id_token")
+        expires_in = int(data.get("expires_in", 3600))
+        # Update in-memory state FIRST so concurrent waiters see the
+        # fresh access token without depending on KV+ESO+kubelet.
+        self._cached_access = new_access
+        self._cached_refresh = new_refresh
+        if self._cached_blob is not None:
+            self._cached_blob = _patch_blob(
+                self._cached_blob,
+                new_access,
+                new_refresh,
                 expires_in,
+                new_id=new_id,
+                patch_last_refresh=self._config.patch_last_refresh,
             )
-            record_refresh("success", time.monotonic() - refresh_start)
-            self._health_last_succeeded_at = time.time()
-            self._record_health_result("success", "", "")
-            await self._persist_to_kv(expires_in)
+            self._cached_account_id = self._blob_account_id(self._cached_blob)
+            self._cached_fedramp = self._blob_fedramp(self._cached_blob)
+        self._access_invalidated = False
+        log.info(
+            "rotated %s successfully (access prefix=%s, expires in %ds)",
+            self._config.provider,
+            new_access[:12],
+            expires_in,
+        )
+        record_refresh("success", time.monotonic() - refresh_start)
+        self._health_last_succeeded_at = time.time()
+        self._record_health_result("success", "", "")
+        await self._persist_to_kv(expires_in)
 
     def _record_health_result(self, result: str, reason: str, text: str) -> None:
         """Record the outcome of a refresh attempt for the /health endpoint.

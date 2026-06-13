@@ -128,10 +128,22 @@ def record_upstream_status(status: int | None) -> None:
 
 
 def record_refresh(result: str, duration_seconds: float | None = None) -> None:
-    """result is one of: success, http_error, request_failed, no_refresh_token."""
+    """result is one of: success, http_error, request_failed,
+    no_refresh_token, deferred_to_peer."""
     token_refresh_total.labels(provider=PROVIDER, result=result).inc()
     if duration_seconds is not None:
         refresh_duration_seconds.labels(provider=PROVIDER, result=result).observe(duration_seconds)
+
+
+refresh_lease_total = Counter(
+    "tank_api_proxy_refresh_lease_total",
+    "Cross-replica refresh-lease outcomes (issue #1079 item 6): acquired (this pod rotates), deferred_to_peer (peer rotated; picked up via file), proceeded_after_timeout (peer never propagated; rotated anyway), unavailable (Lease API failed; failed open).",
+    ["provider", "result"],
+)
+
+
+def record_refresh_lease(result: str) -> None:
+    refresh_lease_total.labels(provider=PROVIDER, result=result).inc()
 
 
 def record_kv_persist(result: str) -> None:
