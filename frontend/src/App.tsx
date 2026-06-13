@@ -258,6 +258,8 @@ import {
   PROVIDERS,
   ROLLOUT_MODES,
   SDK_CHAT_MODES,
+  SESSION_MODE_LABELS,
+  sessionModeLabel,
   isDefaultSessionMode,
   type DefaultSessionMode,
   type Provider,
@@ -851,20 +853,7 @@ interface RolloutState {
   active?: boolean;
 }
 
-const MODE_LABELS: Record<SessionMode, string> = {
-  api_key: "Claude API key",
-  claude_cli: "Claude CLI",
-  claude_gui: "Claude GUI",
-  config: "Claude config",
-  claude_secondary_cli: "Claude secondary CLI",
-  claude_secondary_gui: "Claude secondary GUI",
-  claude_secondary_config: "Claude secondary config",
-  codex_cli: "Codex CLI",
-  codex_gui: "Codex GUI",
-  codex_exec_gui: "Codex Legacy",
-  codex_app_server: "Codex App Server",
-  codex_config: "Codex config",
-};
+const MODE_LABELS: Record<SessionMode, string> = SESSION_MODE_LABELS;
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
 // elsewhere.
@@ -8453,6 +8442,8 @@ function SessionTabMenu({
 
 function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
   switch (id) {
+    case "configuration":
+      return <SettingsIcon />;
     case "transcript":
       return <MessageSquareIcon />;
     case "test":
@@ -8467,6 +8458,8 @@ function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
       return <BugIcon />;
     case "linked_repo":
       return <GitBranchIcon />;
+    case "session_image":
+      return <ImageIcon />;
   }
 }
 
@@ -8701,6 +8694,15 @@ function SessionDataCardDetails({
   readOnly?: boolean;
 }) {
   switch (row.id) {
+    case "configuration":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Selected option", sessionModeLabel(session.mode)],
+            ["Mode key", session.mode || "Not reported"],
+          ]}
+        />
+      );
     case "transcript":
       return (
         <div className="run-session-data-actions">

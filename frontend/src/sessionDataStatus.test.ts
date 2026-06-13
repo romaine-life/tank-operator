@@ -3,6 +3,7 @@ import { buildSessionDataStatusRows } from "./sessionDataStatus";
 
 test("buildSessionDataStatusRows summarizes active workflow links", () => {
   const rows = buildSessionDataStatusRows({
+    mode: "claude_secondary_gui",
     test_state: {
       active: true,
       slot_index: 3,
@@ -29,21 +30,23 @@ test("buildSessionDataStatusRows summarizes active workflow links", () => {
   });
 
   expect(rows.map((row) => [row.id, row.status, row.tone])).toEqual([
-          ["transcript", "Available", "info"],
-          ["test", "Active", "good"],
-          ["context", "Compacted", "warning"],
-          ["session_image", "2026-06-11 08:06 UTC / 532dd02 / PR #1049", "info"],
-          ["rollout", "Inactive", "muted"],
-          ["pull_request", "Linked", "info"],
-          ["bug_report", "Linked", "info"],
-          ["linked_repo", "Ready", "good"],
-        ]);
-  expect(rows[1]?.detail).toBe("Slot 3 reserved");
-  expect(rows[1]?.href).toBe("https://tank-operator-slot-3.tank.dev.romaine.life/");
-  expect(rows[2]?.detail).toBe("2 compactions / 1m window / provider");
-  expect(rows[3]?.detail).toBe("romainecr.azurecr.io/codex-container:codex-dcbfd775 / ref main / workflow linked");
-  expect(rows[3]?.href).toBe("https://github.com/romaine-life/tank-operator/pull/1049");
-  expect(rows[5]?.detail).toBe("romaine-life/tank-operator#123");
+    ["configuration", "Claude secondary GUI", "info"],
+    ["transcript", "Available", "info"],
+    ["test", "Active", "good"],
+    ["context", "Compacted", "warning"],
+    ["session_image", "2026-06-11 08:06 UTC / 532dd02 / PR #1049", "info"],
+    ["rollout", "Inactive", "muted"],
+    ["pull_request", "Linked", "info"],
+    ["bug_report", "Linked", "info"],
+    ["linked_repo", "Ready", "good"],
+  ]);
+  expect(rows[0]?.detail).toBe("mode: claude_secondary_gui");
+  expect(rows[2]?.detail).toBe("Slot 3 reserved");
+  expect(rows[2]?.href).toBe("https://tank-operator-slot-3.tank.dev.romaine.life/");
+  expect(rows[3]?.detail).toBe("2 compactions / 1m window / provider");
+  expect(rows[4]?.detail).toBe("romainecr.azurecr.io/codex-container:codex-dcbfd775 / ref main / workflow linked");
+  expect(rows[4]?.href).toBe("https://github.com/romaine-life/tank-operator/pull/1049");
+  expect(rows[6]?.detail).toBe("romaine-life/tank-operator#123");
 });
 
 test("buildSessionDataStatusRows surfaces repo clone issues", () => {
