@@ -69,6 +69,7 @@ roleRef:
 # Read-only cluster health for the authenticated home/sidebar surface. The
 # endpoint only needs node readiness/pressure; session pod health is covered by
 # the namespace-scoped sessions manager Role above.
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -91,6 +92,7 @@ roleRef:
   kind: ClusterRole
   name: {{ include "tank-operator.orchestratorServiceAccount" . }}-cluster-health
 ---
+{{- end }}
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 # Orchestrator SA needs auth-delegator so internal endpoints can call
 # TokenReview for audience-scoped service-account tokens.
