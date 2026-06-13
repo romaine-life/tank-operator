@@ -4678,20 +4678,20 @@ button:disabled {
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-text {
   display: block;
-  flex: 0 1 auto;
+  flex: 1 1 0;
   min-width: 0;
-  max-width: 100%;
+  max-width: none;
 }
 
 .run-transcript-message[data-compact="true"] .run-msg-footer {
   flex: 0 0 auto;
   margin-top: 0;
-  margin-left: auto;
   white-space: nowrap;
 }
 
 .run-msg-compact-text {
   display: block;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -9230,6 +9230,36 @@ textarea.run-files-viewer-editor:focus {
   flex: 0 0 auto;
   margin-top: 0;
   margin-left: auto;
+  white-space: nowrap;
+}
+
+.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"])
+  .run-transcript-message-content {
+  display: block;
+}
+
+.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"])
+  .run-transcript-message-text {
+  display: block;
+}
+
+.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"])
+  .run-transcript-message-text::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+
+.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"])
+  .run-plain-message-text {
+  display: inline;
+}
+
+.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"])
+  .run-msg-footer {
+  float: right;
+  margin-top: 0.08rem;
+  margin-left: 0.65rem;
   white-space: nowrap;
 }
 

@@ -7463,6 +7463,68 @@ function RunMessageBubble({
   )
     .replace(/\s+/g, " ")
     .trim();
+  const inlineFooter =
+    variant === "user" && !compact && visibleAttachments.length === 0;
+  const messageFooter = (
+    <div
+      className="run-msg-footer"
+      data-always-visible={alwaysVisible ? "" : undefined}
+    >
+      {canonicalMessage &&
+        (variant === "assistant" || variant === "user") &&
+        entry.turnId &&
+        onOpenTurn && (
+          <TurnViewButton
+            turnId={entry.turnId}
+            href={turnHref}
+            onOpenTurn={onOpenTurn}
+          />
+        )}
+      {!canonicalMessage && onOpenTranscriptMessage && (
+        <TranscriptViewButton
+          entryId={entry.id}
+          href={transcriptHref}
+          onOpenTranscriptMessage={onOpenTranscriptMessage}
+        />
+      )}
+      {canonicalMessage && variant === "assistant" && onFork && (
+        <ForkButton entry={entry} onFork={onFork} />
+      )}
+      {variant !== "system" && (
+        <>
+          {onQuote && (
+            <>
+              <QuoteButton
+                text={visibleText}
+                style="fence"
+                onQuote={onQuote}
+              />
+              <QuoteButton
+                text={visibleText}
+                style="blockquote"
+                onQuote={onQuote}
+              />
+            </>
+          )}
+          <CopyButton text={visibleText} />
+          {canonicalMessage && !entry.localOnly && (
+            <LinkButton sessionId={sessionId} entryId={entry.id} />
+          )}
+        </>
+      )}
+      <div className="run-msg-timings">
+        {showDuration && durationMs != null && (
+          <span className="run-msg-timing-row">
+            {formatTurnDuration(durationMs)}
+            <TimerIcon size={9} aria-hidden="true" />
+          </span>
+        )}
+        {showTimestamps && time && (
+          <span className="run-msg-timing-row">{time}</span>
+        )}
+      </div>
+    </div>
+  );
   return (
     <div
       className="run-transcript-message"
@@ -7480,6 +7542,7 @@ function RunMessageBubble({
       data-owner={ownedByTurnActivity ? "activity" : undefined}
       data-continuation={isAvatarContinuation ? "true" : undefined}
       data-highlight={highlighted ? "true" : undefined}
+      data-inline-footer={inlineFooter ? "true" : undefined}
     >
       {variant === "assistant" &&
         showAssistantAvatar &&
@@ -7529,7 +7592,10 @@ function RunMessageBubble({
               )}
             </span>
           ) : variant === "user" ? (
-            <RunPlainText>{visibleText}</RunPlainText>
+            <>
+              <RunPlainText>{visibleText}</RunPlainText>
+              {inlineFooter && messageFooter}
+            </>
           ) : (
             <RunMarkdown>{visibleText}</RunMarkdown>
           )}
@@ -7566,64 +7632,7 @@ function RunMessageBubble({
             sessionId={sessionId}
           />
         )}
-        <div
-          className="run-msg-footer"
-          data-always-visible={alwaysVisible ? "" : undefined}
-        >
-          {canonicalMessage &&
-            (variant === "assistant" || variant === "user") &&
-            entry.turnId &&
-            onOpenTurn && (
-              <TurnViewButton
-                turnId={entry.turnId}
-                href={turnHref}
-                onOpenTurn={onOpenTurn}
-              />
-            )}
-          {!canonicalMessage && onOpenTranscriptMessage && (
-            <TranscriptViewButton
-              entryId={entry.id}
-              href={transcriptHref}
-              onOpenTranscriptMessage={onOpenTranscriptMessage}
-            />
-          )}
-          {canonicalMessage && variant === "assistant" && onFork && (
-            <ForkButton entry={entry} onFork={onFork} />
-          )}
-          {variant !== "system" && (
-            <>
-              {onQuote && (
-                <>
-                  <QuoteButton
-                    text={visibleText}
-                    style="fence"
-                    onQuote={onQuote}
-                  />
-                  <QuoteButton
-                    text={visibleText}
-                    style="blockquote"
-                    onQuote={onQuote}
-                  />
-                </>
-              )}
-              <CopyButton text={visibleText} />
-              {canonicalMessage && !entry.localOnly && (
-                <LinkButton sessionId={sessionId} entryId={entry.id} />
-              )}
-            </>
-          )}
-          <div className="run-msg-timings">
-            {showDuration && durationMs != null && (
-              <span className="run-msg-timing-row">
-                {formatTurnDuration(durationMs)}
-                <TimerIcon size={9} aria-hidden="true" />
-              </span>
-            )}
-            {showTimestamps && time && (
-              <span className="run-msg-timing-row">{time}</span>
-            )}
-          </div>
-        </div>
+        {!inlineFooter && messageFooter}
       </div>
       {variant === "user" &&
         !isAvatarContinuation &&

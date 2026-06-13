@@ -410,7 +410,10 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   expect(appSource.includes("{!compact && variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(false);
   expect(appSource.includes("{!compact && (\n          <div\n            className=\"run-msg-footer\"")).toBe(false);
   expect(appSource.includes("{variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(true);
-  expect(appSource.includes("<div\n          className=\"run-msg-footer\"")).toBe(true);
+  expect(appSource.includes("const messageFooter = (")).toBe(true);
+  expect(appSource.includes("className=\"run-msg-footer\"")).toBe(true);
+  expect(appSource.includes("{inlineFooter && messageFooter}")).toBe(true);
+  expect(appSource.includes("{!inlineFooter && messageFooter}")).toBe(true);
   expect(appSource.includes("data-has-attachments=")).toBe(false);
   expect(indexCssSource).toMatch(
     /\.run-transcript-message-content\s*\{[^}]*width:\s*100%/,
@@ -427,7 +430,10 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
     /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*display:\s*flex;[\s\S]*flex-wrap:\s*wrap/,
   );
   expect(indexCssSource).toMatch(
-    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*margin-left:\s*auto;[\s\S]*white-space:\s*nowrap/,
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-text\s*\{[^}]*flex:\s*1\s+1\s+0;[\s\S]*min-width:\s*0/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*flex:\s*0\s+0\s+auto;[\s\S]*white-space:\s*nowrap/,
   );
   expect(indexCssSource).toMatch(
     /\.run-turn-activity-divider-controls\s*\{[^}]*width:\s*calc\(96px \+ 0\.4rem\)/,

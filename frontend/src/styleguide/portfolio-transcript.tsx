@@ -72,6 +72,27 @@ function TranscriptMessage({
   children: ReactNode;
 }) {
   const avatar = getSessionAvatarByID("jp1-malcolm");
+  const inlineFooter = variant === "user" && !compact;
+  const footer = (
+    <div className="run-msg-footer" data-always-visible>
+      {variant !== "system" && (
+        <>
+          <button className="run-msg-action run-msg-copy" type="button" aria-label="Copy message">
+            <CopyIcon size={12} aria-hidden="true" />
+          </button>
+          <button className="run-msg-action run-msg-link" type="button" aria-label="Copy message link">
+            <LinkIcon size={12} aria-hidden="true" />
+          </button>
+        </>
+      )}
+      <div className="run-msg-timings">
+        <span className="run-msg-timing-row">
+          <TimerIcon size={9} aria-hidden="true" />
+          1.4s
+        </span>
+      </div>
+    </div>
+  );
   return (
     <div
       className="run-transcript-message"
@@ -81,6 +102,7 @@ function TranscriptMessage({
       data-compact={compact ? "true" : undefined}
       data-owner={ownedByActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
+      data-inline-footer={inlineFooter ? "true" : undefined}
       data-design-component="TranscriptMessage"
       data-design-state={highlighted ? "highlighted" : variant}
       data-inspectable
@@ -110,27 +132,13 @@ function TranscriptMessage({
               Please inspect the completed turn with a long initiating prompt. The divider owns the section controls while the prompt preview stays readable.
             </span>
           ) : (
-            children
-          )}
-        </div>
-        <div className="run-msg-footer" data-always-visible>
-          {variant !== "system" && (
             <>
-              <button className="run-msg-action run-msg-copy" type="button" aria-label="Copy message">
-                <CopyIcon size={12} aria-hidden="true" />
-              </button>
-              <button className="run-msg-action run-msg-link" type="button" aria-label="Copy message link">
-                <LinkIcon size={12} aria-hidden="true" />
-              </button>
+              {children}
+              {inlineFooter && footer}
             </>
           )}
-          <div className="run-msg-timings">
-            <span className="run-msg-timing-row">
-              <TimerIcon size={9} aria-hidden="true" />
-              1.4s
-            </span>
-          </div>
         </div>
+        {!inlineFooter && footer}
       </div>
     </div>
   );

@@ -19,6 +19,19 @@ function cssRule(selector: string): string {
   return match[1];
 }
 
+function cssRuleFlexible(selector: string): string {
+  const selectorPattern = selector
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  const match = indexCssSource.match(
+    new RegExp(`^\\s*${selectorPattern}\\s*\\{([\\s\\S]*?)\\}`, "m"),
+  );
+  expect(match, `${selector} rule should exist`).toBeTruthy();
+  return match[1];
+}
+
 test("chat composer textarea does not expose a native resize handle", () => {
   expect(cssRule(".run-composer-textarea")).toMatch(/resize:\s*none\s*!important;/);
   expect(cssRule(".run-composer textarea")).toMatch(/resize:\s*none;/);
@@ -218,4 +231,54 @@ test("turn view transcript rows share the same avatar gutter", () => {
   expect(inlineActivityContentRule).toMatch(/grid-column:\s*2;/);
   expect(inlineActivityContentRule).toMatch(/min-width:\s*0;/);
   expect(inlineActivityContentRule).toMatch(/max-width:\s*100%;/);
+});
+
+test("non-compact user message footer floats into the final prose line", () => {
+  expect(appSource).toMatch(
+    /const inlineFooter =\s*variant === "user" && !compact && visibleAttachments\.length === 0;/,
+  );
+  expect(appSource).toMatch(/data-inline-footer=\{inlineFooter \? "true" : undefined\}/);
+  expect(appSource).toMatch(/<RunPlainText>\{visibleText\}<\/RunPlainText>\s*\{inlineFooter && messageFooter\}/);
+  expect(portfolioTranscriptSource).toMatch(/data-inline-footer=\{inlineFooter \? "true" : undefined\}/);
+
+  const inlineContentRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-transcript-message-content',
+  );
+  expect(inlineContentRule).toMatch(/display:\s*block;/);
+
+  const inlineTextRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-plain-message-text',
+  );
+  expect(inlineTextRule).toMatch(/display:\s*inline;/);
+
+  const footerRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-msg-footer',
+  );
+  expect(footerRule).toMatch(/float:\s*right;/);
+  expect(footerRule).toMatch(/margin-left:\s*0\.65rem;/);
+
+  const clearfixRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-transcript-message-text::after',
+  );
+  expect(clearfixRule).toMatch(/clear:\s*both;/);
+});
+
+test("compact user message preview keeps controls on the same row", () => {
+  const compactTextRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-transcript-message-text',
+  );
+  expect(compactTextRule).toMatch(/flex:\s*1\s+1\s+0;/);
+  expect(compactTextRule).toMatch(/min-width:\s*0;/);
+  expect(compactTextRule).toMatch(/max-width:\s*none;/);
+
+  const compactPreviewRule = cssRule(".run-msg-compact-text");
+  expect(compactPreviewRule).toMatch(/width:\s*100%;/);
+  expect(compactPreviewRule).toMatch(/white-space:\s*nowrap;/);
+  expect(compactPreviewRule).toMatch(/text-overflow:\s*ellipsis;/);
+
+  const compactFooterRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-msg-footer',
+  );
+  expect(compactFooterRule).toMatch(/flex:\s*0\s+0\s+auto;/);
+  expect(compactFooterRule).not.toMatch(/margin-left:\s*auto;/);
 });
