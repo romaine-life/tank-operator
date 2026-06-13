@@ -279,6 +279,172 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	}
 }
 
+func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing.T) {
+	prNumber := 1113
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				Action:    "github.pull_request.mergeability",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				PRNumber:  &prNumber,
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator","mergeable":true,"mergeable_state":"clean"}`),
+			},
+			{
+				Action:    "github.commit.ci",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"completed":3}`),
+			},
+			{
+				Action:    "github.commit.push",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`",
+		"artifact_kind": "codex_runner",
+		"validation_target": "existing_session",
+		"source_tool": "apply_test_slot_hot_swap"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Allowed || !body.PublishVerified || !body.CIVerified || !body.MergeVerified {
+		t.Fatalf("verification body = %#v", body)
+	}
+	if body.PRNumber == nil || *body.PRNumber != prNumber {
+		t.Fatalf("pr_number = %#v, want %d", body.PRNumber, prNumber)
+	}
+	if store.listOwner != "owner@example.test" || store.listSession != "47" || store.listLimit != 200 {
+		t.Fatalf("list lookup = owner %q session %q limit %d", store.listOwner, store.listSession, store.listLimit)
+	}
+}
+
+func TestHandleInternalVerifyHotSwapBlocksPendingCI(t *testing.T) {
+	prNumber := 1113
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				Action:    "github.commit.ci",
+				Status:    "started",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Error:     "checks are pending",
+				Payload:   []byte(`{"pending":["build"]}`),
+			},
+			{
+				Action:    "github.pull_request.mergeability",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				PRNumber:  &prNumber,
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+			},
+			{
+				Action:    "github.commit.push",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Allowed || body.CIVerified {
+		t.Fatalf("verification body = %#v", body)
+	}
+	if got := strings.Join(body.Reasons, "\n"); !strings.Contains(got, "latest CI observation") {
+		t.Fatalf("reasons = %q", got)
+	}
+}
+
+func TestHandleInternalVerifyHotSwapBlocksWrongBranchPublish(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			Action:    "github.commit.push",
+			Status:    "succeeded",
+			RepoOwner: "romaine-life",
+			RepoName:  "tank-operator",
+			ResultSHA: sha,
+			Payload:   []byte(`{"branch":"tank/session/48/tank-operator"}`),
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "tank/session/47/tank-operator",
+		"sha": "`+sha+`"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.PublishVerified {
+		t.Fatalf("wrong-branch publish was accepted: %#v", body)
+	}
+	if got := strings.Join(body.Reasons, "\n"); !strings.Contains(got, "no governed publish record") {
+		t.Fatalf("reasons = %q", got)
+	}
+}
+
 func TestHandleListControlActionsScopesBrowserRead(t *testing.T) {
 	prNumber := 857
 	store := &fakeControlActionStore{

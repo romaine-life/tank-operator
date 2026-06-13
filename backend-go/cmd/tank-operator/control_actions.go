@@ -36,6 +36,30 @@ type controlActionEventJSON struct {
 	Payload       json.RawMessage `json:"payload,omitempty"`
 }
 
+type hotSwapVerificationRequest struct {
+	Repo             string `json:"repo"`
+	Branch           string `json:"branch"`
+	SHA              string `json:"sha"`
+	ArtifactKind     string `json:"artifact_kind,omitempty"`
+	ValidationTarget string `json:"validation_target,omitempty"`
+	SourceTool       string `json:"source_tool,omitempty"`
+}
+
+type hotSwapVerificationResponse struct {
+	Allowed          bool     `json:"allowed"`
+	Reasons          []string `json:"reasons,omitempty"`
+	Repo             string   `json:"repo"`
+	Branch           string   `json:"branch"`
+	SHA              string   `json:"sha"`
+	PRNumber         *int     `json:"pr_number,omitempty"`
+	PublishVerified  bool     `json:"publish_verified"`
+	CIVerified       bool     `json:"ci_verified"`
+	MergeVerified    bool     `json:"merge_verified"`
+	ArtifactKind     string   `json:"artifact_kind,omitempty"`
+	ValidationTarget string   `json:"validation_target,omitempty"`
+	SourceTool       string   `json:"source_tool,omitempty"`
+}
+
 func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/control-actions")
 	if user == nil {
@@ -247,8 +271,160 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, map[string]any{"active": false, "repo": repo, "session_id": sessionID})
 }
 
+func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/hot-swap/verify")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	var body hotSwapVerificationRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	repo := strings.TrimSpace(body.Repo)
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
+		writeError(w, http.StatusBadRequest, "repo must be a GitHub slug like owner/name")
+		return
+	}
+	branch := strings.TrimSpace(body.Branch)
+	if branch == "" {
+		writeError(w, http.StatusBadRequest, "branch is required")
+		return
+	}
+	sha := strings.ToLower(strings.TrimSpace(body.SHA))
+	if !isFullGitSHA(sha) {
+		writeError(w, http.StatusBadRequest, "sha must be a full 40-character git SHA")
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := evaluateHotSwapVerification(rows, owner, name, branch, sha)
+	resp.Repo = repo
+	resp.Branch = branch
+	resp.SHA = sha
+	resp.ArtifactKind = strings.TrimSpace(body.ArtifactKind)
+	resp.ValidationTarget = strings.TrimSpace(body.ValidationTarget)
+	resp.SourceTool = strings.TrimSpace(body.SourceTool)
+	if resp.Allowed {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	writeJSON(w, http.StatusConflict, resp)
+}
+
+func isFullGitSHA(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, ch := range value {
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) hotSwapVerificationResponse {
+	resp := hotSwapVerificationResponse{}
+	var sawPublish, sawCI, sawMerge bool
+	for _, row := range rows {
+		if row.RepoOwner != owner || row.RepoName != repo || !strings.EqualFold(row.ResultSHA, sha) {
+			continue
+		}
+		switch row.Action {
+		case "github.commit.push", "github.break_glass.push":
+			if sawPublish {
+				continue
+			}
+			if controlActionPayloadString(row.Payload, "branch") != branch {
+				continue
+			}
+			sawPublish = true
+			if row.Status == "succeeded" {
+				resp.PublishVerified = true
+			} else {
+				resp.Reasons = append(resp.Reasons, "latest governed publish for this commit has not succeeded")
+			}
+		case "github.commit.ci":
+			if sawCI {
+				continue
+			}
+			sawCI = true
+			if row.Status == "succeeded" {
+				resp.CIVerified = true
+			} else {
+				reason := "latest CI observation for this commit is not green"
+				if row.Error != "" {
+					reason += ": " + row.Error
+				}
+				resp.Reasons = append(resp.Reasons, reason)
+			}
+		case "github.pull_request.mergeability":
+			if sawMerge {
+				continue
+			}
+			if controlActionPayloadString(row.Payload, "branch") != branch {
+				continue
+			}
+			sawMerge = true
+			resp.PRNumber = row.PRNumber
+			if row.Status == "succeeded" {
+				resp.MergeVerified = true
+			} else {
+				reason := "latest PR mergeability observation for this commit is not clean"
+				if row.Error != "" {
+					reason += ": " + row.Error
+				}
+				resp.Reasons = append(resp.Reasons, reason)
+			}
+		}
+	}
+	if !sawPublish {
+		resp.Reasons = append(resp.Reasons, "no governed publish record exists for this commit on this branch")
+	}
+	if !sawCI {
+		resp.Reasons = append(resp.Reasons, "no CI success record exists for this commit")
+	}
+	if !sawMerge {
+		resp.Reasons = append(resp.Reasons, "no clean PR mergeability record exists for this commit on this branch")
+	}
+	resp.Allowed = resp.PublishVerified && resp.CIVerified && resp.MergeVerified
+	return resp
+}
+
+func controlActionPayloadString(payload json.RawMessage, key string) string {
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(asString(body[key]))
+}
+
+func asString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	default:
+		return ""
+	}
+}
+
 func normalizeBreakGlassOperations(in []string) []string {
-	allowed := map[string]bool{"mint_full_git_token": true, "push_current_head": true}
+	allowed := map[string]bool{"mint_full_git_token": true, "push_current_head": true, "apply_test_slot_hot_swap": true}
 	seen := map[string]bool{}
 	out := []string{}
 	for _, raw := range in {
@@ -259,7 +435,7 @@ func normalizeBreakGlassOperations(in []string) []string {
 		}
 	}
 	if len(out) == 0 {
-		out = []string{"mint_full_git_token", "push_current_head"}
+		out = []string{"mint_full_git_token", "push_current_head", "apply_test_slot_hot_swap"}
 	}
 	return out
 }
