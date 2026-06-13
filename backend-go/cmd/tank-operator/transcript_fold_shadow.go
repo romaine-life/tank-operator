@@ -34,12 +34,29 @@ func transcriptFoldShadowDue() bool {
 	return transcriptFoldShadowCounter.Add(1)%every == 0
 }
 
-// shadowCompareFoldTx re-derives the rows the fold just wrote from a full
+// shadowCompareFoldTx re-derives the rows the fold just wrote from a
 // reference projection of the session ledger and diffs them. A match is
 // counted; a divergence is counted, logged with the offending row ids, and
 // healed in the same transaction by the reference re-projection (which also
 // reseeds the memo) — so a fold defect costs one wrong-rows window of zero:
 // the transaction that wrote them also corrects them.
+//
+// foldHorizon bounds the reference read at the fold's knowledge horizon (the
+// memo's LastOrderKey after the batch). The persist pipeline is asynchronous:
+// events COMMIT in the persister and only later reach the materializer via
+// the per-session refresh queue, so by the time this transaction's
+// read-committed ledger scan runs, flood events newer than the dequeued
+// batch are routinely already visible — events the fold cannot know yet and
+// the NEXT batch will fold. Comparing against an unbounded read made every
+// sampled batch of a continuously-flooding turn a false divergence (#1130):
+// the fold's shell lagged the reference by exactly the racing tail
+// (completedAt/endOrderKey), and the "heal" re-ran the O(session) reference
+// read the fold exists to avoid. Bounding at the horizon keeps the
+// comparison apples-to-apples while still catching every true defect: an
+// event AT OR BELOW the horizon that the fold mishandled still diffs, and a
+// late-arriving old-key event the fold's ≤-guard skipped still diffs.
+// foldHorizon == "" means unbounded (the pre-#1130 behavior, used by tests
+// that stage the ledger and rows in lockstep).
 func (m transcriptRowsMaterializer) shadowCompareFoldTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -47,6 +64,7 @@ func (m transcriptRowsMaterializer) shadowCompareFoldTx(
 	txRows transcriptRowsMaterializationTxStore,
 	sessionID string,
 	foldRows []map[string]any,
+	foldHorizon string,
 ) error {
 	if len(foldRows) == 0 {
 		recordTranscriptFoldShadow("match")
@@ -61,8 +79,18 @@ func (m transcriptRowsMaterializer) shadowCompareFoldTx(
 		if err != nil {
 			return err
 		}
-		events = append(events, page.Events...)
-		if page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
+		pastHorizon := false
+		for _, event := range page.Events {
+			if foldHorizon != "" && transcriptString(event, "order_key") > foldHorizon {
+				// Committed after the fold's batch was dequeued; the next
+				// batch folds it. Pages are ASC, so nothing below the
+				// horizon remains.
+				pastHorizon = true
+				break
+			}
+			events = append(events, event)
+		}
+		if pastHorizon || page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
 			break
 		}
 		cursor = page.NextOrderKey

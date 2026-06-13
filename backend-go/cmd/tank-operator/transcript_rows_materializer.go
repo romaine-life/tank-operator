@@ -364,7 +364,11 @@ func (m transcriptRowsMaterializer) tryFoldBatchTx(
 	// for known shapes; the shadow is the net for shapes production invents.
 	if transcriptFoldShadowDue() {
 		if txEvents, ok := m.events.(transcriptEventsTxStore); ok {
-			if err := m.shadowCompareFoldTx(ctx, tx, txEvents, txRows, sessionID, rows); err != nil {
+			// Bound the reference at the memo's post-batch horizon: the
+			// persist pipeline commits events ahead of the async refresh
+			// queue, so the in-tx ledger scan routinely sees flood events
+			// the fold hasn't been handed yet (#1130).
+			if err := m.shadowCompareFoldTx(ctx, tx, txEvents, txRows, sessionID, rows, memo.LastOrderKey); err != nil {
 				return false, err
 			}
 		}
