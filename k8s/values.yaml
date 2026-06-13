@@ -153,7 +153,7 @@ session:
 #   tank-nats-callout-issuer-seed  — `nk -gen account` seed (SA...)
 #   tank-nats-callout-password     — the callout's static NATS user password
 natsCallout:
-  enabled: false
+  enabled: true
   replicas: 2
   user: nats-auth-callout
   issuerSeedKvKey: tank-nats-callout-issuer-seed
