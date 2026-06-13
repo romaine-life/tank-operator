@@ -19,10 +19,12 @@ import (
 type Config struct {
 	URL   string
 	Token string
-	// User authenticates the orchestrator as a static auth_users entry
-	// (password = Token), so it never routes through the NATS auth_callout.
-	// Token-only auth is retired; omit both fields only for unauthenticated
-	// local/test NATS servers.
+	// User, when set, switches authentication from the bare token to a
+	// static user/password pair (password = Token). This is stage 2 of
+	// tank-operator#1128: with authorization.auth_callout enabled on the
+	// server, the orchestrator must be a named auth_users entry so it never
+	// routes through the callout — token-only auth has no user name to
+	// exempt. Unset = pre-callout token auth, unchanged.
 	User string
 	// Stream is the legacy combined stream (events forever; command
 	// subjects only for pre-split session pods). CommandStream is the
@@ -313,7 +315,7 @@ func Connect(ctx context.Context, cfg Config) (*Bus, error) {
 		// password carried in Token.
 		opts = append(opts, nats.UserInfo(user, strings.TrimSpace(cfg.Token)))
 	} else if token := strings.TrimSpace(cfg.Token); token != "" {
-		return nil, fmt.Errorf("NATS token-only auth is retired; set NATS_USER for static user/password auth")
+		opts = append(opts, nats.Token(token))
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {

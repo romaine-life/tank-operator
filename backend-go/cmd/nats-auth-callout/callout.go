@@ -16,14 +16,17 @@
 // orchestrator-written labels (tank-operator/session-id, -scope). A pod can
 // only ever get permissions for the session the orchestrator bound it to.
 //
-// The orchestrator itself is a static auth_users entry in the NATS server
-// config and never reaches this service — a callout outage therefore cannot
-// take down the command plane, only delay NEW session pods' connections
-// (JetStream redelivers).
+// Transition (#1128 staging): legacy pods that still present the shared
+// fleet token are granted unrestricted permissions here, preserving the
+// pre-callout behavior until they age out; the orchestrator itself is a
+// static auth_users entry in the NATS server config and never reaches this
+// service — a callout outage therefore cannot take down the command plane,
+// only delay NEW session pods' connections (JetStream redelivers).
 package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -53,6 +56,11 @@ type calloutService struct {
 	// runs everything in the global account.
 	account  string
 	resolver sessionResolver
+	// legacyToken, when non-empty, grants pre-#1128 unrestricted
+	// permissions to clients presenting the shared fleet token — the
+	// migration policy's pre-deploy-pod clause: existing pods hold that
+	// token until they age out.
+	legacyToken string
 	// commandStream is the WorkQueue stream carrying session commands.
 	commandStream string
 	// providers whose per-session durables a session pod may own. The
@@ -95,6 +103,23 @@ func (s *calloutService) Handle(ctx context.Context, requestJWT []byte) ([]byte,
 			return nil, fmt.Errorf("encode authorization response: %w", err)
 		}
 		return []byte(encoded), nil
+	}
+
+	// Transition arm: the shared fleet token, presented either via the
+	// dedicated token field (nats.Token / nats.js token:) or as a bare
+	// password, keeps unrestricted permissions until pre-#1128 pods age out.
+	presented := strings.TrimSpace(req.ConnectOptions.Token)
+	if presented == "" && strings.TrimSpace(req.ConnectOptions.Username) == "" {
+		presented = strings.TrimSpace(req.ConnectOptions.Password)
+	}
+	if s.legacyToken != "" && presented != "" &&
+		subtle.ConstantTimeCompare([]byte(presented), []byte(s.legacyToken)) == 1 {
+		userJWT, err := s.legacyUserJWT(req)
+		if err != nil {
+			return respond("", "legacy user issuance failed")
+		}
+		recordCalloutAuth("legacy")
+		return respond(userJWT, "")
 	}
 
 	saToken := strings.TrimSpace(req.ConnectOptions.Password)
@@ -158,6 +183,17 @@ func (s *calloutService) sessionUserJWT(req *jwt.AuthorizationRequestClaims, sto
 	uc.Permissions.Pub.Allow.Add(pub...)
 	// JS API replies and pull deliveries arrive on the client's inbox.
 	uc.Permissions.Sub.Allow.Add("_INBOX.>")
+	return uc.Encode(s.issuer)
+}
+
+// legacyUserJWT preserves pre-callout behavior for the shared fleet token.
+func (s *calloutService) legacyUserJWT(req *jwt.AuthorizationRequestClaims) (string, error) {
+	uc := jwt.NewUserClaims(req.UserNkey)
+	uc.Name = "legacy-shared-token"
+	uc.Audience = s.account
+	uc.Expires = s.now().Add(s.userTTL).Unix()
+	uc.Permissions.Pub.Allow.Add(">")
+	uc.Permissions.Sub.Allow.Add(">")
 	return uc.Encode(s.issuer)
 }
 

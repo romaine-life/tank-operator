@@ -122,16 +122,6 @@ func (m *recordingMetrics) RecordPersistBatchSize(n int) {
 	defer m.mu.Unlock()
 	m.batchSizes = append(m.batchSizes, n)
 }
-
-func TestConnectRejectsTokenOnlyAuth(t *testing.T) {
-	_, err := Connect(context.Background(), Config{
-		URL:   "nats://127.0.0.1:1",
-		Token: "shared-token",
-	})
-	if err == nil || !strings.Contains(err.Error(), "token-only auth is retired") {
-		t.Fatalf("Connect token-only auth error = %v, want retired auth error", err)
-	}
-}
 func (m *recordingMetrics) RecordProcessedEventAge(seconds float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
