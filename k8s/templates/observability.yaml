@@ -934,10 +934,21 @@ spec:
             summary: "checkpointed-fold shadow compare diverged from the reference projection"
             runbook: |
               The slog.Error "transcript fold shadow divergence" names the
-              session and row ids. Reproduce by replaying that session's
-              ledger through TestFoldCheckpointEquivalenceOverFixtures-style
-              prefix replay (capture the ledger via
-              GET /api/debug/session-event-ledger, add it as a fixture).
+              session, row ids, and the per-field diff (fold= vs ref=).
+              First rule out the #1130 lookahead shape: if the diff is
+              ONLY activity.completedAt/endOrderKey lagging by events
+              newer than the fold's batch, the shadow compared against
+              ledger events the refresh queue hadn't dequeued yet — fixed
+              by bounding the reference at the memo horizon; a recurrence
+              of that shape means the horizon bound regressed, not the
+              fold. For real defects, reproduce by replaying that
+              session's ledger through
+              TestFoldCheckpointEquivalenceOverFixtures-style prefix
+              replay (capture the ledger via
+              GET /api/debug/session-event-ledger, add it as a fixture;
+              stage commit-ahead-of-dequeue lookahead like
+              TestFoldShadowCompareIgnoresEventsPastFoldHorizon if the
+              live shape involves an actively-flooding turn).
               Mitigate immediately by disabling the fold for the affected
               session (UPDATE session_transcript_fold_state SET memo=NULL,
               disabled=true WHERE tank_session_id='<id>') or fleet-wide by
