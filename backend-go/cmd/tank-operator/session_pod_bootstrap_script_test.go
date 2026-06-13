@@ -272,7 +272,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 		{
 			mode: "config",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"theme":"dark"`,
+				".claude/settings.json": `"theme": "dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
 			},
 		},
@@ -395,6 +395,7 @@ exit 0
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 		"FAKE_NODE_LOG="+nodeLog,
 		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
+		"GLIMMUNG_SUPERVISOR_CHILD=",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
