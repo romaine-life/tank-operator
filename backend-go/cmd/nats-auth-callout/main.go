@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -32,6 +33,16 @@ const natsAuthCalloutSubject = "$SYS.REQ.USER.AUTH"
 // same audience instead of inventing a parallel NATS-only audience.
 const defaultTokenAudience = "https://auth.romaine.life"
 
+const (
+	defaultSessionScope       = "default"
+	glimmungProjectLabel      = "glimmung.romaine.life/project"
+	glimmungTestSlotLabel     = "glimmung.romaine.life/test-slot"
+	glimmungNativeSlotNameKey = "glimmung.romaine.life/native-slot-name"
+	tankOperatorProjectName   = "tank-operator"
+)
+
+var tankOperatorSlotNamePattern = regexp.MustCompile(`^tank-operator-slot-[0-9]+$`)
+
 var calloutAuthTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "tank_nats_auth_callout_total",
 	Help: "NATS auth-callout outcomes: session (per-session JWT issued), denied_*, error.",
@@ -50,7 +61,12 @@ type k8sSessionResolver struct {
 	serviceAccount    string
 }
 
-func (r *k8sSessionResolver) ResolvePodFromToken(ctx context.Context, token string) (string, error) {
+type serviceAccountSubject struct {
+	Namespace      string
+	ServiceAccount string
+}
+
+func (r *k8sSessionResolver) ResolvePodFromToken(ctx context.Context, token string) (sessionPodRef, error) {
 	review, err := r.client.AuthenticationV1().TokenReviews().Create(ctx, &authnv1.TokenReview{
 		Spec: authnv1.TokenReviewSpec{
 			Token:     token,
@@ -58,24 +74,32 @@ func (r *k8sSessionResolver) ResolvePodFromToken(ctx context.Context, token stri
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		return "", fmt.Errorf("token review: %w", err)
+		return sessionPodRef{}, fmt.Errorf("token review: %w", err)
 	}
 	if !review.Status.Authenticated {
-		return "", fmt.Errorf("token not authenticated: %s", review.Status.Error)
+		return sessionPodRef{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
 	}
-	expected := "system:serviceaccount:" + r.sessionsNamespace + ":" + r.serviceAccount
-	if review.Status.User.Username != expected {
-		return "", fmt.Errorf("token subject %q is not the session service account", review.Status.User.Username)
+	subject, err := parseServiceAccountSubject(review.Status.User.Username)
+	if err != nil {
+		return sessionPodRef{}, deny("denied_subject_invalid", err)
+	}
+	expectedScope, err := r.expectedScopeForSubject(ctx, subject)
+	if err != nil {
+		return sessionPodRef{}, err
 	}
 	pods := review.Status.User.Extra["authentication.kubernetes.io/pod-name"]
 	if len(pods) != 1 || strings.TrimSpace(pods[0]) == "" {
-		return "", errors.New("token carries no bound-pod claim (not a projected pod token)")
+		return sessionPodRef{}, errors.New("token carries no bound-pod claim (not a projected pod token)")
 	}
-	return strings.TrimSpace(pods[0]), nil
+	return sessionPodRef{
+		Namespace:     subject.Namespace,
+		Name:          strings.TrimSpace(pods[0]),
+		ExpectedScope: expectedScope,
+	}, nil
 }
 
-func (r *k8sSessionResolver) SessionStorageKeyForPod(ctx context.Context, podName string) (string, error) {
-	pod, err := r.client.CoreV1().Pods(r.sessionsNamespace).Get(ctx, podName, metav1.GetOptions{})
+func (r *k8sSessionResolver) SessionStorageKeyForPod(ctx context.Context, podRef sessionPodRef) (string, error) {
+	pod, err := r.client.CoreV1().Pods(podRef.Namespace).Get(ctx, podRef.Name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("get pod: %w", err)
 	}
@@ -84,10 +108,60 @@ func (r *k8sSessionResolver) SessionStorageKeyForPod(ctx context.Context, podNam
 		return "", errors.New("pod has no tank-operator/session-id label")
 	}
 	scope := strings.TrimSpace(pod.Labels["tank-operator/session-scope"])
-	if scope == "" || scope == "default" {
+	if scope == "" {
+		return "", errors.New("pod has no tank-operator/session-scope label")
+	}
+	if scope != podRef.ExpectedScope {
+		return "", deny("denied_pod_scope_mismatch", fmt.Errorf("pod scope %q does not match token authority scope %q", scope, podRef.ExpectedScope))
+	}
+	if scope == defaultSessionScope {
 		return sessionID, nil
 	}
 	return scope + ":" + sessionID, nil
+}
+
+func parseServiceAccountSubject(username string) (serviceAccountSubject, error) {
+	const prefix = "system:serviceaccount:"
+	rest, ok := strings.CutPrefix(strings.TrimSpace(username), prefix)
+	if !ok {
+		return serviceAccountSubject{}, fmt.Errorf("token subject %q is not a service account", username)
+	}
+	parts := strings.Split(rest, ":")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return serviceAccountSubject{}, fmt.Errorf("token subject %q is not a service account", username)
+	}
+	return serviceAccountSubject{
+		Namespace:      strings.TrimSpace(parts[0]),
+		ServiceAccount: strings.TrimSpace(parts[1]),
+	}, nil
+}
+
+func (r *k8sSessionResolver) expectedScopeForSubject(ctx context.Context, subject serviceAccountSubject) (string, error) {
+	if subject.Namespace == r.sessionsNamespace && subject.ServiceAccount == r.serviceAccount {
+		return defaultSessionScope, nil
+	}
+	slotName, ok := strings.CutSuffix(subject.Namespace, "-sessions")
+	if !ok || strings.TrimSpace(slotName) == "" {
+		return "", deny("denied_subject_untrusted", fmt.Errorf("token subject namespace %q is not an authorized session namespace", subject.Namespace))
+	}
+	if !tankOperatorSlotNamePattern.MatchString(slotName) {
+		return "", deny("denied_subject_untrusted", fmt.Errorf("token subject namespace %q is not a tank-operator slot sessions namespace", subject.Namespace))
+	}
+	expectedSA := slotName + "-session"
+	if subject.ServiceAccount != expectedSA {
+		return "", deny("denied_subject_untrusted", fmt.Errorf("token subject %q is not an authorized slot session service account", subject.ServiceAccount))
+	}
+	ns, err := r.client.CoreV1().Namespaces().Get(ctx, subject.Namespace, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get namespace %q: %w", subject.Namespace, err)
+	}
+	labels := ns.Labels
+	if labels[glimmungTestSlotLabel] != "true" ||
+		labels[glimmungProjectLabel] != tankOperatorProjectName ||
+		labels[glimmungNativeSlotNameKey] != slotName {
+		return "", deny("denied_subject_untrusted", fmt.Errorf("namespace %q is not a trusted tank-operator test-slot namespace", subject.Namespace))
+	}
+	return slotName, nil
 }
 
 func env(name, fallback string) string {

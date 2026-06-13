@@ -200,6 +200,9 @@ Project metadata for Glimmung:
       "pod_selector": "tank-operator/session-id,tank-operator/mode in (codex_gui,codex_exec_gui,codex_app_server)",
       "builder_image": "node:20-alpine"
     }
+  }
+}
+```
 
 Auth: Microsoft sign-in is delegated to auth.romaine.life. The SPA fetches
 an auth.romaine.life JWT (silent if the `.romaine.life` session cookie is

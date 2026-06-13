@@ -1356,7 +1356,7 @@ spec:
         # password, so a no-credentials connect is a stray probe, not a
         # stranded session.
         - alert: TankNatsAuthCalloutDenials
-          expr: sum(rate(tank_nats_auth_callout_total{result=~"denied_token_invalid|denied_pod_unbound|denied_identity_mismatch|error"}[10m])) > 0
+          expr: sum by (result) (rate(tank_nats_auth_callout_total{result=~"denied_token_invalid|denied_subject_invalid|denied_subject_untrusted|denied_pod_unbound|denied_pod_scope_mismatch|denied_identity_mismatch|error"}[10m])) > 0
           for: 15m
           labels:
             severity: warning
@@ -1372,17 +1372,25 @@ spec:
               Inspect the callout logs (deployment nats-auth-callout,
               container `callout`, namespace tank-operator) for the matching
               slog.Warn line and value of {{`{{ $labels.result }}`}}:
-                denied_token_invalid     — TokenReview rejected the token:
+                denied_token_invalid      — TokenReview rejected the token:
                     audience mismatch (NATS_CALLOUT_TOKEN_AUDIENCE vs the
                     projected token's audience https://auth.romaine.life —
-                    the exact #1148 shape), expired token, or a non-session
-                    ServiceAccount subject.
-                denied_pod_unbound       — the pod carries no
-                    tank-operator/session-id label (orchestrator labelling
-                    regression).
-                denied_identity_mismatch — the client's claimed NATS_USER
+                    the exact #1148 shape), expired token, or TokenReview API
+                    error.
+                denied_subject_invalid    — the authenticated subject is not a
+                    Kubernetes ServiceAccount subject.
+                denied_subject_untrusted  — the ServiceAccount is not the
+                    production session SA or a Glimmung tank-operator test-slot
+                    session SA whose namespace labels prove the slot identity.
+                denied_pod_unbound        — the pod carries no
+                    tank-operator/session-id or session-scope label
+                    (orchestrator labelling regression).
+                denied_pod_scope_mismatch — the pod's session-scope label does
+                    not match the production/default or slot authority derived
+                    from the token subject.
+                denied_identity_mismatch  — the client's claimed NATS_USER
                     does not match the pod's orchestrator-written binding.
-                error                    — JWT issuance failed inside the
+                error                     — JWT issuance failed inside the
                     callout (issuer seed / nkey problem).
               Confirm tank_nats_auth_callout_total{result="session"} is
               still incrementing (healthy pods) and grep the affected
