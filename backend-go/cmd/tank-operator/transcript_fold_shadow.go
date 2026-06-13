@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
@@ -74,11 +78,18 @@ func (m transcriptRowsMaterializer) shadowCompareFoldTx(
 		}
 	}
 	var diverged []string
+	var diffs []string
 	for _, row := range foldRows {
 		id := transcriptMapString(row, "id")
 		want, ok := reference[id]
-		if !ok || !reflect.DeepEqual(row, want) {
+		if !ok {
 			diverged = append(diverged, id)
+			diffs = append(diffs, id+": missing from reference")
+			continue
+		}
+		if !reflect.DeepEqual(row, want) {
+			diverged = append(diverged, id)
+			diffs = append(diffs, id+": "+transcriptShadowRowDiff(row, want))
 		}
 	}
 	if len(diverged) == 0 {
@@ -89,6 +100,86 @@ func (m transcriptRowsMaterializer) shadowCompareFoldTx(
 	slog.Error("transcript fold shadow divergence — healing via reference re-projection",
 		"session_id", sessionID,
 		"rows", diverged,
+		"diff", strings.Join(diffs, " | "),
 	)
 	return m.resyncSessionTx(ctx, tx, txEvents, txRows, sessionID)
+}
+
+// transcriptShadowRowDiff names the top-level keys (descending one map level)
+// where the fold-written row and the reference disagree, with bounded value
+// snippets — the diagnostic the #1130 hunt was missing: pod logs survive
+// rollouts far more often than the diverging batch does, and "which field"
+// is the whole investigation.
+func transcriptShadowRowDiff(got, want map[string]any) string {
+	const maxKeys = 6
+	const snippet = 160
+	keys := map[string]bool{}
+	for k := range got {
+		keys[k] = true
+	}
+	for k := range want {
+		keys[k] = true
+	}
+	render := func(v any) string {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		s := string(raw)
+		if len(s) > snippet {
+			s = s[:snippet] + "…"
+		}
+		return s
+	}
+	var parts []string
+	for _, k := range sortedStringKeys(keys) {
+		gv, gok := got[k]
+		wv, wok := want[k]
+		if gok && wok && reflect.DeepEqual(gv, wv) {
+			continue
+		}
+		gm, gIsMap := gv.(map[string]any)
+		wm, wIsMap := wv.(map[string]any)
+		if gIsMap && wIsMap {
+			// One level of descent so a giant nested struct names its
+			// differing children instead of dumping both sides whole.
+			inner := map[string]bool{}
+			for ik := range gm {
+				inner[ik] = true
+			}
+			for ik := range wm {
+				inner[ik] = true
+			}
+			for _, ik := range sortedStringKeys(inner) {
+				igv, igok := gm[ik]
+				iwv, iwok := wm[ik]
+				if igok && iwok && reflect.DeepEqual(igv, iwv) {
+					continue
+				}
+				parts = append(parts, fmt.Sprintf("%s.%s fold=%s ref=%s", k, ik, render(igv), render(iwv)))
+				if len(parts) >= maxKeys {
+					break
+				}
+			}
+		} else {
+			parts = append(parts, fmt.Sprintf("%s fold=%s ref=%s", k, render(gv), render(wv)))
+		}
+		if len(parts) >= maxKeys {
+			parts = append(parts, "…")
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "rows differ but no key-level diff found (type-level mismatch?)"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func sortedStringKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
