@@ -411,11 +411,26 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   expect(appSource.includes("{!compact && (\n          <div\n            className=\"run-msg-footer\"")).toBe(false);
   expect(appSource.includes("{variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(true);
   expect(appSource.includes("<div\n          className=\"run-msg-footer\"")).toBe(true);
+  expect(appSource.includes("data-has-attachments=")).toBe(false);
   expect(indexCssSource).toMatch(
-    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/,
+    /\.run-transcript-message-content\s*\{[^}]*width:\s*100%/,
   );
   expect(indexCssSource).toMatch(
-    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*grid-column:\s*2;[\s\S]*margin-top:\s*0/,
+    /\.run-transcript-message:is\(\[data-variant="assistant"\], \[data-variant="user"\]\):not\(\[data-compact="true"\]\)\s+\.run-transcript-message-content\s*\{[^}]*display:\s*flex;[\s\S]*flex-wrap:\s*wrap/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message:is\(\[data-variant="assistant"\], \[data-variant="user"\]\):not\(\[data-compact="true"\]\)\s+\.run-msg-footer\s*\{[^}]*margin-left:\s*auto;[\s\S]*white-space:\s*nowrap/,
+  );
+  expect(indexCssSource).not.toMatch(/--run-msg-footer-reserve/);
+  expect(indexCssSource).not.toMatch(/\.run-msg-footer\s*\{[^}]*position:\s*absolute/);
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*display:\s*flex;[\s\S]*flex-wrap:\s*wrap/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*margin-left:\s*auto;[\s\S]*white-space:\s*nowrap/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-turn-activity-divider-controls\s*\{[^}]*width:\s*calc\(96px \+ 0\.4rem\)/,
   );
   expect(styleguidePortfolioTranscriptSource.includes("collapsed-text-preview-controls-inline")).toBe(true);
   // The old "hide the whole bubble when collapsed" gate must be gone.

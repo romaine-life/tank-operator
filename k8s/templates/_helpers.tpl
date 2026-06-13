@@ -161,7 +161,7 @@ antigravity-credentials
 {{- end -}}
 
 {{- define "tank-operator.sessionsIngressDnsEnabled" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}true{{- else -}}{{ .Values.sessionsIngress.dnsEndpoint.enabled }}{{- end -}}
+{{- .Values.sessionsIngress.dnsEndpoint.enabled -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionsIngressGatewayIP" -}}

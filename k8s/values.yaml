@@ -184,7 +184,7 @@ wildcardCertificate:
   allowedFromNamespaces: All
 
 # Sessions ingress: wildcard DNS for *.<ingress.hostname>. Off by
-# default; enabled only for slot envs that host a per-session
+# default; enabled only for environments that host a per-session
 # subdomain space (cloudcli iframes etc). external-dns watches the
 # DNSEndpoint and creates a wildcard A record, so per-session
 # HTTPRoutes don't need their own DNS records (orchestrator marks
