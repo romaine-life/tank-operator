@@ -30,6 +30,15 @@ All metric names are prefixed `tank_`. The full namespace:
   duration histogram). Labels: `method`, `route`, `status_class`. The
   duration histogram intentionally omits `status_class` to keep series
   count at routes × methods × 11 buckets ≈ 1000.
+- `tank_file_read_total{operation,path_class,result}` — session files-viewer
+  reads. `operation`: `list|content|raw|walk`. `path_class`:
+  `workspace|home|tooling|tmp|other` (bucket of the resolved absolute path;
+  `other` = wherever the bypass-permissions agent wrote outside the bookmarks).
+  `result`: `ok|bad_request|denied|not_found|pod_unavailable|exec_error`. The
+  `denied` outcome counts secret-denylist rejections
+  (`sessionmodel.SecretMountDenyPrefixes` — e.g. a `/var/run/secrets/**` probe or
+  a symlink that resolved into one); a sustained `denied` rate can indicate a
+  probing client. Bounded at 4 × 5 × 6 = 120 series.
 - `tank_pg_*` — orchestrator Postgres query tracer (counter + duration
   histogram). Labels: `operation`, `outcome`. `operation` is a bounded
   keyword extracted from the SQL text by `pgstore.operationFromSQL`;

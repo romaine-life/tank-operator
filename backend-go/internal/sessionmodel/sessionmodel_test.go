@@ -295,6 +295,109 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	assertVolume(t, volumes, "auth-romaine-sa-token")
 }
 
+// TestProjectedSecretMountsAreDenied is the load-bearing fail-safe for the files
+// viewer. The viewer is default-allow (the pod owner can read anything the
+// bypass-permissions agent wrote, anywhere it wrote it); the ONLY security
+// boundary is SecretMountDenyPrefixes. This test walks every GUI mode's pod
+// spec, collects every mountPath backed by a projected serviceAccountToken or a
+// k8s Secret volume (plus the kubelet-injected default SA token mount, which is
+// implicit and never appears in spec.volumes), and asserts PathReadable refuses
+// each one. A future secret mounted at a path not covered by the denylist fails
+// CI here instead of silently becoming browsable.
+func TestProjectedSecretMountsAreDenied(t *testing.T) {
+	modes := []string{ClaudeGUIMode, CodexGUIMode, AntigravityGUIMode, ClaudeSecondaryGUIMode}
+	for _, mode := range modes {
+		t.Run(mode, func(t *testing.T) {
+			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
+				SessionImage:            "claude-image",
+				CodexSessionImage:       "codex-image",
+				AntigravitySessionImage: "antigravity-image",
+				Repos:                   []string{"romaine-life/tank-operator"},
+			})
+			spec := manifest["spec"].(map[string]any)
+
+			// Volume names whose source is a projected SA token or a k8s Secret.
+			secretVolumes := map[string]bool{}
+			for _, item := range spec["volumes"].([]any) {
+				vol := item.(map[string]any)
+				name, _ := vol["name"].(string)
+				if _, ok := vol["secret"]; ok {
+					secretVolumes[name] = true
+					continue
+				}
+				proj, ok := vol["projected"].(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, src := range proj["sources"].([]any) {
+					if _, ok := src.(map[string]any)["serviceAccountToken"]; ok {
+						secretVolumes[name] = true
+					}
+				}
+			}
+
+			// Every mountPath (containers + initContainers) backed by one of
+			// those secret volumes, plus the implicit default SA token mount.
+			denied := []string{"/var/run/secrets/kubernetes.io/serviceaccount"}
+			collect := func(containers []any) {
+				for _, ci := range containers {
+					c := ci.(map[string]any)
+					mounts, _ := c["volumeMounts"].([]any)
+					for _, mi := range mounts {
+						m := mi.(map[string]any)
+						if secretVolumes[m["name"].(string)] {
+							denied = append(denied, m["mountPath"].(string))
+						}
+					}
+				}
+			}
+			collect(spec["containers"].([]any))
+			if inits, ok := spec["initContainers"].([]any); ok {
+				collect(inits)
+			}
+
+			if len(denied) <= 1 {
+				t.Fatalf("mode %s: expected at least one projected-token mount, found none (traversal broken?)", mode)
+			}
+			for _, mountPath := range denied {
+				if PathReadable(mountPath) {
+					t.Errorf("secret mountPath %q is readable by the files viewer; cover it in sessionmodel.SecretMountDenyPrefixes", mountPath)
+				}
+			}
+		})
+	}
+}
+
+func TestPathReadable(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/workspace", true},
+		{"/workspace/src/App.tsx", true},
+		{"/home/node/.claude/plans/x.md", true},
+		{"/opt/tank/session-config", true},
+		{"/tmp/out.txt", true},
+		{"/etc/hosts", true},
+		{"/var/tmp/agent-scratch.txt", true}, // bypass-write target the user must still see
+		{"/var/run/secrets", false},          // bare deny dir
+		{"/var/run/secrets/auth.romaine.life/token", false},
+		{"/var/run/secrets/kubernetes.io/serviceaccount/token", false},
+		{"/run/secrets", false},                         // realpath form (/var/run -> /run)
+		{"/run/secrets/auth.romaine.life/token", false}, // realpath of the crown-jewel token
+		{"/var/run/secretsfoo", true},                   // sibling dir, not a secret — trailing slash prevents over-match
+		{"/proc", false},
+		{"/proc/1/environ", false},
+		{"/sys/kernel", false},
+		{"relative/path", false},
+	}
+	for _, tc := range cases {
+		if got := PathReadable(tc.path); got != tc.want {
+			t.Errorf("PathReadable(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
 func TestPodManifestAntigravityConfigUsesGlibcImageWithoutSidecar(t *testing.T) {
 	manifest := PodManifest("77", "nelson@romaine.life", AntigravityConfigMode, ManifestOptions{
 		SessionImage:            "claude-image",

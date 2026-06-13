@@ -326,6 +326,48 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
 }
 
+// SecretMountDenyPrefixes are absolute realpath prefixes the session files
+// viewer must NEVER read. This is the ONLY security boundary for read/browse:
+// the viewer is otherwise default-allow (so the pod owner can see anything the
+// bypass-permissions agent wrote, wherever it wrote it), fenced only by this
+// denylist. The "/var/run/secrets/" entry covers every projected
+// serviceAccountToken mount built in PodManifest below — auth.romaine.life (the
+// platform crown-jewel token) and tank-operator — plus the kubelet-injected
+// default SA token at /var/run/secrets/kubernetes.io/serviceaccount. "/proc/"
+// and "/sys/" are denied for file-tree cleanliness + defense-in-depth.
+//
+// The deny decision runs on the in-pod REALPATH. On the Debian-based session
+// images "/var/run" is a symlink to "/run", so the projected token mounts whose
+// declared mountPath is "/var/run/secrets/..." actually resolve to
+// "/run/secrets/...". Both forms are listed so the realpath check (and a symlink
+// escape that lands on either) is covered — dropping "/run/secrets/" would let a
+// "/workspace/leak -> /var/run/secrets" symlink resolve past the denylist.
+//
+// TestProjectedSecretMountsAreDenied asserts every token/Secret mountPath in the
+// generated pod spec is covered here, and TestRealpathResolveAndDenylist proves
+// the realpath form is denied, so a future secret mounted at a novel path fails
+// CI instead of silently becoming browsable. Keep this list next to the mount
+// construction it guards.
+var SecretMountDenyPrefixes = []string{"/var/run/secrets/", "/run/secrets/", "/proc/", "/sys/"}
+
+// PathReadable reports whether an already-realpath-resolved absolute path may be
+// read through the files viewer: true unless it equals or is nested under a
+// denied prefix. The caller MUST pass the in-pod realpath (post symlink
+// resolution), never raw user input — a "/workspace/leak -> /var/run/secrets"
+// symlink would otherwise slip past a lexical check. The decision lives here in
+// Go as the single source of truth; the in-pod script only resolves realpaths.
+func PathReadable(resolved string) bool {
+	if !strings.HasPrefix(resolved, "/") {
+		return false
+	}
+	for _, deny := range SecretMountDenyPrefixes {
+		if resolved == strings.TrimSuffix(deny, "/") || strings.HasPrefix(resolved, deny) {
+			return false
+		}
+	}
+	return true
+}
+
 // noClaudeHijackModes are modes that must not receive the *Claude* OAuth
 // gateway / api-proxy host aliases (platform.claude.com, api.anthropic.com).
 // Codex and antigravity_gui are listed here because they route their own

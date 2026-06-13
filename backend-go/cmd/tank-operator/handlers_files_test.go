@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // TestIsImageContentType pins the image/non-image routing decision.
@@ -193,65 +195,105 @@ func TestSafeWorkspacePathRejectsLiteralTraversal(t *testing.T) {
 	}
 }
 
-func TestWorkspacePathBoundaryCheckRejectsSymlinkEscapes(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "workspace")
-	outside := filepath.Join(t.TempDir(), "outside")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatalf("mkdir root: %v", err)
-	}
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatalf("mkdir outside: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "inside.txt"), []byte("ok"), 0o644); err != nil {
-		t.Fatalf("write inside: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("no"), 0o644); err != nil {
-		t.Fatalf("write outside: %v", err)
-	}
-	linkToOutside := filepath.Join(root, "outside-link")
-	if err := os.Symlink(outside, linkToOutside); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-
+func TestSafeReadablePath(t *testing.T) {
 	cases := []struct {
-		name string
-		path string
-		ok   bool
+		name    string
+		in      string
+		want    string
+		wantErr bool
 	}{
-		{"existing file inside", filepath.Join(root, "inside.txt"), true},
-		{"new file inside", filepath.Join(root, "new.txt"), true},
-		{"literal parent outside", filepath.Join(root, "..", "outside", "secret.txt"), false},
-		{"existing file through outside symlink", filepath.Join(linkToOutside, "secret.txt"), false},
-		{"new file through outside symlink", filepath.Join(linkToOutside, "new.txt"), false},
+		{"blank defaults to workspace root", "", "/workspace", false},
+		{"workspace root", "/workspace", "/workspace", false},
+		{"inside workspace", "/workspace/app/main.go", "/workspace/app/main.go", false},
+		{"home dir (the ~/.claude case)", "/home/node/.claude/plans/x.md", "/home/node/.claude/plans/x.md", false},
+		{"tooling dir", "/opt/tank/session-config", "/opt/tank/session-config", false},
+		{"tmp", "/tmp/out.txt", "/tmp/out.txt", false},
+		{"arbitrary path is allowed (default-allow)", "/etc/hosts", "/etc/hosts", false},
+		{"bypass-write target is allowed", "/var/tmp/agent.txt", "/var/tmp/agent.txt", false},
+		{"relative resolves under workspace", "app/main.go", "/workspace/app/main.go", false},
+		{"secret token mount is denied", "/var/run/secrets/auth.romaine.life/token", "", true},
+		{"proc is denied", "/proc/1/environ", "", true},
+		{"lexical traversal into secrets is denied", "/workspace/../var/run/secrets/x", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := runWorkspaceBoundaryCheck(t, root, tc.path)
-			if got.OK != tc.ok {
-				t.Fatalf("boundary check ok = %v, want %v (resolved=%q error=%q)", got.OK, tc.ok, got.ResolvedPath, got.Error)
+			got, err := safeReadablePath(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("safeReadablePath(%q) succeeded, want error", tc.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("safeReadablePath(%q) error: %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Fatalf("safeReadablePath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
 }
 
-func runWorkspaceBoundaryCheck(t *testing.T, root, target string) struct {
-	OK           bool   `json:"ok"`
-	Error        string `json:"error"`
-	ResolvedPath string `json:"resolved_path"`
-} {
+// TestRealpathResolveAndDenylist exercises the authoritative read-side boundary:
+// the in-pod realpath script resolves symlinks, and sessionmodel.PathReadable
+// decides allow/deny on the RESOLVED path. A symlink pointing into
+// /var/run/secrets resolves into the denylist and is refused even though it sits
+// lexically inside the workspace; a symlink to an ordinary directory resolves to
+// a non-secret path and is allowed (reads are default-allow — only secrets are
+// fenced). This is the symlink-escape protection plus the new default-allow
+// semantics in one place.
+func TestRealpathResolveAndDenylist(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	outside := filepath.Join(t.TempDir(), "outside")
+	for _, d := range []string{root, outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "inside.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write inside: %v", err)
+	}
+	secretLink := filepath.Join(root, "leak")
+	if err := os.Symlink("/var/run/secrets", secretLink); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	outsideLink := filepath.Join(root, "outside-link")
+	if err := os.Symlink(outside, outsideLink); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	cases := []struct {
+		name         string
+		path         string
+		wantReadable bool
+	}{
+		{"ordinary file inside", filepath.Join(root, "inside.txt"), true},
+		{"new file inside", filepath.Join(root, "new.txt"), true},
+		{"symlink into /var/run/secrets is denied", filepath.Join(secretLink, "auth.romaine.life", "token"), false},
+		{"symlink to ordinary dir is allowed", filepath.Join(outsideLink, "notes.txt"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved := resolveRealpathLocally(t, tc.path)
+			if got := sessionmodel.PathReadable(resolved); got != tc.wantReadable {
+				t.Fatalf("PathReadable(resolved=%q) = %v, want %v", resolved, got, tc.wantReadable)
+			}
+		})
+	}
+}
+
+func resolveRealpathLocally(t *testing.T, target string) string {
 	t.Helper()
-	cmd := exec.Command("python3", "-c", workspacePathBoundaryCheckScript, root, target)
+	cmd := exec.Command("python3", "-c", realpathResolveScript, target)
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("run boundary check: %v", err)
+		t.Fatalf("run realpath resolve: %v", err)
 	}
 	var body struct {
-		OK           bool   `json:"ok"`
-		Error        string `json:"error"`
 		ResolvedPath string `json:"resolved_path"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
-		t.Fatalf("parse boundary output %q: %v", string(out), err)
+		t.Fatalf("parse realpath output %q: %v", string(out), err)
 	}
-	return body
+	return body.ResolvedPath
 }

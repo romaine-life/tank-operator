@@ -35,7 +35,7 @@ export function sessionFilesTabTitle(session: SessionWorkspaceState): string {
     return "This session does not have workspace files";
   }
   if (sessionFilesAvailable(session)) {
-    return "Browse files in /workspace";
+    return "Browse session files";
   }
   return "Files are available once the session container starts";
 }

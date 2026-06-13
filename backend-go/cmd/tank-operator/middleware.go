@@ -11,6 +11,7 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 const workspaceRoot = "/workspace"
@@ -47,6 +48,31 @@ func safeWorkspacePath(path string) (string, error) {
 type pathEscapeError struct{ path string }
 
 func (e *pathEscapeError) Error() string { return "path escapes workspace: " + e.path }
+
+// safeReadablePath lexically validates a path for the READ/browse file API.
+// Unlike safeWorkspacePath (write-side, /workspace-fenced), reads are
+// default-allow: the pod owner can browse anything the bypass-permissions agent
+// wrote, wherever it wrote it. The only rejection is a path under a secret
+// deny-prefix (sessionmodel.SecretMountDenyPrefixes). A blank or relative path
+// defaults under /workspace so the panel's default landing dir keeps working.
+//
+// This is only a lexical pre-filter. The authority is the in-pod realpath check
+// (resolveInPodReadablePath), which re-applies the denylist to the
+// symlink-resolved path so a "/workspace/leak -> /var/run/secrets" symlink can't
+// slip through. Returns errPathDenied (mapped to 403 by the handlers) on deny.
+func safeReadablePath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return workspaceRoot, nil
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = workspaceRoot + "/" + path
+	}
+	abs := filepath.Clean(path)
+	if !sessionmodel.PathReadable(abs) {
+		return "", errPathDenied
+	}
+	return abs, nil
+}
 
 func validateTurnArg(v string) string {
 	if turnArgPattern.MatchString(v) {
