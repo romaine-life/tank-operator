@@ -10,7 +10,6 @@ const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 test("model and effort option lists come from Tank run options, not local arrays", () => {
   expect(appSource).not.toMatch(/const CLAUDE_MODELS:/);
   expect(appSource).not.toMatch(/const CODEX_MODELS:/);
-  expect(appSource).not.toMatch(/const ANTIGRAVITY_MODELS:/);
   expect(appSource).not.toMatch(/const CLAUDE_EFFORTS:/);
   expect(appSource).not.toMatch(/const CODEX_EFFORTS:/);
   expect(appSource).toMatch(
@@ -41,11 +40,6 @@ test("Codex model labels do not advertise the unsupported bare GPT-5.3 model", (
   expect(appSource).toContain('"gpt-5.3-codex-spark"');
 });
 
-test("Antigravity model labels include Gemini 3.1 Pro", () => {
-  expect(appSource).toContain('"Gemini 3.1 Pro"');
-  expect(appSource).toContain("Antigravity · Gemini 3.1 Pro");
-});
-
 test("Codex run mode helper follows the session mode contract", () => {
   expect(appSource).toMatch(
     /function isCodexRunMode\(mode: SessionMode\): boolean \{[\s\S]{0,120}MODE_PROVIDERS\[mode\] === "codex" && SDK_CHAT_MODES\.has\(mode\);[\s\S]{0,20}\}/,
@@ -60,14 +54,10 @@ test("RunPrefs persists provider model and effort across page reloads", () => {
   expect(appSource).toMatch(/claudeEffort:\s*string;/);
   expect(appSource).toMatch(/codexModelId:\s*string;/);
   expect(appSource).toMatch(/codexEffort:\s*string;/);
-  expect(appSource).toMatch(/antigravityModelId:\s*string;/);
   expect(appSource).toMatch(/claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
   expect(appSource).toMatch(/claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
   expect(appSource).toMatch(/codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
   expect(appSource).toMatch(/codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
-  expect(appSource).toMatch(
-    /antigravityModelId:\s*DEFAULT_ANTIGRAVITY_MODEL_ID/,
-  );
 });
 
 test("Claude secondary uses the shared Claude run options and prefs", () => {
@@ -136,9 +126,6 @@ test("server and browser run prefs are reconciled through Tank run options", () 
   );
   expect(appSource).toMatch(
     /codexModelId: pickAllowedPrefId\([\s\S]{0,160}modelOptionsForProvider\("codex", runOptions\),[\s\S]{0,120}defaultModelForProvider\("codex", runOptions\)/,
-  );
-  expect(appSource).toMatch(
-    /antigravityModelId: pickAllowedPrefId\([\s\S]{0,160}modelOptionsForProvider\("antigravity", runOptions\),[\s\S]{0,120}defaultModelForProvider\("antigravity", runOptions\)/,
   );
 });
 

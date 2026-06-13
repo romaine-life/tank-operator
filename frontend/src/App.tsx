@@ -867,9 +867,6 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
-  antigravity_config: "Antigravity config",
-  antigravity_cli: "Antigravity Legacy (-p)",
-  antigravity_gui: "Antigravity GUI",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -887,9 +884,6 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
-  antigravity_config: "agy-cfg",
-  antigravity_cli: "agv-legacy",
-  antigravity_gui: "agy-gui",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -901,7 +895,6 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
-  antigravity_gui: "antigravity",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = MODE_PROVIDERS;
@@ -917,7 +910,6 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   anthropic_secondary: "Claude secondary",
   codex: "Codex",
-  antigravity: "Antigravity",
 };
 
 type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly";
@@ -965,8 +957,6 @@ const PROVIDER_QUOTA_WINDOW_DEFS: Record<
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
   ],
-  // No quota windows until the antigravity-runner reports usage evidence.
-  antigravity: [],
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -982,9 +972,6 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_exec_gui: "Retired Codex exec GUI mode",
   codex_app_server: "Retired Codex app-server alias",
   codex_config: "codex login --device-auth · seeds KV for Codex",
-  antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
-  antigravity_cli: "Terminal agy session · Google login from KV",
-  antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1710,7 +1697,6 @@ interface AdminAppVersion {
   app_image: AdminVersionImage;
   session_image: AdminVersionImage;
   codex_session_image: AdminVersionImage;
-  antigravity_session_image: AdminVersionImage;
   session_scope: string;
   pod_name?: string;
   fetched_at: string;
@@ -4360,22 +4346,15 @@ function isCodexRunMode(mode: SessionMode): boolean {
   return MODE_PROVIDERS[mode] === "codex" && SDK_CHAT_MODES.has(mode);
 }
 
-function isAntigravityRunMode(mode: SessionMode): boolean {
-  return mode === "antigravity_gui";
-}
-
 function sessionModeUsesModel(mode: SessionMode): boolean {
-  return (
-    isClaudeRunMode(mode) || isCodexRunMode(mode) || isAntigravityRunMode(mode)
-  );
+  return isClaudeRunMode(mode) || isCodexRunMode(mode);
 }
 
 function providerUsesModel(provider: Provider): boolean {
   return (
     provider === "anthropic" ||
     provider === "anthropic_secondary" ||
-    provider === "codex" ||
-    provider === "antigravity"
+    provider === "codex"
   );
 }
 
@@ -4891,8 +4870,6 @@ const MODEL_LABELS: Record<string, string> = {
   "gpt-5.4": "Codex · GPT-5.4",
   "gpt-5.4-mini": "Codex · GPT-5.4 Mini",
   "gpt-5.3-codex-spark": "Codex · GPT-5.3 Codex Spark",
-  "Gemini 3.1 Pro": "Antigravity · Gemini 3.1 Pro",
-  "Gemini 3.5 Flash (Medium)": "Antigravity · Gemini 3.5 Flash Medium",
 };
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
@@ -4917,7 +4894,6 @@ const DEFAULT_CLAUDE_MODEL_ID = "";
 const DEFAULT_CLAUDE_EFFORT_ID = "";
 const DEFAULT_CODEX_MODEL_ID = "";
 const DEFAULT_CODEX_EFFORT_ID = "";
-const DEFAULT_ANTIGRAVITY_MODEL_ID = "";
 
 interface SessionRunOptionMode {
   mode: string;
@@ -4945,7 +4921,6 @@ function providerForRunMode(mode: SessionMode): Provider | null {
   ) {
     return "codex";
   }
-  if (mode === "antigravity_gui") return "antigravity";
   return null;
 }
 
@@ -5052,11 +5027,6 @@ function reconcileRunPrefsWithRunOptions(
       effortOptionsForProvider("codex", runOptions),
       defaultEffortForProvider("codex", runOptions),
     ),
-    antigravityModelId: pickAllowedPrefId(
-      prefs.antigravityModelId,
-      modelOptionsForProvider("antigravity", runOptions),
-      defaultModelForProvider("antigravity", runOptions),
-    ),
   };
 }
 
@@ -5097,7 +5067,6 @@ function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
     "anthropic",
     "anthropic_secondary",
     "codex",
-    "antigravity",
   ];
   const normalizeProvider = (provider: unknown): Provider | null => {
     if (provider === "claude" || provider === "anthropic") return "anthropic";
@@ -5108,7 +5077,6 @@ function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
       return "anthropic_secondary";
     }
     if (provider === "codex") return "codex";
-    if (provider === "antigravity") return "antigravity";
     return null;
   };
   const stringArray = (v: unknown): string[] =>
@@ -5252,7 +5220,6 @@ interface RunPrefs {
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
-  antigravityModelId: string;
   initialMessageMode: InitialMessageMode;
 }
 
@@ -5271,7 +5238,6 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
-  antigravityModelId: DEFAULT_ANTIGRAVITY_MODEL_ID,
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
@@ -5406,8 +5372,6 @@ function loadRunPrefs(): RunPrefs {
         if (raw != null) out[key] = raw.trim();
       } else if (key === "codexEffort") {
         if (raw != null) out[key] = raw.trim();
-      } else if (key === "antigravityModelId") {
-        if (raw != null) out[key] = raw.trim();
       } else if (raw === "true" || raw === "false") {
         (out as unknown as Record<string, unknown>)[key] = raw === "true";
       }
@@ -5433,11 +5397,6 @@ function selectedModelIdForProvider(
   }
   if (provider === "codex") {
     return prefs.codexModelId || defaultModelForProvider(provider, runOptions);
-  }
-  if (provider === "antigravity") {
-    return (
-      prefs.antigravityModelId || defaultModelForProvider(provider, runOptions)
-    );
   }
   return "";
 }
@@ -5465,8 +5424,6 @@ function setModelPrefForProvider(
     setRunPref("claudeModelId", modelId);
   } else if (provider === "codex") {
     setRunPref("codexModelId", modelId);
-  } else if (provider === "antigravity") {
-    setRunPref("antigravityModelId", modelId);
   }
 }
 
@@ -5512,10 +5469,6 @@ function mergeServerRunPrefs(
         out[key] = raw.trim();
       }
     } else if (key === "codexEffort") {
-      if (typeof raw === "string") {
-        out[key] = raw.trim();
-      }
-    } else if (key === "antigravityModelId") {
       if (typeof raw === "string") {
         out[key] = raw.trim();
       }
@@ -8481,9 +8434,7 @@ function SessionTabMenu({
             title={
               session.mode === "codex_config"
                 ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                : session.mode === "antigravity_config"
-                  ? "capture the agy OAuth token from this pod and write it to KV"
-                  : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+                : "capture ~/.claude/.credentials.json from this pod and write it to KV"
             }
           >
             <SaveIcon className="run-tab-more-item-icon" />
@@ -13276,10 +13227,6 @@ function AdminVersionPanel({
         { label: "App", image: state.summary.app_image },
         { label: "Claude sessions", image: state.summary.session_image },
         { label: "Codex sessions", image: state.summary.codex_session_image },
-        {
-          label: "Antigravity sessions",
-          image: state.summary.antigravity_session_image,
-        },
       ]
     : [];
   return (
@@ -13360,7 +13307,7 @@ function AdminTestSlotDefaultsPanel({
   const modelChoices = modelOptionsForMode(draft.mode, sessionRunOptions);
   const effortChoices = effortOptionsForMode(draft.mode, sessionRunOptions);
   const provider = MODE_MENU_ICONS[draft.mode];
-  const modelRequired = provider === "codex" || provider === "antigravity";
+  const modelRequired = provider === "codex";
   const canSave =
     !state.loading &&
     !state.saving &&
@@ -14914,7 +14861,6 @@ function ChatPane({
   );
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
-  const isAntigravity = isAntigravityRunMode(session.mode);
   const usesModel = sessionModeUsesModel(session.mode);
   const usesEffort = sessionModeUsesEffort(session.mode);
   const ready = sessionContainerAvailable(session);
@@ -15060,9 +15006,7 @@ function ChatPane({
     ? runPrefs.claudeModelId
     : isCodex
       ? runPrefs.codexModelId
-      : isAntigravity
-        ? runPrefs.antigravityModelId
-        : "";
+      : "";
   const preferredEffortId = isClaude
     ? runPrefs.claudeEffort
     : isCodex
@@ -15072,9 +15016,7 @@ function ChatPane({
     ? defaultModelForMode(session.mode, sessionRunOptions)
     : isCodex
       ? defaultModelForMode(session.mode, sessionRunOptions)
-      : isAntigravity
-        ? defaultModelForMode(session.mode, sessionRunOptions)
-        : "";
+      : "";
   const fallbackEffortId = isClaude
     ? defaultEffortForMode(session.mode, sessionRunOptions)
     : isCodex

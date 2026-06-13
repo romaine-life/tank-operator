@@ -136,7 +136,7 @@ func TestProcessStrandedTurnsDefersYoungProgressedTurn(t *testing.T) {
 
 // TestProcessStrandedTurnsClassifiesContinuationsAsAwayErrors pins the
 // summon-invariant wiring: a stranded background-wake / scheduled-wakeup /
-// agent-continuation turn carries the away-error reason so the sidebar rings
+// terminal turn carries the away-error reason so the sidebar rings
 // the bell (the agent promised to resume while the user was away and the
 // resume silently died); an ordinary user turn does not.
 func TestProcessStrandedTurnsClassifiesContinuationsAsAwayErrors(t *testing.T) {

@@ -34,16 +34,6 @@ func doSaveCredentials(w http.ResponseWriter, r *http.Request, s *appServer, ema
 	case sessionmodel.ClaudeSecondaryConfigMode:
 		execCmd = []string{"sh", "-c", "cat $HOME/.claude/.credentials.json"}
 		kvKeyEnv = "CLAUDE_SECONDARY_CREDENTIALS_KV_KEY"
-	case sessionmodel.AntigravityConfigMode:
-		// agy writes the completed Google/Ultra OAuth token to a fixed file
-		// after the interactive paste-code login. Path + shape confirmed live
-		// against a real Ultra login: $HOME/.gemini/antigravity-cli/
-		// antigravity-oauth-token, a ~498-byte JSON blob {auth_method, token:{…}}.
-		// Note the directory is .gemini/antigravity-cli (NOT the Codeium/.codeium
-		// heritage the dir layout might suggest) and the file carries no .json
-		// extension.
-		execCmd = []string{"sh", "-c", "cat $HOME/.gemini/antigravity-cli/antigravity-oauth-token"}
-		kvKeyEnv = "ANTIGRAVITY_CREDENTIALS_KV_KEY"
 	default:
 		// claude / config modes
 		execCmd = []string{"sh", "-c", "cat $HOME/.claude/.credentials.json"}

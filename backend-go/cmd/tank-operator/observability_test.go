@@ -177,14 +177,14 @@ func TestStreamAuthTicketResultLabelKeepsClientCancelOutOfStoreErrors(t *testing
 	}
 }
 
-func TestSessionRuntimeConfigProviderLabelIncludesAntigravity(t *testing.T) {
-	for _, provider := range []string{"claude", "codex", "antigravity"} {
+func TestSessionRuntimeConfigProviderLabelIncludesLiveProviders(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
 		if got := sessionRuntimeConfigProviderLabel(provider); got != provider {
 			t.Fatalf("sessionRuntimeConfigProviderLabel(%q) = %q, want %q", provider, got, provider)
 		}
 	}
 
-	if got := sessionRuntimeConfigProviderLabel("gemini"); got != "unknown" {
+	if got := sessionRuntimeConfigProviderLabel("unknown-provider"); got != "unknown" {
 		t.Fatalf("sessionRuntimeConfigProviderLabel(unknown) = %q, want unknown", got)
 	}
 }

@@ -159,24 +159,6 @@ func TestCancelPendingWakesForSession(t *testing.T) {
 	}
 }
 
-// TestSupportsScheduledWakeupsRejectsAntigravity pins the long-running-agent
-// harness contract on the orchestrator: only Claude is fired by the scheduled-wakeup
-// loop. Antigravity self-continues natively (agy fires its own timer/task and emits
-// the continuation), so Tank must NOT own a clock for it — that double-wakes a
-// self-managing agent and is the trap that cost ~20 prior attempts. The runner
-// relays agy's self-continuation through /agent-continuation instead. See
-// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
-func TestSupportsScheduledWakeupsRejectsAntigravity(t *testing.T) {
-	if !supportsScheduledWakeups("claude") {
-		t.Fatal("supportsScheduledWakeups(claude) = false, want true")
-	}
-	for _, provider := range []string{"antigravity", "codex", ""} {
-		if supportsScheduledWakeups(provider) {
-			t.Fatalf("supportsScheduledWakeups(%q) = true, want false (only claude is fired by Tank)", provider)
-		}
-	}
-}
-
 func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "claude-runner"))

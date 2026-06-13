@@ -337,7 +337,6 @@ Contract impact:
 - The background wake boundary projects as a `meta` chip
   (`metaKind: background_task_wake`) inside Turn activity — "Background task
   finished — agent re-invoked" (or "Agent continued on its own" for the
-  antigravity self-continuation relay) — never as a user-side message bubble.
   The `turn.submitted.payload.prompt` text is AGENT-DIRECTED harness
   instruction; rendering it raw in the user's chat voice was the "wake-notice
   prose rendered raw" defect. The full prompt stays on the chip's

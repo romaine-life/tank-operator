@@ -62,7 +62,6 @@ terminal under its own id, like the AskUserQuestion question shell, paused
 asking turn, and rotated continuation, must be excluded from its candidate
 model or the sweep writes false `turn.command_failed` terminals onto it;
 this happened in production on the sweep's first day, 2026-06-12). Producer-side completeness is not
-completeness. Precedent: tank-operator#1030 introduced `agent-continuation`
 turns (a new source, a new no-user-message turn shape, a new terminal flag)
 with zero read-model changes; the relay rendered as a standalone turn and the
 pending task was invisible at rest until tank-operator#1035 published the
@@ -259,7 +258,6 @@ A conversation projection has these UI states:
   the submitted turn. The provider callback may still be paused internally,
   but the transcript turn boundary is owned by Tank.
 - `scheduled`: the agent parked itself with pending time-bound work (a Claude
-  `ScheduleWakeup`, an Antigravity `schedule`, or a `run_in_background` wake).
   The sibling of
   `needs_input` — a non-terminal pause-phase of a live (simulated) turn that
   resumes on the clock/event, not on the user, so it does **not** summon. A turn
@@ -535,21 +533,14 @@ Codex SDK adapter:
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
 | Abort from user interrupt | `turn.interrupted` | Distinct from provider failure. |
 
-Antigravity transcript adapter:
 
 | Provider transcript step | Tank event | Notes |
 | --- | --- | --- |
 | JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
-| First mapped provider step for a turn | `turn.started` | agy writes append-only JSONL transcript files instead of streaming a first-class SDK event. The runner synthesizes the Tank turn start from the first mapped step. |
 | `source=USER_EXPLICIT` | ignored | Tank owns the durable user row. Provider echoes must not enter the transcript. |
 | `source=SYSTEM` history/context steps | ignored | Injected context is not a user-visible transcript item. |
-| `source=SYSTEM`, `type=ERROR_MESSAGE` | `item.failed` | agy uses this shape as the terminal result for invalid provider tool calls, such as disabled MCP tools or invalid artifact paths. It must close the matching pending tool item; dropping it leaves stale pending state and causes later tool results to attach to the wrong title. |
-| `source=MODEL`, `type=PLANNER_RESPONSE`, `tool_calls[]` | `item.started` | Each tool call opens a tool item. Provider item ids include the agy conversation id when available because one root turn can append subagent transcript files with duplicate `step_index` values. |
-| `source=MODEL` tool result step with non-error status | `item.completed` | Completes the matching pending tool item in the same agy conversation. |
 | `source=MODEL` tool result step with `status=ERROR` | `item.failed` | Tool execution failure is item-scoped and does not fail the whole session. |
 | `source=MODEL`, `type=PLANNER_RESPONSE` prose without tool calls | `item.completed` | Assistant message item; the latest such message is the final-answer candidate for `turn.completed`. |
-| agy process success | `turn.completed` | Include usage when loadCodeAssist reports it. |
-| agy process failure | `turn.failed` | Provider/process failure, not a user interrupt. |
 | User interrupt / runner shutdown | `turn.interrupted` | Distinct from provider failure. |
 
 ## Backend API Sketch
@@ -728,7 +719,6 @@ by the launch-time create boundary, so this endpoint writes `turn.submitted`
 only.
 Command ack happens only after the corresponding durable terminal event is
 published. Provider self-scheduled wakeups are backend-owned durable state:
-the Claude runner extracts `ScheduleWakeup` tool_use calls and the Antigravity
 runner extracts `schedule` tool calls, then registers them through
 `POST /api/internal/sessions/{session_id}/scheduled-wakeups` with the provider
 item id as the idempotency key. The orchestrator claims due rows from

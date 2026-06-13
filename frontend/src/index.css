@@ -131,8 +131,6 @@
   --mode-codex-gui-fg: #8bd7c5;
   --mode-codex-config-bg: rgba(180, 200, 120, 0.10);
   --mode-codex-config-fg: #c9d68b;
-  --mode-antigravity-config-bg: rgba(66, 133, 244, 0.12);
-  --mode-antigravity-config-fg: #9db8f0;
 
   /* Radii */
   --radius-sm: 0.375rem;
@@ -2181,7 +2179,6 @@ button:disabled {
 .mode-codex_exec_gui,
 .mode-codex_app_server { background: var(--mode-codex-gui-bg); color: var(--mode-codex-gui-fg); }
 .mode-codex_config        { background: var(--mode-codex-config-bg); color: var(--mode-codex-config-fg); }
-.mode-antigravity_config  { background: var(--mode-antigravity-config-bg); color: var(--mode-antigravity-config-fg); }
 
 /* Cluster health ------------------------------------------------------------ */
 

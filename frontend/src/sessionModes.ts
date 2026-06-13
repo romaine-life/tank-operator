@@ -1,8 +1,7 @@
 export type Provider =
   | "anthropic"
   | "anthropic_secondary"
-  | "codex"
-  | "antigravity";
+  | "codex";
 export type SessionInteraction = "gui" | "cli";
 
 export const SESSION_MODE_ORDER = [
@@ -18,9 +17,6 @@ export const SESSION_MODE_ORDER = [
   "codex_exec_gui",
   "codex_app_server",
   "codex_config",
-  "antigravity_config",
-  "antigravity_cli",
-  "antigravity_gui",
 ] as const;
 
 export type SessionMode = (typeof SESSION_MODE_ORDER)[number];
@@ -32,8 +28,6 @@ export type DefaultSessionMode = Extract<
   | "claude_secondary_gui"
   | "codex_cli"
   | "codex_gui"
-  | "antigravity_cli"
-  | "antigravity_gui"
 >;
 
 type RolloutContract = "claude" | "codex" | "gui" | null;
@@ -50,9 +44,6 @@ export interface SessionModeContract {
   rollout: RolloutContract;
 }
 
-// "antigravity" is Gemini-Ultra via `agy`. It participates in the same GUI chat
-// provider contract as Claude/Codex; only CLI and model/effort controls are
-// absent until the runner exposes equivalent choices.
 export const SESSION_MODE_CONTRACT = {
   api_key: {
     provider: "anthropic",
@@ -186,39 +177,6 @@ export const SESSION_MODE_CONTRACT = {
     repos: false,
     rollout: null,
   },
-  antigravity_config: {
-    provider: "antigravity",
-    interaction: null,
-    defaultSelectable: false,
-    configCredentials: true,
-    chatSurface: false,
-    sdkChat: false,
-    workspaceFiles: false,
-    repos: false,
-    rollout: null,
-  },
-  antigravity_cli: {
-    provider: "antigravity",
-    interaction: "cli",
-    defaultSelectable: true,
-    configCredentials: false,
-    chatSurface: false,
-    sdkChat: false,
-    workspaceFiles: false,
-    repos: false,
-    rollout: null,
-  },
-  antigravity_gui: {
-    provider: "antigravity",
-    interaction: "gui",
-    defaultSelectable: true,
-    configCredentials: false,
-    chatSurface: true,
-    sdkChat: true,
-    workspaceFiles: true,
-    repos: true,
-    rollout: "gui",
-  },
 } satisfies Record<SessionMode, SessionModeContract>;
 
 function modeSet(
@@ -235,7 +193,6 @@ export const PROVIDERS: readonly Provider[] = [
   "anthropic",
   "anthropic_secondary",
   "codex",
-  "antigravity",
 ];
 
 export const MODE_PROVIDERS: Record<SessionMode, Provider> =

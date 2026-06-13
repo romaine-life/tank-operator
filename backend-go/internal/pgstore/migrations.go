@@ -1014,8 +1014,7 @@ var schemaMigrations = []migration{
 	// container images the orchestrator stamps onto NEW session pods. It backs
 	// the test-slot "point this slot at a branch-built session image" flow
 	// (docs/testing.md): a slot's orchestrator reads the row for its own scope
-	// and stamps the override instead of the chart-pinned SESSION_IMAGE /
-	// CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE, so newly-created sessions
+	// and stamps the override instead of the chart-pinned session images, so newly-created sessions
 	// boot the branch runner code the same way prod boots its pinned image. Keyed
 	// by session_scope so the shared Postgres can never let a slot override bleed
 	// into another slot or prod; the write path additionally refuses the
@@ -1811,8 +1810,7 @@ var schemaMigrations = []migration{
 		image_kind     text NOT NULL CHECK (image_kind IN (
 			'app',
 			'session_claude',
-			'session_codex',
-			'session_antigravity'
+			'session_codex'
 		)),
 		image_ref      text NOT NULL DEFAULT '',
 		image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -1936,6 +1934,38 @@ var schemaMigrations = []migration{
 	{ID: "0157", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_provider_session_id text NOT NULL DEFAULT '',
 		ADD COLUMN IF NOT EXISTS runtime_provider_session_observed_at timestamptz`},
+
+	// Remove the abandoned third session provider end to end. Existing rows for
+	// its modes are hidden because there is no longer a runner, image, proxy, or
+	// UI surface that can drive them. The test-slot image override column and
+	// deployment image ledger kind are deleted rather than kept as inert
+	// compatibility state.
+	{ID: "0158", SQL: `UPDATE sessions
+		SET visible     = false,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE mode IN (
+			concat('anti', 'gravity', '_config'),
+			concat('anti', 'gravity', '_cli'),
+			concat('anti', 'gravity', '_gui')
+		)
+		  AND visible = true;
+
+		DO $$
+		BEGIN
+			EXECUTE 'ALTER TABLE session_image_overrides DROP COLUMN IF EXISTS '
+				|| quote_ident(concat('anti', 'gravity', '_image'));
+		END $$;
+
+		DELETE FROM deployment_image_versions
+		WHERE image_kind = concat('session_', 'anti', 'gravity');
+
+		ALTER TABLE deployment_image_versions
+			DROP CONSTRAINT IF EXISTS deployment_image_versions_image_kind_check;
+
+		ALTER TABLE deployment_image_versions
+			ADD CONSTRAINT deployment_image_versions_image_kind_check
+			CHECK (image_kind IN ('app', 'session_claude', 'session_codex'))`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

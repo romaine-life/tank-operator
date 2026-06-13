@@ -18,26 +18,17 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
 )
 
-// stubResolver maps SA tokens to pods and pods to storage keys without a
-// cluster: the Kubernetes seam under test elsewhere stays out of the
+// stubResolver maps pod identity tokens to storage keys without contacting
+// auth.romaine.life: the identity seam under test elsewhere stays out of the
 // authorization-semantics tests.
 type stubResolver struct {
-	tokens map[string]string // SA token -> pod name
-	pods   map[string]string // pod name -> storage key
+	tokens map[string]string // pod token -> storage key
 }
 
-func (s *stubResolver) ResolvePodFromToken(_ context.Context, token string) (string, error) {
-	pod, ok := s.tokens[token]
+func (s *stubResolver) SessionStorageKeyFromToken(_ context.Context, token string) (string, error) {
+	key, ok := s.tokens[token]
 	if !ok {
 		return "", errors.New("token rejected")
-	}
-	return pod, nil
-}
-
-func (s *stubResolver) SessionStorageKeyForPod(_ context.Context, podName string) (string, error) {
-	key, ok := s.pods[podName]
-	if !ok {
-		return "", errors.New("no session binding")
 	}
 	return key, nil
 }
@@ -120,8 +111,9 @@ func testService(t *testing.T) *calloutService {
 		issuer:  issuer,
 		account: natsGlobalAccount,
 		resolver: &stubResolver{
-			tokens: map[string]string{"sa-token-864": "session-pod-864"},
-			pods:   map[string]string{"session-pod-864": "864"},
+			tokens: map[string]string{
+				"pod-token-864": "864",
+			},
 		},
 		commandStream: defaultCommandStream,
 		providers:     defaultProviders,
@@ -160,7 +152,7 @@ func TestSessionPodGetsOwnSubjectsOnly(t *testing.T) {
 	svc := testService(t)
 	_, url := startCalloutServer(t, svc)
 
-	nc, err := nats.Connect(url, nats.UserInfo("864", "sa-token-864"))
+	nc, err := nats.Connect(url, nats.UserInfo("864", "pod-token-864"))
 	if err != nil {
 		t.Fatalf("session pod connect: %v", err)
 	}
@@ -210,7 +202,7 @@ func TestSessionPodCannotSubscribeToOtherSubjects(t *testing.T) {
 	svc := testService(t)
 	_, url := startCalloutServer(t, svc)
 
-	nc, err := nats.Connect(url, nats.UserInfo("864", "sa-token-864"))
+	nc, err := nats.Connect(url, nats.UserInfo("864", "pod-token-864"))
 	if err != nil {
 		t.Fatalf("session pod connect: %v", err)
 	}
@@ -243,7 +235,7 @@ func TestUnknownCredentialsAreRejected(t *testing.T) {
 	_, url := startCalloutServer(t, svc)
 
 	if _, err := nats.Connect(url, nats.UserInfo("864", "wrong-token")); err == nil {
-		t.Fatalf("bad SA token must be rejected at connect")
+		t.Fatalf("bad pod token must be rejected at connect")
 	}
 	if _, err := nats.Connect(url, nats.Token("shared-fleet-token")); err == nil {
 		t.Fatalf("bare shared token must be rejected at connect")
@@ -260,7 +252,7 @@ func TestClaimedIdentityMustMatchPodBinding(t *testing.T) {
 	// The token is valid and binds to session 864 — claiming 865 is a
 	// mis-wired or hostile pod and must be rejected, not silently
 	// downgraded to the claimed session.
-	if _, err := nats.Connect(url, nats.UserInfo("865", "sa-token-864")); err == nil {
+	if _, err := nats.Connect(url, nats.UserInfo("865", "pod-token-864")); err == nil {
 		t.Fatalf("identity mismatch must be rejected at connect")
 	}
 }

@@ -14,9 +14,7 @@ import (
 )
 
 // providerFatalReportTotal counts runner-reported provider-fatal events by
-// provider and result so "agy died and killed the session" has an operable
-// signal ("if this comes up often i'll figure out a way to revive them" —
-// this counter is how often).
+// provider and result.
 var providerFatalReportTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_session_provider_fatal_total",
@@ -26,9 +24,8 @@ var providerFatalReportTotal = promauto.NewCounterVec(
 )
 
 // handleInternalProviderFatal is the pod-side runner's report that its agent
-// process died and the session cannot continue. Per the session lifecycle
-// decision recorded in backend-go/cmd/antigravity-runner/ARCHITECTURE.md,
-// provider-process death is session-terminal: the session row moves to
+// process died and the session cannot continue. Provider-process death is
+// session-terminal: the session row moves to
 // Failed through the same RowWriter transition the K8s watch uses for pod
 // death, so the sidebar, activity, and UI gating behave identically. There
 // is deliberately no revival path.

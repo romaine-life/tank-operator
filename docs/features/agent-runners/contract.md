@@ -59,7 +59,6 @@ the rest of the product reconstruct what happened.
   persistence.
 - A runner must not require an open browser to continue work.
 - Provider self-scheduled wakeup state is durable in Postgres. Claude
-  `ScheduleWakeup` and Antigravity `schedule` tool calls are registered by the
   runner with the backend; the orchestrator later submits the wakeup through
   the same backend-owned turn boundary as a user turn.
   Registration, cancellation, fire, and failure also write

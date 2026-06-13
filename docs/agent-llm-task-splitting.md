@@ -88,7 +88,7 @@ stage-split workflow shape **or** explicitly document why a single
 LLM is appropriate for that flow. Drift toward "let one LLM do
 everything" is the failure mode this principle exists to prevent.
 
-Glimmung-driven projects with `runner: native-k8s` should split LLM
+Glimmung-driven projects using runner-k8s should split LLM
 work across multiple `k8s_job` steps (each invoking claude-code with
 a narrowed prompt and tool set), the same way spirelens splits across
 GitHub Actions jobs. Per-stage tool permissions and per-stage handoff
