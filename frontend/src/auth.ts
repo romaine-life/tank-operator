@@ -131,9 +131,13 @@ export type StreamTicketRequest =
   | { stream: "session-events"; sessionId: string; sessionScope?: string }
   | { stream: "pinned-repos"; sessionScope?: string };
 
-export async function authedEventSourceURL(
+type BrowserNativeTicketRequest =
+  | StreamTicketRequest
+  | { stream: "file-raw"; sessionId: string; path: string; sessionScope?: string };
+
+async function authedBrowserNativeURL(
   path: string,
-  request: StreamTicketRequest,
+  request: BrowserNativeTicketRequest,
 ): Promise<string> {
   const res = await authedFetch("/api/auth/stream-ticket", {
     method: "POST",
@@ -141,7 +145,10 @@ export async function authedEventSourceURL(
     body: JSON.stringify({
       stream: request.stream,
       ...(request.sessionScope ? { session_scope: request.sessionScope } : {}),
-      ...(request.stream === "session-events" ? { session_id: request.sessionId } : {}),
+      ...(request.stream === "session-events" || request.stream === "file-raw"
+        ? { session_id: request.sessionId }
+        : {}),
+      ...(request.stream === "file-raw" ? { path: request.path } : {}),
     }),
   });
   if (!res.ok) {
@@ -154,6 +161,25 @@ export async function authedEventSourceURL(
   }
   const separator = path.includes("?") ? "&" : "?";
   return `${path}${separator}stream_ticket=${encodeURIComponent(ticket)}`;
+}
+
+export async function authedEventSourceURL(
+  path: string,
+  request: StreamTicketRequest,
+): Promise<string> {
+  return authedBrowserNativeURL(path, request);
+}
+
+export async function authedFileRawURL(
+  sessionId: string,
+  path: string,
+): Promise<string> {
+  const rawPath = `/api/sessions/${encodeURIComponent(sessionId)}/files/raw?path=${encodeURIComponent(path)}`;
+  return authedBrowserNativeURL(rawPath, {
+    stream: "file-raw",
+    sessionId,
+    path,
+  });
 }
 
 export async function authedEventSource(

@@ -37,12 +37,20 @@ test("computeFitScale shrinks large images to fit the container", () => {
   expect(fit).toBe(0.5);
 });
 
-test("computeFitScale never upscales small images past natural size", () => {
+test("computeFitScale upscales smaller screenshots to an inspectable size", () => {
   const fit = computeFitScale(
     { width: 100, height: 100 },
     { width: 1000, height: 1000 },
   );
-  expect(fit).toBe(1);
+  expect(fit).toBe(MAX_SCALE);
+});
+
+test("computeFitScale caps extreme upscaling at the maximum zoom", () => {
+  const fit = computeFitScale(
+    { width: 1, height: 1 },
+    { width: 1000, height: 1000 },
+  );
+  expect(fit).toBe(MAX_SCALE);
 });
 
 test("computeFitScale is defensive about unknown dimensions", () => {

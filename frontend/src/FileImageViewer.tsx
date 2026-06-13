@@ -27,6 +27,7 @@ import {
 interface FileImageViewerProps {
   src: string;
   alt: string;
+  openHref?: string;
 }
 
 interface PendingScroll {
@@ -42,12 +43,27 @@ interface PendingScroll {
 
 const NO_SIZE: Size = { width: 0, height: 0 };
 
+type MouseClickLike = Pick<
+  MouseEvent,
+  "button" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"
+>;
+
+function isPlainLeftClick(event: MouseClickLike): boolean {
+  return (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
 /**
  * Zoomable preview for workspace image/screenshot files.
  *
  * Two display modes:
- *  - "fit": image is contained within the viewport at up to natural size
- *    (the historical behaviour) and tracks container resizes.
+ *  - "fit": image is scaled to an inspectable contained size and tracks
+ *    container resizes.
  *  - "zoom": image is rendered at `naturalSize * scale` pixels and the
  *    surrounding viewport scrolls/pans, so users can inspect detail.
  *
@@ -55,7 +71,7 @@ const NO_SIZE: Size = { width: 0, height: 0 };
  * cursor, double-click to toggle fit vs. 100%, and click-drag to pan when the
  * image overflows the viewport. Pure zoom math lives in `./imageZoom`.
  */
-export function FileImageViewer({ src, alt }: FileImageViewerProps) {
+export function FileImageViewer({ src, alt, openHref }: FileImageViewerProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [naturalSize, setNaturalSize] = useState<Size>(NO_SIZE);
   const [containerSize, setContainerSize] = useState<Size>(NO_SIZE);
@@ -225,7 +241,13 @@ export function FileImageViewer({ src, alt }: FileImageViewerProps) {
   }, []);
 
   const imgStyle: React.CSSProperties = fit
-    ? { maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }
+    ? {
+        width: `${naturalSize.width * fitScale}px`,
+        height: `${naturalSize.height * fitScale}px`,
+        maxWidth: "100%",
+        maxHeight: "100%",
+        objectFit: "contain",
+      }
     : {
         width: `${naturalSize.width * scale}px`,
         height: `${naturalSize.height * scale}px`,
@@ -241,6 +263,23 @@ export function FileImageViewer({ src, alt }: FileImageViewerProps) {
     .filter(Boolean)
     .join(" ");
 
+  const image = (
+    <img
+      className="run-files-viewer-image"
+      alt={alt}
+      src={src}
+      draggable={false}
+      style={imgStyle}
+      onLoad={(e) => {
+        const img = e.currentTarget;
+        setNaturalSize({
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        });
+      }}
+    />
+  );
+
   return (
     <div className="run-files-viewer-image-stage">
       <div
@@ -253,20 +292,23 @@ export function FileImageViewer({ src, alt }: FileImageViewerProps) {
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-        <img
-          className="run-files-viewer-image"
-          alt={alt}
-          src={src}
-          draggable={false}
-          style={imgStyle}
-          onLoad={(e) => {
-            const img = e.currentTarget;
-            setNaturalSize({
-              width: img.naturalWidth,
-              height: img.naturalHeight,
-            });
-          }}
-        />
+        {openHref ? (
+          <a
+            className="run-files-viewer-image-link"
+            href={openHref}
+            target="_blank"
+            rel="noreferrer"
+            draggable={false}
+            onClick={(e) => {
+              if (isPlainLeftClick(e)) e.preventDefault();
+            }}
+            onDragStart={(e) => e.preventDefault()}
+          >
+            {image}
+          </a>
+        ) : (
+          image
+        )}
       </div>
       <div className="run-files-image-zoom" role="group" aria-label="Image zoom">
         <button

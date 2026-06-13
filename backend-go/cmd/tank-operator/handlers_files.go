@@ -111,6 +111,39 @@ func screenshotExtension(contentType, rawName string) string {
 	return ".png"
 }
 
+func rawFileContentType(path string) string {
+	ext := ""
+	if dot := strings.LastIndexByte(path, '.'); dot >= 0 && dot < len(path)-1 {
+		ext = strings.ToLower(path[dot:])
+	}
+	switch ext {
+	case ".avif":
+		return "image/avif"
+	case ".bmp":
+		return "image/bmp"
+	case ".gif":
+		return "image/gif"
+	case ".heic":
+		return "image/heic"
+	case ".heif":
+		return "image/heif"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".svg":
+		return "image/svg+xml"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func fileRawTicketResourceID(sessionID, relPath string) string {
+	return strings.TrimSpace(sessionID) + "\x1f" + strings.TrimSpace(relPath)
+}
+
 // uniqueAttachmentRelPath returns the workspace-relative path a non-image
 // upload should land at — `.attachments/<unix-ns>-<sanitized-name>`.
 // Image uploads go through the in-pod O_EXCL `screenshots/<n>.<ext>`
@@ -436,17 +469,7 @@ PY`,
 
 // handleGetFileRaw returns raw file bytes (up to 8 MiB).
 func (s *appServer) handleGetFileRaw(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
-	if herr != nil {
-		writeError(w, herr.status, herr.msg)
-		return
-	}
-
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
 		writeError(w, http.StatusBadRequest, "missing path")
@@ -455,6 +478,28 @@ func (s *appServer) handleGetFileRaw(w http.ResponseWriter, r *http.Request) {
 	absPath, err := safeWorkspacePath(filePath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	relPath := workspaceRelPath(absPath)
+
+	var user auth.User
+	if strings.TrimSpace(r.URL.Query().Get("stream_ticket")) != "" {
+		ticketUser, _, ok := s.requireBrowserStreamAuth(w, r, streamKindFileRaw, fileRawTicketResourceID(sessionID, relPath))
+		if !ok {
+			return
+		}
+		user = ticketUser
+	} else {
+		authUser, ok := s.requireAuth(w, r)
+		if !ok {
+			return
+		}
+		user = authUser
+	}
+
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
+	if herr != nil {
+		writeError(w, herr.status, herr.msg)
 		return
 	}
 	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
@@ -470,7 +515,7 @@ func (s *appServer) handleGetFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", rawFileContentType(absPath))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
 }

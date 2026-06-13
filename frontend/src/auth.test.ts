@@ -2,6 +2,7 @@ import { test, expect } from "vitest";
 import {
   authedFetch,
   authedEventSourceURL,
+  authedFileRawURL,
   bootstrapAuth,
   clearStoredToken,
   getStoredToken,
@@ -201,6 +202,48 @@ test("authedEventSourceURL mints pinned-repos stream tickets without a session i
     expect(await authedEventSourceURL("/api/github/pinned-repos/events", {
               stream: "pinned-repos",
             })).toBe("/api/github/pinned-repos/events?stream_ticket=pins-ticket");
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
+  }
+});
+
+test("authedFileRawURL mints a path-bound browser-native file ticket", async () => {
+  const originalLocalStorage = (globalThis as { localStorage?: Storage }).localStorage;
+  const originalFetch = globalThis.fetch;
+  const storage = new Map<string, string>([
+    ["auth-romaine-jwt", "jwt"],
+  ]);
+
+  (globalThis as { localStorage?: Storage }).localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
+    clear: () => storage.clear(),
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() {
+      return storage.size;
+    },
+  } as Storage;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(String(input)).toBe("/api/auth/stream-ticket");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer jwt");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      stream: "file-raw",
+      session_id: "152",
+      path: "screenshots/result one.png",
+    });
+    return jsonResponse({ ticket: "file-ticket" });
+  }) as typeof fetch;
+
+  try {
+    expect(await authedFileRawURL("152", "screenshots/result one.png")).toBe(
+      "/api/sessions/152/files/raw?path=screenshots%2Fresult%20one.png&stream_ticket=file-ticket",
+    );
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
