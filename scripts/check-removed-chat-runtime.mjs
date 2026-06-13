@@ -135,6 +135,16 @@ const blocked = [
   { name: "retired Tank order key storage name", pattern: /\btank_order_key\b/ },
   { name: "retired Tank event sequence storage name", pattern: /\btank_event_seq\b/ },
   { name: "retired frontend activity poll interval", pattern: /\bPOLL_INTERVAL_MS\b/ },
+  // Mid-session model/effort re-pin replaced the pod-lifetime seal that
+  // silently ignored later model/effort changes. The claude-runner now tears
+  // down + rebuilds query() with provider-session resume; codex re-resumes its
+  // thread. Block the retired "ignore the override" metric/identifier so a
+  // future change cannot quietly restore the silent-divergence path. See
+  // docs/features/agent-runners/contract.md.
+  {
+    name: "retired pod-lifetime model seal (silent override-ignore)",
+    pattern: /optionsOverrideIgnoredTotal|tank_runner_options_override_ignored_total/,
+  },
   { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
   // tank-operator#83 — sidebar session-list moved from wake-and-refetch
   // polling onto a durable typed-event ledger + cursor-resumable SSE.

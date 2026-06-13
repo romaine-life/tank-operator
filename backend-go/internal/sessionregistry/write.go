@@ -183,10 +183,12 @@ func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, e
 	return err
 }
 
-// SetRuntimeContextWindow records the first provider-observed model context
-// window for a session. The requested session model is immutable after create,
-// so later differing values are treated as provider/runtime anomalies and do
-// not silently change the durable UI denominator.
+// SetRuntimeContextWindow records the provider-observed model context window
+// for a session. It is latest-observed-wins: the runner reports the window
+// once per pinned model and resets its latch on a mid-session model re-pin, so
+// a model switch legitimately updates the durable UI denominator (a switch to
+// a model with a different window must not leave the old denominator stale).
+// Unchanged values are skipped so the row_version cursor does not churn.
 func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	sessionID = strings.TrimSpace(sessionID)
@@ -198,13 +200,13 @@ func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID st
 		UPDATE sessions
 		SET runtime_context_window_tokens      = $4,
 			runtime_context_window_source      = $5,
-			runtime_context_window_observed_at = COALESCE(runtime_context_window_observed_at, now()),
+			runtime_context_window_observed_at = now(),
 			updated_at                         = now(),
 			row_version                        = nextval('sessions_row_version_seq')
 		WHERE email = $1
 			AND session_scope = $2
 			AND session_id = $3
-			AND runtime_context_window_tokens = 0
+			AND runtime_context_window_tokens IS DISTINCT FROM $4
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, tokens, source)
 	return err

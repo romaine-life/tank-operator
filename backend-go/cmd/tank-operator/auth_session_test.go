@@ -483,12 +483,12 @@ func (r *testSessionRegistry) SetRuntimeContextWindow(_ context.Context, email, 
 	if !ok {
 		return nil
 	}
-	if record.RuntimeContextWindowTokens == 0 {
-		record.RuntimeContextWindowTokens = tokens
-		record.RuntimeContextWindowSource = source
-		record.RuntimeContextWindowObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		records[sessionID] = record
-	}
+	// Latest-observed-wins, mirroring the store (a mid-session model re-pin
+	// legitimately updates the window).
+	record.RuntimeContextWindowTokens = tokens
+	record.RuntimeContextWindowSource = source
+	record.RuntimeContextWindowObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	records[sessionID] = record
 	return nil
 }
 func (r *testSessionRegistry) SetRuntimeProviderSessionID(_ context.Context, email, sessionID, providerSessionID string) error {

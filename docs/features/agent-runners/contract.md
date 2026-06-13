@@ -37,6 +37,14 @@ the rest of the product reconstruct what happened.
   pre-provider progress (`turn.submitted` projection and runner-owned
   `turn.claimed` when the runner accepts the command), runner progress, and
   exactly one terminal turn outcome.
+- Model and effort are sealed within a turn but re-pinnable between turns: a
+  user may change the session's model/effort mid-session (the durable
+  `model`/`effort` columns, set via `PUT /api/sessions/{id}/run-config`). The
+  change applies to the next turn, never mid-turn — the runner re-pins at an
+  idle turn boundary by tearing down the current provider query/thread and
+  rebuilding it with provider-session resume + the new options, preserving the
+  conversation. Antigravity is excluded (its model is an `agy` process-start
+  argument). The runner must not silently ignore a changed model/effort.
 - Stop/interrupt remains pending until a durable interrupted, completed,
   failed, or already-terminal event resolves it.
 - Stop/interrupt against a turn that is already terminal must not create a new
@@ -102,6 +110,11 @@ the rest of the product reconstruct what happened.
   provider item IDs.
 - Provider failures must become durable failure events instead of silent
   strandings.
+- A mid-session model/effort re-pin that fails provider resume (for example a
+  cross-model thinking-block rejection) must resolve the turn with a durable
+  `turn.failed`, never a silent stranding; the failure class stays visible in
+  `tank_runner_provider_failure_signature_total` so a cross-model resume
+  regression is observable.
 - Provider rate-limit stream frames must be classified by the provider's
   primary quota status before they affect durable turn state. A primary
   rejected/exhausted quota resolves the active turn with

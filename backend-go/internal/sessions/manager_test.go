@@ -1017,11 +1017,11 @@ func (r *managerTestRegistry) SetRuntimeConfig(_ context.Context, email, session
 func (r *managerTestRegistry) SetRuntimeContextWindow(_ context.Context, email, sessionID string, tokens int64, source string) error {
 	for i, record := range r.records {
 		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
-			if r.records[i].RuntimeContextWindowTokens == 0 {
-				r.records[i].RuntimeContextWindowTokens = tokens
-				r.records[i].RuntimeContextWindowSource = source
-				r.records[i].RuntimeContextWindowObservedAt = "2026-05-21T00:00:00Z"
-			}
+			// Latest-observed-wins, mirroring the store (a mid-session model
+			// re-pin legitimately updates the window).
+			r.records[i].RuntimeContextWindowTokens = tokens
+			r.records[i].RuntimeContextWindowSource = source
+			r.records[i].RuntimeContextWindowObservedAt = "2026-05-21T00:00:00Z"
 			return nil
 		}
 	}

@@ -59,9 +59,12 @@ Contract impact:
   The browser fetches this metadata before enabling new-session creation; MCP
   exposes it through `get_session_run_options` for agents that want to pick a
   non-default run shape.
-- Tank validates create, turn, and runtime-config model/effort values against
-  the same provider-owned allowlists. Rejections are hard `400` responses with
-  an actionable allowed-value list instead of a silent runner default.
+- Tank validates create, turn, runtime-config, and mid-session
+  run-config-update model/effort values against the same provider-owned
+  allowlists. Rejections are hard `400` responses with an actionable
+  allowed-value list instead of a silent runner default. (`run_config_update`
+  is the surface label for the mid-session `PUT /api/sessions/{id}/run-config`
+  path — see the Mid-Session Model/Effort Change capability below.)
 - `antigravity_gui` sessions stamp the validated create-time model into the
   pod manifest as `TANK_SESSION_MODEL`; the runner must pass that exact value
   to `agy --model` before the first turn and echo it through the internal
@@ -98,6 +101,50 @@ Evidence:
   MCP `get_session_run_options` tool and assert MCP schemas do not carry local
   hardcoded model/mode enums.
 - Metric: `tank_session_run_config_rejected_total{surface,provider,reason}`.
+
+## Mid-Session Model/Effort Change
+
+Status: complete
+
+Intent:
+Let a user change a running Claude or Codex GUI session's model/effort from the
+composer, so model selection is no longer locked at create time. The change
+applies to the next turn and preserves the conversation.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `PUT /api/sessions/{id}/run-config` updates the durable user-chosen
+  `model`/`effort` columns (the create-time-immutable assumption is retired).
+  The turn handler already overrides each `submit_turn` with the registered
+  config, so the next turn carries the new values; validation reuses the
+  create/turn allowlist choke point and rejects under the `run_config_update`
+  surface. Antigravity is rejected (its model is an `agy` process-start arg).
+- The runner re-pins at an idle turn boundary, never mid-turn: the claude-runner
+  tears down and rebuilds `query()` with provider-session resume + the new
+  options; the codex app-server transport drops and re-resumes its thread.
+  model/effort are sealed within a turn, re-pinnable between turns (see the
+  Agent Runners contract). The composer model chip is an interactive dropdown
+  for Claude/Codex (read-only for Antigravity); a pick applies to the next turn
+  silently and never interrupts a running turn.
+- The runner-reported context window is latest-observed-wins so a switch to a
+  model with a different window updates the durable UI denominator.
+
+Evidence:
+- `backend-go/cmd/tank-operator/handlers_run_config_test.go` covers the
+  run-config route: Claude switch, model-only-preserves-effort, unsupported
+  model/effort, missing Codex model, Antigravity rejection, and not-found.
+- `claude-runner/src/runner.test.ts` covers scheduling a re-pin on a differing
+  turn and `performRebuild` rebuilding with resume + the new model.
+- `codex-runner/src/appServerTransport.test.ts` covers re-resuming the thread
+  under a new model on a mid-session change.
+- `frontend/src/modelEffortDefaults.test.ts` covers the Claude/Codex-gated
+  composer dropdown and the run-config `PUT` (option-a next-turn apply).
+- Metrics: `tank_session_run_config_rejected_total{surface="run_config_update"}`,
+  `tank_runner_options_repinned_total{model,effort}`.
 
 ## SpireLens MCP Session Capability
 
