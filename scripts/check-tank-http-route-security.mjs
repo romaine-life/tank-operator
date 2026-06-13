@@ -56,11 +56,38 @@ function renderHelm({ release, namespace, args }) {
   return result.stdout;
 }
 
+function renderHelmAll({ release, namespace, args }) {
+  const command = [
+    "template",
+    release,
+    path.join(repoRoot, "k8s"),
+    "--namespace",
+    namespace,
+    ...args,
+  ];
+  const result = spawnSync("helm", command, {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    const detail = [result.stdout, result.stderr].filter(Boolean).join("\n");
+    throw new Error(`helm ${command.join(" ")} failed:\n${detail}`);
+  }
+  return result.stdout;
+}
+
 function httpRouteDocs(rendered) {
   return rendered
     .split(/^---\s*$/m)
     .map((doc) => doc.trim())
     .filter((doc) => /\nkind:\s*HTTPRoute\s*(?:\n|$)/.test(`\n${doc}\n`));
+}
+
+function dnsEndpointDocs(rendered) {
+  return rendered
+    .split(/^---\s*$/m)
+    .map((doc) => doc.trim())
+    .filter((doc) => /\nkind:\s*DNSEndpoint\s*(?:\n|$)/.test(`\n${doc}\n`));
 }
 
 function metadataName(doc) {
@@ -118,6 +145,17 @@ function validateRendered(rendered, scenarioName, expectedHost) {
     );
   }
   return failures;
+}
+
+function validateNoDefaultSlotSessionWildcard(scenario) {
+  const rendered = renderHelmAll(scenario);
+  const dnsDocs = dnsEndpointDocs(rendered);
+  return dnsDocs
+    .filter((doc) => metadataName(doc) === "tank-operator-sessions-wildcard")
+    .map(
+      () =>
+        `${scenario.name}: validation slots must not publish *.${scenario.host} DNS by default because the shared certificate only covers *.tank.dev.romaine.life`,
+    );
 }
 
 function runSelfTest() {
@@ -183,6 +221,9 @@ function main() {
   for (const scenario of scenarios) {
     const rendered = renderHelm(scenario);
     failures.push(...validateRendered(rendered, scenario.name, scenario.host));
+    if (scenario.name.startsWith("validation-slot-")) {
+      failures.push(...validateNoDefaultSlotSessionWildcard(scenario));
+    }
   }
 
   if (failures.length > 0) {
