@@ -2,187 +2,158 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
-	authnv1 "k8s.io/api/authentication/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
+	jwtlib "github.com/golang-jwt/jwt/v5"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 )
 
-func TestDefaultTokenAudienceMatchesPlatformAudience(t *testing.T) {
-	if got, want := defaultTokenAudience, "https://auth.romaine.life"; got != want {
-		t.Fatalf("defaultTokenAudience = %q, want %q", got, want)
+func TestDefaultAuthExchangeURLMatchesPlatformExchange(t *testing.T) {
+	if got, want := defaultAuthExchangeURL, "https://auth.romaine.life/api/auth/exchange/k8s"; got != want {
+		t.Fatalf("defaultAuthExchangeURL = %q, want %q", got, want)
 	}
 }
 
-func TestK8sSessionResolverProductionAuthority(t *testing.T) {
-	client := fake.NewSimpleClientset(&corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "tank-operator-sessions",
-			Name:      "session-908",
-			Labels: map[string]string{
-				"tank-operator/session-id":    "908",
-				"tank-operator/session-scope": defaultSessionScope,
-			},
-		},
-	})
-	tokenReviewSubject(client, "system:serviceaccount:tank-operator-sessions:claude-session", "session-908")
-	resolver := testK8sResolver(client)
+func TestAuthExchangeSessionResolverProductionAuthority(t *testing.T) {
+	signer := testAuthSigner(t)
+	authToken := mintServiceToken(t, signer, "svc:tank:908", "pod-908@service.tank.romaine.life")
+	resolver, seenToken := testAuthExchangeResolver(t, signer, authToken, http.StatusOK)
 
-	pod, err := resolver.ResolvePodFromToken(context.Background(), "prod-token")
+	key, err := resolver.SessionStorageKeyFromToken(context.Background(), "projected-sa-token")
 	if err != nil {
-		t.Fatalf("ResolvePodFromToken: %v", err)
-	}
-	if pod.Namespace != "tank-operator-sessions" || pod.Name != "session-908" || pod.ExpectedScope != defaultSessionScope {
-		t.Fatalf("pod ref = %#v", pod)
-	}
-	key, err := resolver.SessionStorageKeyForPod(context.Background(), pod)
-	if err != nil {
-		t.Fatalf("SessionStorageKeyForPod: %v", err)
+		t.Fatalf("SessionStorageKeyFromToken: %v", err)
 	}
 	if key != "908" {
 		t.Fatalf("storage key = %q, want 908", key)
 	}
-}
-
-func TestK8sSessionResolverGlimmungSlotAuthority(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		trustedSlotNamespace("tank-operator-slot-1"),
-		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: "tank-operator-slot-1-sessions",
-				Name:      "session-175",
-				Labels: map[string]string{
-					"tank-operator/session-id":    "175",
-					"tank-operator/session-scope": "tank-operator-slot-1",
-				},
-			},
-		},
-	)
-	tokenReviewSubject(client, "system:serviceaccount:tank-operator-slot-1-sessions:tank-operator-slot-1-session", "session-175")
-	resolver := testK8sResolver(client)
-
-	pod, err := resolver.ResolvePodFromToken(context.Background(), "slot-token")
-	if err != nil {
-		t.Fatalf("ResolvePodFromToken: %v", err)
-	}
-	if pod.Namespace != "tank-operator-slot-1-sessions" || pod.Name != "session-175" || pod.ExpectedScope != "tank-operator-slot-1" {
-		t.Fatalf("pod ref = %#v", pod)
-	}
-	key, err := resolver.SessionStorageKeyForPod(context.Background(), pod)
-	if err != nil {
-		t.Fatalf("SessionStorageKeyForPod: %v", err)
-	}
-	if key != "tank-operator-slot-1:175" {
-		t.Fatalf("storage key = %q, want tank-operator-slot-1:175", key)
+	if *seenToken != "projected-sa-token" {
+		t.Fatalf("exchange bearer = %q, want projected-sa-token", *seenToken)
 	}
 }
 
-func TestK8sSessionResolverRejectsUntrustedSlotNamespace(t *testing.T) {
-	client := fake.NewSimpleClientset(&corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "tank-operator-slot-1-sessions",
-		},
+func TestAuthExchangeSessionResolverGlimmungSlotAuthority(t *testing.T) {
+	signer := testAuthSigner(t)
+	authToken := mintServiceToken(t, signer, "svc:tank:slot-5-session-175", "pod-slot-5-session-175@service.tank.romaine.life")
+	resolver, _ := testAuthExchangeResolver(t, signer, authToken, http.StatusOK)
+
+	key, err := resolver.SessionStorageKeyFromToken(context.Background(), "slot-projected-token")
+	if err != nil {
+		t.Fatalf("SessionStorageKeyFromToken: %v", err)
+	}
+	if key != "tank-operator-slot-5:175" {
+		t.Fatalf("storage key = %q, want tank-operator-slot-5:175", key)
+	}
+}
+
+func TestStorageKeyFromAuthUserRejectsNonTankServicePrincipal(t *testing.T) {
+	_, err := storageKeyFromAuthUser(auth.User{
+		Sub:        "svc:tank-operator:orchestrator",
+		Email:      "pod-orchestrator@service.tank-operator.romaine.life",
+		Role:       auth.RoleService,
+		ActorEmail: "user@example.com",
 	})
-	tokenReviewSubject(client, "system:serviceaccount:tank-operator-slot-1-sessions:tank-operator-slot-1-session", "session-175")
-	resolver := testK8sResolver(client)
-
-	_, err := resolver.ResolvePodFromToken(context.Background(), "slot-token")
 	assertDenyResult(t, err, "denied_subject_untrusted")
 }
 
-func TestK8sSessionResolverRejectsWrongSlotServiceAccount(t *testing.T) {
-	client := fake.NewSimpleClientset(trustedSlotNamespace("tank-operator-slot-1"))
-	tokenReviewSubject(client, "system:serviceaccount:tank-operator-slot-1-sessions:claude-session", "session-175")
-	resolver := testK8sResolver(client)
-
-	_, err := resolver.ResolvePodFromToken(context.Background(), "slot-token")
+func TestStorageKeyFromAuthUserRejectsEmailSubjectMismatch(t *testing.T) {
+	_, err := storageKeyFromAuthUser(auth.User{
+		Sub:        "svc:tank:908",
+		Email:      "pod-909@service.tank.romaine.life",
+		Role:       auth.RoleService,
+		ActorEmail: "user@example.com",
+	})
 	assertDenyResult(t, err, "denied_subject_untrusted")
 }
 
-func TestK8sSessionResolverRejectsNonSlotShapedNamespace(t *testing.T) {
-	client := fake.NewSimpleClientset(trustedSlotNamespace("tank-operator-preview"))
-	tokenReviewSubject(client, "system:serviceaccount:tank-operator-preview-sessions:tank-operator-preview-session", "session-175")
-	resolver := testK8sResolver(client)
+func TestAuthExchangeSessionResolverRejectsHumanJWT(t *testing.T) {
+	signer := testAuthSigner(t)
+	authToken := mintToken(t, signer, map[string]any{
+		"sub":   "human-1",
+		"email": "user@example.com",
+		"name":  "User",
+		"role":  auth.RoleUser,
+	})
+	resolver, _ := testAuthExchangeResolver(t, signer, authToken, http.StatusOK)
 
-	_, err := resolver.ResolvePodFromToken(context.Background(), "slot-token")
+	_, err := resolver.SessionStorageKeyFromToken(context.Background(), "projected-sa-token")
 	assertDenyResult(t, err, "denied_subject_untrusted")
 }
 
-func TestK8sSessionResolverRejectsPodScopeMismatch(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		trustedSlotNamespace("tank-operator-slot-1"),
-		&corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: "tank-operator-slot-1-sessions",
-				Name:      "session-175",
-				Labels: map[string]string{
-					"tank-operator/session-id":    "175",
-					"tank-operator/session-scope": "tank-operator-slot-2",
-				},
-			},
-		},
-	)
-	tokenReviewSubject(client, "system:serviceaccount:tank-operator-slot-1-sessions:tank-operator-slot-1-session", "session-175")
-	resolver := testK8sResolver(client)
+func TestAuthExchangeSessionResolverRejectsExchangeFailure(t *testing.T) {
+	signer := testAuthSigner(t)
+	resolver, _ := testAuthExchangeResolver(t, signer, "", http.StatusForbidden)
 
-	pod, err := resolver.ResolvePodFromToken(context.Background(), "slot-token")
+	_, err := resolver.SessionStorageKeyFromToken(context.Background(), "projected-sa-token")
+	assertDenyResult(t, err, "denied_auth_exchange")
+}
+
+func testAuthSigner(t *testing.T) *auth.InMemoryJWT {
+	t.Helper()
+	signer, err := auth.NewInMemoryJWT("test-kid")
 	if err != nil {
-		t.Fatalf("ResolvePodFromToken: %v", err)
+		t.Fatalf("NewInMemoryJWT: %v", err)
 	}
-	_, err = resolver.SessionStorageKeyForPod(context.Background(), pod)
-	assertDenyResult(t, err, "denied_pod_scope_mismatch")
+	return signer
 }
 
-func TestK8sSessionResolverRejectsNonServiceAccountSubject(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	tokenReviewSubject(client, "system:node:node-1", "session-175")
-	resolver := testK8sResolver(client)
-
-	_, err := resolver.ResolvePodFromToken(context.Background(), "node-token")
-	assertDenyResult(t, err, "denied_subject_invalid")
+func testAuthExchangeResolver(t *testing.T, signer *auth.InMemoryJWT, token string, status int) (*authExchangeSessionResolver, *string) {
+	t.Helper()
+	seenToken := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("exchange method = %s, want POST", r.Method)
+		}
+		seenToken = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if status != http.StatusOK {
+			_, _ = w.Write([]byte(`{"detail":"denied"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
+	}))
+	t.Cleanup(srv.Close)
+	return &authExchangeSessionResolver{
+		http:        srv.Client(),
+		exchangeURL: srv.URL,
+		verifier:    auth.NewVerifier(signer),
+	}, &seenToken
 }
 
-func testK8sResolver(client *fake.Clientset) *k8sSessionResolver {
-	return &k8sSessionResolver{
-		client:            client,
-		audience:          defaultTokenAudience,
-		sessionsNamespace: "tank-operator-sessions",
-		serviceAccount:    "claude-session",
-	}
-}
-
-func tokenReviewSubject(client *fake.Clientset, username string, podName string) {
-	client.Fake.PrependReactor("create", "tokenreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authnv1.TokenReview{
-			Status: authnv1.TokenReviewStatus{
-				Authenticated: true,
-				User: authnv1.UserInfo{
-					Username: username,
-					Extra: map[string]authnv1.ExtraValue{
-						"authentication.kubernetes.io/pod-name": {podName},
-					},
-				},
-			},
-		}, nil
+func mintServiceToken(t *testing.T, signer *auth.InMemoryJWT, sub, email string) string {
+	t.Helper()
+	return mintToken(t, signer, map[string]any{
+		"sub":         sub,
+		"email":       email,
+		"name":        "Service",
+		"role":        auth.RoleService,
+		"actor_email": "user@example.com",
 	})
 }
 
-func trustedSlotNamespace(slotName string) *corev1.Namespace {
-	return &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: slotName + "-sessions",
-			Labels: map[string]string{
-				glimmungTestSlotLabel:     "true",
-				glimmungProjectLabel:      tankOperatorProjectName,
-				glimmungNativeSlotNameKey: slotName,
-			},
-		},
+func mintToken(t *testing.T, signer *auth.InMemoryJWT, claims map[string]any) string {
+	t.Helper()
+	now := time.Now()
+	payload := jwtlib.MapClaims{
+		"iss": "https://auth.romaine.life",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(),
 	}
+	for k, v := range claims {
+		payload[k] = v
+	}
+	token, err := signer.MintJWT(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("MintJWT: %v", err)
+	}
+	return token
 }
 
 func assertDenyResult(t *testing.T, err error, want string) {
