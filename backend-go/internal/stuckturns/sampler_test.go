@@ -154,14 +154,13 @@ func TestRunOnceSetsGaugePerPhaseAndComputesStuckSeconds(t *testing.T) {
 				// zero ActivityUpdatedAt → stuck_seconds stays 0, no panic.
 			},
 		},
-		// Session 828's exact incident shape (tank-operator#1085): a
-		// streaming session whose last ledger event (the final answer at
-		// 03:05:59) is half an hour old with the turn still open.
+		// A streaming session whose last ledger event is half an hour old
+		// with the turn still open.
 		streaming: []StuckTurn{
 			{
 				SessionID:      "828",
 				Scope:          "default",
-				Mode:           "antigravity_gui",
+				Mode:           "codex_gui",
 				Phase:          PhaseStreaming,
 				ActivityStatus: "streaming",
 				ActiveTurnID:   "turn_7fcfb58b",

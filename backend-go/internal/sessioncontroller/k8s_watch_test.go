@@ -206,7 +206,7 @@ func TestHandleUpsertRecordsContainerOOMTermination(t *testing.T) {
 	restarted.Status.ContainerStatuses = []corev1.ContainerStatus{
 		{Name: "claude", Ready: true},
 		{
-			Name:         "antigravity-runner",
+			Name:         "codex-runner",
 			Ready:        true,
 			RestartCount: 1,
 			LastTerminationState: corev1.ContainerState{
@@ -226,8 +226,8 @@ func TestHandleUpsertRecordsContainerOOMTermination(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("termination metric calls = %d, want 1", len(calls))
 	}
-	if calls[0].container != "antigravity-runner" {
-		t.Fatalf("container = %q, want antigravity-runner", calls[0].container)
+	if calls[0].container != "codex-runner" {
+		t.Fatalf("container = %q, want codex-runner", calls[0].container)
 	}
 	if calls[0].reason != "oom_killed" {
 		t.Fatalf("reason = %q, want oom_killed", calls[0].reason)

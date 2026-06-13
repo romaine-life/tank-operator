@@ -74,11 +74,6 @@ session:
   # every push to main via a `[skip ci]` follow-up commit.
   image: "romainecr.azurecr.io/claude-container:claude-0e1a1bd17623622e3c661874aa8299a9de87bd8afdd3f3a4204815e49c2c2821"
   codexImage: "romainecr.azurecr.io/codex-container:codex-162f364eb70f1e8bd39cb8951899cfe857379bf8a0ecb59b235c136b2aa1898d"
-  # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
-  # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
-  # antigravity_config credential-mint mode. session-images-build.yml rewrites
-  # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: "romainecr.azurecr.io/antigravity-container:antigravity-9d9be6a5541dc1fcc58826e9cb5e69becadf3c0dd830a0753bdcc1bc405cf79c"
   imageMetadata:
     claude:
       built_at: "2026-06-13T07:46:07Z"
@@ -100,21 +95,6 @@ session:
       workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27460723786"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
-    antigravity:
-      built_at: "2026-06-13T07:46:07Z"
-      git_sha: "8dc4485019ac0297ec8879d41faecb1e783ffa97"
-      git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/8dc4485019ac0297ec8879d41faecb1e783ffa97"
-      pr_number: "1144"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1144"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27460723786"
-      repository: "romaine-life/tank-operator"
-      actor: "tank-operator-host[bot]"
-  # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
-  # orchestrator namespace where the antigravity-api-proxy mounts it; agy
-  # session pods never mount it (they get a placeholder + proxy injection).
-  antigravityCredentialsSecret: antigravity-credentials
-  antigravityCredentialsSecretKey: antigravity-oauth-token
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -221,8 +201,7 @@ apiProxy:
     tag: "api-proxy-e0ad4d6615a334574603dd6f8f8152e00e324bf3d15ae5513660ba511919e748"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
-  # Replica count shared by all four proxy Deployments (claude,
-  # claude-secondary, codex, antigravity). HOLD AT 1 until the refresh
+  # Replica count shared by all provider proxy Deployments. HOLD AT 1 until the refresh
   # lease proves itself in production: cross-replica rotation safety rides
   # the api-proxy-refresh-<kv-secret-name> coordination.k8s.io Lease
   # (api-proxy/src/tank_api_proxy/lease.py), and the gate for raising this
@@ -236,12 +215,6 @@ apiProxy:
   # Published to KV by infra/api_proxy.tf â€” separate UAMI from the
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
-  # KV key holding the Google installed-app OAuth client_secret used by the
-  # antigravity-api-proxy refresh exchange. Seeded out-of-band (like the
-  # provider credential blobs); the value is extractable from the public agy
-  # binary so it is not confidential, but is kept out of git regardless.
-  kvAntigravityClientSecretKey: antigravity-oauth-client-secret
-
 claudeSecondaryApiProxy:
   serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
 
@@ -251,13 +224,6 @@ claudeSecondaryApiProxy:
 # and validation slots.
 codexApiProxy:
   serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
-
-# Antigravity API proxy: a third production Envoy + ext_proc deployment using
-# the same image and UAMI as apiProxy. It fronts cloudcode-pa.googleapis.com
-# (Google Code Assist data plane) and owns the Google OAuth refresh chain for
-# agy (Gemini-Ultra) GUI sessions in production and validation slots.
-antigravityApiProxy:
-  serviceHost: antigravity-api-proxy.tank-operator.svc.cluster.local
 
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access

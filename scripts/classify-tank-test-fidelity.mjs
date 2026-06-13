@@ -30,7 +30,6 @@ const KNOWN_ARTIFACTS = new Set([
   "backend",
   "agent_runner",
   "codex_runner",
-  "antigravity_runner",
   "full_runtime",
 ]);
 
@@ -199,7 +198,6 @@ function classifyTankTestFidelity(paths, opts = {}) {
   const runnerImpacted =
     impacts.has("agent_runner") ||
     impacts.has("codex_runner") ||
-    impacts.has("antigravity_runner") ||
     impacts.has("runner_shared") ||
     impacts.has("session_bus_contract");
 
@@ -300,7 +298,6 @@ function collectImpacts(paths) {
     if (isBackend(file)) impacts.add("backend");
     if (isAgentRunner(file)) impacts.add("agent_runner");
     if (isCodexRunner(file)) impacts.add("codex_runner");
-    if (isAntigravityRunner(file)) impacts.add("antigravity_runner");
     if (isRunnerShared(file)) impacts.add("runner_shared");
     if (isSessionBusContract(file)) impacts.add("session_bus_contract");
     if (isSessionPodInput(file)) impacts.add("session_pod");
@@ -314,11 +311,9 @@ function requiredArtifactsForImpacts(impacts) {
   if (impacts.has("backend") || impacts.has("session_bus_contract")) out.add("backend");
   if (impacts.has("agent_runner")) out.add("agent_runner");
   if (impacts.has("codex_runner")) out.add("codex_runner");
-  if (impacts.has("antigravity_runner")) out.add("antigravity_runner");
   if (impacts.has("runner_shared") || impacts.has("session_bus_contract")) {
     out.add("agent_runner");
     out.add("codex_runner");
-    out.add("antigravity_runner");
   }
   if (impacts.has("session_pod")) out.add("branch_image");
   return out;
@@ -349,8 +344,8 @@ function requiresBranchImage(file) {
   const base = path.posix.basename(file);
   if (base === "Dockerfile" || base === ".dockerignore") return true;
   if (isSessionPodInput(file)) return true;
-  if (/^(claude-runner|codex-runner|antigravity-runner)\/(?:package|package-lock)\.json$/.test(file)) return true;
-  if (/^(claude-runner|codex-runner|antigravity-runner)\/(?:pnpm-lock\.yaml|yarn\.lock)$/.test(file)) return true;
+  if (/^(claude-runner|codex-runner)\/(?:package|package-lock)\.json$/.test(file)) return true;
+  if (/^(claude-runner|codex-runner)\/(?:pnpm-lock\.yaml|yarn\.lock)$/.test(file)) return true;
   if (/^k8s\/.*\.(ya?ml|json)$/.test(file)) return true;
   return false;
 }
@@ -388,10 +383,6 @@ function isCodexRunner(file) {
   return file.startsWith("codex-runner/src/") || file.startsWith("codex-runner/test/");
 }
 
-function isAntigravityRunner(file) {
-  return file.startsWith("antigravity-runner/src/");
-}
-
 function isRunnerShared(file) {
   return file.startsWith("runner-shared/");
 }
@@ -403,7 +394,6 @@ function isSessionBusContract(file) {
     file === "runner-shared/sessionBus.d.ts" ||
     file === "claude-runner/src/sessionBus.ts" ||
     file === "codex-runner/src/sessionBus.ts" ||
-    file === "antigravity-runner/src/sessionBus.ts" ||
     file === "backend-go/cmd/tank-operator/handlers_turns.go" ||
     file === "backend-go/cmd/tank-operator/handlers_turns_test.go"
   );
@@ -413,7 +403,6 @@ function isSessionPodInput(file) {
   return (
     file.startsWith("claude-container/") ||
     file.startsWith("agent-container/") ||
-    file.startsWith("antigravity-container/") ||
     file.startsWith("k8s/session-config/")
   );
 }
@@ -433,7 +422,7 @@ function printHelp() {
   process.stdout.write(`Usage: node scripts/classify-tank-test-fidelity.mjs [options] [changed-file...]
 
 Options:
-  --artifact-kind <kind>       auto, static, backend, agent_runner, codex_runner, antigravity_runner, full_runtime
+  --artifact-kind <kind>       auto, static, backend, agent_runner, codex_runner, full_runtime
   --validation-target <target> existing_session, new_session, or full_runtime
   --changed-file <path>        Add one changed file
   --changed-files-file <path>  Read newline-delimited changed files
@@ -449,19 +438,9 @@ function runSelfTests() {
   assert.equal(c(["frontend/src/App.tsx"], { artifactKind: "static" }).classification, CLASS_FAITHFUL);
   assert.equal(c(["backend-go/cmd/tank-operator/handlers_sessions.go"], { artifactKind: "backend" }).classification, CLASS_FAITHFUL);
   assert.equal(c(["codex-runner/src/runner.ts"], { artifactKind: "codex_runner" }).classification, CLASS_FAITHFUL);
-  assert.equal(c(["antigravity-runner/src/runner.ts"], { artifactKind: "antigravity_runner" }).classification, CLASS_FAITHFUL);
   assert.equal(
     c(["codex-runner/src/runner.ts"], { artifactKind: "codex_runner", validationTarget: "new_session" }).classification,
     CLASS_IMAGE,
-  );
-  assert.equal(
-    c(["antigravity-runner/src/runner.ts"], { artifactKind: "antigravity_runner", validationTarget: "new_session" }).classification,
-    CLASS_IMAGE,
-  );
-  const retiredRunnerKind = String.fromCharCode(103, 101, 109, 105, 110, 105) + "_runner";
-  assert.throws(
-    () => c(["antigravity-runner/src/runner.ts"], { artifactKind: retiredRunnerKind }),
-    new RegExp(`unknown artifact kind "${retiredRunnerKind}"`),
   );
   assert.equal(
     c(["backend-go/internal/sessionbus/subjects.go", "runner-shared/sessionBus.js"], {
@@ -501,7 +480,7 @@ function runSelfTests() {
   // backend sources still require a backend artifact.
   assert.deepEqual(
     [...requiredArtifactsForImpacts(collectImpacts(["backend-go/cmd/tank-operator/handlers_turns_test.go"]))].sort(),
-    ["agent_runner", "antigravity_runner", "backend", "codex_runner"],
+    ["agent_runner", "backend", "codex_runner"],
   );
   assert.equal(
     c(["backend-go/cmd/tank-operator/transcript_projection.go"], { artifactKind: "static", validationTarget: "existing_session" }).classification,

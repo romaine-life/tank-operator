@@ -118,10 +118,6 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 	if effortInput != "" && effort == "" {
 		recordSessionRuntimeConfigUpdate(provider, "bad_request")
 		recordSessionRunConfigRejected("runtime_config", provider, "unsupported_effort")
-		if provider == "antigravity" {
-			writeError(w, http.StatusBadRequest, effortUnsupportedMessage(provider, "sessions"))
-			return
-		}
 		if provider == "codex" {
 			writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh")
 			return

@@ -4,9 +4,7 @@ import "testing"
 
 // TestProviderFatalDerivesFailedStatus pins the contract that a runner's
 // provider-fatal report moves the session row to the same terminal Failed
-// status pod death produces. Provider-process death is session-terminal by
-// design (no revival architecture); see
-// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+// status pod death produces.
 func TestProviderFatalDerivesFailedStatus(t *testing.T) {
 	changes, ok := deriveRowColumnChanges(Event{Type: EventTypeProviderFatal})
 	if !ok {

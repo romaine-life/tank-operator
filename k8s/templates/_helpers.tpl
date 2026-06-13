@@ -29,14 +29,6 @@ codex-credentials
 {{- end -}}
 {{- end -}}
 
-{{- define "tank-operator.antigravityCredentialsKvKey" -}}
-{{- if or (eq .Values.namespaces.orchestrator "tank-operator") (eq (include "tank-operator.isTestEnv" .) "true") -}}
-antigravity-credentials
-{{- else -}}
-{{ printf "%s-antigravity-credentials" .Values.namespaces.orchestrator }}
-{{- end -}}
-{{- end -}}
-
 {{- define "tank-operator.renderMode" -}}
 {{- $mode := .Values.renderMode | default "normal" -}}
 {{- if not (has $mode (list "normal" "warm" "hot")) -}}
@@ -134,10 +126,6 @@ antigravity-credentials
 
 {{- define "tank-operator.codexApiProxyHost" -}}
 {{- .Values.codexApiProxy.serviceHost -}}
-{{- end -}}
-
-{{- define "tank-operator.antigravityApiProxyHost" -}}
-{{- .Values.antigravityApiProxy.serviceHost -}}
 {{- end -}}
 
 {{- define "tank-operator.codexCredentialsSecret" -}}

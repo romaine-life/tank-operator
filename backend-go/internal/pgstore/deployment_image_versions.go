@@ -16,17 +16,15 @@ import (
 )
 
 const (
-	DeploymentImageKindApp                = "app"
-	DeploymentImageKindSessionClaude      = "session_claude"
-	DeploymentImageKindSessionCodex       = "session_codex"
-	DeploymentImageKindSessionAntigravity = "session_antigravity"
+	DeploymentImageKindApp           = "app"
+	DeploymentImageKindSessionClaude = "session_claude"
+	DeploymentImageKindSessionCodex  = "session_codex"
 )
 
 var deploymentImageKinds = map[string]struct{}{
-	DeploymentImageKindApp:                {},
-	DeploymentImageKindSessionClaude:      {},
-	DeploymentImageKindSessionCodex:       {},
-	DeploymentImageKindSessionAntigravity: {},
+	DeploymentImageKindApp:           {},
+	DeploymentImageKindSessionClaude: {},
+	DeploymentImageKindSessionCodex:  {},
 }
 
 // ErrDeploymentImageVersionsUnavailable means the deployment_image_versions
