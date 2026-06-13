@@ -4795,7 +4795,7 @@ button:disabled {
 }
 
 .run-turn-view-body[data-page-kind="question"] .run-tool-ask {
-  width: min(100%, 48rem);
+  width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.035);
