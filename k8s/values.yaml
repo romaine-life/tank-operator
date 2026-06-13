@@ -319,10 +319,13 @@ sessionBus:
   # stream`). R=3 requires the infra-bootstrap NATS chart to also run
   # cluster.replicas: 3; both must move together.
   streamReplicas: 3
+  # Static password Secret for the orchestrator's NATS auth_users entry.
+  # Session pods do not mount this; they authenticate through auth_callout
+  # with projected auth.romaine.life service-account tokens.
   authSecret: tank-nats-auth
   tokenKvKey: tank-nats-token
-  # 1128 stage 2: set to "tank-operator" together with infra-bootstrap's
-  # NATS authorization.users flip. Empty = legacy bare-token auth.
+  # Static NATS user for the orchestrator. Must match infra-bootstrap's
+  # NATS authorization.users entry.
   user: tank-operator
   monitorURLs:
     - http://tank-nats-0.tank-nats-headless.nats.svc.cluster.local:8222
@@ -331,8 +334,7 @@ sessionBus:
   # NATS lives in its own namespace, deployed by infra-bootstrap's nats
   # chart. tank-operator chart no longer owns the NATS sub-chart; the
   # ExternalSecret template in k8s/templates/externalsecret-nats.yaml
-  # still provisions the auth token Secret in the orchestrator and
-  # sessions namespaces so clients can connect.
+  # provisions only the orchestrator static-user password Secret.
   url: nats://tank-nats.nats.svc.cluster.local:4222
 
 clusterMaintenance:
