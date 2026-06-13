@@ -15032,12 +15032,11 @@ function ChatPane({
     adminControls?.observability.summary ?? null,
     adminControls?.observability.error ?? null,
   );
-  // Seed model + effort from RunPrefs (browser-persisted). State is local
-  // because the runners seal model + effort from the first submit_turn —
-  // the splash screen is where the user adjusts the defaults before a
-  // session is created.
-  // Existing sessions prefer the durable session-owned run config; browser
-  // prefs are only the fallback for older rows that do not have it.
+  // Seed model + effort from the durable session run config (browser prefs are
+  // the fallback for older rows). State is local and MUTABLE: the composer
+  // model dropdown updates it optimistically and PUTs /run-config, and the
+  // runner re-pins on the next turn. Existing sessions prefer the durable
+  // session-owned run config.
   const configuredModelId = (session.model ?? "").trim();
   const configuredEffortId = (session.effort ?? "").trim();
   const hasConfiguredSessionRunConfig = Boolean(
@@ -15079,8 +15078,9 @@ function ChatPane({
     : effortOptions.some((opt) => opt.id === preferredEffortId)
       ? preferredEffortId
       : fallbackEffortId;
-  const [selectedModelId] = useState<string>(initialModelId);
-  const [selectedEffortId] = useState<string>(initialEffortId);
+  const [selectedModelId, setSelectedModelId] = useState<string>(initialModelId);
+  const [selectedEffortId, setSelectedEffortId] =
+    useState<string>(initialEffortId);
   const runtimeContextWindowTokens =
     typeof session.runtime_context_window_tokens === "number" &&
     Number.isFinite(session.runtime_context_window_tokens) &&
@@ -15107,6 +15107,59 @@ function ChatPane({
   const [slashCommands, setSlashCommands] =
     useState<SlashCommand[]>(SLASH_COMMANDS);
   const [mcpOpen, setMcpOpen] = useState(false);
+  // In-session model/effort dropdown — the mid-session model switch. Mirrors
+  // the splash picker; option (a): a pick applies to the NEXT turn silently
+  // (the runner re-pins at an idle boundary), never interrupting a live turn.
+  const [runModelMenuOpen, setRunModelMenuOpen] = useState(false);
+  const applyRunConfig = useCallback(
+    async (model: string, effort: string) => {
+      const prevModel = selectedModelId;
+      const prevEffort = selectedEffortId;
+      if (model === prevModel && effort === prevEffort) return;
+      // Optimistic: the trigger reflects the pick immediately. SSE converges
+      // session.model/effort, and the runner reports runtime_model once it
+      // re-pins on the next turn.
+      setSelectedModelId(model);
+      setSelectedEffortId(effort);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${session.id}/run-config`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model, effort }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`run-config update failed: ${res.status}`);
+        }
+        const updated = normalizeSession(await res.json());
+        onSessionPatch(session.id, {
+          model: updated.model,
+          effort: updated.effort,
+        });
+      } catch (err) {
+        // Revert the optimistic selection so the trigger doesn't lie.
+        setSelectedModelId(prevModel);
+        setSelectedEffortId(prevEffort);
+        console.error("run-config update failed:", err);
+      }
+    },
+    [session.id, selectedModelId, selectedEffortId, onSessionPatch],
+  );
+  // Close the in-session model dropdown on an outside click (same data-menu
+  // routing as the splash picker).
+  useEffect(() => {
+    if (!runModelMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const root = target?.closest("[data-menu]") as HTMLElement | null;
+      if (root?.dataset.menu === "run-model") return;
+      setRunModelMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [runModelMenuOpen]);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -21121,24 +21174,128 @@ function ChatPane({
                 }}
                 modelChip={
                   usesModel ? (
-                    <span
-                      className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
-                      title={modelChipTitle}
-                      aria-label={modelChipTitle}
-                    >
-                      <BrainIcon
-                        className="run-model-chip-icon"
-                        aria-hidden="true"
-                      />
-                      <span className="run-model-chip-label">
-                        {modelChipLabel}
+                    isClaude || isCodex ? (
+                      <span className="run-model-select" data-menu="run-model">
+                        <button
+                          type="button"
+                          className={`run-model-chip run-model-trigger${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                          title={`Model: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""} — applies to your next turn`}
+                          aria-haspopup="listbox"
+                          aria-expanded={runModelMenuOpen}
+                          disabled={readOnly}
+                          onClick={() => setRunModelMenuOpen((v) => !v)}
+                        >
+                          <BrainIcon
+                            className="run-model-chip-icon"
+                            aria-hidden="true"
+                          />
+                          <span className="run-model-chip-label">
+                            {configuredModelLabel}
+                          </span>
+                          {configuredEffortLabel && (
+                            <span className="run-model-chip-effort">
+                              {configuredEffortLabel}
+                            </span>
+                          )}
+                          <IconChevronDown
+                            className="run-model-chip-caret"
+                            aria-hidden="true"
+                          />
+                        </button>
+                        {runModelMenuOpen && (
+                          <ul
+                            className="dropdown run-model-menu"
+                            role="listbox"
+                            aria-label="model"
+                          >
+                            {modelOptions.map((model) => {
+                              const selected = model.id === selectedModelId;
+                              return (
+                                <li
+                                  key={model.id}
+                                  role="option"
+                                  aria-selected={selected}
+                                >
+                                  <button
+                                    type="button"
+                                    className={
+                                      selected ? "is-selected" : undefined
+                                    }
+                                    onClick={() => {
+                                      setRunModelMenuOpen(false);
+                                      void applyRunConfig(
+                                        model.id,
+                                        selectedEffortId,
+                                      );
+                                    }}
+                                  >
+                                    <span className="run-model-chip-label">
+                                      {model.label}
+                                    </span>
+                                  </button>
+                                </li>
+                              );
+                            })}
+                            {usesEffort && effortOptions.length > 0 && (
+                              <li
+                                role="separator"
+                                aria-hidden="true"
+                                className="run-model-menu-sep"
+                              />
+                            )}
+                            {usesEffort &&
+                              effortOptions.map((effort) => {
+                                const selected =
+                                  effort.id === selectedEffortId;
+                                return (
+                                  <li
+                                    key={`effort-${effort.id}`}
+                                    role="option"
+                                    aria-selected={selected}
+                                  >
+                                    <button
+                                      type="button"
+                                      className={
+                                        selected ? "is-selected" : undefined
+                                      }
+                                      onClick={() => {
+                                        setRunModelMenuOpen(false);
+                                        void applyRunConfig(
+                                          selectedModelId,
+                                          effort.id,
+                                        );
+                                      }}
+                                    >
+                                      <span className="run-model-chip-effort">
+                                        {effort.label}
+                                      </span>
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                          </ul>
+                        )}
                       </span>
-                      {effortChipLabel && (
-                        <span className="run-model-chip-effort">
-                          {effortChipLabel}
+                    ) : (
+                      <span
+                        className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                        title={modelChipTitle}
+                        aria-label={modelChipTitle}
+                      >
+                        <BrainIcon
+                          className="run-model-chip-icon"
+                          aria-hidden="true"
+                        />
+                        <span className="run-model-chip-label">
+                          {modelChipLabel}
                         </span>
-                      )}
-                    </span>
+                        {effortChipLabel && (
+                          <span className="run-model-chip-effort">
+                            {effortChipLabel}
+                          </span>
+                        )}
+                      </span>
+                    )
                   ) : null
                 }
               />

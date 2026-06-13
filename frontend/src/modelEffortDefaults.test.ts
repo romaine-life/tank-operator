@@ -200,3 +200,31 @@ test("forkSessionFromMessage forwards model and effort on create, not the first 
     /client_nonce: newForkTurnId\(\)[\s\S]{0,160}model: request\.model/,
   );
 });
+
+test("mid-session run-config: the composer model chip is a Claude/Codex-gated dropdown", () => {
+  // selectedModelId/effort are now mutable — the dropdown updates them
+  // optimistically. The old single-binding "sealed" useState is gone.
+  expect(appSource).toMatch(
+    /const \[selectedModelId, setSelectedModelId\] = useState<string>/,
+  );
+  expect(appSource).toMatch(
+    /const \[selectedEffortId, setSelectedEffortId\] =\s*useState<string>/,
+  );
+  // The in-session dropdown is gated to Claude/Codex; Antigravity keeps the
+  // read-only chip (its model is a process-start arg, not switchable).
+  expect(appSource).toMatch(
+    /isClaude \|\| isCodex \? \([\s\S]{0,160}data-menu="run-model"/,
+  );
+});
+
+test("mid-session run-config: a pick PUTs /run-config and only toggles the menu (option a)", () => {
+  // applyRunConfig PUTs the durable run config; the turn handler forwards it
+  // and the runner re-pins on the next turn (no interrupt of the running one).
+  expect(appSource).toMatch(
+    /applyRunConfig = useCallback\([\s\S]{0,600}run-config[\s\S]{0,80}method: "PUT"/,
+  );
+  // The trigger only toggles the dropdown — it never submits or interrupts.
+  expect(appSource).toMatch(
+    /run-model-trigger[\s\S]{0,400}onClick=\{\(\) => setRunModelMenuOpen\(\(v\) => !v\)\}/,
+  );
+});
