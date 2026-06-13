@@ -6,15 +6,15 @@ image:
   tag: "app-95c8da8b2be928985d608121e488a6d81c07e60e7972a8321e5db14e54bfd1b3"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-13T05:34:47Z"
-    git_sha: "759948e709db0d6bd95825d6bface50fe3ec39ee"
+    built_at: "2026-06-13T06:00:02Z"
+    git_sha: "8671ce9f52f3e6d1a86074a59a3f2c5915bd563c"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/759948e709db0d6bd95825d6bface50fe3ec39ee"
-    pr_number: "1148"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1148"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27457896175"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/8671ce9f52f3e6d1a86074a59a3f2c5915bd563c"
+    pr_number: "1150"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1150"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27458474272"
     repository: "romaine-life/tank-operator"
-    actor: "nelsong6"
+    actor: "tank-operator-host[bot]"
 
 # normal: regular chart render
 # warm: per-slot baseline resources, no long-running app/proxy pods
