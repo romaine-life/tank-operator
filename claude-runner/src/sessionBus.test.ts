@@ -8,6 +8,9 @@
 // silence on our own graceful close), and the /healthz liveness signal.
 
 import { strict as assert } from "node:assert";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { SharedSessionBus } from "../../runner-shared/sessionBus.js";
@@ -141,6 +144,45 @@ void test("connect hardens reconnection: unlimited attempts, waitOnFirstConnect"
   assert.equal(state.connectOptions?.waitOnFirstConnect, true);
   await stop();
   await bus.close();
+});
+
+void test("connect uses per-session user and projected token file authenticator", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tank-nats-auth-"));
+  const tokenPath = join(dir, "token");
+  await writeFile(tokenPath, "projected-token\n", { mode: 0o600 });
+  const { deps, state } = fakeDeps({ iterators: [blockingIterator([])] });
+  const cfg = {
+    ...busConfig(),
+    natsToken: "",
+    natsUser: "slot-a:63",
+    natsPasswordFile: tokenPath,
+  };
+  const bus = new SharedSessionBus(cfg as never, "claude", deps as never);
+  const stop = await bus.startCommandConsumer(async () => {}, undefined as never);
+  assert.equal(state.connectOptions?.token, undefined);
+  assert.equal(typeof state.connectOptions?.authenticator, "function");
+  const authenticator = state.connectOptions?.authenticator as () => AnyRecord;
+  assert.deepEqual(authenticator(), {
+    user: "slot-a:63",
+    pass: "projected-token",
+  });
+  await stop();
+  await bus.close();
+});
+
+void test("connect rejects partial per-session NATS auth config", async () => {
+  const { deps } = fakeDeps({ iterators: [blockingIterator([])] });
+  const cfg = {
+    ...busConfig(),
+    natsToken: "",
+    natsUser: "slot-a:63",
+    natsPasswordFile: "",
+  };
+  const bus = new SharedSessionBus(cfg as never, "claude", deps as never);
+  await assert.rejects(
+    () => bus.startCommandConsumer(async () => {}, undefined as never),
+    /NATS_USER and NATS_PASSWORD_FILE must be set together/,
+  );
 });
 
 void test("supervised consumer restarts after iterator death and redelivers", async () => {

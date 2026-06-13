@@ -161,6 +161,7 @@ import {
 } from "lucide-react";
 import {
   authedEventSource,
+  authedFileRawURL,
   authedFetch,
   bootstrapAuth,
   logout,
@@ -4680,7 +4681,18 @@ function humanFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]);
+const IMAGE_EXTS = new Set([
+  "avif",
+  "bmp",
+  "gif",
+  "heic",
+  "heif",
+  "jpg",
+  "jpeg",
+  "png",
+  "svg",
+  "webp",
+]);
 function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
@@ -7177,36 +7189,27 @@ function AttachmentPreview({
   sessionId: string;
 }) {
   const target = attachmentWorkspaceTarget(attachment);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [rawImageUrl, setRawImageUrl] = useState<string | null>(null);
   useEffect(() => {
     if (attachment.previewUrl || attachment.kind !== "image" || !target?.path) {
-      setObjectUrl(null);
+      setRawImageUrl(null);
       return () => undefined;
     }
     let cancelled = false;
-    let url: string | null = null;
-    void authedFetch(
-      `/api/sessions/${sessionId}/files/raw?path=${encodeURIComponent(target.path)}`,
-    )
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.blob();
-      })
-      .then((blob) => {
+    void authedFileRawURL(sessionId, target.path)
+      .then((url) => {
         if (cancelled) return;
-        url = URL.createObjectURL(blob);
-        setObjectUrl(url);
+        setRawImageUrl(url);
       })
       .catch(() => {
-        if (!cancelled) setObjectUrl(null);
+        if (!cancelled) setRawImageUrl(null);
       });
     return () => {
       cancelled = true;
-      if (url) URL.revokeObjectURL(url);
     };
   }, [attachment.kind, attachment.previewUrl, sessionId, target?.path]);
 
-  const src = attachment.previewUrl || objectUrl;
+  const src = attachment.previewUrl || rawImageUrl;
   if (attachment.kind === "image" && src) {
     return (
       <img
@@ -17123,7 +17126,6 @@ function ChatPane({
 
   useEffect(() => {
     let cancelled = false;
-    let objectUrl: string | null = null;
     setFileRawImageUrl(null);
     setFileRawImageError(null);
     setFileRawImageLoading(false);
@@ -17135,17 +17137,10 @@ function ChatPane({
       return () => undefined;
     }
     setFileRawImageLoading(true);
-    void authedFetch(
-      `/api/sessions/${session.id}/files/raw?path=${encodeURIComponent(selectedFile.path)}`,
-    )
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.blob();
-      })
-      .then((blob) => {
+    void authedFileRawURL(session.id, selectedFile.path)
+      .then((url) => {
         if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setFileRawImageUrl(objectUrl);
+        setFileRawImageUrl(url);
         setFileRawImageLoading(false);
       })
       .catch((err) => {
@@ -17155,7 +17150,6 @@ function ChatPane({
       });
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [filesAvailable, selectedFile?.binary, selectedFile?.path, session.id]);
 
@@ -20282,6 +20276,14 @@ function ChatPane({
                           <FileImageViewer
                             src={fileRawImageUrl}
                             alt={selectedFile.path}
+                            openHref={sessionRouteUrl(
+                              session.id,
+                              "files",
+                              null,
+                              null,
+                              null,
+                              selectedFile.path,
+                            )}
                           />
                         </Suspense>
                       ) : (

@@ -1,7 +1,8 @@
 // nats-auth-callout is the per-session NATS credential issuer
 // (tank-operator#1128). Session pods stop sharing one fleet-wide NATS token;
 // each pod authenticates with its projected ServiceAccount token (audience
-// auth.romaine.life — the same trust root as the MCP gateway) and receives a
+// https://auth.romaine.life — the same platform audience used by the
+// auth.romaine.life exchange path and MCP gateway) and receives a
 // NATS user JWT whose permissions cover exactly its own session's subjects:
 //
 //   - publish tank.session.<scope>.<sid>.events       (event ledger ingress)

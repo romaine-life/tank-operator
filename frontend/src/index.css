@@ -8949,8 +8949,16 @@ button:disabled {
   cursor: grabbing;
 }
 
-.run-files-viewer-image-wrap.is-pannable .run-files-viewer-image {
+.run-files-viewer-image-wrap.is-pannable .run-files-viewer-image,
+.run-files-viewer-image-wrap.is-pannable .run-files-viewer-image-link {
   margin: auto;
+}
+
+.run-files-viewer-image-link {
+  display: inline-flex;
+  line-height: 0;
+  color: inherit;
+  text-decoration: none;
 }
 
 .run-files-viewer-image {

@@ -128,6 +128,8 @@ type runnerConfig struct {
 	sessionStorageKey string
 	ownerEmail        string
 	natsURL           string
+	natsUser          string
+	natsPasswordFile  string
 	natsToken         string
 	natsStream        string
 	natsCommandStream string
@@ -1076,6 +1078,8 @@ func loadConfig() (runnerConfig, error) {
 		sessionStorageKey: storageKey,
 		ownerEmail:        strings.ToLower(strings.TrimSpace(os.Getenv("POD_OWNER_EMAIL"))),
 		natsURL:           firstNonEmpty(os.Getenv("NATS_URL"), "nats://tank-nats.nats.svc.cluster.local:4222"),
+		natsUser:          strings.TrimSpace(os.Getenv("NATS_USER")),
+		natsPasswordFile:  strings.TrimSpace(os.Getenv("NATS_PASSWORD_FILE")),
 		natsToken:         strings.TrimSpace(os.Getenv("NATS_TOKEN")),
 		natsStream:        sessionbus.StreamName(os.Getenv("NATS_STREAM")),
 		natsCommandStream: sessionbus.CommandStreamName(os.Getenv("NATS_COMMAND_STREAM")),
@@ -1126,10 +1130,33 @@ func connectNATS(cfg runnerConfig) (*nats.Conn, error) {
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2 * time.Second),
 	}
+	if cfg.natsUser != "" || cfg.natsPasswordFile != "" {
+		if cfg.natsUser == "" || cfg.natsPasswordFile == "" {
+			return nil, errors.New("NATS_USER and NATS_PASSWORD_FILE must be set together")
+		}
+		password, err := readTrimmedFile(cfg.natsPasswordFile, "NATS_PASSWORD_FILE")
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, nats.UserInfo(cfg.natsUser, password))
+		return nats.Connect(cfg.natsURL, opts...)
+	}
 	if cfg.natsToken != "" {
 		opts = append(opts, nats.Token(cfg.natsToken))
 	}
 	return nats.Connect(cfg.natsURL, opts...)
+}
+
+func readTrimmedFile(path string, label string) (string, error) {
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("%s read failed: %w", label, err)
+	}
+	trimmed := strings.TrimSpace(string(value))
+	if trimmed == "" {
+		return "", fmt.Errorf("%s is empty", label)
+	}
+	return trimmed, nil
 }
 
 func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, state *runnerState, ptmx *os.File) {

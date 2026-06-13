@@ -19,8 +19,9 @@ static `auth_users` entry to `$SYS.REQ.USER.AUTH`. The
 account nkey:
 
 - **Session pods** connect with `user=<storage key>`, `pass=<projected SA
-  token>` (audience `auth.romaine.life` — the MCP-gateway trust root). The
-  callout validates the token via audience-pinned `TokenReview`, takes the
+  token>` (audience `https://auth.romaine.life` — the same platform audience
+  used by auth.romaine.life's exchange path and the MCP gateway). The callout
+  validates the token via audience-pinned `TokenReview`, takes the
   **bound pod name from the token's claims**, reads the pod's
   orchestrator-written labels (`tank-operator/session-id`, `-scope`), and
   issues permissions for exactly that session:
@@ -64,10 +65,14 @@ safe.
    The orchestrator deployment simultaneously gains `NATS_USER`; session
    pods (legacy token) now authenticate THROUGH the callout's legacy grant.
    Watch `tank_nats_auth_callout_total{result="legacy"}` count the fleet.
-3. **Flip session credentials** — `sessionmodel.go` injects the storage key
-   + SA-token path instead of `NATS_TOKEN`; runners send user/pass. New
-   pods only (migration policy, pre-deploy-pod clause); old pods keep
-   working via the legacy grant for ≤7d (idle reaper bound).
+3. **Flip session credentials** — `sessionmodel.go` injects `NATS_USER`
+   (the storage key) + `NATS_PASSWORD_FILE` (the projected
+   auth.romaine.life-audience SA token path) instead of `NATS_TOKEN`;
+   runners send user/pass. JavaScript runners read the password file from
+   the NATS authenticator so reconnects see token rotation; Antigravity's
+   Go runner exits/restarts on permanent auth closure and reads the file on
+   boot. New pods only (migration policy, pre-deploy-pod clause); old pods
+   keep working via the legacy grant for ≤7d (idle reaper bound).
 4. **Drop the legacy grant** once `legacy` flatlines: remove
    `NATS_CALLOUT_LEGACY_TOKEN` from the callout deployment and delete the
    `tank-nats-auth` ExternalSecret from the sessions namespace. This is the

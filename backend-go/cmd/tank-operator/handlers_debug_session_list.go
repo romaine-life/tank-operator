@@ -69,31 +69,47 @@ func (s *appServer) handleDebugSessionListState(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, out)
 }
 
-// debugRowJSON is a compact, sidebar-relevant projection. Drops the
+// debugRowJSON is a compact, recovery-relevant projection. Drops the
 // activity_summary and test/rollout blobs to keep the response
-// scannable; the operator can re-query the registry directly for
-// those if needed.
+// scannable, but keeps the durable create-time run configuration so
+// an operator can recreate a soft-deleted session without direct
+// database credentials.
 func debugRowJSON(record sessionmodel.SessionRecord) map[string]any {
 	return map[string]any{
-		"id":               record.ID,
-		"mode":             record.Mode,
-		"pod_name":         record.PodName,
-		"name":             record.Name,
-		"visible":          record.Visible,
-		"status":           record.Status,
-		"requested_at":     record.RequestedAt,
-		"created_at":       record.CreatedAt,
-		"updated_at":       record.UpdatedAt,
-		"ready_at":         record.ReadyAt,
-		"terminating_at":   record.TerminatingAt,
-		"agent_avatar_id":  record.AgentAvatarID,
-		"system_avatar_id": record.SystemAvatarID,
-		"sidebar_position": record.SidebarPosition,
-		"row_version":      record.RowVersion,
-		"has_activity":     len(record.ActivitySummary) > 0,
-		"has_test_state":   record.TestState != nil,
-		"has_rollout":      record.RolloutState != nil,
+		"id":                    record.ID,
+		"mode":                  record.Mode,
+		"pod_name":              record.PodName,
+		"name":                  record.Name,
+		"visible":               record.Visible,
+		"status":                record.Status,
+		"requested_at":          record.RequestedAt,
+		"created_at":            record.CreatedAt,
+		"updated_at":            record.UpdatedAt,
+		"ready_at":              record.ReadyAt,
+		"terminating_at":        record.TerminatingAt,
+		"repos":                 nonNilStrings(record.Repos),
+		"capabilities":          nonNilStrings(record.Capabilities),
+		"model":                 record.Model,
+		"effort":                record.Effort,
+		"runtime_model":         record.RuntimeModel,
+		"runtime_effort":        record.RuntimeEffort,
+		"runtime_configured_at": record.RuntimeConfiguredAt,
+		"agent_avatar_id":       record.AgentAvatarID,
+		"system_avatar_id":      record.SystemAvatarID,
+		"sidebar_position":      record.SidebarPosition,
+		"row_version":           record.RowVersion,
+		"has_activity":          len(record.ActivitySummary) > 0,
+		"has_clone_state":       record.CloneState != nil,
+		"has_test_state":        record.TestState != nil,
+		"has_rollout":           record.RolloutState != nil,
 	}
+}
+
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
 }
 
 func sliceMap[T, R any](in []T, fn func(T) R) []R {
