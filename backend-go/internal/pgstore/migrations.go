@@ -1810,7 +1810,8 @@ var schemaMigrations = []migration{
 		image_kind     text NOT NULL CHECK (image_kind IN (
 			'app',
 			'session_claude',
-			'session_codex'
+			'session_codex',
+			'session_antigravity'
 		)),
 		image_ref      text NOT NULL DEFAULT '',
 		image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
