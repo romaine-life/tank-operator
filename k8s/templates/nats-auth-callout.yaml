@@ -73,6 +73,7 @@ spec:
       labels:
         app.kubernetes.io/name: nats-auth-callout
     spec:
+      serviceAccountName: default
       automountServiceAccountToken: false
       containers:
         - name: callout
