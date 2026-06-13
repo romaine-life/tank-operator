@@ -127,9 +127,8 @@ spec:
 # #1128). It exposes tank_nats_auth_callout_total on :9100 but has no
 # Service — it speaks NATS ($SYS.REQ.USER.AUTH), not HTTP, so there is
 # nothing for a ServiceMonitor to select; scrape the pods directly.
-# Without this, the stage-4 gate metric (result="legacy" flatline) and
-# every new-pod auth FAILURE (result=denied_*/error — the #1148
-# "Authorization Violation" class that wedges submitted turns) are
+# Without this, every new-pod auth FAILURE (result=denied_*/error — the
+# #1148 "Authorization Violation" class that wedges submitted turns) is
 # invisible to Prometheus. Gated to non-test envs because test slots run
 # tokenless single-tenant NATS and never render the callout. Two replicas;
 # the counter is per-pod, so the alerts below sum() across pods.
@@ -1394,34 +1393,6 @@ spec:
               Confirm tank_nats_auth_callout_total{result="session"} is
               still incrementing (healthy pods) and grep the affected
               session pod's runner logs for NATS "Authorization Violation".
-
-        # Stage-4 gate signal (#1128). The callout grants the legacy
-        # unrestricted permission set to any client still presenting the
-        # shared fleet token (NATS_CALLOUT_LEGACY_TOKEN). Expected ONLY for
-        # pre-stage-3 session pods that have not yet aged out (idle reaper
-        # bound ≤7d). This is the migration audit checklist's required
-        # "the old path is being used again" counter: while it fires,
-        # deleting the legacy grant would strand those live pods, so stage 4
-        # (remove NATS_CALLOUT_LEGACY_TOKEN + the sessions-namespace
-        # tank-nats-auth ExternalSecret) MUST NOT ship. Diagnostic only.
-        - alert: TankNatsAuthCalloutLegacyTokenInUse
-          expr: sum(rate(tank_nats_auth_callout_total{result="legacy"}[1h])) > 0
-          for: 5m
-          labels:
-            severity: info
-          annotations:
-            summary: "NATS auth-callout is still granting the legacy shared fleet token"
-            runbook: |
-              A client authenticated to NATS with the shared fleet token and
-              the callout issued the legacy unrestricted grant. Expected only
-              for pre-stage-3 session pods that have not yet aged out (idle
-              reaper bound ≤7d after the stage-3 session-image flip). This is
-              the #1128 stage-4 gate: when this stays at zero for a full
-              pre-stage-3 pod-age window, the legacy grant is safe to remove
-              (docs/session-bus-auth.md → Staged rollout step 4); until then
-              removing it strands live pods. Identify the lingering pods via
-              NATS connz (user="legacy-shared-token") in the nats namespace.
-              Does not page.
 
     - name: tank-operator.api-proxy
       rules:

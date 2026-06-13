@@ -34,7 +34,7 @@ const defaultTokenAudience = "https://auth.romaine.life"
 
 var calloutAuthTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "tank_nats_auth_callout_total",
-	Help: "NATS auth-callout outcomes: session (per-session JWT issued), legacy (shared-token transition grant), denied_*, error.",
+	Help: "NATS auth-callout outcomes: session (per-session JWT issued), denied_*, error.",
 }, []string{"result"})
 
 func recordCalloutAuth(result string) {
@@ -140,7 +140,6 @@ func main() {
 			sessionsNamespace: requiredEnv("NATS_CALLOUT_SESSIONS_NAMESPACE"),
 			serviceAccount:    env("NATS_CALLOUT_SESSION_SERVICE_ACCOUNT", "claude-session"),
 		},
-		legacyToken:   strings.TrimSpace(os.Getenv("NATS_CALLOUT_LEGACY_TOKEN")),
 		commandStream: env("NATS_CALLOUT_COMMAND_STREAM", defaultCommandStream),
 		providers:     defaultProviders,
 		userTTL:       defaultUserTTL,
@@ -200,7 +199,6 @@ func main() {
 	slog.Info("nats auth callout serving",
 		"subject", natsAuthCalloutSubject,
 		"sessions_namespace", svc.resolver.(*k8sSessionResolver).sessionsNamespace,
-		"legacy_token_enabled", svc.legacyToken != "",
 		"metrics", metricsAddr,
 	)
 
