@@ -107,6 +107,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
