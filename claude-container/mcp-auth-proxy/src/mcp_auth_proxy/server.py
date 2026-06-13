@@ -742,12 +742,18 @@ async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_
     )
     async with http.get(url, headers={"Authorization": f"Bearer {service_jwt}"}) as resp:
         body = await resp.text()
+        if resp.status == 204 or not body.strip():
+            return None
         if resp.status >= 400:
             raise RuntimeError(f"Tank break-glass grant lookup failed with HTTP {resp.status}: {body[:500]}")
     try:
         value = json.loads(body)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Tank break-glass grant lookup returned invalid JSON") from exc
+        log.warning(
+            "Tank break-glass grant lookup returned invalid JSON; treating as no active grant",
+            exc_info=exc,
+        )
+        return None
     if isinstance(value, dict) and value.get("active") is True:
         return value
     return None
