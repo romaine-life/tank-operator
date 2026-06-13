@@ -165,6 +165,7 @@ type projectionAwaitingInput struct {
 	ProviderTimelineID string
 	TimelineID         string
 	Questions          []any
+	Plan               string
 	QuestionIndex      int
 	QuestionSet        int
 	OrderKey           string
@@ -732,6 +733,7 @@ func (s *projectionState) applyAwaitingInput(event map[string]any) {
 		ProviderTimelineID: transcriptMapString(payload, "provider_timeline_id"),
 		TimelineID:         projectionFirstNonEmpty(transcriptMapString(payload, "timeline_id"), transcriptString(event, "timeline_id")),
 		Questions:          questions,
+		Plan:               transcriptMapString(payload, "plan"),
 		QuestionIndex:      projectionAwaitingInputQuestionIndex(event),
 		QuestionSet:        projectionAwaitingInputQuestionSet(event),
 		OrderKey:           transcriptString(event, "order_key"),
@@ -2204,6 +2206,7 @@ func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectio
 		"timeline_id":          awaiting.TimelineID,
 		"provider_timeline_id": awaiting.ProviderTimelineID,
 		"questions":            awaiting.Questions,
+		"plan":                 awaiting.Plan,
 		"question_index":       awaiting.QuestionIndex,
 		"question_set":         awaiting.QuestionSet,
 	}, answered, answer)
@@ -2258,6 +2261,11 @@ func projectionAwaitingInputPayloadFromMap(raw map[string]any, answered bool, an
 	}
 	if answer.Annotations != nil {
 		out["annotations"] = answer.Annotations
+	}
+	// ExitPlanMode plan-approval pauses carry the plan markdown; the Turns
+	// question page renders it above the Approve/Request-changes question.
+	if plan := transcriptMapString(raw, "plan"); plan != "" {
+		out["plan"] = plan
 	}
 	return out
 }

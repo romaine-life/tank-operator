@@ -176,6 +176,12 @@ export function askUserQuestionHandoffEvents(args) {
   const text = formatAskUserQuestionText(questions);
   const createdAt = new Date().toISOString();
   const producer = { name: `${source}-runner`, runtime: source };
+  // Optional plan markdown for ExitPlanMode pauses. The plan-approval shape
+  // reuses this AskUserQuestion handoff: one Approve/Request-changes question
+  // plus the full plan body, which the Turns question page renders as markdown
+  // above the question. Empty/absent for ordinary AskUserQuestion pauses.
+  const plan =
+    typeof args.plan === "string" && args.plan.trim() ? args.plan : undefined;
   const awaitingInput = {
     asking_turn_id: askingTurnID,
     question_turn_id: questionTurnID,
@@ -183,6 +189,7 @@ export function askUserQuestionHandoffEvents(args) {
     timeline_id: questionTimelineID,
     provider_timeline_id: providerTimelineID,
     questions,
+    ...(plan ? { plan } : {}),
   };
   return {
     questionClientNonce: questionNonce,

@@ -513,6 +513,17 @@ function askUserQuestionToolResult(
   };
 }
 
+// exitPlanModePlanText extracts the plan markdown from an ExitPlanMode tool
+// input. The SDK passes `{ plan, allowedPrompts? }`; we render `plan`. Returns
+// "" when absent/malformed so the pause still renders (just without a body).
+function exitPlanModePlanText(input: unknown): string {
+  if (input && typeof input === "object" && "plan" in input) {
+    const plan = (input as { plan?: unknown }).plan;
+    if (typeof plan === "string" && plan.trim()) return plan;
+  }
+  return "";
+}
+
 type InputReplyAnswerShape =
   | "selection_only"
   | "free_form_only"
@@ -658,6 +669,12 @@ const DEFAULT_EFFORT: EffortLevel = "high";
 const TANK_MCP_SERVER_NAME = "tank";
 const TANK_ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const TANK_ASK_USER_QUESTION_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_ASK_USER_QUESTION_TOOL}`;
+// ExitPlanMode is the SDK-native "I've finished planning" tool. Tank reuses the
+// AskUserQuestion human-in-the-loop rail for it: the alias routes the native
+// call to a Tank MCP tool whose handler pauses the turn for plan approval
+// (Approve / Request changes) and resolves when the user answers.
+const TANK_EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
+const TANK_EXIT_PLAN_MODE_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_EXIT_PLAN_MODE_TOOL}`;
 
 const askUserQuestionInputSchema = {
   question: z
@@ -702,6 +719,15 @@ const askUserQuestionInputSchema = {
     .boolean()
     .optional()
     .describe("Whether the user may answer with free-form text."),
+};
+
+const exitPlanModeInputSchema = {
+  plan: z
+    .string()
+    .optional()
+    .describe(
+      "The completed implementation plan to present to the Tank user for approval, as markdown.",
+    ),
 };
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
@@ -1183,6 +1209,7 @@ export class Runner {
       allowDangerouslySkipPermissions: true,
       toolAliases: {
         [TANK_ASK_USER_QUESTION_TOOL]: TANK_ASK_USER_QUESTION_TOOL_ALIAS,
+        [TANK_EXIT_PLAN_MODE_TOOL]: TANK_EXIT_PLAN_MODE_TOOL_ALIAS,
       },
       ...(providerSessionID
         ? { resume: providerSessionID }
@@ -1299,6 +1326,13 @@ export class Runner {
           async (input) => this.handleTankAskUserQuestion(input),
           { alwaysLoad: true },
         ),
+        tool(
+          TANK_EXIT_PLAN_MODE_TOOL,
+          "Present your completed plan to the Tank user and wait for approval before implementing. The user approves or requests changes.",
+          exitPlanModeInputSchema,
+          async (input) => this.handleTankExitPlanMode(input),
+          { alwaysLoad: true },
+        ),
       ],
     });
   }
@@ -1324,6 +1358,59 @@ export class Runner {
   private nextTankAskUserQuestionProviderItemID(turn: PendingTurn): string {
     this.tankAskUserQuestionSequence += 1;
     return `tank_ask_user_question_${turn.turnID}_${this.tankAskUserQuestionSequence}`;
+  }
+
+  // handleTankExitPlanMode mirrors handleTankAskUserQuestion: ExitPlanMode is
+  // aliased to this Tank MCP tool, so the agent's native "exit plan mode" call
+  // pauses the turn for plan approval instead of streaming past as an inert
+  // tool item. The plan body rides the awaiting_input handoff (rendered as the
+  // dedicated plan page); the binary decision reuses the AskUserQuestion
+  // option/answer rail — "Approve" resumes into the implementation turn,
+  // "Request changes" returns the user's feedback so the agent revises.
+  private handleTankExitPlanMode(input: unknown): Promise<CallToolResult> {
+    const turn = this.activeTurn;
+    if (!turn) {
+      return Promise.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "ExitPlanMode cannot pause the turn because no active Tank turn exists.",
+          },
+        ],
+      });
+    }
+    const providerItemID = this.nextTankExitPlanModeProviderItemID(turn);
+    const questions = [
+      {
+        question: "Approve this plan?",
+        header: "Plan ready for review",
+        options: [
+          {
+            label: "Approve",
+            description: "Proceed with implementing this plan.",
+          },
+          {
+            label: "Request changes",
+            description: "Send the plan back with feedback to revise.",
+          },
+        ],
+        multiSelect: false,
+        allowFreeForm: true,
+        secret: false,
+      },
+    ];
+    return this.pauseTurnForInput(
+      turn,
+      questions,
+      providerItemID,
+      exitPlanModePlanText(input),
+    );
+  }
+
+  private nextTankExitPlanModeProviderItemID(turn: PendingTurn): string {
+    this.tankAskUserQuestionSequence += 1;
+    return `tank_exit_plan_mode_${turn.turnID}_${this.tankAskUserQuestionSequence}`;
   }
 
   private async handleEvent(message: SDKMessage): Promise<void> {
@@ -2346,6 +2433,7 @@ export class Runner {
     turn: PendingTurn,
     questions: unknown,
     providerItemID: string,
+    plan?: string,
   ): Promise<CallToolResult> {
     if (turn.terminalEmitted) {
       return {
@@ -2367,6 +2455,7 @@ export class Runner {
       providerItemID,
       providerTimelineID: timelineID,
       questions: questions as unknown[],
+      ...(plan && plan.trim() ? { plan } : {}),
     });
     const replyKey = inputReplyKey(turn.turnID, timelineID, providerItemID);
     const waitForReply = new Promise<CallToolResult>((resolve) => {
