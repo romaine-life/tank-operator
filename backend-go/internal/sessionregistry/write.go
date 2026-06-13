@@ -159,9 +159,11 @@ func validateSessionRecordForWrite(record sessionmodel.SessionRecord) error {
 }
 
 // SetRuntimeConfig records the model/effort options the pod-side runner
-// actually handed to the provider executable or SDK. The intended session
-// config is immutable after create; this applied surface is allowed to
-// update on runner restart so the UI reflects the current process.
+// actually handed to the provider executable or SDK (the RUNTIME/applied
+// surface). The user-chosen config (the model/effort columns) is mutable
+// post-create via SetRunConfig; this applied surface tracks what the runner
+// last pinned, updating on runner restart and on a mid-session re-pin so the
+// UI reflects the current process.
 func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	sessionID = strings.TrimSpace(sessionID)
@@ -296,6 +298,31 @@ func (s *Store) SetOpenTarget(ctx context.Context, email, sessionID, target stri
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, target)
+	return err
+}
+
+// SetRunConfig updates the user-chosen run config (model/effort) for an SDK
+// chat session after create. Tank's model/effort are no longer immutable after
+// create: a user may change them mid-session from the composer, the next
+// submit_turn carries the new values (the turn handler reads these columns),
+// and the runner re-pins on the next turn at an idle boundary. Like SetName,
+// missing-session is a no-op and the row_version bump keeps the row-update
+// cursor advancing so open tabs converge. Validation (provider allowlist,
+// default-alias rejection, Antigravity exclusion) lives in the handler.
+func (s *Store) SetRunConfig(ctx context.Context, email, sessionID, model, effort string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET model       = $4,
+			effort      = $5,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, strings.TrimSpace(model), strings.TrimSpace(effort))
 	return err
 }
 

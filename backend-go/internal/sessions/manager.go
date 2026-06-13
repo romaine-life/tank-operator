@@ -51,6 +51,7 @@ type SessionRegistry interface {
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
 	SetOpenTarget(ctx context.Context, email, sessionID, target string) error
+	SetRunConfig(ctx context.Context, email, sessionID, model, effort string) error
 	SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error
 	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
@@ -590,6 +591,28 @@ func (m *Manager) SetOpenTarget(ctx context.Context, owner, sessionID, target st
 	if m.registry != nil {
 		if regErr := m.registry.SetOpenTarget(ctx, owner, sessionID, target); regErr != nil {
 			slog.Warn("set-open-target registry update failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// SetRunConfig persists a mid-session change to the user-chosen model/effort
+// for an SDK chat session. Like SetOpenTarget it is registry-only durable
+// state — no pod annotation is patched. The next submit_turn carries the new
+// values (the turn handler overrides from the registered config) and the
+// runner re-pins on the next turn at an idle boundary. Validation lives in the
+// HTTP handler; the manager persists, publishes the row, and returns refreshed
+// Info the same way SetOpenTarget's tail does.
+func (m *Manager) SetRunConfig(ctx context.Context, owner, sessionID, model, effort string) (Info, error) {
+	if m.registry != nil {
+		if regErr := m.registry.SetRunConfig(ctx, owner, sessionID, model, effort); regErr != nil {
+			slog.Warn("set-run-config registry update failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}
