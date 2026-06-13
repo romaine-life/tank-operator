@@ -41,6 +41,10 @@ export type SessionRoute = SettingsRoute & {
   // Workspace-relative path of the HTML file to render full-page in the
   // sandboxed "static" view. Non-null only when tab === "static".
   staticPath: string | null;
+  // Workspace-relative file selected in the files view. Non-null only when
+  // tab === "files" and the route includes a file target.
+  filePath: string | null;
+  fileLine: number | null;
 };
 
 export type HomeRoute = SettingsRoute & {
@@ -117,6 +121,21 @@ export function parsePageNumber(segment: string): number | null {
   return parsePositiveIntSegment(segment);
 }
 
+function splitFileLineSuffix(path: string): {
+  path: string;
+  line: number | null;
+} {
+  const match = path.match(/:(\d+)$/);
+  if (!match) return { path, line: null };
+  const line = Number(match[1]);
+  if (!Number.isSafeInteger(line) || line < 1) return { path, line: null };
+  return { path: path.slice(0, -match[0].length), line };
+}
+
+function validWorkspaceRoutePath(path: string): boolean {
+  return Boolean(path) && !path.split("/").some((seg) => seg === "..");
+}
+
 export function readSessionRouteFromPathname(pathname: string): SessionRoute | null {
   const parts = routeParts(pathname);
   if (parts[0] !== "sessions" || !parts[1]) return null;
@@ -129,6 +148,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       pageNumber: null,
       pageSegmentPresent: false,
       staticPath: null,
+      filePath: null,
+      fileLine: null,
       ...defaultSettingsRoute,
     };
   }
@@ -141,6 +162,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       pageNumber: null,
       pageSegmentPresent: false,
       staticPath: null,
+      filePath: null,
+      fileLine: null,
       ...defaultSettingsRoute,
     };
   }
@@ -165,6 +188,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       pageNumber,
       pageSegmentPresent,
       staticPath: null,
+      filePath: null,
+      fileLine: null,
       ...defaultSettingsRoute,
     };
   }
@@ -173,7 +198,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
     // `..` segment so a bookmarked link can't escape the workspace (the backend
     // re-validates with safeWorkspacePath too).
     const rel = parts.slice(3).join("/");
-    if (!rel || rel.split("/").some((seg) => seg === "..")) return null;
+    if (!validWorkspaceRoutePath(rel)) return null;
     return {
       sessionId: parts[1],
       tab: "static",
@@ -182,6 +207,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       pageNumber: null,
       pageSegmentPresent: false,
       staticPath: rel,
+      filePath: null,
+      fileLine: null,
       ...defaultSettingsRoute,
     };
   }
@@ -194,14 +221,18 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       pageNumber: null,
       pageSegmentPresent: false,
       staticPath: null,
+      filePath: null,
+      fileLine: null,
       ...defaultSettingsRoute,
     };
   }
-  // The file-browser and background panes are routed at the surface level so they
-  // are addressable and reload-stable and appear in the breadcrumb. Their deeper
-  // internal state (file path, selected file, background view) stays client-side
-  // for now; deep-linking it is a deliberate, named follow-up.
-  if (parts[2] === "files" && parts.length === 3) {
+  // The file-browser pane is routed at the surface level, and may include a
+  // workspace-relative file path so transcript file links can open the same
+  // preview in a new tab.
+  if (parts[2] === "files" && parts.length >= 3) {
+    const target = parts.length > 3 ? parts.slice(3).join("/") : "";
+    if (target && !validWorkspaceRoutePath(target)) return null;
+    const fileTarget = target ? splitFileLineSuffix(target) : null;
     return {
       sessionId: parts[1],
       tab: "files",
@@ -210,6 +241,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       pageNumber: null,
       pageSegmentPresent: false,
       staticPath: null,
+      filePath: fileTarget?.path ?? null,
+      fileLine: fileTarget?.line ?? null,
       ...defaultSettingsRoute,
     };
   }
@@ -222,6 +255,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       pageNumber: null,
       pageSegmentPresent: false,
       staticPath: null,
+      filePath: null,
+      fileLine: null,
       ...defaultSettingsRoute,
     };
   }
@@ -260,6 +295,8 @@ export function buildSessionRouteUrl(
   turnNumber?: number | null,
   staticPath?: string | null,
   pageNumber?: number | null,
+  filePath?: string | null,
+  fileLine?: number | null,
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
@@ -278,7 +315,14 @@ export function buildSessionRouteUrl(
   } else if (tab === "session-data") {
     suffix = "/session-data";
   } else if (tab === "files") {
-    suffix = "/files";
+    const routedFilePath = filePath
+      ? filePath.split("/").map(encodeURIComponent).join("/")
+      : "";
+    suffix = `/files${
+      routedFilePath
+        ? `/${routedFilePath}${fileLine != null ? `:${fileLine}` : ""}`
+        : ""
+    }`;
   } else if (tab === "background") {
     suffix = "/background";
   }

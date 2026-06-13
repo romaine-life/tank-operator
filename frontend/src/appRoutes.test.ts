@@ -19,6 +19,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -31,6 +33,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -42,6 +46,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -54,6 +60,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -69,6 +77,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -83,6 +93,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -97,6 +109,8 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -108,11 +122,25 @@ test("session routes parse only session-scoped pages", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
-  // Surface-only for now: a deeper segment isn't a valid target yet.
-  expect(readSessionRouteFromPathname("/sessions/s-1/files/src")).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/files/src/App.tsx:42")).toEqual({
+    sessionId: "s-1",
+    tab: "files",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    filePath: "src/App.tsx",
+    fileLine: 42,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  expect(readSessionRouteFromPathname("/sessions/s-1/files/../secret")).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/settings")).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability")).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/help")).toBe(null);
@@ -127,6 +155,8 @@ test("session routes parse the sandboxed static-page subroute", () => {
     pageNumber: null,
     pageSegmentPresent: false,
     staticPath: "diagram.html",
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -143,6 +173,18 @@ test("static page route urls embed the workspace path per segment", () => {
   expect(buildSessionRouteUrl(current, "s-1", "static", null, "out/report.html")).toBe("https://tank.example.test/sessions/s-1/static/out/report.html");
   // Spaces in a segment are percent-encoded; path separators are preserved.
   expect(buildSessionRouteUrl(current, "s-1", "static", null, "my diagram.html")).toBe("https://tank.example.test/sessions/s-1/static/my%20diagram.html");
+  expect(
+    buildSessionRouteUrl(
+      current,
+      "s-1",
+      "files",
+      null,
+      null,
+      null,
+      "screenshots/main menu.png",
+      3,
+    ),
+  ).toBe("https://tank.example.test/sessions/s-1/files/screenshots/main%20menu.png:3");
 });
 
 test("session route urls broadcast only session-owned pages", () => {
@@ -168,6 +210,8 @@ test("turn routes carry an optional page ordinal", () => {
     pageNumber: 2,
     pageSegmentPresent: true,
     staticPath: null,
+    filePath: null,
+    fileLine: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
