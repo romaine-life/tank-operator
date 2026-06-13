@@ -2271,6 +2271,11 @@ func projectionAwaitingInputPayloadFromMap(raw map[string]any, answered bool, an
 	if answer.Annotations != nil {
 		out["annotations"] = answer.Annotations
 	}
+	// ExitPlanMode plan-approval pauses carry the plan markdown; the Turns
+	// question page renders it above the Approve/Request-changes question.
+	if plan := transcriptMapString(raw, "plan"); plan != "" {
+		out["plan"] = plan
+	}
 	return out
 }
 

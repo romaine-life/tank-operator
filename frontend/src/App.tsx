@@ -503,6 +503,9 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     timelineId: string;
     providerTimelineId?: string;
     questions: unknown[];
+    // ExitPlanMode plan-approval pauses carry the plan markdown; rendered on
+    // the question page above the Approve/Request-changes question.
+    plan?: string;
     questionCount: number;
     questionIndex?: number;
     questionSet?: number;
@@ -9662,6 +9665,14 @@ function RunAwaitingInputCard({
       data-answered={answered ? "true" : "false"}
       data-dismissed={dismissed ? "true" : "false"}
     >
+      {aw?.plan && aw.plan.trim() !== "" && (
+        <div className="run-tool-ask-plan" data-slot="plan">
+          <span className="run-tool-ask-chip">Plan</span>
+          <div className="run-tool-ask-plan-body">
+            <RunMarkdown>{aw.plan}</RunMarkdown>
+          </div>
+        </div>
+      )}
       {dismissed && (
         <div className="run-tool-ask-status" role="status" aria-live="polite">
           <span className="run-tool-ask-status-icon" aria-hidden="true">

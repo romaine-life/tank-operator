@@ -80,6 +80,9 @@ export interface AskUserQuestionHandoffEventArgs {
   providerItemID: string;
   providerTimelineID: string;
   questions: unknown[];
+  // ExitPlanMode plan-approval pauses pass the plan markdown so the Turns
+  // question page renders it above the Approve/Request-changes question.
+  plan?: string;
 }
 
 export interface AskUserQuestionHandoffEvents {
