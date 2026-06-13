@@ -144,7 +144,7 @@ session:
 
 # Per-session NATS credential issuer (#1128): answers the NATS server's
 # auth_callout with user JWTs scoped to one session's subjects, identity
-# anchored in projected SA tokens + orchestrator-written pod labels.
+# anchored in auth.romaine.life's k8s service-principal exchange.
 # DISABLED until the staged rollout starts; flipping `enabled` only deploys
 # the issuer — nothing routes through it until infra-bootstrap's NATS chart
 # turns on authorization.auth_callout with this issuer's account public key

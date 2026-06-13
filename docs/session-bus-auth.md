@@ -21,30 +21,25 @@ account nkey:
 - **Session pods** connect with `user=<storage key>`, `pass=<projected SA
   token>` (audience `https://auth.romaine.life` — the same platform audience
   used by auth.romaine.life's exchange path and the MCP gateway). The callout
-  validates the token via audience-pinned `TokenReview`, resolves the
-  authenticated ServiceAccount subject into a concrete session authority, takes
-  the **bound pod name from the token's claims**, reads the pod's
-  orchestrator-written labels (`tank-operator/session-id`, `-scope`) in that
-  authority's namespace, and issues permissions for exactly that session:
+  POSTs that token to `auth.romaine.life/api/auth/exchange/k8s`, verifies the
+  returned platform JWT against auth.romaine.life's JWKS, derives the storage
+  key from the service-principal subject (`svc:tank:<id>` or
+  `svc:tank:slot-N-session-<id>`), and issues permissions for exactly that
+  session:
   - publish `tank.session.<scope>.<sid>.events`
   - the `TANK_SESSION_COMMANDS` consumer API (`$JS.API.CONSUMER.{DURABLE.
     CREATE,CREATE,INFO,MSG.NEXT}`) for the session's own per-provider
     durables (data + control planes), plus `$JS.API.INFO`
   - subscribe `_INBOX.>`
-  The claimed username is only ever checked for equality with the pod's
-  label binding — identity comes from the cluster, not the client.
-- **Session authorities** are closed and explicit. Production accepts only
-  `system:serviceaccount:tank-operator-sessions:claude-session` and requires
-  pod scope `default`. Glimmung validation slots share the production NATS
-  broker and production auth-callout; a slot token is accepted only when its
-  subject is `system:serviceaccount:<slot>-sessions:<slot>-session` where
-  `<slot>` has the `tank-operator-slot-<N>` shape, the namespace is labelled as
-  a Glimmung `tank-operator` test slot whose native slot name is `<slot>`, and
-  the bound pod carries
-  `tank-operator/session-scope=<slot>`. Slot Helm renders grant the production
-  `tank-operator/nats-auth-callout` ServiceAccount `get pods` only in that
-  slot's sessions namespace; the callout does not receive cluster-wide pod
-  read.
+  The claimed username is only ever checked for equality with the
+  auth.romaine.life service identity — identity comes from the identity
+  provider, not the client.
+- **Session authorities** are closed and explicit at auth.romaine.life.
+  Production session pods exchange into `svc:tank:<id>`. Glimmung validation
+  slots share the production NATS broker and production auth-callout; their
+  auth exchange emits `svc:tank:slot-N-session-<id>`, which the callout maps to
+  the existing scoped storage key `tank-operator-slot-N:<id>`. The NATS
+  callout does not use Kubernetes TokenReview and has no pod-read RBAC.
 - **The orchestrator and the callout itself** are static `auth_users` in
   the NATS server config and never route through the callout — a callout
   outage cannot take down the command plane. Existing connections keep
@@ -54,7 +49,7 @@ account nkey:
 
 Outcomes are counted in `tank_nats_auth_callout_total{result}`:
 `session` / `denied_*` / `error`. Denials are bounded to credential,
-subject-authority, pod-binding, and claimed-identity failures so slot auth
+auth-exchange, subject-authority, and claimed-identity failures so slot auth
 regressions are visible without high-cardinality labels. The callout has no Service (it answers
 NATS, not HTTP), so the counter is scraped by the `tank-nats-auth-callout`
 PodMonitor in `k8s/templates/observability.yaml`; `TankNatsAuthCalloutDenials`
