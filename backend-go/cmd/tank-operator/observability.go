@@ -1213,7 +1213,7 @@ func controlActionSourceServiceLabel(sourceService string) string {
 
 func controlActionSourceToolLabel(sourceTool string) string {
 	switch sourceTool {
-	case "merge_pull_request", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_git_break_glass", "git_break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare":
+	case "merge_pull_request", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_pr_lane", "create_pr_lane", "pr_lane_approval", "request_git_break_glass", "git_break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare":
 		return sourceTool
 	default:
 		return "other"
@@ -1226,6 +1226,11 @@ func controlActionActionLabel(action string) string {
 		"github.pull_request.ready_for_review",
 		"github.pull_request.open",
 		"github.pull_request.mergeability",
+		"github.pr_lane.request",
+		"github.pr_lane.approve",
+		"github.pr_lane.deny",
+		"github.pr_lane.auto_approve",
+		"github.pr_lane.create",
 		"github.commit.write",
 		"github.commit.push",
 		"github.commit.ci",

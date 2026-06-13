@@ -224,8 +224,10 @@ import {
 import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
+  pendingPRLaneRequests,
   type ControlActionRow,
   type ControlActionStatus,
+  type PRLaneRequest,
 } from "./controlActions";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
@@ -9143,6 +9145,81 @@ function BackgroundMeta({
   );
 }
 
+function PRLaneApprovalIndicator({
+  requests,
+  busyEventId,
+  onApprove,
+  onDeny,
+  onAutoApprove,
+}: {
+  requests: PRLaneRequest[];
+  busyEventId: string | null;
+  onApprove: (request: PRLaneRequest) => void;
+  onDeny: (request: PRLaneRequest) => void;
+  onAutoApprove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (requests.length === 0) return null;
+  const countLabel = `${requests.length} branch request${requests.length === 1 ? "" : "s"}`;
+  return (
+    <div className="pr-lane-approval">
+      <button
+        type="button"
+        className="pr-lane-approval-trigger"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <GitBranchIcon size={14} aria-hidden="true" />
+        <span>{countLabel}</span>
+      </button>
+      {open && (
+        <div className="pr-lane-approval-panel">
+          <div className="pr-lane-approval-head">
+            <span>branch requests</span>
+            <button type="button" onClick={onAutoApprove}>
+              approve all for session
+            </button>
+          </div>
+          <div className="pr-lane-approval-list">
+            {requests.map((request) => {
+              const busy = busyEventId === request.eventId;
+              return (
+                <div className="pr-lane-approval-item" key={request.eventId}>
+                  <div className="pr-lane-approval-main">
+                    <div className="pr-lane-approval-title">
+                      <GitPullRequestIcon size={14} aria-hidden="true" />
+                      <span>{request.laneName}</span>
+                    </div>
+                    <div className="pr-lane-approval-meta">
+                      {[request.relationship, request.base ? `from ${request.base}` : "", request.repo]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                    {request.scope && (
+                      <div className="pr-lane-approval-scope">{request.scope}</div>
+                    )}
+                    {request.reason && (
+                      <div className="pr-lane-approval-reason">{request.reason}</div>
+                    )}
+                  </div>
+                  <div className="pr-lane-approval-actions">
+                    <button type="button" disabled={busy} onClick={() => onApprove(request)}>
+                      approve
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => onDeny(request)}>
+                      deny
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BackgroundScreen({
   shellEntries,
   scheduledEntries,
@@ -15064,6 +15141,12 @@ function ChatPane({
   const [controlActionEntries, setControlActionEntries] = useState<
     TranscriptEntry[]
   >([]);
+  const [controlActionRows, setControlActionRows] = useState<
+    ControlActionRow[]
+  >([]);
+  const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
+    string | null
+  >(null);
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -15149,10 +15232,12 @@ function ChatPane({
   const fetchControlActionEntries = useCallback(async () => {
     if (publicView) {
       setControlActionEntries([]);
+      setControlActionRows([]);
       return;
     }
     if (readOnly) {
       setControlActionEntries([]);
+      setControlActionRows([]);
       return;
     }
     const res = await fetchPaneResource(
@@ -15162,11 +15247,88 @@ function ChatPane({
     );
     if (!res.ok) return;
     const body = (await res.json()) as ControlActionRow[];
+    setControlActionRows(body);
     setControlActionEntries(
       controlActionRowsToEntries(body) as TranscriptEntry[],
     );
   }, [
     fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
+  const prLaneRequests = useMemo(
+    () => pendingPRLaneRequests(controlActionRows),
+    [controlActionRows],
+  );
+  const postPRLaneDecision = useCallback(
+    async (request: PRLaneRequest, decision: "approve" | "deny") => {
+      if (publicView || readOnly) return;
+      setPRLaneApprovalBusyId(request.eventId);
+      try {
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/${decision}`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          },
+        );
+        await fetchControlActionEntries();
+      } finally {
+        setPRLaneApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const autoApprovePRLanes = useCallback(async () => {
+    if (publicView || readOnly) return;
+    setPRLaneApprovalBusyId("__auto__");
+    try {
+      const repo = prLaneRequests[0]?.repo ?? "";
+      await authedFetch(
+        scopedSessionPathForPane(
+          `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/auto-approve`,
+        ),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repo,
+            limit: 10,
+            reason: "approved from session composer",
+          }),
+        },
+      );
+      const pending = [...prLaneRequests];
+      for (const request of pending) {
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note: "session auto-approval enabled" }),
+          },
+        );
+      }
+      await fetchControlActionEntries();
+    } finally {
+      setPRLaneApprovalBusyId(null);
+    }
+  }, [
+    fetchControlActionEntries,
+    prLaneRequests,
     publicView,
     readOnly,
     scopedSessionPathForPane,
@@ -18975,13 +19137,17 @@ function ChatPane({
     if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
+      setControlActionRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
     }
     let cancelled = false;
     const refresh = () => {
       void fetchControlActionEntries().catch(() => {
-        if (!cancelled) setControlActionEntries([]);
+        if (!cancelled) {
+          setControlActionEntries([]);
+          setControlActionRows([]);
+        }
       });
       void fetchBackgroundTaskEntries().catch(() => {
         if (!cancelled) setBackgroundTaskLedgerEntries([]);
@@ -21019,6 +21185,19 @@ function ChatPane({
                 Drop to attach
               </div>
             )}
+            <PRLaneApprovalIndicator
+              requests={prLaneRequests}
+              busyEventId={prLaneApprovalBusyId}
+              onApprove={(request) => {
+                void postPRLaneDecision(request, "approve");
+              }}
+              onDeny={(request) => {
+                void postPRLaneDecision(request, "deny");
+              }}
+              onAutoApprove={() => {
+                void autoApprovePRLanes();
+              }}
+            />
             {attachments.length > 0 && (
               <div className="run-composer-attachments">
                 {attachments.map((a) => (

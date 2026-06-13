@@ -60,6 +60,31 @@ type hotSwapVerificationResponse struct {
 	SourceTool       string   `json:"source_tool,omitempty"`
 }
 
+type prLaneApprovalRequest struct {
+	Note string `json:"note"`
+}
+
+type prLaneAutoApprovalRequest struct {
+	Repo   string `json:"repo"`
+	Limit  int    `json:"limit"`
+	Reason string `json:"reason"`
+}
+
+type prLaneAuthorizationResponse struct {
+	Allowed         bool     `json:"allowed"`
+	Reasons         []string `json:"reasons,omitempty"`
+	RequestEventID  string   `json:"request_event_id,omitempty"`
+	ApprovalEventID string   `json:"approval_event_id,omitempty"`
+	Repo            string   `json:"repo,omitempty"`
+	LaneName        string   `json:"lane_name,omitempty"`
+	Relationship    string   `json:"relationship,omitempty"`
+	Base            string   `json:"base,omitempty"`
+	Scope           string   `json:"scope,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	ProposedBranch  string   `json:"proposed_branch,omitempty"`
+	AutoApproved    bool     `json:"auto_approved,omitempty"`
+}
+
 func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/control-actions")
 	if user == nil {
@@ -271,6 +296,216 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, map[string]any{"active": false, "repo": repo, "session_id": sessionID})
 }
 
+func (s *appServer) handleApprovePRLaneRequest(w http.ResponseWriter, r *http.Request) {
+	s.handlePRLaneDecision(w, r, "approve")
+}
+
+func (s *appServer) handleDenyPRLaneRequest(w http.ResponseWriter, r *http.Request) {
+	s.handlePRLaneDecision(w, r, "deny")
+}
+
+func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request, decision string) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	requestEventID := strings.TrimSpace(r.PathValue("request_event_id"))
+	if sessionID == "" || requestEventID == "" {
+		writeError(w, http.StatusBadRequest, "session_id and request_event_id are required")
+		return
+	}
+	var body prLaneApprovalRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), user.OwnerEmail(), s.sessionScope, sessionID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	request, ok := findPendingPRLaneRequest(rows, requestEventID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "pending PR lane request not found")
+		return
+	}
+	action := "github.pr_lane.approve"
+	status := "succeeded"
+	if decision == "deny" {
+		action = "github.pr_lane.deny"
+		status = "failed"
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"request_event_id": request.EventID,
+		"request_payload":  json.RawMessage(request.Payload),
+		"note":             strings.TrimSpace(body.Note),
+		"decided_by":       user.Email,
+	})
+	event := pgstore.ControlActionEvent{
+		EventID:       "tank-pr-lane-" + decision + "-" + sessionID + "-" + randomHex(12),
+		InvocationID:  request.InvocationID,
+		OwnerEmail:    user.OwnerEmail(),
+		SessionScope:  s.sessionScope,
+		SessionID:     sessionID,
+		SourceService: "tank-operator",
+		SourceTool:    "pr_lane_approval",
+		Action:        action,
+		Status:        status,
+		TargetKind:    request.TargetKind,
+		TargetRef:     request.TargetRef,
+		RepoOwner:     request.RepoOwner,
+		RepoName:      request.RepoName,
+		Payload:       payload,
+	}
+	row, err := s.controlActions.Append(r.Context(), event)
+	if err != nil {
+		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	writeJSON(w, http.StatusCreated, controlActionToJSON(row, false))
+}
+
+func (s *appServer) handleAutoApprovePRLanes(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	var body prLaneAutoApprovalRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	repo := strings.TrimSpace(body.Repo)
+	owner, name := "", ""
+	if repo != "" {
+		var ok bool
+		owner, name, ok = strings.Cut(repo, "/")
+		if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
+			writeError(w, http.StatusBadRequest, "repo must be empty or a GitHub slug like owner/name")
+			return
+		}
+	}
+	limit := body.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"repo":        repo,
+		"limit":       limit,
+		"reason":      strings.TrimSpace(body.Reason),
+		"approved_by": user.Email,
+		"scope":       "session",
+	})
+	targetRef := "tank://session/" + sessionID + "/pr-lanes"
+	if repo != "" {
+		targetRef = "https://github.com/" + repo
+	}
+	event := pgstore.ControlActionEvent{
+		EventID:       "tank-pr-lane-auto-approve-" + sessionID + "-" + randomHex(12),
+		InvocationID:  "tank-pr-lane-auto-approve-" + randomHex(12),
+		OwnerEmail:    user.OwnerEmail(),
+		SessionScope:  s.sessionScope,
+		SessionID:     sessionID,
+		SourceService: "tank-operator",
+		SourceTool:    "pr_lane_approval",
+		Action:        "github.pr_lane.auto_approve",
+		Status:        "succeeded",
+		TargetKind:    "github_repository",
+		TargetRef:     targetRef,
+		RepoOwner:     owner,
+		RepoName:      name,
+		Payload:       payload,
+	}
+	row, err := s.controlActions.Append(r.Context(), event)
+	if err != nil {
+		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	writeJSON(w, http.StatusCreated, controlActionToJSON(row, false))
+}
+
+func (s *appServer) handleInternalGetPRLaneAutoApproval(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/pr-lane-auto-approval")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	approved, eventID, limit := activePRLaneAutoApproval(rows, repo)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active":        approved,
+		"event_id":      eventID,
+		"limit":         limit,
+		"repo":          repo,
+		"session_id":    sessionID,
+		"session_scope": s.sessionScope,
+	})
+}
+
+func (s *appServer) handleInternalGetPRLaneAuthorization(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	requestEventID := strings.TrimSpace(r.PathValue("request_event_id"))
+	if sessionID == "" || requestEventID == "" {
+		writeError(w, http.StatusBadRequest, "session_id and request_event_id are required")
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := evaluatePRLaneAuthorization(rows, requestEventID)
+	status := http.StatusOK
+	if !resp.Allowed {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, resp)
+}
+
 func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/hot-swap/verify")
 	if user == nil {
@@ -323,6 +558,117 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusConflict, resp)
+}
+
+func evaluatePRLaneAuthorization(rows []pgstore.ControlActionEvent, requestEventID string) prLaneAuthorizationResponse {
+	var request pgstore.ControlActionEvent
+	for _, row := range rows {
+		if row.EventID == requestEventID && row.Action == "github.pr_lane.request" {
+			request = row
+			break
+		}
+	}
+	if request.EventID == "" {
+		return prLaneAuthorizationResponse{Allowed: false, Reasons: []string{"PR lane request not found"}}
+	}
+	resp := prLaneAuthorizationResponse{
+		RequestEventID: request.EventID,
+		Repo:           request.RepoOwner + "/" + request.RepoName,
+	}
+	var payload struct {
+		LaneName       string `json:"lane_name"`
+		Relationship   string `json:"relationship"`
+		Base           string `json:"base"`
+		Scope          string `json:"scope"`
+		Reason         string `json:"reason"`
+		ProposedBranch string `json:"proposed_branch"`
+		AutoApproved   bool   `json:"auto_approved"`
+	}
+	_ = json.Unmarshal(request.Payload, &payload)
+	resp.LaneName = strings.TrimSpace(payload.LaneName)
+	resp.Relationship = strings.TrimSpace(payload.Relationship)
+	resp.Base = strings.TrimSpace(payload.Base)
+	resp.Scope = strings.TrimSpace(payload.Scope)
+	resp.Reason = strings.TrimSpace(payload.Reason)
+	resp.ProposedBranch = strings.TrimSpace(payload.ProposedBranch)
+	resp.AutoApproved = payload.AutoApproved || request.Status == "succeeded"
+	if resp.LaneName == "" || resp.ProposedBranch == "" || request.RepoOwner == "" || request.RepoName == "" {
+		resp.Reasons = append(resp.Reasons, "PR lane request is missing lane or repository metadata")
+	}
+	for _, row := range rows {
+		if row.InvocationID != request.InvocationID {
+			continue
+		}
+		switch row.Action {
+		case "github.pr_lane.deny":
+			resp.Reasons = append(resp.Reasons, "PR lane request was denied")
+			return resp
+		case "github.pr_lane.approve":
+			if row.Status == "succeeded" {
+				resp.ApprovalEventID = row.EventID
+				resp.Allowed = len(resp.Reasons) == 0
+				return resp
+			}
+		case "github.pr_lane.create":
+			if row.Status == "succeeded" {
+				resp.Reasons = append(resp.Reasons, "PR lane request has already been created")
+				return resp
+			}
+		}
+	}
+	if resp.AutoApproved && len(resp.Reasons) == 0 {
+		resp.Allowed = true
+		return resp
+	}
+	resp.Reasons = append(resp.Reasons, "PR lane request is pending approval")
+	return resp
+}
+
+func findPendingPRLaneRequest(rows []pgstore.ControlActionEvent, eventID string) (pgstore.ControlActionEvent, bool) {
+	var request pgstore.ControlActionEvent
+	for _, row := range rows {
+		if row.Action == "github.pr_lane.request" && row.EventID == eventID && row.Status == "started" {
+			request = row
+			break
+		}
+	}
+	if request.EventID == "" {
+		return pgstore.ControlActionEvent{}, false
+	}
+	for _, row := range rows {
+		if row.InvocationID != request.InvocationID {
+			continue
+		}
+		switch row.Action {
+		case "github.pr_lane.approve", "github.pr_lane.deny":
+			return pgstore.ControlActionEvent{}, false
+		}
+	}
+	return request, true
+}
+
+func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo string) (bool, string, int) {
+	for _, row := range rows {
+		if row.Action != "github.pr_lane.auto_approve" || row.Status != "succeeded" {
+			continue
+		}
+		rowRepo := strings.TrimSpace(row.RepoOwner + "/" + row.RepoName)
+		if row.RepoOwner == "" || row.RepoName == "" {
+			rowRepo = ""
+		}
+		if repo != "" && rowRepo != "" && rowRepo != repo {
+			continue
+		}
+		limit := 10
+		var payload struct {
+			Limit int `json:"limit"`
+		}
+		if err := json.Unmarshal(row.Payload, &payload); err == nil && payload.Limit > 0 {
+			limit = payload.Limit
+		}
+		return true, row.EventID, limit
+	}
+	return false, "", 0
 }
 
 func isFullGitSHA(value string) bool {
@@ -471,6 +817,11 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		"github.pull_request.ready_for_review",
 		"github.pull_request.open",
 		"github.pull_request.mergeability",
+		"github.pr_lane.request",
+		"github.pr_lane.approve",
+		"github.pr_lane.deny",
+		"github.pr_lane.auto_approve",
+		"github.pr_lane.create",
 		"github.commit.write",
 		"github.commit.push",
 		"github.commit.ci",

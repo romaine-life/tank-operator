@@ -43,8 +43,27 @@ export type ControlActionBackgroundEntry = {
   controlActionSha?: string;
 };
 
+export type PRLaneRequest = {
+  eventId: string;
+  invocationId: string;
+  createdAt?: string;
+  repo?: string;
+  laneName: string;
+  relationship?: string;
+  base?: string;
+  scope?: string;
+  reason?: string;
+  proposedBranch?: string;
+};
+
 function nonempty(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function payloadObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function normalizeControlActionStatus(status: string | undefined): ControlActionStatus {
@@ -104,6 +123,16 @@ function actionTitle(action: string | undefined): string {
       return "GitHub break-glass token";
     case "github.break_glass.push":
       return "GitHub break-glass push";
+    case "github.pr_lane.request":
+      return "PR lane request";
+    case "github.pr_lane.approve":
+      return "PR lane approved";
+    case "github.pr_lane.deny":
+      return "PR lane denied";
+    case "github.pr_lane.auto_approve":
+      return "PR lane auto-approval";
+    case "github.pr_lane.create":
+      return "PR lane created";
     default:
       return "Control action";
   }
@@ -142,6 +171,45 @@ export function controlActionRowsToEntries(rows: ControlActionRow[]): ControlAct
       controlActionRepo: repo || undefined,
       controlActionPrNumber: typeof row.pr_number === "number" ? row.pr_number : undefined,
       controlActionSha: sha,
+    }];
+  });
+}
+
+export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[] {
+  const resolvedInvocations = new Set<string>();
+  for (const row of rows) {
+    const action = nonempty(row.action);
+    if (action !== "github.pr_lane.approve" && action !== "github.pr_lane.deny") {
+      continue;
+    }
+    const invocationID = nonempty(row.invocation_id);
+    if (invocationID) resolvedInvocations.add(invocationID);
+  }
+  return rows.flatMap((row) => {
+    if (nonempty(row.action) !== "github.pr_lane.request") return [];
+    if (nonempty(row.status) !== "started") return [];
+    const eventId = nonempty(row.event_id);
+    const invocationId = nonempty(row.invocation_id);
+    if (!eventId || !invocationId || resolvedInvocations.has(invocationId)) {
+      return [];
+    }
+    const payload = payloadObject(row.payload);
+    const laneName = nonempty(payload.lane_name);
+    if (!laneName) return [];
+    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
+      .filter(Boolean)
+      .join("/");
+    return [{
+      eventId,
+      invocationId,
+      createdAt: nonempty(row.created_at),
+      repo: repo || undefined,
+      laneName,
+      relationship: nonempty(payload.relationship),
+      base: nonempty(payload.base),
+      scope: nonempty(payload.scope),
+      reason: nonempty(payload.reason),
+      proposedBranch: nonempty(payload.proposed_branch),
     }];
   });
 }

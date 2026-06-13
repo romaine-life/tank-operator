@@ -3022,6 +3022,121 @@ button:disabled {
   display: contents;
 }
 
+.pr-lane-approval {
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  padding: 0 var(--space-1);
+}
+
+.pr-lane-approval-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 1.75rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-sidebar-control);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.pr-lane-approval-trigger:hover {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.pr-lane-approval-panel {
+  position: absolute;
+  left: var(--space-1);
+  bottom: calc(100% + var(--space-2));
+  z-index: 25;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: min(24rem, 60vh);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-3);
+}
+
+.pr-lane-approval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.pr-lane-approval-head button,
+.pr-lane-approval-actions button {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  padding: 0.2rem 0.45rem;
+}
+
+.pr-lane-approval-head button:hover,
+.pr-lane-approval-actions button:hover {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.pr-lane-approval-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.pr-lane-approval-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.pr-lane-approval-main {
+  min-width: 0;
+}
+
+.pr-lane-approval-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.pr-lane-approval-meta,
+.pr-lane-approval-scope,
+.pr-lane-approval-reason {
+  margin-top: 0.15rem;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.pr-lane-approval-reason {
+  color: var(--text-muted);
+}
+
+.pr-lane-approval-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
 /* Repo picker — splash page chip-and-picker for selecting repos to
    auto-clone into a new session's /workspace. Inline with the home
    panel; the panel itself opens below the trigger as a small dialog
