@@ -353,18 +353,11 @@ const blocked = [
   // tank-operator#1128 stage 3: GUI session runner sidecars authenticate
   // to NATS through auth_callout with NATS_USER=<storage key> and
   // NATS_PASSWORD_FILE=<projected auth.romaine.life SA token>. The shared
-  // tank-nats-auth remains only as the orchestrator static-user password.
+  // tank-nats-auth token remains only for orchestrator/callout bootstrap and
+  // pre-stage-3 pods aging out through the callout's transition grant.
   {
     name: "removed shared NATS token injection into session runner env",
     pattern: /(runnerEnv|codexRunnerEnv|antigravityRunnerEnv)[\s\S]{0,600}"name":\s*"NATS_TOKEN"/,
-  },
-  {
-    name: "removed NATS callout shared-token grant env",
-    pattern: /\bNATS_CALLOUT_LEGACY_TOKEN\b/,
-  },
-  {
-    name: "removed NATS callout unrestricted shared-token user",
-    pattern: /\blegacy-shared-token\b/,
   },
   // Turn-complete sound was per-pane (declared inside ChatPane in
   // App.tsx) before the cutover that moved it onto the always-on

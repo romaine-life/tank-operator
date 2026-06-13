@@ -625,7 +625,9 @@ configs are identical, so old and new runners coexist freely.
 
 ## Per-session NATS runner credentials
 
-Status: shipped
+Status: in progress (stage 3 implemented + deployed; stage 4 blocked on
+legacy-flatline, now observable via the `tank-nats-auth-callout` PodMonitor and
+the `TankNatsAuthCalloutLegacyTokenInUse` alert)
 
 Intent:
 Session pods must not share a fleet-wide NATS token. The NATS bus carries
@@ -654,10 +656,15 @@ Contract impact:
   Antigravity's Go runner reads the projected token file at boot/connect and
   relies on the existing permanent-close container restart path if auth is
   later revoked.
-- The migration is closed: the callout has no shared-token authorization
-  branch, no legacy-token env, and no session-namespace `tank-nats-auth`
-  ExternalSecret. The remaining `tank-nats-auth` Secret is the orchestrator
-  namespace's static password for `NATS_USER=tank-operator`.
+- Stage 4 is not optional: after
+  `tank_nats_auth_callout_total{result="legacy"}` stays flat for a full
+  pre-stage-3 pod-age window, remove `NATS_CALLOUT_LEGACY_TOKEN` and the
+  session-namespace `tank-nats-auth` ExternalSecret. Until then the legacy grant
+  exists only to avoid breaking live pre-stage-3 pods. That gate is now
+  measurable: the callout is scraped by the `tank-nats-auth-callout` PodMonitor
+  and `TankNatsAuthCalloutLegacyTokenInUse` fires while any client still
+  presents the shared token. Before this the callout exposed the counter but
+  nothing scraped it, so the gate could not be evaluated.
 
 Evidence:
 - Manifest: `backend-go/internal/sessionmodel/sessionmodel_test.go`
@@ -673,8 +680,10 @@ Evidence:
   shared `NATS_TOKEN` injection into session runner envs.
 - Observability: the callout exposes `tank_nats_auth_callout_total{result}` on
   `:9100`, scraped by the `tank-nats-auth-callout` PodMonitor in
-  `k8s/templates/observability.yaml`. `TankNatsAuthCalloutDenials` pages the
-  #1148 new-pod auth-failure class (`denied_*`/`error`).
+  `k8s/templates/observability.yaml`. `TankNatsAuthCalloutLegacyTokenInUse`
+  makes the stage-4 `result="legacy"` flatline gate observable, and
+  `TankNatsAuthCalloutDenials` pages the #1148 new-pod auth-failure class
+  (`denied_*`/`error`).
 
 ## Runner correctness cluster (issue #1078)
 
