@@ -13,11 +13,11 @@
 // See docs/testing.md → "Frontend test layers" → "Rendering components that use
 // context".
 import { expect, test, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
-import { LinkButton, RunContext } from "./App.tsx";
+import { LinkButton, RunContext, RunMarkdownLink } from "./App.tsx";
 
 // Render `ui` inside a real RunContext provider. Everything is a harmless no-op
 // except the parts a test overrides — here, `createMessageLink`.
@@ -27,6 +27,13 @@ function renderWithRunContext(
 ) {
   const value: React.ContextType<typeof RunContext> = {
     openWorkspacePath: () => {},
+    workspacePathHref: (target) => {
+      const path = typeof target === "string" ? target : target.path;
+      const line = typeof target === "string" ? null : target.line;
+      return `https://tank.example/sessions/42/files/${path}${
+        line == null ? "" : `:${line}`
+      }`;
+    },
     submitAnswer: async () => {},
     askUserQuestionDrafts: {},
     setAskUserQuestionDraft: () => {},
@@ -39,6 +46,33 @@ function renderWithRunContext(
     <RunContext.Provider value={value}>{ui}</RunContext.Provider>,
   );
 }
+
+test("workspace markdown links expose routed hrefs and preserve modified clicks", () => {
+  const openWorkspacePath = vi.fn();
+
+  renderWithRunContext(
+    <RunMarkdownLink href="/workspace/screenshots/result.png:7">
+      result.png
+    </RunMarkdownLink>,
+    { openWorkspacePath },
+  );
+
+  const link = screen.getByRole("link", { name: "result.png" });
+  expect(link).toHaveAttribute(
+    "href",
+    "https://tank.example/sessions/42/files/screenshots/result.png:7",
+  );
+
+  link.setAttribute("href", "#workspace-link");
+  fireEvent.click(link, { ctrlKey: true, button: 0 });
+  expect(openWorkspacePath).not.toHaveBeenCalled();
+
+  fireEvent.click(link, { button: 0 });
+  expect(openWorkspacePath).toHaveBeenCalledWith({
+    path: "screenshots/result.png",
+    line: 7,
+  });
+});
 
 test("clicking copies the server-created deep link and announces success", async () => {
   const url = "https://tank.example/sessions/42?message=evt_7";
