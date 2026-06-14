@@ -273,3 +273,34 @@ export function isDefaultSessionMode(
 ): value is DefaultSessionMode {
   return DEFAULT_SESSION_MODES.has(value as SessionMode);
 }
+
+/**
+ * Durable session-capability identifiers stored on `sessions.capabilities` and
+ * echoed to the SPA on every session-list row. The backend owns the canonical
+ * list (`SessionCapability*` in backend-go/internal/sessionmodel); the SPA only
+ * needs constants for the capabilities it renders an affordance for.
+ */
+export const RESTRICTED_GIT_CAPABILITY = "restricted_git";
+
+/** True when a session opted into Tank-governed (restricted) Git. */
+export function hasRestrictedGit(
+  capabilities: readonly string[] | null | undefined,
+): boolean {
+  return capabilities?.includes(RESTRICTED_GIT_CAPABILITY) ?? false;
+}
+
+/**
+ * Which interaction glyph a session row renders. Restricted-git sessions swap
+ * the GUI "monitor" glyph for a git glyph so the row carries a standing visual
+ * reminder that the session uses governed Git. The swap is gated on `gui`
+ * because `restricted_git` is only ever granted to repo-backed GUI modes (see
+ * REPO_SUPPORTED_MODES); any other interaction keeps its normal glyph.
+ */
+export type InteractionIconKind = SessionInteraction | "restricted-git";
+
+export function interactionIconKind(
+  interaction: SessionInteraction,
+  restrictedGit: boolean,
+): InteractionIconKind {
+  return restrictedGit && interaction === "gui" ? "restricted-git" : interaction;
+}
