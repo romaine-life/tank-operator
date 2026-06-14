@@ -330,6 +330,36 @@ test("adapter preserves the pre-question burst as final-answer candidate for Cla
   });
 });
 
+test("adapter captures same-message pre-question text when AskUserQuestion has no prior final-answer candidate", () => {
+  const ctx = turn();
+  const events = canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "assistant",
+    uuid: "claude-msg-ask-with-burst",
+    message: {
+      content: [
+        {
+          type: "text",
+          text: "BIG BURST CONTEXT: Here is the full context before I ask the user to choose.",
+        },
+        {
+          type: "tool_use",
+          id: "toolu_ask",
+          name: "AskUserQuestion",
+          input: { question: "Proceed?" },
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(events.map((event) => event.payload?.text), [
+    "BIG BURST CONTEXT: Here is the full context before I ask the user to choose.",
+  ]);
+  assert.deepEqual(ctx.finalAnswer, {
+    timelineIDs: ["turn-run-123:item:assistant:claude-msg-ask-with-burst:text:0"],
+    providerItemIDs: ["assistant:claude-msg-ask-with-burst:text:0"],
+  });
+});
+
 test("adapter emits no item events for Tank AskUserQuestion MCP alias", () => {
   const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
     type: "assistant",

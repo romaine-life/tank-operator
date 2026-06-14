@@ -158,7 +158,7 @@ export function canonicalEventsForClaudeMessage(
     }
     if (hasNonPausingToolUse) {
       turn.finalAnswer = undefined;
-    } else if (!hasPausingToolUse && finalAnswerTimelineIDs.length > 0) {
+    } else if (finalAnswerTimelineIDs.length > 0 && (!hasPausingToolUse || !turn.finalAnswer)) {
       turn.finalAnswer = {
         timelineIDs: finalAnswerTimelineIDs,
         providerItemIDs: finalAnswerProviderItemIDs,
