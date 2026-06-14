@@ -43,8 +43,13 @@ const (
 	// capability joins the tailnet and mounts an MCP config with
 	// spire-lens-mcp on localhost :9997.
 	SessionCapabilitySpireLensMCP = "spirelens_mcp"
-	DefaultSpireLensMCPPort       = 15527
-	DefaultSpireLensTailscaleTag  = "tag:spirelens-orchestrator"
+	// SessionCapabilityRestrictedGit opts a pod into the experimental
+	// governed Git surface: Tank-owned session branches, guarded MCP writes,
+	// post-commit publishing, and PR lane approvals. Sessions without this
+	// capability keep the historical direct Git/GitHub behavior.
+	SessionCapabilityRestrictedGit = "restricted_git"
+	DefaultSpireLensMCPPort        = 15527
+	DefaultSpireLensTailscaleTag   = "tag:spirelens-orchestrator"
 	// Per-container metrics ports inside session pods. The
 	// k8s/templates/podmonitor-sessions.yaml PodMonitor scrapes each by
 	// the named container port (mcp-auth-proxy: "metrics", runners:
@@ -85,7 +90,8 @@ var (
 	}
 
 	sessionCapabilities = map[string]struct{}{
-		SessionCapabilitySpireLensMCP: {},
+		SessionCapabilitySpireLensMCP:  {},
+		SessionCapabilityRestrictedGit: {},
 	}
 )
 
@@ -613,6 +619,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 
 	// Build configmap volume mounts for both containers.
 	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)
+	restrictedGitEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilityRestrictedGit)
 	mcpConfigKey := "mcp.json"
 	if spireLensMCPEnabled {
 		mcpConfigKey = "mcp.spirelens.json"
@@ -655,6 +662,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				},
 			},
 		)
+	}
+	if restrictedGitEnabled {
+		env = append(env, map[string]any{"name": "TANK_RESTRICTED_GIT", "value": "true"})
 	}
 
 	claudeVolumeMounts := append([]any{}, configMounts...)
@@ -747,7 +757,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
 				map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+				map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 				map[string]any{"name": "AGENT_POST_COMMIT_HOOK", "value": "/opt/tank/agent-post-commit-hook.sh"},
+				map[string]any{"name": "AGENT_PRE_PUSH_HOOK", "value": "/opt/tank/agent-pre-push-hook.sh"},
 			},
 			"volumeMounts": []any{
 				map[string]any{
@@ -760,6 +772,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					"name":      "session-config",
 					"mountPath": "/opt/tank/agent-post-commit-hook.sh",
 					"subPath":   "agent-post-commit-hook.sh",
+					"readOnly":  true,
+				},
+				map[string]any{
+					"name":      "session-config",
+					"mountPath": "/opt/tank/agent-pre-push-hook.sh",
+					"subPath":   "agent-pre-push-hook.sh",
 					"readOnly":  true,
 				},
 				map[string]any{
@@ -875,6 +893,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	mcpProxyVolumeMounts := append([]any{}, configMounts...)
+	if wantSDKRunner {
+		mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
+			"name":      "workspace",
+			"mountPath": "/workspace",
+		})
+	}
 	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
 		"name":      "auth-romaine-sa-token",
 		"mountPath": "/var/run/secrets/auth.romaine.life",
@@ -882,6 +906,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	})
 	mcpProxyEnv := []any{
 		map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
+		map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+		map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
+		map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+		map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 		// Session identity forwarded by mcp-auth-proxy on outbound calls to
 		// Tank/Glimmung MCP servers. SESSION_ID still feeds the older
 		// X-Tank-Origin-Session-Id handoff-avatar path for mcp-tank-operator;
@@ -989,6 +1017,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
+			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 		}
 		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude
 		// container gets, so the SDK's spawned claude binary trusts the
@@ -1125,6 +1154,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 		}
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			codexRunnerEnv = append(codexRunnerEnv,
@@ -1431,6 +1461,13 @@ func mcpAuthProxyResources() map[string]any {
 			"memory": "256Mi",
 		},
 	}
+}
+
+func boolEnv(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func itoa(n int) string {

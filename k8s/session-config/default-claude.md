@@ -35,8 +35,13 @@ Kubernetes, use or propose a dedicated builder path (GitHub Actions, ACR Tasks,
 BuildKit/Kaniko/buildah in an appropriately privileged builder pod), not ad hoc
 Docker-in-this-session-pod.
 
-For shell `git` access, call the GitHub MCP `mint_clone_token` tool for the needed repo(s), then use the returned token in an `https://x-access-token:<token>@github.com/owner/
-repo.git` remote URL. The github MCP server has additional tools if the minted token lacks permissions. If the combination of both lacks permissions, the solve is likely to increase the scope of the mcp server or the token, so feel free to raise the issue (and maybe even draft a code change on a branch) that expands the permissions on the mcp server or the minted token.
+Some sessions may be created with `TANK_RESTRICTED_GIT=true`. In that
+experimental restricted mode, preselected repos are checked out on Tank-owned
+branches with draft PRs; local commits are published through the Tank MCP
+`publish_current_head` tool so Tank can watch CI and mergeability; direct
+`git push` and raw GitHub write tokens are intentionally blocked. If
+`TANK_RESTRICTED_GIT` is not true, use the normal repo workflow available in
+the session.
 
 You need to install from the lockfile before doing frontend builds if you just cloned the repo.
 

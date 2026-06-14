@@ -444,6 +444,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
 	mux.HandleFunc("POST /api/sessions/{session_id}/scheduled-wakeups/cancel", s.handleCancelScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
+	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/approve", s.handleApprovePRLaneRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	// Durable resolver for the public per-session turn number: the canonical
 	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor
@@ -488,6 +491,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/background-tasks/unresolved", s.handleInternalUnresolvedBackgroundTasks)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/hot-swap/verify", s.handleInternalVerifyHotSwap)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-auto-approval", s.handleInternalGetPRLaneAutoApproval)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/git-break-glass/grants", s.handleInternalGrantGitBreakGlass)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

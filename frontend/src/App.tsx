@@ -224,8 +224,10 @@ import {
 import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
+  pendingPRLaneRequests,
   type ControlActionRow,
   type ControlActionStatus,
+  type PRLaneRequest,
 } from "./controlActions";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
@@ -4602,6 +4604,7 @@ type RunTab =
   | "background"
   | "files"
   | "session-data"
+  | "pull-requests"
   | "settings"
   | "help"
   | "cluster"
@@ -7892,6 +7895,123 @@ function isControlActionEntry(entry: TranscriptEntry): boolean {
   return isBackgroundTaskEntry(entry) && entry.taskKind === "control_action";
 }
 
+type AgentGitActivityItem = {
+  id: string;
+  href: string;
+  repo?: string;
+  label: string;
+  detail: string;
+  action?: string;
+  createdAt?: string;
+};
+
+function payloadField(payload: unknown, key: string): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function summarizeGitAction(action: string | undefined): string {
+  switch (action) {
+    case "github.pull_request.open":
+      return "opened";
+    case "github.pull_request.ready_for_review":
+      return "ready";
+    case "github.pull_request.merge":
+      return "merged";
+    case "github.pull_request.mergeability":
+      return "mergeability";
+    case "github.commit.push":
+      return "pushed";
+    case "github.commit.write":
+      return "committed";
+    case "github.commit.ci":
+      return "CI";
+    case "github.break_glass.request":
+      return "break-glass";
+    default:
+      return "touched";
+  }
+}
+
+function buildAgentGitActivity(entries: TranscriptEntry[]): {
+  pullRequests: AgentGitActivityItem[];
+  commits: AgentGitActivityItem[];
+} {
+  const pullRequestsByKey = new Map<string, AgentGitActivityItem>();
+  const commits: AgentGitActivityItem[] = [];
+  for (const entry of entries) {
+    if (!isControlActionEntry(entry)) continue;
+    const row = entry.taskRawItem as ControlActionRow | undefined;
+    const action = entry.controlActionAction ?? row?.action;
+    const href = entry.controlActionTarget ?? row?.target_ref ?? "";
+    const repo = entry.controlActionRepo;
+    const createdAt = entry.startedAt ?? entry.time;
+    if (
+      action?.startsWith("github.pull_request.") &&
+      href.includes("github.com/") &&
+      href.includes("/pull/")
+    ) {
+      const number =
+        entry.controlActionPrNumber ??
+        (typeof row?.pr_number === "number" ? row.pr_number : undefined);
+      const key = repo && number ? `${repo}#${number}` : href;
+      const state =
+        typeof row?.status === "string" && row.status !== "succeeded"
+          ? row.status
+          : payloadField(row?.payload, "mergeable_state");
+      const item: AgentGitActivityItem = {
+        id: `pr-${key}`,
+        href,
+        repo,
+        label: number ? `PR #${number}` : "Pull request",
+        detail: [repo, summarizeGitAction(action), state, formatToolFullTime(createdAt)]
+          .filter(Boolean)
+          .join(" / "),
+        action,
+        createdAt,
+      };
+      const existing = pullRequestsByKey.get(key);
+      if (!existing || (createdAt ?? "") > (existing.createdAt ?? "")) {
+        pullRequestsByKey.set(key, item);
+      }
+      continue;
+    }
+    if (
+      action === "github.commit.push" ||
+      action === "github.commit.write" ||
+      action === "github.commit.ci"
+    ) {
+      const sha = entry.controlActionSha ?? row?.result_sha ?? "";
+      const short = sha ? sha.slice(0, 7) : "commit";
+      const subject =
+        payloadField(row?.payload, "subject") ??
+        payloadField(row?.payload, "message");
+      const state =
+        action === "github.commit.ci" && typeof row?.status === "string"
+          ? row.status
+          : undefined;
+      commits.push({
+        id: `commit-${entry.id}`,
+        href,
+        repo,
+        label: short,
+        detail: [repo, summarizeGitAction(action), state, subject, formatToolFullTime(createdAt)]
+          .filter(Boolean)
+          .join(" / "),
+        action,
+        createdAt,
+      });
+    }
+  }
+  const byNewest = (a: AgentGitActivityItem, b: AgentGitActivityItem) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
+  return {
+    pullRequests: Array.from(pullRequestsByKey.values()).sort(byNewest),
+    commits: commits.sort(byNewest),
+  };
+}
+
 function isShellToolEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "tool" && entry.toolKind === "shell";
 }
@@ -8246,6 +8366,7 @@ function RunHeaderOverflowMenu({
   background,
   files,
   sessionData,
+  pullRequests,
   settingsActive,
   helpActive,
   clusterActive,
@@ -8258,6 +8379,7 @@ function RunHeaderOverflowMenu({
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
   sessionData: RunHeaderMenuTabState;
+  pullRequests: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
   clusterActive: boolean;
@@ -8330,6 +8452,25 @@ function RunHeaderOverflowMenu({
             aria-hidden="true"
           />
           <span>Session data</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${pullRequests.active ? " is-active" : ""}`}
+          disabled={pullRequests.disabled}
+          onSelect={pullRequests.onOpen}
+          title={pullRequests.title}
+        >
+          <GitPullRequestIcon
+            className="run-tab-more-item-icon"
+            aria-hidden="true"
+          />
+          <span>PRs</span>
+          <span
+            className="run-shell-tasks-count run-tab-more-item-count"
+            data-active={(pullRequests.count ?? 0) > 0 ? "true" : undefined}
+            aria-label={`${pullRequests.count ?? 0} pull requests`}
+          >
+            {pullRequests.count ?? 0}
+          </span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
@@ -9009,6 +9150,81 @@ function BackgroundMeta({
   );
 }
 
+function PRLaneApprovalIndicator({
+  requests,
+  busyEventId,
+  onApprove,
+  onDeny,
+  onAutoApprove,
+}: {
+  requests: PRLaneRequest[];
+  busyEventId: string | null;
+  onApprove: (request: PRLaneRequest) => void;
+  onDeny: (request: PRLaneRequest) => void;
+  onAutoApprove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (requests.length === 0) return null;
+  const countLabel = `${requests.length} branch request${requests.length === 1 ? "" : "s"}`;
+  return (
+    <div className="pr-lane-approval">
+      <button
+        type="button"
+        className="pr-lane-approval-trigger"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <GitBranchIcon size={14} aria-hidden="true" />
+        <span>{countLabel}</span>
+      </button>
+      {open && (
+        <div className="pr-lane-approval-panel">
+          <div className="pr-lane-approval-head">
+            <span>branch requests</span>
+            <button type="button" onClick={onAutoApprove}>
+              approve all for session
+            </button>
+          </div>
+          <div className="pr-lane-approval-list">
+            {requests.map((request) => {
+              const busy = busyEventId === request.eventId;
+              return (
+                <div className="pr-lane-approval-item" key={request.eventId}>
+                  <div className="pr-lane-approval-main">
+                    <div className="pr-lane-approval-title">
+                      <GitPullRequestIcon size={14} aria-hidden="true" />
+                      <span>{request.laneName}</span>
+                    </div>
+                    <div className="pr-lane-approval-meta">
+                      {[request.relationship, request.base ? `from ${request.base}` : "", request.repo]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                    {request.scope && (
+                      <div className="pr-lane-approval-scope">{request.scope}</div>
+                    )}
+                    {request.reason && (
+                      <div className="pr-lane-approval-reason">{request.reason}</div>
+                    )}
+                  </div>
+                  <div className="pr-lane-approval-actions">
+                    <button type="button" disabled={busy} onClick={() => onApprove(request)}>
+                      approve
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => onDeny(request)}>
+                      deny
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BackgroundScreen({
   shellEntries,
   scheduledEntries,
@@ -9332,6 +9548,96 @@ function BackgroundScreen({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function AgentGitActivityScreen({
+  pullRequests,
+  commits,
+}: {
+  pullRequests: AgentGitActivityItem[];
+  commits: AgentGitActivityItem[];
+}) {
+  return (
+    <div className="run-session-data-screen run-git-activity-screen">
+      <section
+        className="run-session-data-section"
+        aria-labelledby="run-git-activity-title"
+      >
+        <div className="run-session-data-page-head">
+          <h2 className="run-session-data-title" id="run-git-activity-title">
+            PRs
+          </h2>
+          <span className="run-session-data-summary">
+            {pullRequests.length} PRs / {commits.length} commits
+          </span>
+        </div>
+        <div className="run-git-activity-group">
+          <h3 className="run-git-activity-heading">Pull requests</h3>
+          {pullRequests.length === 0 ? (
+            <div className="run-session-data-empty">
+              No pull requests touched yet.
+            </div>
+          ) : (
+            <div className="run-git-activity-list" role="list">
+              {pullRequests.map((item) => (
+                <a
+                  key={item.id}
+                  className="run-git-activity-row"
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="listitem"
+                >
+                  <span className="run-git-activity-icon" aria-hidden="true">
+                    <GitPullRequestIcon />
+                  </span>
+                  <span className="run-git-activity-main">
+                    <span className="run-git-activity-label">{item.label}</span>
+                    <span className="run-git-activity-detail">{item.detail}</span>
+                  </span>
+                  <ExternalLinkIcon
+                    className="run-git-activity-external"
+                    aria-hidden="true"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="run-git-activity-group">
+          <h3 className="run-git-activity-heading">Commits</h3>
+          {commits.length === 0 ? (
+            <div className="run-session-data-empty">No pushed commits yet.</div>
+          ) : (
+            <div className="run-git-activity-list" role="list">
+              {commits.slice(0, 50).map((item) => (
+                <a
+                  key={item.id}
+                  className="run-git-activity-row"
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="listitem"
+                >
+                  <span className="run-git-activity-icon" aria-hidden="true">
+                    <GitBranchIcon />
+                  </span>
+                  <span className="run-git-activity-main">
+                    <span className="run-git-activity-label">{item.label}</span>
+                    <span className="run-git-activity-detail">{item.detail}</span>
+                  </span>
+                  <ExternalLinkIcon
+                    className="run-git-activity-external"
+                    aria-hidden="true"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -14848,6 +15154,12 @@ function ChatPane({
   const [controlActionEntries, setControlActionEntries] = useState<
     TranscriptEntry[]
   >([]);
+  const [controlActionRows, setControlActionRows] = useState<
+    ControlActionRow[]
+  >([]);
+  const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
+    string | null
+  >(null);
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -14933,10 +15245,12 @@ function ChatPane({
   const fetchControlActionEntries = useCallback(async () => {
     if (publicView) {
       setControlActionEntries([]);
+      setControlActionRows([]);
       return;
     }
     if (readOnly) {
       setControlActionEntries([]);
+      setControlActionRows([]);
       return;
     }
     const res = await fetchPaneResource(
@@ -14946,11 +15260,88 @@ function ChatPane({
     );
     if (!res.ok) return;
     const body = (await res.json()) as ControlActionRow[];
+    setControlActionRows(body);
     setControlActionEntries(
       controlActionRowsToEntries(body) as TranscriptEntry[],
     );
   }, [
     fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
+  const prLaneRequests = useMemo(
+    () => pendingPRLaneRequests(controlActionRows),
+    [controlActionRows],
+  );
+  const postPRLaneDecision = useCallback(
+    async (request: PRLaneRequest, decision: "approve" | "deny") => {
+      if (publicView || readOnly) return;
+      setPRLaneApprovalBusyId(request.eventId);
+      try {
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/${decision}`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          },
+        );
+        await fetchControlActionEntries();
+      } finally {
+        setPRLaneApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const autoApprovePRLanes = useCallback(async () => {
+    if (publicView || readOnly) return;
+    setPRLaneApprovalBusyId("__auto__");
+    try {
+      const repo = prLaneRequests[0]?.repo ?? "";
+      await authedFetch(
+        scopedSessionPathForPane(
+          `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/auto-approve`,
+        ),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repo,
+            limit: 10,
+            reason: "approved from session composer",
+          }),
+        },
+      );
+      const pending = [...prLaneRequests];
+      for (const request of pending) {
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note: "session auto-approval enabled" }),
+          },
+        );
+      }
+      await fetchControlActionEntries();
+    } finally {
+      setPRLaneApprovalBusyId(null);
+    }
+  }, [
+    fetchControlActionEntries,
+    prLaneRequests,
     publicView,
     readOnly,
     scopedSessionPathForPane,
@@ -16331,6 +16722,13 @@ function ChatPane({
     }
     if (route.tab === "session-data") {
       setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "pull-requests") {
+      setActiveTab("pull-requests");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -18752,13 +19150,17 @@ function ChatPane({
     if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
+      setControlActionRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
     }
     let cancelled = false;
     const refresh = () => {
       void fetchControlActionEntries().catch(() => {
-        if (!cancelled) setControlActionEntries([]);
+        if (!cancelled) {
+          setControlActionEntries([]);
+          setControlActionRows([]);
+        }
       });
       void fetchBackgroundTaskEntries().catch(() => {
         if (!cancelled) setBackgroundTaskLedgerEntries([]);
@@ -18783,6 +19185,10 @@ function ChatPane({
   const backgroundTaskEntries = useMemo(
     () => backgroundTaskLedgerEntries.filter(isBackgroundTaskEntry),
     [backgroundTaskLedgerEntries],
+  );
+  const agentGitActivity = useMemo(
+    () => buildAgentGitActivity(controlActionEntries),
+    [controlActionEntries],
   );
   const runningShellInvocationEntries = useMemo(
     () => renderedEntries.filter(isRunningShellInvocationEntry),
@@ -19131,6 +19537,8 @@ function ChatPane({
       replaceAppRoute("cluster");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "pull-requests") {
+      replaceSessionRoute(session.id, "pull-requests");
     } else if (activeTab === "files") {
       replaceSessionRoute(
         session.id,
@@ -19534,7 +19942,10 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const pullRequestURL = testState?.pull_request_url?.trim() || "";
+  const pullRequestURL =
+    agentGitActivity.pullRequests[0]?.href ||
+    testState?.pull_request_url?.trim() ||
+    "";
   const sessionDataRows = useMemo(
     () =>
       buildSessionDataStatusRows({
@@ -20039,6 +20450,13 @@ function ChatPane({
                   title: "Session data",
                   onOpen: () => toggleRunTab("session-data"),
                 }}
+                pullRequests={{
+                  active: activeTab === "pull-requests",
+                  disabled: false,
+                  title: "PRs and commits touched by this session",
+                  count: agentGitActivity.pullRequests.length,
+                  onOpen: () => toggleRunTab("pull-requests"),
+                }}
                 settingsActive={activeTab === "settings"}
                 helpActive={activeTab === "help"}
                 clusterActive={activeTab === "cluster"}
@@ -20516,6 +20934,11 @@ function ChatPane({
                 }
                 readOnly={readOnly}
               />
+            ) : activeTab === "pull-requests" ? (
+              <AgentGitActivityScreen
+                pullRequests={agentGitActivity.pullRequests}
+                commits={agentGitActivity.commits}
+              />
             ) : activeTab === "settings" ? (
               <RunSettingsPanel
                 session={session}
@@ -20775,6 +21198,19 @@ function ChatPane({
                 Drop to attach
               </div>
             )}
+            <PRLaneApprovalIndicator
+              requests={prLaneRequests}
+              busyEventId={prLaneApprovalBusyId}
+              onApprove={(request) => {
+                void postPRLaneDecision(request, "approve");
+              }}
+              onDeny={(request) => {
+                void postPRLaneDecision(request, "deny");
+              }}
+              onAutoApprove={() => {
+                void autoApprovePRLanes();
+              }}
+            />
             {attachments.length > 0 && (
               <div className="run-composer-attachments">
                 {attachments.map((a) => (
@@ -21742,6 +22178,7 @@ function AuthenticatedApp() {
   const [repoError, setRepoError] = useState<string | null>(null);
   const [homeBugLabels, setHomeBugLabels] = useState<string[]>([]);
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
+  const [homeRestrictedGitEnabled, setHomeRestrictedGitEnabled] = useState(false);
   const visibleRecentRepos = useMemo(() => {
     if (dismissedRecentRepos.length === 0) return recentRepos;
     const dismissed = new Set(
@@ -22460,6 +22897,12 @@ function AuthenticatedApp() {
       setHomeSpireLensMcpEnabled(false);
     }
   }, [defaultSessionMode, spireLensMcpAvailable]);
+
+  useEffect(() => {
+    if (!REPO_SUPPORTED_MODES.has(defaultSessionMode)) {
+      setHomeRestrictedGitEnabled(false);
+    }
+  }, [defaultSessionMode]);
 
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
@@ -23705,8 +24148,14 @@ function AuthenticatedApp() {
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     const bugLabel = homeBugLabels[0]?.trim() ?? "";
-    const capabilities =
-      spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
+    const capabilities = [
+      ...(spireLensMcpAvailable && homeSpireLensMcpEnabled
+        ? ["spirelens_mcp"]
+        : []),
+      ...(REPO_SUPPORTED_MODES.has(mode) && homeRestrictedGitEnabled
+        ? ["restricted_git"]
+        : []),
+    ];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
       homeEditingDefaultTitleRef.current,
@@ -24828,6 +25277,13 @@ function AuthenticatedApp() {
                     title: "Session data is available once the session starts",
                     onOpen: () => undefined,
                   }}
+                  pullRequests={{
+                    active: false,
+                    disabled: true,
+                    title: "PRs are available once the session starts",
+                    count: 0,
+                    onOpen: () => undefined,
+                  }}
                   settingsActive={homeActiveTab === "settings"}
                   helpActive={homeActiveTab === "help"}
                   clusterActive={homeActiveTab === "cluster"}
@@ -25333,6 +25789,28 @@ function AuthenticatedApp() {
                               </span>
                               <span className="home-quick-sub">
                                 Game host tools
+                              </span>
+                            </span>
+                          </button>
+                        )}
+                        {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
+                          <button
+                            type="button"
+                            className={`home-quick-action home-capability-action${homeRestrictedGitEnabled ? " is-selected" : ""}`}
+                            onClick={() =>
+                              setHomeRestrictedGitEnabled((value) => !value)
+                            }
+                            disabled={busy}
+                            aria-pressed={homeRestrictedGitEnabled}
+                            title="Use experimental Tank-governed Git permissions for this session"
+                          >
+                            <GitBranchIcon className="home-quick-icon" />
+                            <span className="home-quick-main">
+                              <span className="home-quick-title">
+                                Restricted Git
+                              </span>
+                              <span className="home-quick-sub">
+                                Experimental
                               </span>
                             </span>
                           </button>

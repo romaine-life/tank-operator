@@ -99,6 +99,19 @@ test("session routes parse only session-scoped pages", () => {
     adminView: "controls",
   });
   expect(readSessionRouteFromPathname("/sessions/s-1/session-data/extra")).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/pull-requests")).toEqual({
+    sessionId: "s-1",
+    tab: "pull-requests",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    filePath: null,
+    fileLine: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
   // The file-browser and background panes are surface-routed so they are
   // addressable, reload-stable, and appear in the breadcrumb.
   expect(readSessionRouteFromPathname("/sessions/s-1/files")).toEqual({
@@ -197,6 +210,7 @@ test("session route urls broadcast only session-owned pages", () => {
   // turns tab with no selected number stays on the root session page.
   expect(buildSessionRouteUrl(current, "s 1", "turns")).toBe("https://tank.example.test/sessions/s%201");
   expect(buildSessionRouteUrl(current, "s 1", "session-data")).toBe("https://tank.example.test/sessions/s%201/session-data");
+  expect(buildSessionRouteUrl(current, "s 1", "pull-requests")).toBe("https://tank.example.test/sessions/s%201/pull-requests");
   expect(buildSessionRouteUrl(current, "s 1", "files")).toBe("https://tank.example.test/sessions/s%201/files");
   expect(buildSessionRouteUrl(current, "s 1", "background")).toBe("https://tank.example.test/sessions/s%201/background");
 });
