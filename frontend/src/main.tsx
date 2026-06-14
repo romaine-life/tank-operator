@@ -4,6 +4,7 @@ import { App } from "./App";
 import { LongChatDebugPage } from "./LongChatDebugPage";
 import { SessionListDebugPage } from "./SessionListDebugPage";
 import { AvatarPreviewHost } from "./avatarPreview";
+import { RESTRICTED_GIT_PREF_KEY } from "./homePreferences";
 import { noteUserScroll, startLongTaskObserver } from "./longTaskTelemetry";
 import { StyleguideAvatars } from "./styleguide/avatars";
 import { StyleguideBootState } from "./styleguide/boot-state";
@@ -56,6 +57,7 @@ const TANK_KEY_ALLOWLIST = [
   "tank.defaultInteraction",
   "tank.homeSelectedRepos",
   "tank.sessionInteraction:",
+  RESTRICTED_GIT_PREF_KEY,  // home Restricted Git toggle (homePreferences.ts)
 ];
 function isAllowedTankKey(key: string): boolean {
   for (const allowed of TANK_KEY_ALLOWLIST) {

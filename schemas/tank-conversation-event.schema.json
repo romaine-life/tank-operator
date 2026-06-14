@@ -326,6 +326,10 @@
           "description": "ExitPlanMode plan markdown rendered on the question page above the Approve/Request-changes question. Absent for ordinary AskUserQuestion pauses.",
           "type": "string"
         },
+        "asking_turn_final_answer": {
+          "description": "Optional final-answer candidate from the asking turn at the moment the runner paused for AskUserQuestion. Uses the same shape as turn.completed.payload.final_answer so the question page can render the exact assistant item(s) the adapter considered final before the pause.",
+          "$ref": "#/$defs/finalAnswer"
+        },
         "provider_item_id": { "type": "string", "minLength": 1 },
         "timeline_id": { "type": "string", "minLength": 1 }
       }

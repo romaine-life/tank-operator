@@ -178,6 +178,15 @@ answer; it must not visibly move a rendered row from one surface to the other.
   This context is sourced from durable `user_message.created` and is not an
   activity child row, so it stays visible while the reader moves between
   activity pages.
+- Synthetic AskUserQuestion turns may render the asking turn's durable
+  final-answer candidate on each question page before the answer card. The
+  candidate is snapshotted by the runner on
+  `turn.awaiting_input.payload.asking_turn_final_answer` using the same
+  `final_answer.timeline_ids` shape as `turn.completed`; the backend then reads
+  those exact assistant `item.completed` rows from the asking turn. This is a
+  page-context copy only: it must not create an extra activity page, change the
+  question turn's lifecycle/event counts, or become the synthetic turn's final
+  answer.
 - The dedicated Turns view renders successful final assistant prose from the
   server-projected `/turns/{id}/activity` `final_answer.entries` section, not by
   inferring finality from the currently selected activity page. Agent activity
@@ -271,6 +280,10 @@ answer; it must not visibly move a rendered row from one surface to the other.
   initiating user message at the top of the Turns view from the server
   projection. Switching activity pages keeps that same context visible and does
   not duplicate the human user message inside the activity page body.
+- Opening a synthetic AskUserQuestion turn route renders the linked asking
+  turn's final-answer candidate above the answer card when the awaiting-input
+  payload names one, keeps the page kind as `question`, and invalidates the
+  cached page when the asking turn's durable high-water mark changes.
 - Collapsing agent activity in the Turns view keeps the server-projected final
   answer visible, hides ordinary tool/reasoning/progress rows, keeps
   server-owned always-visible context such as background-wake prompts visible,

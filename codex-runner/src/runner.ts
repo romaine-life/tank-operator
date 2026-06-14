@@ -890,6 +890,7 @@ export class Runner {
       providerItemID: request.providerItemID,
       providerTimelineID: timelineID,
       questions: codexQuestionsToTankShape(request.questions),
+      finalAnswer: this.codexAdapter.finalAnswerForTurn(turn.turnID),
     });
     const key = inputReplyKey(turn.turnID, timelineID, request.providerItemID);
     const waitForReply = new Promise<AppServerUserInputResponse>((resolve) => {

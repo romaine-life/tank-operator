@@ -116,6 +116,15 @@ func readUserFacingTurnEventsWithChain(ctx context.Context, eventStore store.Ses
 	}
 	candidates := []string{turnID}
 	noteObserved(turnID, events)
+	if askingTurnID, _ := askUserQuestionAskingTurnFinalAnswer(turnID, events); askingTurnID != "" {
+		askingEvents, err := readAllTurnEvents(ctx, eventStore, sessionID, askingTurnID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		candidates = append(candidates, askingTurnID)
+		noteObserved(askingTurnID, askingEvents)
+		events = append(events, askingTurnFinalAnswerContextEvents(turnID, events, askingEvents)...)
+	}
 	// Transitively pull the entire background-wake continuation chain rooted at
 	// turnID. A wake turn can itself launch a background task whose terminal
 	// wakes a further continuation turn (wake-of-a-wake); the whole chain folds
@@ -140,6 +149,133 @@ func readUserFacingTurnEventsWithChain(ctx context.Context, eventStore store.Ses
 		frontier = append(frontier, backgroundWakeTurnIDsForParentEvents(wakeEvents, wakeTurnID)...)
 	}
 	return orderedTranscriptEvents(events), candidates, observed, nil
+}
+
+const questionFinalAnswerContextForTurnField = "_tank_question_final_answer_context_for_turn"
+
+func askUserQuestionAskingTurnFinalAnswer(questionTurnID string, events []map[string]any) (string, map[string]bool) {
+	if questionTurnID == "" {
+		return "", nil
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if !isQuestionOnlyAwaitingInputEvent(event) {
+			continue
+		}
+		payload := transcriptPayload(event)
+		if transcriptMapString(payload, "question_turn_id") != questionTurnID {
+			continue
+		}
+		askingTurnID := transcriptMapString(payload, "asking_turn_id")
+		finalAnswerIDs := finalAnswerTimelineIDsFromPayload(payload, "asking_turn_final_answer")
+		if askingTurnID != "" && askingTurnID != questionTurnID && len(finalAnswerIDs) > 0 {
+			return askingTurnID, finalAnswerIDs
+		}
+	}
+	return "", nil
+}
+
+func finalAnswerTimelineIDsFromPayload(payload map[string]any, field string) map[string]bool {
+	raw, _ := payload[field].(map[string]any)
+	rawIDs, _ := raw["timeline_ids"].([]any)
+	if len(rawIDs) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, rawID := range rawIDs {
+		id, _ := rawID.(string)
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out[id] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func askingTurnFinalAnswerContextEvents(questionTurnID string, questionEvents, askingEvents []map[string]any) []map[string]any {
+	if questionTurnID == "" {
+		return nil
+	}
+	_, finalAnswerIDs := askUserQuestionAskingTurnFinalAnswer(questionTurnID, questionEvents)
+	if len(finalAnswerIDs) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(finalAnswerIDs))
+	for _, event := range orderedTranscriptEvents(askingEvents) {
+		if transcriptString(event, "type") != "item.completed" || transcriptString(event, "actor") != "assistant" {
+			continue
+		}
+		if !finalAnswerIDs[transcriptString(event, "timeline_id")] {
+			continue
+		}
+		context := cloneAnyMap(event)
+		context[questionFinalAnswerContextForTurnField] = questionTurnID
+		out = append(out, context)
+	}
+	return out
+}
+
+func eventIsQuestionFinalAnswerContextForTurn(event map[string]any, turnID string) bool {
+	return turnID != "" && transcriptString(event, questionFinalAnswerContextForTurnField) == turnID
+}
+
+func ownTurnPageEvents(events []map[string]any, turnID string) []map[string]any {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		if eventIsQuestionFinalAnswerContextForTurn(event, turnID) {
+			continue
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
+func projectQuestionFinalAnswerContextEntries(turnID string, events []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, event := range orderedTranscriptEvents(events) {
+		if !eventIsQuestionFinalAnswerContextForTurn(event, turnID) {
+			continue
+		}
+		entry := projectQuestionFinalAnswerContextEvent(event)
+		if entry != nil {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func projectQuestionFinalAnswerContextEvent(event map[string]any) map[string]any {
+	item := &projectionItem{
+		ID:             transcriptString(event, "timeline_id"),
+		TurnID:         transcriptString(event, "turn_id"),
+		ParentID:       transcriptString(event, "parent_id"),
+		ProviderItemID: transcriptString(event, "provider_item_id"),
+		Actor:          transcriptString(event, "actor"),
+		Kind:           projectionFirstNonEmpty(transcriptPayloadString(event, "kind"), defaultProjectionItemKind(event)),
+		Status:         "completed",
+		Title:          transcriptPayloadString(event, "title"),
+		Text:           transcriptPayloadString(event, "text"),
+		Payload:        transcriptPayload(event),
+		OrderKey:       transcriptString(event, "order_key"),
+		SourceEventID:  transcriptString(event, "event_id"),
+		CreatedAt:      transcriptString(event, "created_at"),
+		StartedAt:      transcriptString(event, "created_at"),
+		CompletedAt:    transcriptString(event, "created_at"),
+	}
+	entry := projectProjectionItem(item)
+	if entry == nil {
+		return nil
+	}
+	entry = cloneAnyMap(entry)
+	entry["id"] = transcriptMapString(entry, "id") + ":question_final_answer_context"
+	entry["questionFinalAnswerContext"] = true
+	entry["turnOnly"] = true
+	return entry
 }
 
 func backgroundWakeTurnIDsForParentEvents(events []map[string]any, parentTurnID string) []string {
@@ -519,15 +655,17 @@ func turnPageStatusIsLive(status string) bool {
 // shell summary comes from a complete fold over every event (terminal-correct),
 // while page bodies come from each page's own event range.
 func projectTurnPages(turnID string, events []map[string]any) turnPagesProjection {
-	pageSlices := splitTurnEventsIntoSemanticPages(events)
-	wakeParents := backgroundWakeParentTurnsFromEvents(events)
-	turnContext := projectTurnContextEntry(turnID, events)
-	finalAnswerIDs := finalAnswerIDsFromTurnEvents(events)
+	questionFinalAnswerContextEntries := projectQuestionFinalAnswerContextEntries(turnID, events)
+	ownEvents := ownTurnPageEvents(events, turnID)
+	pageSlices := splitTurnEventsIntoSemanticPages(ownEvents)
+	wakeParents := backgroundWakeParentTurnsFromEvents(ownEvents)
+	turnContext := projectTurnContextEntry(turnID, ownEvents)
+	finalAnswerIDs := finalAnswerIDsFromTurnEvents(ownEvents)
 
 	// Terminal-correct shell from the COMPLETE event set: the full projection
 	// folds the whole turn, so its activity summary always reflects the
 	// terminal regardless of how many events the turn has.
-	full := projectTranscriptEvents(events)
+	full := projectTranscriptEvents(ownEvents)
 	status := ""
 	shell := map[string]any{}
 	activityBody := full.ActivityBodies[turnID]
@@ -535,7 +673,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		shell = cloneAnyMap(activityBody.Summary)
 		status = activityBody.Status
 	}
-	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(events), turnCompletedTerminalCount(events) > 1)
+	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(ownEvents), turnCompletedTerminalCount(ownEvents) > 1)
 	finalAnswerIDs = mergeFinalAnswerEntryIDs(finalAnswerIDs, finalAnswerEntries)
 	collapse := turnActivityCollapseSummary(activityBody, finalAnswerEntries, finalAnswerIDs)
 	live := turnPageStatusIsLive(status)
@@ -549,6 +687,9 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		sealed := number < len(pageSlices) || !live
 		questionSet, questionIndex, questionCount, answered := turnPageQuestionSetState(slice)
 		entries := reassignBackgroundWakeProjectedEntries(projectPageBodyEntries(slice.Events), wakeParents)
+		if slice.Kind == "question" && len(questionFinalAnswerContextEntries) > 0 {
+			entries = append(cloneProjectedEntries(questionFinalAnswerContextEntries), entries...)
+		}
 		page := turnPage{
 			Number:        number,
 			Kind:          slice.Kind,
@@ -581,7 +722,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	}
 
 	shell["pageCount"] = len(pages)
-	shell["totalEventCount"] = len(events)
+	shell["totalEventCount"] = len(ownEvents)
 	shell["pages"] = directory
 
 	return turnPagesProjection{
@@ -591,8 +732,19 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		FinalAnswerEntries: finalAnswerEntries,
 		Collapse:           collapse,
 		Pages:              pages,
-		TotalEventCount:    len(events),
+		TotalEventCount:    len(ownEvents),
 	}
+}
+
+func cloneProjectedEntries(entries []map[string]any) []map[string]any {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, cloneAnyMap(entry))
+	}
+	return out
 }
 
 // finalAnswerIDsFromTurnEvents resolves the turn-detail final answer for a
