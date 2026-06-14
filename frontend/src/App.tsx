@@ -78,7 +78,12 @@ import {
   breadcrumbTrail,
   breadcrumbUpHref,
 } from "./breadcrumb";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
   buildHomeRouteUrl,
@@ -10768,7 +10773,7 @@ type CombinedDropdownEntry = {
   directoryItem?: TurnActivityPageDirectoryItem;
 };
 
-function RunTurnViewControls({
+export function RunTurnViewControls({
   turns,
   selectedTurnId,
   turnActivityLoadsByTurn,
@@ -11165,6 +11170,9 @@ function RunTurnViewControls({
             <SheetTitle className="run-turn-pager-sheet-title">
               Navigate transcript
             </SheetTitle>
+            <SheetDescription className="sr-only">
+              Choose a turn and page, or step through the conversation.
+            </SheetDescription>
             <div className="run-turn-pager-sheet-body">{controls}</div>
           </SheetContent>
         </Sheet>
