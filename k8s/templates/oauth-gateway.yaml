@@ -160,6 +160,45 @@ roleRef:
   kind: Role
   name: claude-oauth-ca-reflector-write
 ---
+{{- /*
+Glimmung native-validation runs execute as the `glimmung-runner` ServiceAccount
+(in the `glimmung-runs` namespace) and copy this reflected `claude-oauth-ca`
+ConfigMap out of the sessions namespace into their per-run agent namespace, so
+the agent container trusts the Claude OAuth proxy CA. Glimmung grants that SA
+admin only in the per-slot sessions namespace, where this CA is NOT reflected —
+so the cross-namespace `kubectl get` against the sessions namespace was denied
+and every native run aborted at agent setup. Grant the runner SA read on just
+this one ConfigMap.
+
+Tactical: the durable fix is for Glimmung to provision the provider-appropriate
+CA (Claude vs Codex) into the runner-owned namespace itself, removing this
+cross-tenant read entirely. Tracked with the runner-MCP work.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claude-oauth-ca-runner-read
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["claude-oauth-ca"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claude-oauth-ca-runner-read
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+subjects:
+  - kind: ServiceAccount
+    name: glimmung-runner
+    namespace: glimmung-runs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: claude-oauth-ca-runner-read
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
