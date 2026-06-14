@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
@@ -82,6 +84,7 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 		ContextWindowSource   string         `json:"context_window_source"`
 		ProviderSessionID     string         `json:"provider_session_id"`
 		ProviderRateLimitInfo map[string]any `json:"provider_rate_limit_info"`
+		ProviderUsageSnapshot map[string]any `json:"provider_usage_snapshot"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
@@ -196,8 +199,35 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 			return
 		}
 	}
+	if len(body.ProviderUsageSnapshot) > 0 {
+		quotaProvider := providerQuotaProviderForMode(info.Mode)
+		rows := providerUsageEvidence(quotaProvider, timeNowRFC3339(), body.ProviderUsageSnapshot)
+		if len(rows) > 0 {
+			if err := s.upsertProviderQuotaSnapshots(r.Context(), s.providerQuotaScope(), rows, "claude_sdk_usage"); err != nil {
+				recordSessionRuntimeConfigUpdate(provider, "update_failed")
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
 	recordSessionRuntimeConfigUpdate(provider, "ok")
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func timeNowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func providerQuotaProviderForMode(mode string) string {
+	normalized := sessionmodel.NormalizeSessionMode(mode)
+	switch normalized {
+	case sessionmodel.ClaudeSecondaryCLIMode, sessionmodel.ClaudeSecondaryGUIMode, sessionmodel.ClaudeSecondaryConfigMode:
+		return "anthropic_secondary"
+	case sessionmodel.CodexCLIMode, sessionmodel.CodexGUIMode, sessionmodel.CodexExecGUIMode, sessionmodel.CodexAppServerMode, sessionmodel.CodexConfigMode:
+		return "codex"
+	default:
+		return "anthropic"
+	}
 }
 
 func sanitizeProviderSessionID(input string) string {

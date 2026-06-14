@@ -1014,6 +1014,8 @@ export class Runner {
     count: number;
   } | null = null;
   private providerRetryStallMs = PROVIDER_RETRY_STALL_MS;
+  private providerUsageReportInFlight = false;
+  private providerUsageLastAttemptMs = 0;
   // sdkReady gates run()'s for-await loop on the first submit_turn
   // arriving so we can pin model/effort from that command's payload
   // before constructing query(). resolveSdkReady is called exactly once
@@ -1256,6 +1258,8 @@ export class Runner {
     void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
       console.warn("runtime config report failed:", err);
     });
+    this.providerUsageLastAttemptMs = 0;
+    this.scheduleProviderUsageReport(5000);
     // The model's context window is reported later, from the first SDK
     // `result` message's per-model ModelUsage (see maybeReportContextWindow).
     // The Anthropic Models API path was removed: `GET /v1/models/{model}`
@@ -1499,6 +1503,7 @@ export class Runner {
     // window still latches even when the active turn was already interrupted.
     if (providerEvent.type === "result") {
       this.maybeReportContextWindow(message);
+      this.scheduleProviderUsageReport(0);
     }
     const activeTurn = await this.ensureActiveTurn(providerEvent);
     if (isClaudePermissionDeniedEvent(providerEvent)) {
@@ -1694,6 +1699,58 @@ export class Runner {
     return rateLimitInfo;
   }
 
+  private reportProviderRateLimitRetryStallInfo(message: ClaudeProviderEvent): void {
+    const rateLimitInfo =
+      claudeRateLimitInfo(message) ??
+      ({
+        provider: "claude",
+        status: "rejected",
+        rateLimitType: "api_retry",
+        ...(typeof message.uuid === "string" && message.uuid.trim()
+          ? { uuid: message.uuid.trim().slice(0, 512) }
+          : {}),
+        ...(typeof message.session_id === "string" && message.session_id.trim()
+          ? { session_id: message.session_id.trim().slice(0, 512) }
+          : {}),
+      } satisfies Record<string, unknown>);
+    void reportRuntimeConfig(this.cfg, {
+      providerRateLimitInfo: rateLimitInfo,
+    }).catch((err) => {
+      console.warn("provider retry-stall rate-limit info report failed:", err);
+    });
+  }
+
+  private scheduleProviderUsageReport(delayMs: number): void {
+    const timer = setTimeout(() => {
+      void this.reportProviderUsageSnapshot();
+    }, Math.max(0, delayMs));
+    const nodeTimer = timer as unknown as { unref?: () => void };
+    if (typeof nodeTimer.unref === "function") {
+      nodeTimer.unref();
+    }
+  }
+
+  private async reportProviderUsageSnapshot(): Promise<void> {
+    if (this.runSignal?.aborted || this.providerUsageReportInFlight) return;
+    const query = this.sdkQuery;
+    if (!query) return;
+    const now = Date.now();
+    if (now - this.providerUsageLastAttemptMs < 60_000) return;
+    this.providerUsageLastAttemptMs = now;
+    this.providerUsageReportInFlight = true;
+    try {
+      const usage = await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      if (!usage || typeof usage !== "object") return;
+      await reportRuntimeConfig(this.cfg, {
+        providerUsageSnapshot: usage,
+      });
+    } catch (err) {
+      console.warn("provider usage snapshot report failed:", err);
+    } finally {
+      this.providerUsageReportInFlight = false;
+    }
+  }
+
   private async failTurnForProviderRateLimit(
     turn: PendingTurn,
     message: ClaudeProviderEvent,
@@ -1779,6 +1836,7 @@ export class Runner {
     retryCount: number,
   ): Promise<void> {
     providerRateLimitDecisionTotal.labels("retry_stall_failed").inc();
+    this.reportProviderRateLimitRetryStallInfo(message);
     if (turn.terminalEmitted) return;
     providerFailureClassTotal.labels("rate_limit").inc();
     const error =

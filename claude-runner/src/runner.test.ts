@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -1807,81 +1808,123 @@ test("Claude rate_limit_event with allowed primary quota does not fail the activ
 });
 
 test("Claude api_retry rate_limit stall fails the turn durably once the no-progress window elapses", async () => {
-  const { runner, harness } = makeInterruptHarness();
+  const tmp = mkdtempSync(path.join(tmpdir(), "claude-runner-test-"));
+  const tokenPath = path.join(tmp, "token");
+  writeFileSync(tokenPath, "runtime-token\n", "utf8");
+  const fetchCalls: Array<{ url: string; init?: RequestInit; body: Record<string, unknown> }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchCalls.push({
+      url: String(url),
+      init,
+      body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    });
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const { runner, harness } = makeInterruptHarness({
+    ...runnerConfig(),
+    operatorInternalURL: "http://operator.internal",
+    operatorTokenPath: tokenPath,
+  });
   const r = runner as unknown as {
     activeTurn: unknown;
     providerRetryStallMs: number;
     handleEvent: (message: unknown) => Promise<void>;
   };
-  // Collapse the no-progress window so the second frame trips it
-  // deterministically without sleeping for the production default.
-  r.providerRetryStallMs = 0;
-  r.activeTurn = {
-    turnID: "turn_retry-stalled",
-    clientNonce: "retry-stalled",
-    text: "hello",
-    // started:false — the 638 pathology: claimed but the SDK never produced
-    // a first frame, only api_retry.
-    started: false,
-    interrupted: false,
-    terminalEmitted: false,
-    commandRecord: { id: "submit-1", type: "submit_turn" },
-    stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
-  };
+  try {
+    // Collapse the no-progress window so the second frame trips it
+    // deterministically without sleeping for the production default.
+    r.providerRetryStallMs = 0;
+    r.activeTurn = {
+      turnID: "turn_retry-stalled",
+      clientNonce: "retry-stalled",
+      text: "hello",
+      // started:false — the 638 pathology: claimed but the SDK never produced
+      // a first frame, only api_retry.
+      started: false,
+      interrupted: false,
+      terminalEmitted: false,
+      commandRecord: { id: "submit-1", type: "submit_turn" },
+      stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
+    };
 
-  // First api_retry arms the stall window; no terminal yet.
-  await r.handleEvent({
-    type: "system",
-    subtype: "api_retry",
-    error: "rate_limit",
-    uuid: "retry-1",
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    harness.events.length,
-    0,
-    "a single retry frame must not fail the turn",
-  );
-  assert.deepEqual(
-    harness.bus,
-    [],
-    "command stays in flight while the SDK is still retrying",
-  );
+    // First api_retry arms the stall window; no terminal yet.
+    await r.handleEvent({
+      type: "system",
+      subtype: "api_retry",
+      error: "rate_limit",
+      uuid: "retry-1",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      harness.events.length,
+      0,
+      "a single retry frame must not fail the turn",
+    );
+    assert.deepEqual(
+      harness.bus,
+      [],
+      "command stays in flight while the SDK is still retrying",
+    );
+    assert.equal(fetchCalls.length, 0, "a single retry frame must not report rate-limit state");
 
-  // Second api_retry, past the (zeroed) window, forces the durable terminal.
-  await r.handleEvent({
-    type: "system",
-    subtype: "api_retry",
-    error: "rate_limit",
-    uuid: "retry-2",
-  });
-  await new Promise((resolve) => setImmediate(resolve));
+    // Second api_retry, past the (zeroed) window, forces the durable terminal.
+    await r.handleEvent({
+      type: "system",
+      subtype: "api_retry",
+      error: "rate_limit",
+      uuid: "retry-2",
+    });
+    for (let i = 0; i < 5 && fetchCalls.length === 0; i += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
 
-  assert.equal(
-    harness.events.length,
-    1,
-    "a sustained rate-limit retry stall must emit exactly one durable terminal",
-  );
-  assert.equal(harness.events[0]!.type, "turn.failed");
-  assert.equal(
-    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
-    "provider_rate_limit",
-  );
-  assert.match(
-    (harness.events[0] as { payload?: { error?: string } }).payload?.error ??
-      "",
-    /retry stall/,
-  );
-  assert.deepEqual(
-    harness.bus,
-    ["ack"],
-    "the submit command must ack after the durable stall terminal",
-  );
-  assert.equal(
-    r.activeTurn,
-    null,
-    "the stalled turn is released after the terminal",
-  );
+    assert.equal(
+      harness.events.length,
+      1,
+      "a sustained rate-limit retry stall must emit exactly one durable terminal",
+    );
+    assert.equal(harness.events[0]!.type, "turn.failed");
+    assert.equal(
+      (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
+      "provider_rate_limit",
+    );
+    assert.match(
+      (harness.events[0] as { payload?: { error?: string } }).payload?.error ??
+        "",
+      /retry stall/,
+    );
+    assert.deepEqual(
+      harness.bus,
+      ["ack"],
+      "the submit command must ack after the durable stall terminal",
+    );
+    assert.equal(
+      r.activeTurn,
+      null,
+      "the stalled turn is released after the terminal",
+    );
+    assert.equal(fetchCalls.length, 1, "the terminal retry stall reports provider rate-limit state");
+    assert.equal(
+      fetchCalls[0]!.url,
+      "http://operator.internal/api/internal/sessions/63/runtime-config",
+    );
+    assert.equal(
+      fetchCalls[0]!.init?.headers instanceof Headers
+        ? fetchCalls[0]!.init.headers.get("Authorization")
+        : (fetchCalls[0]!.init?.headers as Record<string, string>)?.Authorization,
+      "Bearer runtime-token",
+    );
+    assert.deepEqual(fetchCalls[0]!.body.provider_rate_limit_info, {
+      provider: "claude",
+      status: "rejected",
+      rateLimitType: "api_retry",
+      uuid: "retry-2",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("Claude api_retry rate_limit resets after real turn progress so a later isolated retry does not fail the turn", async () => {

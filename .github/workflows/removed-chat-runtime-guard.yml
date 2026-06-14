@@ -79,3 +79,10 @@ jobs:
         run: |
           node scripts/check-tank-http-route-security.mjs --self-test
           node scripts/check-tank-http-route-security.mjs
+
+      # The session ServiceAccount must stay read-only on the cluster. Binding
+      # it to cluster-admin is the kubectl-cp/exec bypass of the CI-gated
+      # hot-swap path; this guard renders the chart and fails if the session SA
+      # is bound to cluster-admin instead of tank-session-readonly.
+      - name: Check session SA stays read-only (no cluster-admin bypass)
+        run: node scripts/check-session-readonly-rbac.mjs

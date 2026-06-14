@@ -3,16 +3,16 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-0e209917f2a2fe5bc911f5a912ec983ae20412d1abf3bacd7501c685964b9c66"
+  tag: "app-db6470b8ae1ff3300a8e7d383159e58cd33188968abab10a87d4f6221bfe63d6"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-14T22:15:51Z"
-    git_sha: "fd2b962199b83aec212c3695440c737538bdf289"
+    built_at: "2026-06-14T23:44:25Z"
+    git_sha: "48f8533bbdaea5da9dc57360fe3bee0eab4accfe"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/fd2b962199b83aec212c3695440c737538bdf289"
-    pr_number: "1208"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1208"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27513733898"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/48f8533bbdaea5da9dc57360fe3bee0eab4accfe"
+    pr_number: ""
+    pr_url: ""
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27515854541"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
@@ -198,7 +198,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-a43c007240c6f401994b0dc2aa0c067a559013339c6c26e2ff0c33fa02f63398"
+    tag: "api-proxy-062f136533b4a8d7568c9d786140670dc0fffe47fcc6c2eb9c8655b7c0acd2b7"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   # Replica count shared by all provider proxy Deployments. HOLD AT 1 until the refresh
