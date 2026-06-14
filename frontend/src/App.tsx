@@ -26362,7 +26362,7 @@ function AuthenticatedApp() {
                     <section className="home-hero" aria-labelledby="home-title">
                       <div>
                         <h2 id="home-title" className="home-title">
-                          What do you want to build?
+                          What do you want to build? HOTSWAP-OK-940
                         </h2>
                         <p className="home-sub">
                           Type below to start a session with the selected
