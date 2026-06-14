@@ -1503,12 +1503,45 @@ async def _github_graphql_json(http: ClientSession, token: str, query: str, vari
         return resp.status, body if isinstance(body, dict) else {"body": body}
 
 
+def _check_run_recency(run: dict) -> tuple[str, int]:
+    """Sort key for picking the most recent run of a check.
+
+    started_at is ISO8601 (lexically sortable); the GitHub check-run id is a
+    monotonic tiebreaker for runs that share a timestamp.
+    """
+    started = str(run.get("started_at") or run.get("completed_at") or "")
+    try:
+        run_id = int(run.get("id") or 0)
+    except (TypeError, ValueError):
+        run_id = 0
+    return (started, run_id)
+
+
+def _latest_check_runs(check_runs: list) -> list:
+    """Reduce check runs to the most recent run per check name.
+
+    GitHub retains every run for a commit, including stale runs from an earlier
+    attempt. Branch protection evaluates the latest run per name; Tank must too,
+    or a check re-run from failure -> success still reads as failed and blocks
+    the governed merge/hot-swap gate forever.
+    """
+    latest: dict[str, dict] = {}
+    for run in check_runs:
+        if not isinstance(run, dict):
+            continue
+        name = str(run.get("name") or run.get("app", {}).get("slug") or "check")
+        existing = latest.get(name)
+        if existing is None or _check_run_recency(run) >= _check_run_recency(existing):
+            latest[name] = run
+    return list(latest.values())
+
+
 def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, str, dict]:
     conclusions_ok = {"success", "skipped", "neutral"}
     failed: list[str] = []
     pending: list[str] = []
     completed = 0
-    for run in check_runs:
+    for run in _latest_check_runs(check_runs):
         if not isinstance(run, dict):
             continue
         name = str(run.get("name") or run.get("app", {}).get("slug") or "check")
@@ -1611,6 +1644,21 @@ async def _watch_published_commit(
                     mergeable = pr.get("mergeable")
                     mergeable_state = str(pr.get("mergeable_state") or "")
                     pr_url = str(pr.get("html_url") or f"https://github.com/{owner}/{repo}/pull/{pr_number}")
+                    # The /pulls?head= list endpoint returns mergeable=null;
+                    # GitHub only computes mergeability on the single-PR GET, so
+                    # fetch it (otherwise the recorded observation is stuck
+                    # "unknown" forever and the governed merge gate never opens).
+                    if pr_number is not None:
+                        detail_status, detail_body = await _github_api_json(
+                            http,
+                            github_token,
+                            "GET",
+                            f"/repos/{owner}/{repo}/pulls/{pr_number}",
+                        )
+                        if detail_status < 400 and isinstance(detail_body, dict):
+                            mergeable = detail_body.get("mergeable")
+                            mergeable_state = str(detail_body.get("mergeable_state") or "")
+                            pr_url = str(detail_body.get("html_url") or pr_url)
                     merge_status = "started"
                     merge_error = "mergeability is still unknown"
                     if mergeable is True and mergeable_state not in {"dirty", "blocked"}:
