@@ -231,9 +231,7 @@ export async function bootstrapAuth(): Promise<SessionUser | null> {
 export async function startLogin(): Promise<void> {
   const config = await fetchConfig();
   const current = new URL(window.location.href);
-  const callbackTarget = current.searchParams.has("github_install_state")
-    ? `${current.origin}${current.pathname}${current.search}`
-    : `${current.origin}${current.pathname}`;
+  const callbackTarget = `${current.origin}${current.pathname}${current.search}`;
   const callbackURL = encodeURIComponent(callbackTarget);
   window.location.href = `${config.auth_url}/sign-in/microsoft?callbackURL=${callbackURL}`;
 }

@@ -122,6 +122,64 @@ func (s *ControlActionStore) ListBySession(ctx context.Context, ownerEmail, sess
 	return out, rows.Err()
 }
 
+func (s *ControlActionStore) GetBySessionEvent(ctx context.Context, sessionScope, sessionID, eventID string) (ControlActionEvent, error) {
+	if s == nil || s.pool == nil {
+		return ControlActionEvent{}, errors.New("control action store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	eventID = strings.TrimSpace(eventID)
+	if sessionID == "" || eventID == "" {
+		return ControlActionEvent{}, errors.New("session_id and event_id are required")
+	}
+	const q = `
+		SELECT event_id, invocation_id, created_at, owner_email, session_scope, session_id,
+			source_service, source_tool, action, status, target_kind, target_ref,
+			repo_owner, repo_name, pr_number, result_sha, error, payload
+		FROM control_action_events
+		WHERE session_scope = $1
+		  AND session_id = $2
+		  AND event_id = $3
+	`
+	return scanControlActionEvent(s.pool.QueryRow(ctx, q, sessionScope, sessionID, eventID))
+}
+
+func (s *ControlActionStore) BreakGlassDecisionForRequest(ctx context.Context, sessionScope, sessionID, requestEventID string) (ControlActionEvent, error) {
+	if s == nil || s.pool == nil {
+		return ControlActionEvent{}, errors.New("control action store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	requestEventID = strings.TrimSpace(requestEventID)
+	if sessionID == "" || requestEventID == "" {
+		return ControlActionEvent{}, errors.New("session_id and request_event_id are required")
+	}
+	const q = `
+		SELECT event_id, invocation_id, created_at, owner_email, session_scope, session_id,
+			source_service, source_tool, action, status, target_kind, target_ref,
+			repo_owner, repo_name, pr_number, result_sha, error, payload
+		FROM control_action_events
+		WHERE session_scope = $1
+		  AND session_id = $2
+		  AND payload->>'request_event_id' = $3
+		  AND action IN (
+			'github.break_glass.grant',
+			'github.break_glass.deny',
+			'azure.break_glass.grant',
+			'azure.break_glass.deny'
+		  )
+		ORDER BY created_at ASC, event_id ASC
+		LIMIT 1
+	`
+	return scanControlActionEvent(s.pool.QueryRow(ctx, q, sessionScope, sessionID, requestEventID))
+}
+
 func normalizeControlActionEvent(event ControlActionEvent, defaultScope string) ControlActionEvent {
 	event.EventID = strings.TrimSpace(event.EventID)
 	event.InvocationID = strings.TrimSpace(event.InvocationID)

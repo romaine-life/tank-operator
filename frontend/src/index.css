@@ -9052,6 +9052,16 @@ button:disabled {
   text-align: right;
 }
 
+.break-glass-approval .pr-lane-approval-trigger {
+  border-color: rgba(240, 180, 41, 0.45);
+  color: #f5d37b;
+}
+
+.break-glass-approval .pr-lane-approval-item.is-focused {
+  border-color: rgba(240, 180, 41, 0.55);
+  box-shadow: inset 3px 0 0 rgba(240, 180, 41, 0.85);
+}
+
 .run-pr-menu-sep {
   height: 1px;
   margin: 0.25rem 0.25rem;

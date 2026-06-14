@@ -151,9 +151,10 @@ describe("pendingBreakGlassRequests", () => {
         repo: "romaine-life/tank-operator",
         repoOwner: "romaine-life",
         repoName: "tank-operator",
+        kind: "git",
+        target: "romaine-life/tank-operator",
         reason: "hotfix push",
         source: "agent",
-        approvalUrl: undefined,
       },
     ]);
   });
@@ -208,6 +209,63 @@ describe("pendingBreakGlassRequests", () => {
 
     expect(pendingBreakGlassRequests(rows, NOW).map((r) => r.eventId)).toEqual([
       "bg-1",
+    ]);
+  });
+
+  test("clears a request once a grant or deny references the request event", () => {
+    for (const action of ["github.break_glass.grant", "github.break_glass.deny"]) {
+      const rows: ControlActionRow[] = [
+        {
+          event_id: "bg-1",
+          invocation_id: "bg-inv-1",
+          action: "github.break_glass.request",
+          status: "started",
+          repo_owner: "romaine-life",
+          repo_name: "tank-operator",
+          payload: {},
+        },
+        {
+          event_id: "decision-1",
+          invocation_id: "decision-inv-1",
+          action,
+          status: action.endsWith(".deny") ? "failed" : "succeeded",
+          repo_owner: "romaine-life",
+          repo_name: "tank-operator",
+          payload: { request_event_id: "bg-1" },
+        },
+      ];
+
+      expect(pendingBreakGlassRequests(rows, NOW)).toEqual([]);
+    }
+  });
+
+  test("returns azure break-glass requests until an exact decision exists", () => {
+    const rows: ControlActionRow[] = [
+      {
+        event_id: "azure-bg-1",
+        invocation_id: "azure-inv-1",
+        created_at: "2026-06-13T07:30:00Z",
+        action: "azure.break_glass.request",
+        status: "started",
+        target_kind: "azure_mcp",
+        target_ref: "azure-personal",
+        payload: { reason: "inspect ledger", source: "agent" },
+      },
+    ];
+
+    expect(pendingBreakGlassRequests(rows, NOW)).toEqual([
+      {
+        eventId: "azure-bg-1",
+        invocationId: "azure-inv-1",
+        createdAt: "2026-06-13T07:30:00Z",
+        kind: "azure",
+        target: "azure-personal",
+        repo: "",
+        repoOwner: undefined,
+        repoName: undefined,
+        reason: "inspect ledger",
+        source: "agent",
+      },
     ]);
   });
 });

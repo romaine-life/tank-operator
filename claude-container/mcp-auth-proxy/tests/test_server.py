@@ -803,35 +803,20 @@ def test_hot_swap_tool_schema_gets_repo_path_for_tank_gate() -> None:
 
 
 def test_break_glass_approval_url_carries_request_context() -> None:
-    url = _break_glass_approval_url(
-        "95",
-        {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
-        {"kind": "named", "branches": ["repair"]},
-        "need to repair a branch conflict",
-        "agent",
-    )
+    url = _break_glass_approval_url("95", "request-123")
 
-    assert url.startswith("https://auth.romaine.life/admin?")
-    assert "intent=git-break-glass" in url
-    assert "session_id=95" in url
-    assert "session_scope=default" in url
+    assert url == "https://tank.romaine.life/sessions/95?break_glass_request=request-123"
     query = parse_qs(urlparse(url).query)
-    assert json.loads(query["repo_scope"][0]) == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
-    assert json.loads(query["branch_scope"][0]) == {"kind": "named", "branches": ["repair"]}
-    assert "reason=need+to+repair+a+branch+conflict" in url
+    assert query["break_glass_request"] == ["request-123"]
+    assert "repo_scope" not in query
+    assert "branch_scope" not in query
+    assert "reason" not in query
 
 
 def test_break_glass_approval_url_carries_slot_scope() -> None:
-    url = _break_glass_approval_url(
-        "95",
-        {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
-        {"kind": "unlimited"},
-        "",
-        "agent",
-        session_scope="tank-operator-slot-6",
-    )
+    url = _break_glass_approval_url("slot/session", "request-123")
 
-    assert "session_scope=tank-operator-slot-6" in url
+    assert url == "https://tank.romaine.life/sessions/slot%2Fsession?break_glass_request=request-123"
 
 
 def test_break_glass_mcp_lists_no_tools_before_activation(monkeypatch, tmp_path) -> None:
@@ -946,32 +931,34 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     )
 
     payload = json.loads(response.text)
-    assert payload["result"]["structuredContent"]["approval_url"].startswith("https://auth.romaine.life/admin?")
+    structured = payload["result"]["structuredContent"]
+    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95?break_glass_request=")
     assert payload["result"]["structuredContent"]["privileged_tools_visible"] is False
     recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
     assert recorded["action"] == "github.break_glass.request"
+    assert recorded["event_id"] == structured["request_event_id"]
     assert recorded["source_tool"] == "request_git_break_glass"
     assert recorded["target_ref"] == "https://github.com/romaine-life/tank-operator"
     assert recorded["payload"]["reason"] == "need branch repair"
+    assert recorded["payload"]["approval_url"] == structured["approval_url"]
+    assert recorded["payload"]["request_event_id"] == recorded["event_id"]
     assert recorded["payload"]["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
     assert recorded["payload"]["branch_scope"] == {"kind": "unlimited"}
+    approval_query = parse_qs(urlparse(structured["approval_url"]).query)
+    assert "repo_scope" not in approval_query
+    assert "branch_scope" not in approval_query
+    assert "reason" not in approval_query
     assert recorded_call["headers"]["Authorization"] == "Bearer service-token"
 
 
 def test_azure_break_glass_approval_url_carries_intent_without_repo() -> None:
-    url = _azure_break_glass_approval_url(
-        "95",
-        "inspect the session_events ledger",
-        "agent",
-    )
+    url = _azure_break_glass_approval_url("95", "request-abc")
 
-    assert url.startswith("https://auth.romaine.life/admin?")
-    assert "intent=azure-break-glass" in url
-    assert "session_id=95" in url
-    assert "session_scope=default" in url
+    assert url == "https://tank.romaine.life/sessions/95?break_glass_request=request-abc"
+    assert "intent=azure-break-glass" not in url
     assert "repo=" not in url
-    assert "reason=inspect+the+session_events+ledger" in url
+    assert "reason=" not in url
 
 
 def test_append_azure_break_glass_tool_adds_request_tool() -> None:
@@ -1012,16 +999,18 @@ def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatc
     assert structured["resource"] == "azure-personal"
     assert structured["status"] == "approval_required"
     assert structured["privileged_tools_visible"] is False
-    assert structured["approval_url"].startswith("https://auth.romaine.life/admin?")
-    assert "intent=azure-break-glass" in structured["approval_url"]
+    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95?break_glass_request=")
     assert "token" not in structured
     recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
     assert recorded["action"] == "azure.break_glass.request"
+    assert recorded["event_id"] == structured["request_event_id"]
     assert recorded["source_tool"] == "request_azure_break_glass"
     assert recorded["target_kind"] == "azure_mcp"
     assert recorded["target_ref"] == "azure-personal"
     assert recorded["payload"]["reason"] == "inspect ledger"
+    assert recorded["payload"]["approval_url"] == structured["approval_url"]
+    assert recorded["payload"]["request_event_id"] == recorded["event_id"]
 
 
 def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
@@ -1105,8 +1094,9 @@ def test_tank_break_glass_tool_records_all_repo_branch_scope(monkeypatch) -> Non
     assert recorded["payload"]["repo_scope"] == {"kind": "all_repos"}
     assert recorded["payload"]["branch_scope"] == {"kind": "named", "branches": ["branch-a", "branch-b"]}
     query = parse_qs(urlparse(recorded["payload"]["approval_url"]).query)
-    assert json.loads(query["repo_scope"][0]) == {"kind": "all_repos"}
-    assert json.loads(query["branch_scope"][0]) == {"kind": "named", "branches": ["branch-a", "branch-b"]}
+    assert query["break_glass_request"] == [recorded["event_id"]]
+    assert "repo_scope" not in query
+    assert "branch_scope" not in query
 
 
 def test_tank_pr_lane_tool_records_approval_request(monkeypatch) -> None:

@@ -103,7 +103,6 @@ _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
-_AUTH_ROMAINE_BREAK_GLASS_URL = os.environ.get("AUTH_ROMAINE_BREAK_GLASS_URL") or "https://auth.romaine.life/admin"
 _GITHUB_WRITE_TOOL_DENYLIST = {
     "mint_clone_token",
     "create_pull_request",
@@ -1458,50 +1457,12 @@ async def _verify_github_hot_swap_head(
     }
 
 
-def _break_glass_approval_url(
-    session_id: str,
-    repo_scope: dict,
-    branch_scope: dict,
-    reason: str,
-    source: str,
-    *,
-    session_scope: str | None = None,
-) -> str:
-    scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
-    params = {
-        "intent": "git-break-glass",
-        "session_id": session_id,
-        "session_scope": scope,
-        "repo_scope": json.dumps(repo_scope, separators=(",", ":")),
-        "branch_scope": json.dumps(branch_scope, separators=(",", ":")),
-        "source": source,
-    }
-    if reason:
-        params["reason"] = reason
-    separator = "&" if "?" in _AUTH_ROMAINE_BREAK_GLASS_URL else "?"
-    return f"{_AUTH_ROMAINE_BREAK_GLASS_URL}{separator}{urlencode(params)}"
+def _break_glass_approval_url(session_id: str, request_event_id: str) -> str:
+    return f"{TANK_UI_HOST}/sessions/{quote(session_id, safe='')}?{urlencode({'break_glass_request': request_event_id})}"
 
 
-def _azure_break_glass_approval_url(
-    session_id: str,
-    reason: str,
-    source: str,
-    session_scope: str | None = None,
-) -> str:
-    # Mirrors _break_glass_approval_url. azure-personal break-glass is not
-    # repo-scoped, so there is no repo param; the auth.romaine.life admin
-    # console keys its approval card on intent=azure-break-glass.
-    scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
-    params = {
-        "intent": "azure-break-glass",
-        "session_id": session_id,
-        "session_scope": scope,
-        "source": source,
-    }
-    if reason:
-        params["reason"] = reason
-    separator = "&" if "?" in _AUTH_ROMAINE_BREAK_GLASS_URL else "?"
-    return f"{_AUTH_ROMAINE_BREAK_GLASS_URL}{separator}{urlencode(params)}"
+def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> str:
+    return _break_glass_approval_url(session_id, request_event_id)
 
 
 def _pr_lane_approval_url(session_id: str, request_event_id: str) -> str:
@@ -2995,13 +2956,8 @@ async def _handle_tank_break_glass_tool(
         if grant and not _grant_covers_branch_scope(grant, branch_scope):
             grant = None
         activation = _activate_break_glass_mcp_config(repo_slug, grant) if grant else None
-        approval_url = _break_glass_approval_url(
-            ORIGIN_SESSION_ID,
-            repo_scope,
-            branch_scope,
-            reason,
-            source,
-        )
+        event_id = f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
+        approval_url = _break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         target_ref = f"https://github.com/{repo_slug}"
         if repo_scope.get("kind") == "all_repos":
             target_ref = f"tank://session/{ORIGIN_SESSION_ID}/git-break-glass/all-repos"
@@ -3011,7 +2967,7 @@ async def _handle_tank_break_glass_tool(
             http,
             {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
             {
-                "event_id": f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "event_id": event_id,
                 "invocation_id": invocation_id,
                 "source_service": "mcp-tank-operator",
                 "source_tool": _TANK_BREAK_GLASS_TOOL,
@@ -3023,6 +2979,7 @@ async def _handle_tank_break_glass_tool(
                 "repo_name": repo,
                 "payload": {
                     "approval_url": approval_url,
+                    "request_event_id": event_id,
                     "reason": reason,
                     "source": source,
                     "repo_scope": repo_scope,
@@ -3041,6 +2998,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "request_event_id": event_id,
                 "status": "approved",
                 "approval_url": approval_url,
                 "privileged_tools_visible": True,
@@ -3057,6 +3015,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
                 "privileged_tools_visible": False,
@@ -3084,8 +3043,8 @@ async def _handle_tank_azure_break_glass_tool(
     request_id: object,
     arguments: dict,
 ) -> web.Response:
-    # Mirrors _handle_tank_break_glass_tool. Records the request and returns an
-    # auth.romaine.life approval URL; it never mints or reveals a token. Unlike
+    # Mirrors _handle_tank_break_glass_tool. Records the request and returns a
+    # Tank approval URL; it never mints or reveals a token. Unlike
     # git break-glass there is no activation step: azure-personal is already in
     # .mcp.json and the server (mcp-azure-personal) is the enforcement point, so
     # once a grant exists the server simply starts serving its tools.
@@ -3099,12 +3058,13 @@ async def _handle_tank_azure_break_glass_tool(
         source = str(arguments.get("source") or "agent").strip() or "agent"
         service_token = await auth_romaine_provider.token()
         grant = await _active_azure_break_glass_grant(http, service_token)
-        approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, reason, source)
+        event_id = f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
+        approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         await _post_tank_control_action(
             http,
             {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
             {
-                "event_id": f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "event_id": event_id,
                 "invocation_id": invocation_id,
                 "source_service": "mcp-tank-operator",
                 "source_tool": _TANK_AZURE_BREAK_GLASS_TOOL,
@@ -3114,6 +3074,7 @@ async def _handle_tank_azure_break_glass_tool(
                 "target_ref": "azure-personal",
                 "payload": {
                     "approval_url": approval_url,
+                    "request_event_id": event_id,
                     "reason": reason,
                     "source": source,
                 },
@@ -3128,6 +3089,7 @@ async def _handle_tank_azure_break_glass_tool(
             structured = {
                 "resource": "azure-personal",
                 "status": "approved",
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "expires_at": grant.get("expires_at"),
                 "privileged_tools_visible": True,
@@ -3142,6 +3104,7 @@ async def _handle_tank_azure_break_glass_tool(
             )
             structured = {
                 "resource": "azure-personal",
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
                 "privileged_tools_visible": False,

@@ -67,12 +67,13 @@ export type BreakGlassRequest = {
   eventId: string;
   invocationId: string;
   createdAt?: string;
-  repo: string;
+  kind: "git" | "azure";
+  target: string;
+  repo?: string;
   repoOwner?: string;
   repoName?: string;
   reason?: string;
   source?: string;
-  approvalUrl?: string;
 };
 
 function nonempty(value: unknown): string | undefined {
@@ -140,6 +141,8 @@ function actionTitle(action: string | undefined): string {
       return "GitHub break-glass request";
     case "github.break_glass.grant":
       return "GitHub break-glass grant";
+    case "github.break_glass.deny":
+      return "GitHub break-glass denied";
     case "github.break_glass.token":
       return "GitHub break-glass token";
     case "github.break_glass.push":
@@ -148,6 +151,8 @@ function actionTitle(action: string | undefined): string {
       return "Azure break-glass request";
     case "azure.break_glass.grant":
       return "Azure break-glass grant";
+    case "azure.break_glass.deny":
+      return "Azure break-glass denied";
     case "azure.break_glass.use":
       return "Azure break-glass use";
     case "github.pr_lane.request":
@@ -279,59 +284,74 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
   });
 }
 
-// pendingBreakGlassRequests surfaces git break-glass requests that are still
-// awaiting a human grant: a started `github.break_glass.request` whose repo has
-// no unexpired `github.break_glass.grant`. Deduped to the newest request per
-// repo. This is what lights the "approve break glass" chip on the pull-request
-// composer button so an operator can grant from the Tank UI instead of the
-// auth.romaine.life approval URL (whose console callback does not yet exist).
+// pendingBreakGlassRequests surfaces break-glass requests that are still
+// awaiting an admin decision. A grant or deny with payload.request_event_id
+// resolves the exact request; older grant rows without that field also clear
+// matching git repo requests until they expire.
 export function pendingBreakGlassRequests(
   rows: ControlActionRow[],
   now: number = Date.now(),
 ): BreakGlassRequest[] {
+  const resolvedRequests = new Set<string>();
   const grantedRepos = new Set<string>();
   for (const row of rows) {
-    if (nonempty(row.action) !== "github.break_glass.grant") continue;
+    const action = nonempty(row.action);
+    if (
+      action !== "github.break_glass.grant" &&
+      action !== "github.break_glass.deny" &&
+      action !== "azure.break_glass.grant" &&
+      action !== "azure.break_glass.deny"
+    )
+      continue;
+    const payload = payloadObject(row.payload);
+    const requestEventId = nonempty(payload.request_event_id);
+    if (requestEventId) resolvedRequests.add(requestEventId);
+    if (action !== "github.break_glass.grant") continue;
     if (nonempty(row.status) !== "succeeded") continue;
     const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
       .filter(Boolean)
       .join("/");
     if (!repo) continue;
-    const expiresAt = nonempty(payloadObject(row.payload).expires_at);
+    const expiresAt = nonempty(payload.expires_at);
     if (!expiresAt) continue;
     const expiry = Date.parse(expiresAt);
     if (Number.isNaN(expiry) || expiry <= now) continue;
     grantedRepos.add(repo);
   }
-  const byRepo = new Map<string, BreakGlassRequest>();
+  const byTarget = new Map<string, BreakGlassRequest>();
   for (const row of rows) {
-    if (nonempty(row.action) !== "github.break_glass.request") continue;
+    const action = nonempty(row.action);
+    if (action !== "github.break_glass.request" && action !== "azure.break_glass.request") continue;
     if (nonempty(row.status) !== "started") continue;
     const eventId = nonempty(row.event_id);
     const invocationId = nonempty(row.invocation_id);
     if (!eventId || !invocationId) continue;
+    if (resolvedRequests.has(eventId)) continue;
     const repoOwner = nonempty(row.repo_owner);
     const repoName = nonempty(row.repo_name);
     const repo = [repoOwner, repoName].filter(Boolean).join("/");
-    if (!repo || grantedRepos.has(repo)) continue;
+    const kind = action === "azure.break_glass.request" ? "azure" : "git";
+    if (kind === "git" && (!repo || grantedRepos.has(repo))) continue;
     const payload = payloadObject(row.payload);
+    const target = kind === "azure" ? "azure-personal" : repo;
     const request: BreakGlassRequest = {
       eventId,
       invocationId,
+      kind,
       createdAt: nonempty(row.created_at),
+      target,
       repo,
       repoOwner,
       repoName,
       reason: nonempty(payload.reason),
       source: nonempty(payload.source),
-      approvalUrl: nonempty(payload.approval_url),
     };
-    const existing = byRepo.get(repo);
+    const existing = byTarget.get(target);
     if (!existing || (request.createdAt ?? "") > (existing.createdAt ?? "")) {
-      byRepo.set(repo, request);
+      byTarget.set(target, request);
     }
   }
-  return Array.from(byRepo.values()).sort((a, b) =>
+  return Array.from(byTarget.values()).sort((a, b) =>
     (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
   );
 }

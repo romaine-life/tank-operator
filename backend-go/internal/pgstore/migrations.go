@@ -1253,7 +1253,6 @@ var schemaMigrations = []migration{
 		ON control_action_events (owner_email, session_scope, session_id, created_at DESC)`},
 	{ID: "0105", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
 		ON control_action_events (source_service, target_kind, target_ref, created_at DESC)`},
-
 	// Repair guard for the runtime-context migrations after a branch image wrote
 	// a production ledger checksum under the same IDs before the final main
 	// migration text landed. These statements are idempotent and intentionally
@@ -1967,6 +1966,16 @@ var schemaMigrations = []migration{
 		ALTER TABLE deployment_image_versions
 			ADD CONSTRAINT deployment_image_versions_image_kind_check
 			CHECK (image_kind IN ('app', 'session_claude', 'session_codex'))`},
+	{ID: "0159", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS control_action_events_break_glass_request_decision
+		ON control_action_events (session_scope, session_id, (payload->>'request_event_id'))
+		WHERE action IN (
+			'github.break_glass.grant',
+			'github.break_glass.deny',
+			'azure.break_glass.grant',
+			'azure.break_glass.deny'
+		)
+		  AND payload ? 'request_event_id'
+		  AND payload->>'request_event_id' <> ''`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration
