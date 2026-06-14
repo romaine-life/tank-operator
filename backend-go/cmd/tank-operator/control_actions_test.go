@@ -253,10 +253,7 @@ func TestHandleApprovePRLaneRequestRecordsDecision(t *testing.T) {
 	}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
-		"note":"ok",
-		"limit":50,
-		"unlimited":true,
-		"branch_names":["human-added"]
+		"note":"ok"
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.SetPathValue("request_event_id", "lane-request-1")
@@ -329,13 +326,68 @@ func TestHandleApprovePRLaneRequestRejectsResolvedRequest(t *testing.T) {
 	}
 }
 
+func TestHandleApprovePRLaneAllocationPersistsRepoScopeOverride(t *testing.T) {
+	requestPayload := []byte(`{
+		"allocation_request":true,
+		"repo_scope":{"kind":"repos","repos":["romaine-life/tank-operator"]},
+		"branch_scope":{"kind":"count","count":5},
+		"reason":"split multi-repo work"
+	}`)
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:      "lane-request-1",
+			InvocationID: "lane-invocation-1",
+			Action:       "github.pr_lane.request",
+			Status:       "started",
+			TargetKind:   "github_repository",
+			TargetRef:    "tank://session/47/pr-lanes",
+			Payload:      requestPayload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
+		"note":"broaden",
+		"repo_scope":{"kind":"repos","repos":["romaine-life/auth","romaine-life/tank-operator"]},
+		"branch_scope":{"kind":"count","count":10}
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "lane-request-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleApprovePRLaneRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := store.appendCalls[0]
+	if got.Action != "github.pr_lane.auto_approve" || got.RepoOwner != "" || got.TargetRef != "tank://session/47/pr-lanes/repos" {
+		t.Fatalf("approval identity = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	repoScope, ok := payload["repo_scope"].(map[string]any)
+	if !ok {
+		t.Fatalf("repo_scope = %#v", payload["repo_scope"])
+	}
+	repos, ok := repoScope["repos"].([]any)
+	if !ok || len(repos) != 2 || repos[0] != "romaine-life/auth" || repos[1] != "romaine-life/tank-operator" {
+		t.Fatalf("repo_scope.repos = %#v", repoScope["repos"])
+	}
+	branchScope, ok := payload["branch_scope"].(map[string]any)
+	if !ok || branchScope["kind"] != "count" || branchScope["count"] != float64(10) {
+		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+}
+
 func TestHandleAutoApprovePRLanesPersistsSessionGrant(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/auto-approve", strings.NewReader(`{
-		"repo": "romaine-life/tank-operator",
-		"limit": 12,
-		"branch_names": ["docs", "tank/session/47/tank-operator/backend"],
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"named","branches":["docs", "tank/session/47/tank-operator/backend"]},
 		"reason": "planned split"
 	}`))
 	req.SetPathValue("session_id", "47")
@@ -361,14 +413,44 @@ func TestHandleAutoApprovePRLanesPersistsSessionGrant(t *testing.T) {
 	if err := json.Unmarshal(got.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	names, ok := payload["branch_names"].([]any)
+	branchScope, ok := payload["branch_scope"].(map[string]any)
+	if !ok || branchScope["kind"] != "named" {
+		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+	names, ok := branchScope["branches"].([]any)
 	if !ok || len(names) != 2 || names[0] != "docs" || names[1] != "backend" {
-		t.Fatalf("branch_names = %#v", payload["branch_names"])
+		t.Fatalf("branch_scope.branches = %#v", branchScope["branches"])
+	}
+}
+
+func TestHandleAutoApprovePRLanesRejectsConflictingBranchScope(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/auto-approve", strings.NewReader(`{
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited","branches":["docs"]},
+		"reason": "planned split"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleAutoApprovePRLanes(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
 	}
 }
 
 func TestHandleInternalGetPRLaneAutoApprovalReturnsActiveGrant(t *testing.T) {
-	payload, _ := json.Marshal(map[string]any{"limit": 7, "scope": "session"})
+	payload, _ := json.Marshal(map[string]any{
+		"repo_scope":   map[string]any{"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+		"branch_scope": map[string]any{"kind": "count", "count": 7},
+		"scope":        "session",
+	})
 	store := &fakeControlActionStore{
 		listRows: []pgstore.ControlActionEvent{{
 			EventID:   "auto-1",
@@ -404,8 +486,8 @@ func TestHandleInternalGetPRLaneAutoApprovalReturnsActiveGrant(t *testing.T) {
 
 func TestHandleInternalGetPRLaneAutoApprovalEnforcesBranchNamesAndLimit(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
-		"limit":        1,
-		"branch_names": []string{"docs"},
+		"repo_scope":   map[string]any{"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+		"branch_scope": map[string]any{"kind": "named", "branches": []string{"docs"}},
 		"scope":        "session",
 	})
 	store := &fakeControlActionStore{
@@ -464,8 +546,8 @@ func TestHandleApprovePRLaneAllocationRequestCreatesAutoApproval(t *testing.T) {
 			RepoName:     "tank-operator",
 			Payload: []byte(`{
 				"allocation_request":true,
-				"lane_names":["docs","backend"],
-				"requested_count":2,
+				"repo_scope":{"kind":"current_repo","repo":"romaine-life/tank-operator"},
+				"branch_scope":{"kind":"named","branches":["docs","backend"]},
 				"reason":"split review"
 			}`),
 		}},
@@ -493,15 +575,13 @@ func TestHandleApprovePRLaneAllocationRequestCreatesAutoApproval(t *testing.T) {
 	if err := json.Unmarshal(got.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["limit"] != float64(2) {
-		t.Fatalf("limit = %#v", payload["limit"])
+	branchScope, ok := payload["branch_scope"].(map[string]any)
+	if !ok || branchScope["kind"] != "named" {
+		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
 	}
-	if payload["unlimited"] != false {
-		t.Fatalf("unlimited = %#v", payload["unlimited"])
-	}
-	names, ok := payload["branch_names"].([]any)
+	names, ok := branchScope["branches"].([]any)
 	if !ok || len(names) != 2 || names[0] != "docs" || names[1] != "backend" {
-		t.Fatalf("branch_names = %#v", payload["branch_names"])
+		t.Fatalf("branch_scope.branches = %#v", branchScope["branches"])
 	}
 }
 
@@ -518,8 +598,8 @@ func TestHandleApprovePRLaneAllocationRequestAllowsExplicitOverride(t *testing.T
 			RepoName:     "tank-operator",
 			Payload: []byte(`{
 				"allocation_request":true,
-				"lane_names":["docs","backend"],
-				"requested_count":2,
+				"repo_scope":{"kind":"current_repo","repo":"romaine-life/tank-operator"},
+				"branch_scope":{"kind":"named","branches":["docs","backend"]},
 				"reason":"split review"
 			}`),
 		}},
@@ -527,9 +607,7 @@ func TestHandleApprovePRLaneAllocationRequestAllowsExplicitOverride(t *testing.T
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
 		"note":"override",
-		"limit":10,
-		"unlimited":true,
-		"branch_names":["ops"]
+		"branch_scope":{"kind":"unlimited"}
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.SetPathValue("request_event_id", "lane-request-1")
@@ -546,12 +624,9 @@ func TestHandleApprovePRLaneAllocationRequestAllowsExplicitOverride(t *testing.T
 	if err := json.Unmarshal(got.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["limit"] != float64(10) || payload["unlimited"] != true {
-		t.Fatalf("override payload = %#v", payload)
-	}
-	names, ok := payload["branch_names"].([]any)
-	if !ok || len(names) != 1 || names[0] != "ops" {
-		t.Fatalf("branch_names = %#v", payload["branch_names"])
+	branchScope, ok := payload["branch_scope"].(map[string]any)
+	if !ok || branchScope["kind"] != "unlimited" {
+		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
 	}
 }
 
@@ -666,7 +741,8 @@ func TestHandleInternalGrantGitBreakGlassPersistsGrant(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
-		"repo": "romaine-life/tank-operator",
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
 		"ttl_seconds": 900,
 		"operations": ["mint_full_git_token"],
 		"request_event_id": "request-1",
@@ -698,14 +774,89 @@ func TestHandleInternalGrantGitBreakGlassPersistsGrant(t *testing.T) {
 	if payload["request_event_id"] != "request-1" {
 		t.Fatalf("request_event_id = %v", payload["request_event_id"])
 	}
+	if _, ok := payload["repo_scope"].(map[string]any); !ok {
+		t.Fatalf("repo_scope = %#v", payload["repo_scope"])
+	}
+	if _, ok := payload["branch_scope"].(map[string]any); !ok {
+		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+}
+
+func TestHandleInternalGrantGitBreakGlassPersistsAllReposBranchScope(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"all_repos"},
+		"branch_scope": {"kind":"named","branches":["refs/heads/feature-a", "feature-b"]},
+		"ttl_seconds": 900,
+		"operations": ["push_current_head"],
+		"request_event_id": "request-1",
+		"reason": "repair planned branches"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := store.appendCalls[0]
+	if got.RepoOwner != "" || got.RepoName != "" || got.TargetRef != "tank://session/47/git-break-glass/all-repos" {
+		t.Fatalf("scope identity = owner %q repo %q target %q", got.RepoOwner, got.RepoName, got.TargetRef)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	repoScope, ok := payload["repo_scope"].(map[string]any)
+	if !ok || repoScope["kind"] != "all_repos" {
+		t.Fatalf("repo_scope = %#v", payload["repo_scope"])
+	}
+	branchScope, ok := payload["branch_scope"].(map[string]any)
+	if !ok || branchScope["kind"] != "named" {
+		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+	names, ok := branchScope["branches"].([]any)
+	if !ok || len(names) != 2 || names[0] != "feature-a" || names[1] != "feature-b" {
+		t.Fatalf("branch_scope.branches = %#v", branchScope["branches"])
+	}
+}
+
+func TestHandleInternalGrantGitBreakGlassRejectsConflictingRepoScope(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"all_repos","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
+		"ttl_seconds": 900,
+		"operations": ["push_current_head"],
+		"request_event_id": "request-1",
+		"reason": "repair planned branches"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
 }
 
 func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	payload, _ := json.Marshal(map[string]any{
-		"expires_at": expiresAt,
-		"operations": []string{"mint_full_git_token"},
-		"reason":     "repair branch",
+		"expires_at":   expiresAt,
+		"operations":   []string{"mint_full_git_token"},
+		"reason":       "repair branch",
+		"repo_scope":   map[string]any{"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+		"branch_scope": map[string]any{"kind": "unlimited"},
 	})
 	store := &fakeControlActionStore{
 		listRows: []pgstore.ControlActionEvent{{
@@ -738,6 +889,50 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	}
 	if store.listOwner != "owner@example.test" || store.listSession != "47" {
 		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
+	}
+}
+
+func TestHandleInternalGetGitBreakGlassGrantMatchesExplicitRepoListAndBranchLimit(t *testing.T) {
+	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	payload, _ := json.Marshal(map[string]any{
+		"expires_at":   expiresAt,
+		"operations":   []string{"push_current_head"},
+		"repo_scope":   map[string]any{"kind": "repos", "repos": []string{"romaine-life/tank-operator", "romaine-life/auth"}},
+		"branch_scope": map[string]any{"kind": "count", "count": 2},
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				EventID:   "grant-1",
+				Action:    "github.break_glass.grant",
+				Status:    "succeeded",
+				TargetRef: "tank://session/47/git-break-glass/repos",
+				Payload:   payload,
+			},
+			{
+				Action:  "github.break_glass.push",
+				Status:  "succeeded",
+				Payload: []byte(`{"grant_event_id":"grant-1","branch":"feature-a"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/git-break-glass/grant?repo=romaine-life/auth", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetGitBreakGlassGrant(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != true || body["remaining_branches"] != float64(1) {
+		t.Fatalf("body = %#v", body)
 	}
 }
 

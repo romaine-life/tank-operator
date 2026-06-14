@@ -4,6 +4,7 @@ import asyncio
 import json
 import subprocess
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from aiohttp import ClientSession, ClientTimeout, web
@@ -745,9 +746,11 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     publish = augmented["result"]["tools"][1]
     assert publish["inputSchema"]["properties"]["repo_path"]["type"] == "string"
     pr_lane = augmented["result"]["tools"][2]
-    assert pr_lane["inputSchema"]["required"] == ["reason"]
-    assert "lane_names" in pr_lane["inputSchema"]["properties"]
-    assert "requested_count" in pr_lane["inputSchema"]["properties"]
+    assert pr_lane["inputSchema"]["required"] == ["repo_scope", "reason"]
+    assert "repo_scope" in pr_lane["inputSchema"]["properties"]
+    assert "branch_scope" in pr_lane["inputSchema"]["properties"]
+    assert "lane_names" not in pr_lane["inputSchema"]["properties"]
+    assert "requested_count" not in pr_lane["inputSchema"]["properties"]
     assert "pull request" in pr_lane["description"]
     create_lane = augmented["result"]["tools"][3]
     assert create_lane["inputSchema"]["required"] == ["request_event_id"]
@@ -762,6 +765,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert "Feature Contracts" in update_body["description"]
     break_glass = augmented["result"]["tools"][7]
     assert "approval URL" in break_glass["description"]
+    assert break_glass["inputSchema"]["required"] == ["repo_scope", "branch_scope", "reason"]
     assert "token" not in break_glass["inputSchema"]["properties"]
 
 
@@ -798,7 +802,8 @@ def test_hot_swap_tool_schema_gets_repo_path_for_tank_gate() -> None:
 def test_break_glass_approval_url_carries_request_context() -> None:
     url = _break_glass_approval_url(
         "95",
-        "romaine-life/tank-operator",
+        {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+        {"kind": "named", "branches": ["repair"]},
         "need to repair a branch conflict",
         "agent",
     )
@@ -807,14 +812,17 @@ def test_break_glass_approval_url_carries_request_context() -> None:
     assert "intent=git-break-glass" in url
     assert "session_id=95" in url
     assert "session_scope=default" in url
-    assert "repo=romaine-life%2Ftank-operator" in url
+    query = parse_qs(urlparse(url).query)
+    assert json.loads(query["repo_scope"][0]) == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
+    assert json.loads(query["branch_scope"][0]) == {"kind": "named", "branches": ["repair"]}
     assert "reason=need+to+repair+a+branch+conflict" in url
 
 
 def test_break_glass_approval_url_carries_slot_scope() -> None:
     url = _break_glass_approval_url(
         "95",
-        "romaine-life/tank-operator",
+        {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+        {"kind": "unlimited"},
         "",
         "agent",
         session_scope="tank-operator-slot-6",
@@ -926,7 +934,11 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
             http,
             _StaticTokenProvider("service-token"),
             9,
-            {"repo": "romaine-life/tank-operator", "reason": "need branch repair"},
+            {
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+                "branch_scope": {"kind": "unlimited"},
+                "reason": "need branch repair",
+            },
         )
     )
 
@@ -939,7 +951,71 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     assert recorded["source_tool"] == "request_git_break_glass"
     assert recorded["target_ref"] == "https://github.com/romaine-life/tank-operator"
     assert recorded["payload"]["reason"] == "need branch repair"
+    assert recorded["payload"]["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
+    assert recorded["payload"]["branch_scope"] == {"kind": "unlimited"}
     assert recorded_call["headers"]["Authorization"] == "Bearer service-token"
+
+
+def test_tank_break_glass_tool_records_request_when_active_grant_misses_branch_scope(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(
+            200,
+            b'{"active":true,"event_id":"grant-1","repo_scope":{"kind":"current_repo","repo":"romaine-life/tank-operator"},"branch_scope":{"kind":"named","branches":["branch-a"]}}',
+        ),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            17,
+            {
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+                "branch_scope": {"kind": "named", "branches": ["branch-b"]},
+                "reason": "need another branch",
+            },
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["result"]["structuredContent"]["status"] == "approval_required"
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
+    assert recorded_call["json"]["payload"]["branch_scope"] == {"kind": "named", "branches": ["branch-b"]}
+
+
+def test_tank_break_glass_tool_records_all_repo_branch_scope(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b"not-json"),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            19,
+            {
+                "repo_scope": {"kind": "all_repos"},
+                "branch_scope": {"kind": "named", "branches": ["refs/heads/branch-a", "branch-b"]},
+                "reason": "planned migration",
+            },
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["result"]["structuredContent"]["repo_scope"] == {"kind": "all_repos"}
+    assert payload["result"]["structuredContent"]["branch_scope"] == {"kind": "named", "branches": ["branch-a", "branch-b"]}
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
+    recorded = recorded_call["json"]
+    assert recorded["target_ref"] == "tank://session/95/git-break-glass/all-repos"
+    assert recorded["payload"]["repo_scope"] == {"kind": "all_repos"}
+    assert recorded["payload"]["branch_scope"] == {"kind": "named", "branches": ["branch-a", "branch-b"]}
+    query = parse_qs(urlparse(recorded["payload"]["approval_url"]).query)
+    assert json.loads(query["repo_scope"][0]) == {"kind": "all_repos"}
+    assert json.loads(query["branch_scope"][0]) == {"kind": "named", "branches": ["branch-a", "branch-b"]}
 
 
 def test_tank_pr_lane_tool_records_approval_request(monkeypatch) -> None:
@@ -955,7 +1031,7 @@ def test_tank_pr_lane_tool_records_approval_request(monkeypatch) -> None:
             _StaticTokenProvider("service-token"),
             10,
             {
-                "repo": "romaine-life/tank-operator",
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
                 "lane_name": "docs",
                 "relationship": "parallel",
                 "base": "main",
@@ -997,9 +1073,8 @@ def test_tank_pr_lane_tool_records_allocation_request(monkeypatch) -> None:
             _StaticTokenProvider("service-token"),
             16,
             {
-                "repo": "romaine-life/tank-operator",
-                "lane_names": ["docs", "backend"],
-                "requested_count": 2,
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+                "branch_scope": {"kind": "named", "branches": ["docs", "backend"]},
                 "reason": "split review into named lanes",
             },
         )
@@ -1009,19 +1084,76 @@ def test_tank_pr_lane_tool_records_allocation_request(monkeypatch) -> None:
     structured = payload["result"]["structuredContent"]
     assert structured["status"] == "approval_required"
     assert structured["allocation_request"] is True
-    assert structured["lane_names"] == ["docs", "backend"]
+    assert structured["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
+    assert structured["branch_scope"] == {"kind": "named", "branches": ["docs", "backend"]}
     assert structured["approval_url"].startswith("https://tank.romaine.life/?session=95&pr_lane_request=")
-    assert structured["proposed_branches"] == [
-        "tank/session/95/tank-operator/docs",
-        "tank/session/95/tank-operator/backend",
-    ]
     recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
     assert recorded["action"] == "github.pr_lane.request"
     assert recorded["status"] == "started"
     assert recorded["payload"]["allocation_request"] is True
-    assert recorded["payload"]["requested_count"] == 2
-    assert recorded["payload"]["lane_names"] == ["docs", "backend"]
+    assert recorded["payload"]["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
+    assert recorded["payload"]["branch_scope"] == {"kind": "named", "branches": ["docs", "backend"]}
+
+
+def test_tank_pr_lane_tool_records_multi_repo_allocation_request(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":false}'),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_pr_lane_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            20,
+            {
+                "repo_scope": {"kind": "repos", "repos": ["romaine-life/tank-operator", "romaine-life/auth"]},
+                "branch_scope": {"kind": "count", "count": 5},
+                "reason": "split multi-repo work",
+            },
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    assert structured["status"] == "approval_required"
+    assert structured["repo_scope"] == {"kind": "repos", "repos": ["romaine-life/tank-operator", "romaine-life/auth"]}
+    assert structured["branch_scope"] == {"kind": "count", "count": 5}
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
+    recorded = recorded_call["json"]
+    assert recorded["target_ref"] == "tank://session/95/pr-lanes/repos"
+    assert recorded["repo_owner"] == ""
+    assert recorded["repo_name"] == ""
+    assert recorded["payload"]["repo_scope"] == {"kind": "repos", "repos": ["romaine-life/tank-operator", "romaine-life/auth"]}
+    assert recorded["payload"]["branch_scope"] == {"kind": "count", "count": 5}
+
+
+def test_tank_pr_lane_tool_rejects_conflicting_branch_scope(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":false}'),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_pr_lane_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            21,
+            {
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+                "branch_scope": {"kind": "unlimited", "branches": ["docs"]},
+                "reason": "split review",
+            },
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["error"]["code"] == -32013
+    assert "unlimited rejects branches and count" in payload["error"]["message"]
+    assert all(call.get("method") != "POST" for call in http.calls)
 
 
 def test_tank_pr_lane_tool_marks_session_auto_approved(monkeypatch) -> None:
@@ -1037,7 +1169,7 @@ def test_tank_pr_lane_tool_marks_session_auto_approved(monkeypatch) -> None:
             _StaticTokenProvider("service-token"),
             11,
             {
-                "repo": "romaine-life/tank-operator",
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
                 "lane_name": "mcp-proxy",
                 "relationship": "stacked",
                 "reason": "depends on backend lane endpoint",

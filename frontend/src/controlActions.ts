@@ -48,6 +48,8 @@ export type PRLaneRequest = {
   invocationId: string;
   createdAt?: string;
   repo?: string;
+  repos?: string[];
+  allRepos?: boolean;
   laneName: string;
   allocationRequest?: boolean;
   laneNames?: string[];
@@ -218,8 +220,10 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
     }
     const payload = payloadObject(row.payload);
     const allocationRequest = payload.allocation_request === true;
-    const laneNames = Array.isArray(payload.lane_names)
-      ? payload.lane_names.flatMap((value) => {
+    const branchScope = payloadObject(payload.branch_scope);
+    const repoScope = payloadObject(payload.repo_scope);
+    const laneNames = Array.isArray(branchScope.branches)
+      ? branchScope.branches.flatMap((value) => {
           const name = nonempty(value);
           return name ? [name] : [];
         })
@@ -230,11 +234,17 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
           return branch ? [branch] : [];
         })
       : [];
+    const repos = Array.isArray(repoScope.repos)
+      ? repoScope.repos.flatMap((value) => {
+          const repo = nonempty(value);
+          return repo ? [repo] : [];
+        })
+      : [];
     const laneName = nonempty(payload.lane_name) ?? (allocationRequest ? "branch allocation" : undefined);
     if (!laneName) return [];
     const requestedCount =
-      typeof payload.requested_count === "number" && Number.isFinite(payload.requested_count)
-        ? payload.requested_count
+      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
+        ? branchScope.count
         : undefined;
     const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
       .filter(Boolean)
@@ -254,8 +264,11 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
     if (allocationRequest) request.allocationRequest = true;
     if (laneNames.length > 0) request.laneNames = laneNames;
     if (proposedBranches.length > 0) request.proposedBranches = proposedBranches;
-    if (requestedCount !== undefined) request.requestedCount = requestedCount;
-    if (payload.unlimited === true) request.unlimited = true;
+    if (nonempty(repoScope.repo)) request.repo = nonempty(repoScope.repo);
+    if (repos.length > 0) request.repos = repos;
+    if (repoScope.kind === "all_repos") request.allRepos = true;
+    if (branchScope.kind === "count" && requestedCount !== undefined) request.requestedCount = requestedCount;
+    if (branchScope.kind === "unlimited") request.unlimited = true;
     return [request];
   });
 }

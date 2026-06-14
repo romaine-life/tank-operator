@@ -70,8 +70,8 @@ describe("pendingPRLaneRequests", () => {
         repo_name: "tank-operator",
         payload: {
           allocation_request: true,
-          lane_names: ["docs", "backend"],
-          requested_count: 2,
+          repo_scope: { kind: "current_repo", repo: "romaine-life/tank-operator" },
+          branch_scope: { kind: "named", branches: ["docs", "backend"] },
           reason: "split review",
         },
       },
@@ -84,7 +84,8 @@ describe("pendingPRLaneRequests", () => {
         repo_name: "tank-operator",
         payload: {
           allocation_request: true,
-          unlimited: true,
+          repo_scope: { kind: "current_repo", repo: "romaine-life/tank-operator" },
+          branch_scope: { kind: "unlimited" },
           reason: "large migration",
         },
       },
@@ -100,11 +101,11 @@ describe("pendingPRLaneRequests", () => {
       {
         eventId: "allocation-1",
         invocationId: "alloc-inv-1",
+        createdAt: undefined,
         repo: "romaine-life/tank-operator",
         laneName: "branch allocation",
         allocationRequest: true,
         laneNames: ["docs", "backend"],
-        requestedCount: 2,
         relationship: undefined,
         base: undefined,
         scope: undefined,
