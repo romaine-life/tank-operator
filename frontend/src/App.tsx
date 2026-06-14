@@ -2372,8 +2372,9 @@ interface ComposerToolButtonsProps {
     disabled?: boolean;
     readyUrl?: string;
     title: string;
-    onClick?: () => void;
-    onReadyClick?: () => void;
+    onCreateHold?: () => void;
+    onCreateAndDrive?: () => void;
+    onOpenReady?: () => void;
   };
   pullRequest: {
     latestUrl?: string;
@@ -2642,34 +2643,68 @@ function ComposerToolButtons({
           <TankIcon className="run-composer-icon" />
         </button>
       )}
-      {testReadyURL ? (
-        <a
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${test.active ? " is-active" : ""}`}
-          href={testReadyURL}
-          target="_blank"
-          rel="noreferrer"
-          onClick={test.onReadyClick}
-          aria-label="Open test environment in new tab"
-          title="Open test environment in new tab"
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
+            disabled={test.disabled}
+            aria-label="Test actions"
+            title={test.title}
+            aria-haspopup="menu"
+          >
+            <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+            {testReadyURL && (
+              <ExternalLinkIcon
+                className="run-test-ready-icon"
+                aria-hidden="true"
+              />
+            )}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          side="top"
+          className="run-test-action-menu"
         >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-          <ExternalLinkIcon
-            className="run-test-ready-icon"
-            aria-hidden="true"
-          />
-        </a>
-      ) : (
-        <button
-          type="button"
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${test.active ? " is-active" : ""}`}
-          onClick={test.onClick}
-          disabled={test.disabled}
-          aria-label="Start test skill"
-          title={test.title}
-        >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-        </button>
-      )}
+          <DropdownMenuItem
+            className="run-test-action-menu-item"
+            onSelect={test.onCreateHold}
+          >
+            <FlaskConicalIcon aria-hidden="true" />
+            <span>Create slot and hold</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="run-test-action-menu-item"
+            onSelect={test.onCreateAndDrive}
+          >
+            <PlayIcon aria-hidden="true" />
+            <span>Create slot and run test</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="run-test-action-menu-separator" />
+          {testReadyURL ? (
+            <DropdownMenuItem className="run-test-action-menu-item" asChild>
+              <a
+                href={testReadyURL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={test.onOpenReady}
+              >
+                <ExternalLinkIcon aria-hidden="true" />
+                <span>Open test slot</span>
+              </a>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              className="run-test-action-menu-item"
+              disabled
+            >
+              <ExternalLinkIcon aria-hidden="true" />
+              <span>Open test slot</span>
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <PullRequestMenuButton {...pullRequest} />
       {bugLabelControl}
       <button
@@ -7685,7 +7720,7 @@ function RunMessageBubble({
       ? ((entry as Record<string, unknown>).skillSupplementalText as string)
       : (durableSkillDisplay?.supplemental_text ?? "");
   const skillActionIcon =
-    skillName === "test"
+    skillName === "test" || skillName === "test-drive"
       ? FlaskConicalIcon
       : skillName === "rollout"
         ? TankIcon
@@ -9487,6 +9522,11 @@ function PRLaneApprovalIndicator({
           <div className="pr-lane-approval-list">
             {requests.map((request) => {
               const busy = busyEventId === request.eventId;
+              const repoScope = request.allRepos
+                ? "all repos"
+                : request.repos && request.repos.length > 1
+                  ? request.repos.join(", ")
+                  : request.repo;
               return (
                 <div className="pr-lane-approval-item" key={request.eventId}>
                   <div className="pr-lane-approval-main">
@@ -9504,7 +9544,7 @@ function PRLaneApprovalIndicator({
                               : `${request.laneNames?.length || request.proposedBranches?.length || 0} named branches`
                           : request.relationship,
                         request.base ? `from ${request.base}` : "",
-                        request.repo,
+                        repoScope,
                       ]
                         .filter(Boolean)
                         .join(" · ")}
@@ -15711,14 +15751,14 @@ function ChatPane({
                 note: override
                   ? `agent-requested allocation approved with ${override} override`
                   : "agent-requested allocation approved",
-                branch_names: override === "count" || override === "unlimited" ? [] : requestedBranches,
-                limit:
-                  override === "count"
-                    ? 10
-                    : override === "listed"
-                      ? requestedBranches.length
-                      : request.requestedCount ?? 0,
-                unlimited: override === "unlimited" || (override === undefined && request.unlimited === true),
+                branch_scope:
+                  override === "unlimited" || (override === undefined && request.unlimited === true)
+                    ? { kind: "unlimited" }
+                    : override === "count"
+                      ? { kind: "count", count: 10 }
+                      : requestedBranches.length > 0
+                        ? { kind: "named", branches: requestedBranches }
+                        : { kind: "count", count: request.requestedCount ?? 10 },
               }
             : {};
         await authedFetch(
@@ -19190,7 +19230,7 @@ function ChatPane({
     });
   }
 
-  function startTestSkill() {
+  function startTestSkill(skillName = "test") {
     if (session.status !== "Active") return;
     const promptText = getComposerValue().trim();
     const composed = composePromptWithAttachments(promptText);
@@ -19207,7 +19247,7 @@ function ChatPane({
         ),
       );
     });
-    submitSkillInvocation("test", composed.prompt);
+    submitSkillInvocation(skillName, composed.prompt);
   }
 
   function startGuiRollout() {
@@ -21973,15 +22013,16 @@ function ChatPane({
                 test={{
                   active: testActionActive,
                   readyUrl: testState?.active ? testState.url?.trim() : "",
-                  onReadyClick: () => {
+                  onOpenReady: () => {
                     if (testState)
                       void markTestState({ ...testState, active: true });
                   },
-                  onClick: startTestSkill,
+                  onCreateHold: () => startTestSkill("test"),
+                  onCreateAndDrive: () => startTestSkill("test-drive"),
                   disabled: !ready,
                   title: testState?.active
-                    ? "Test skill is active"
-                    : "Use the test skill",
+                    ? "Choose a test action"
+                    : "Start a test workflow",
                 }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
@@ -26556,7 +26597,7 @@ function AuthenticatedApp() {
                       title: "Use /rollout once your session starts",
                     }}
                     test={{
-                      onClick: () => {
+                      onCreateHold: () => {
                         void createSession(
                           defaultSessionMode,
                           homeComposerText.trim() || undefined,

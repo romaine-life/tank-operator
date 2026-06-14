@@ -62,18 +62,15 @@ type hotSwapVerificationResponse struct {
 }
 
 type prLaneApprovalRequest struct {
-	Note        string   `json:"note"`
-	BranchNames []string `json:"branch_names,omitempty"`
-	Limit       int      `json:"limit,omitempty"`
-	Unlimited   bool     `json:"unlimited,omitempty"`
+	Note        string      `json:"note"`
+	RepoScope   repoScope   `json:"repo_scope,omitempty"`
+	BranchScope branchScope `json:"branch_scope,omitempty"`
 }
 
 type prLaneAutoApprovalRequest struct {
-	Repo        string   `json:"repo"`
-	Limit       int      `json:"limit"`
-	Unlimited   bool     `json:"unlimited"`
-	BranchNames []string `json:"branch_names"`
-	Reason      string   `json:"reason"`
+	RepoScope   repoScope   `json:"repo_scope,omitempty"`
+	BranchScope branchScope `json:"branch_scope,omitempty"`
+	Reason      string      `json:"reason"`
 }
 
 type prLaneAuthorizationResponse struct {
@@ -89,6 +86,18 @@ type prLaneAuthorizationResponse struct {
 	Reason          string   `json:"reason,omitempty"`
 	ProposedBranch  string   `json:"proposed_branch,omitempty"`
 	AutoApproved    bool     `json:"auto_approved,omitempty"`
+}
+
+type repoScope struct {
+	Kind  string   `json:"kind"`
+	Repo  string   `json:"repo,omitempty"`
+	Repos []string `json:"repos,omitempty"`
+}
+
+type branchScope struct {
+	Kind     string   `json:"kind"`
+	Branches []string `json:"branches,omitempty"`
+	Count    int      `json:"count,omitempty"`
 }
 
 func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *http.Request) {
@@ -181,26 +190,40 @@ func (s *appServer) handleInternalGrantGitBreakGlass(w http.ResponseWriter, r *h
 		return
 	}
 	var body struct {
-		Repo           string   `json:"repo"`
-		TTLSeconds     int      `json:"ttl_seconds"`
-		Operations     []string `json:"operations"`
-		RequestEventID string   `json:"request_event_id"`
-		Reason         string   `json:"reason"`
+		Repo           string      `json:"repo"`
+		RepoScope      repoScope   `json:"repo_scope"`
+		BranchScope    branchScope `json:"branch_scope"`
+		TTLSeconds     int         `json:"ttl_seconds"`
+		Operations     []string    `json:"operations"`
+		RequestEventID string      `json:"request_event_id"`
+		Reason         string      `json:"reason"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	owner, name, ok := splitRepoSlug(body.Repo)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "repo must be a GitHub slug like owner/name")
+	repoScope, err := normalizeRepoScope(body.RepoScope, body.Repo)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	branchScope, err := normalizeBranchScope(body.BranchScope, sessionID, singleRepoName(repoScopeRepos(repoScope), repoScope.Kind == "all_repos"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	repos := repoScopeRepos(repoScope)
+	allRepos := repoScope.Kind == "all_repos"
+	owner, name := singleRepoOwner(repos, allRepos), singleRepoName(repos, allRepos)
 	row, expiresAt, err := s.appendGitBreakGlassGrant(r.Context(), gitBreakGlassGrantInput{
 		SessionID:      sessionID,
 		OwnerEmail:     user.ActorEmail,
 		RepoOwner:      owner,
 		RepoName:       name,
+		RepoScope:      repoScope,
+		BranchScope:    branchScope,
 		TTLSeconds:     body.TTLSeconds,
 		Operations:     body.Operations,
 		RequestEventID: body.RequestEventID,
@@ -216,7 +239,9 @@ func (s *appServer) handleInternalGrantGitBreakGlass(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"active":        true,
 		"event_id":      row.EventID,
-		"repo":          owner + "/" + name,
+		"repo":          strings.Trim(strings.TrimSpace(owner+"/"+name), "/"),
+		"repo_scope":    repoScope,
+		"branch_scope":  branchScope,
 		"expires_at":    expiresAt.Format(time.RFC3339),
 		"operations":    normalizeBreakGlassOperations(body.Operations),
 		"session_id":    sessionID,
@@ -229,6 +254,8 @@ type gitBreakGlassGrantInput struct {
 	OwnerEmail     string
 	RepoOwner      string
 	RepoName       string
+	RepoScope      repoScope
+	BranchScope    branchScope
 	TTLSeconds     int
 	Operations     []string
 	RequestEventID string
@@ -252,6 +279,14 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 	now := time.Now().UTC()
 	expiresAt := now.Add(time.Duration(ttl) * time.Second)
 	repo := in.RepoOwner + "/" + in.RepoName
+	resolvedRepoScope := in.RepoScope
+	if strings.TrimSpace(resolvedRepoScope.Kind) == "" && in.RepoOwner != "" && in.RepoName != "" {
+		resolvedRepoScope = repoScope{Kind: "current_repo", Repo: repo}
+	}
+	resolvedBranchScope := in.BranchScope
+	if strings.TrimSpace(resolvedBranchScope.Kind) == "" {
+		resolvedBranchScope = branchScope{Kind: "unlimited"}
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"approved_by":      strings.TrimSpace(in.ApprovedBy),
 		"expires_at":       expiresAt.Format(time.RFC3339),
@@ -259,6 +294,8 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 		"operations":       operations,
 		"request_event_id": strings.TrimSpace(in.RequestEventID),
 		"reason":           strings.TrimSpace(in.Reason),
+		"repo_scope":       resolvedRepoScope,
+		"branch_scope":     resolvedBranchScope,
 	})
 	event := pgstore.ControlActionEvent{
 		EventID:       "tank-break-glass-grant-" + in.SessionID + "-" + randomHex(12),
@@ -271,7 +308,7 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 		Action:        "github.break_glass.grant",
 		Status:        "succeeded",
 		TargetKind:    "github_repository",
-		TargetRef:     "https://github.com/" + repo,
+		TargetRef:     repoScopeTargetRef(in.SessionID, resolvedRepoScope, "git-break-glass"),
 		RepoOwner:     in.RepoOwner,
 		RepoName:      in.RepoName,
 		Payload:       payload,
@@ -302,8 +339,8 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
 	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
-	if sessionID == "" || repo == "" {
-		writeError(w, http.StatusBadRequest, "session_id and repo are required")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
 	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
@@ -316,28 +353,47 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 		if row.Action != "github.break_glass.grant" || row.Status != "succeeded" {
 			continue
 		}
-		if row.RepoOwner+"/"+row.RepoName != repo {
-			continue
-		}
 		var payload struct {
-			ExpiresAt  string   `json:"expires_at"`
-			Operations []string `json:"operations"`
-			Reason     string   `json:"reason"`
+			ExpiresAt   string      `json:"expires_at"`
+			Operations  []string    `json:"operations"`
+			Reason      string      `json:"reason"`
+			RepoScope   repoScope   `json:"repo_scope"`
+			BranchScope branchScope `json:"branch_scope"`
 		}
 		_ = json.Unmarshal(row.Payload, &payload)
+		repoScope, err := normalizeRepoScope(payload.RepoScope, rowDefaultRepo(row))
+		if err != nil || !repoScopeCoversRepo(repoScope, repo) {
+			continue
+		}
 		expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(payload.ExpiresAt))
 		if err != nil || !expiresAt.After(now) {
 			continue
 		}
+		branchScope, err := normalizeBranchScope(payload.BranchScope, row.SessionID, singleRepoName(repoScopeRepos(repoScope), repoScope.Kind == "all_repos"))
+		if err != nil {
+			continue
+		}
+		branchLimit := branchScope.Count
+		remainingBranches := 0
+		if branchScope.Kind == "count" {
+			usedBranches := countBreakGlassGrantBranches(rows, row.EventID)
+			if usedBranches >= branchLimit {
+				continue
+			}
+			remainingBranches = branchLimit - usedBranches
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"active":        true,
-			"event_id":      row.EventID,
-			"repo":          repo,
-			"expires_at":    expiresAt.UTC().Format(time.RFC3339),
-			"operations":    normalizeBreakGlassOperations(payload.Operations),
-			"reason":        payload.Reason,
-			"session_id":    sessionID,
-			"session_scope": s.sessionScope,
+			"active":             true,
+			"event_id":           row.EventID,
+			"repo":               repo,
+			"repo_scope":         repoScope,
+			"branch_scope":       branchScope,
+			"expires_at":         expiresAt.UTC().Format(time.RFC3339),
+			"operations":         normalizeBreakGlassOperations(payload.Operations),
+			"reason":             payload.Reason,
+			"remaining_branches": remainingBranches,
+			"session_id":         sessionID,
+			"session_scope":      s.sessionScope,
 		})
 		return
 	}
@@ -503,7 +559,9 @@ func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request,
 	}
 	var body prLaneApprovalRequest
 	if r.Body != nil {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
 			writeError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
@@ -519,49 +577,48 @@ func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var requestPayload struct {
-		AllocationRequest bool     `json:"allocation_request"`
-		LaneNames         []string `json:"lane_names"`
-		ProposedBranches  []string `json:"proposed_branches"`
-		RequestedCount    int      `json:"requested_count"`
-		Unlimited         bool     `json:"unlimited"`
-		Reason            string   `json:"reason"`
+		AllocationRequest bool        `json:"allocation_request"`
+		RepoScope         repoScope   `json:"repo_scope"`
+		BranchScope       branchScope `json:"branch_scope"`
+		Reason            string      `json:"reason"`
 	}
 	_ = json.Unmarshal(request.Payload, &requestPayload)
 	if decision == "approve" && requestPayload.AllocationRequest {
-		branchNames := normalizePRLaneBranchNames(append(append([]string{}, requestPayload.LaneNames...), requestPayload.ProposedBranches...), sessionID, request.RepoName)
-		branchNames = uniqueStrings(branchNames)
-		limit := requestPayload.RequestedCount
-		unlimited := requestPayload.Unlimited
-		overrideBranchNames := normalizePRLaneBranchNames(body.BranchNames, sessionID, request.RepoName)
-		if len(overrideBranchNames) > 0 {
-			branchNames = overrideBranchNames
+		requestRepoScope, err := normalizeRepoScope(requestPayload.RepoScope, rowDefaultRepo(request))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "PR lane request has invalid repo_scope")
+			return
 		}
-		if body.Limit > 0 {
-			limit = body.Limit
+		requestBranchScope, err := normalizeBranchScope(requestPayload.BranchScope, sessionID, request.RepoName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "PR lane request has invalid branch_scope")
+			return
 		}
-		if body.Unlimited {
-			unlimited = true
-		}
-		if !unlimited {
-			if limit <= 0 && len(branchNames) > 0 {
-				limit = len(branchNames)
-			}
-			if limit <= 0 {
-				limit = 10
-			}
-			if limit > 50 {
-				limit = 50
+		resolvedRepoScope := requestRepoScope
+		resolvedBranchScope := requestBranchScope
+		if body.BranchScope.Kind != "" {
+			resolvedBranchScope, err = normalizeBranchScope(body.BranchScope, sessionID, request.RepoName)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
 			}
 		}
+		if body.RepoScope.Kind != "" {
+			resolvedRepoScope, err = normalizeRepoScope(body.RepoScope, "")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		repos := repoScopeRepos(resolvedRepoScope)
+		allRepos := resolvedRepoScope.Kind == "all_repos"
 		payload, _ := json.Marshal(map[string]any{
 			"request_event_id": request.EventID,
 			"request_payload":  json.RawMessage(request.Payload),
 			"note":             strings.TrimSpace(body.Note),
 			"approved_by":      user.Email,
-			"repo":             strings.TrimSpace(request.RepoOwner + "/" + request.RepoName),
-			"limit":            limit,
-			"unlimited":        unlimited,
-			"branch_names":     branchNames,
+			"repo_scope":       resolvedRepoScope,
+			"branch_scope":     resolvedBranchScope,
 			"reason":           firstNonEmptyControlAction(strings.TrimSpace(requestPayload.Reason), strings.TrimSpace(body.Note)),
 			"scope":            "session",
 		})
@@ -576,9 +633,9 @@ func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request,
 			Action:        "github.pr_lane.auto_approve",
 			Status:        "succeeded",
 			TargetKind:    request.TargetKind,
-			TargetRef:     request.TargetRef,
-			RepoOwner:     request.RepoOwner,
-			RepoName:      request.RepoName,
+			TargetRef:     repoScopeTargetRef(sessionID, resolvedRepoScope, "pr-lanes"),
+			RepoOwner:     singleRepoOwner(repos, allRepos),
+			RepoName:      singleRepoName(repos, allRepos),
 			Payload:       payload,
 		}
 		row, err := s.controlActions.Append(r.Context(), event)
@@ -644,46 +701,33 @@ func (s *appServer) handleAutoApprovePRLanes(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body prLaneAutoApprovalRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	repo := strings.TrimSpace(body.Repo)
-	owner, name := "", ""
-	if repo != "" {
-		var ok bool
-		owner, name, ok = strings.Cut(repo, "/")
-		if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
-			writeError(w, http.StatusBadRequest, "repo must be empty or a GitHub slug like owner/name")
-			return
-		}
+	resolvedRepoScope, err := normalizeRepoScope(body.RepoScope, "")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	branchNames := normalizePRLaneBranchNames(body.BranchNames, sessionID, name)
-	limit := body.Limit
-	if !body.Unlimited {
-		if limit <= 0 && len(branchNames) > 0 {
-			limit = len(branchNames)
-		}
-		if limit <= 0 {
-			limit = 10
-		}
-		if limit > 50 {
-			limit = 50
-		}
+	repos := repoScopeRepos(resolvedRepoScope)
+	allRepos := resolvedRepoScope.Kind == "all_repos"
+	owner, name := singleRepoOwner(repos, allRepos), singleRepoName(repos, allRepos)
+	resolvedBranchScope, err := normalizeBranchScope(body.BranchScope, sessionID, name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"repo":         repo,
-		"limit":        limit,
-		"unlimited":    body.Unlimited,
-		"branch_names": branchNames,
+		"repo_scope":   resolvedRepoScope,
+		"branch_scope": resolvedBranchScope,
 		"reason":       strings.TrimSpace(body.Reason),
 		"approved_by":  user.Email,
 		"scope":        "session",
 	})
-	targetRef := "tank://session/" + sessionID + "/pr-lanes"
-	if repo != "" {
-		targetRef = "https://github.com/" + repo
-	}
+	targetRef := repoScopeTargetRef(sessionID, resolvedRepoScope, "pr-lanes")
 	event := pgstore.ControlActionEvent{
 		EventID:       "tank-pr-lane-auto-approve-" + sessionID + "-" + randomHex(12),
 		InvocationID:  "tank-pr-lane-auto-approve-" + randomHex(12),
@@ -740,6 +784,10 @@ func (s *appServer) handleInternalGetPRLaneAutoApproval(w http.ResponseWriter, r
 		"unlimited":     grant.Unlimited,
 		"remaining":     grant.Remaining,
 		"branch_names":  grant.BranchNames,
+		"repos":         grant.Repos,
+		"all_repos":     grant.AllRepos,
+		"repo_scope":    grant.RepoScope,
+		"branch_scope":  grant.BranchScope,
 		"repo":          repo,
 		"session_id":    sessionID,
 		"session_scope": s.sessionScope,
@@ -930,6 +978,10 @@ type prLaneAutoApprovalGrant struct {
 	Unlimited   bool
 	Remaining   int
 	BranchNames []string
+	Repos       []string
+	AllRepos    bool
+	RepoScope   repoScope
+	BranchScope branchScope
 }
 
 func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo, laneName, proposedBranch string) prLaneAutoApprovalGrant {
@@ -947,26 +999,41 @@ func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo, laneName,
 		}
 		limit := 10
 		var payload struct {
-			Limit       int      `json:"limit"`
-			Unlimited   bool     `json:"unlimited"`
-			BranchNames []string `json:"branch_names"`
+			RepoScope   repoScope   `json:"repo_scope"`
+			BranchScope branchScope `json:"branch_scope"`
 		}
 		_ = json.Unmarshal(row.Payload, &payload)
-		branchNames := normalizePRLaneBranchNames(payload.BranchNames, row.SessionID, row.RepoName)
+		repoScope, err := normalizeRepoScope(payload.RepoScope, rowDefaultRepo(row))
+		if err != nil {
+			continue
+		}
+		if !repoScopeCoversRepo(repoScope, repo) {
+			continue
+		}
+		branchScope, err := normalizeBranchScope(payload.BranchScope, row.SessionID, row.RepoName)
+		if err != nil {
+			continue
+		}
+		branchNames := branchScope.Branches
 		if requestedLane != "" && len(branchNames) > 0 && !stringInSlice(requestedLane, branchNames) {
 			continue
 		}
-		if payload.Unlimited {
+		repos := repoScopeRepos(repoScope)
+		if branchScope.Kind == "unlimited" {
 			return prLaneAutoApprovalGrant{
 				Active:      true,
 				EventID:     row.EventID,
 				Unlimited:   true,
 				BranchNames: branchNames,
+				Repos:       repos,
+				AllRepos:    repoScope.Kind == "all_repos",
+				RepoScope:   repoScope,
+				BranchScope: branchScope,
 			}
 		}
-		if payload.Limit > 0 {
-			limit = payload.Limit
-		} else if len(branchNames) > 0 {
+		if branchScope.Kind == "count" && branchScope.Count > 0 {
+			limit = branchScope.Count
+		} else if branchScope.Kind == "named" && len(branchNames) > 0 {
 			limit = len(branchNames)
 		}
 		used := countPRLaneAutoApprovalUses(rows, row.EventID)
@@ -979,6 +1046,10 @@ func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo, laneName,
 			Limit:       limit,
 			Remaining:   limit - used,
 			BranchNames: branchNames,
+			Repos:       repos,
+			AllRepos:    repoScope.Kind == "all_repos",
+			RepoScope:   repoScope,
+			BranchScope: branchScope,
 		}
 	}
 	return prLaneAutoApprovalGrant{}
@@ -998,10 +1069,19 @@ func prLaneAutoApprovalGrantAllows(rows []pgstore.ControlActionEvent, eventID, r
 			return false
 		}
 		var payload struct {
-			BranchNames []string `json:"branch_names"`
+			RepoScope   repoScope   `json:"repo_scope"`
+			BranchScope branchScope `json:"branch_scope"`
 		}
 		_ = json.Unmarshal(row.Payload, &payload)
-		branchNames := normalizePRLaneBranchNames(payload.BranchNames, row.SessionID, row.RepoName)
+		repoScope, err := normalizeRepoScope(payload.RepoScope, rowDefaultRepo(row))
+		if err != nil || !repoScopeCoversRepo(repoScope, repo) {
+			return false
+		}
+		branchScope, err := normalizeBranchScope(payload.BranchScope, row.SessionID, row.RepoName)
+		if err != nil {
+			return false
+		}
+		branchNames := branchScope.Branches
 		return requestedLane == "" || len(branchNames) == 0 || stringInSlice(requestedLane, branchNames)
 	}
 	return false
@@ -1018,6 +1098,23 @@ func countPRLaneAutoApprovalUses(rows []pgstore.ControlActionEvent, grantEventID
 		}
 	}
 	return used
+}
+
+func countBreakGlassGrantBranches(rows []pgstore.ControlActionEvent, grantEventID string) int {
+	branches := map[string]bool{}
+	for _, row := range rows {
+		if row.Action != "github.break_glass.push" || row.Status != "succeeded" {
+			continue
+		}
+		if controlActionPayloadString(row.Payload, "grant_event_id") != grantEventID {
+			continue
+		}
+		branch := strings.TrimSpace(controlActionPayloadString(row.Payload, "branch"))
+		if branch != "" {
+			branches[branch] = true
+		}
+	}
+	return len(branches)
 }
 
 func normalizePRLaneBranchNames(values []string, sessionID, repo string) []string {
@@ -1222,6 +1319,172 @@ func normalizeAzureBreakGlassOperations(in []string) []string {
 		out = []string{"use_azure_personal_mcp"}
 	}
 	return out
+}
+
+func normalizeRepoScope(scope repoScope, fallbackRepo string) (repoScope, error) {
+	kind := strings.TrimSpace(scope.Kind)
+	switch kind {
+	case "current_repo":
+		if len(scope.Repos) > 0 {
+			return repoScope{}, errors.New("repo_scope current_repo rejects repos")
+		}
+		repo := strings.TrimSpace(firstNonEmptyControlAction(scope.Repo, fallbackRepo))
+		if repo == "" {
+			return repoScope{}, errors.New("repo_scope current_repo requires repo")
+		}
+		repos, err := normalizeGitHubRepoList([]string{repo})
+		if err != nil {
+			return repoScope{}, err
+		}
+		return repoScope{Kind: kind, Repo: repos[0]}, nil
+	case "repos":
+		if strings.TrimSpace(scope.Repo) != "" {
+			return repoScope{}, errors.New("repo_scope repos rejects repo")
+		}
+		repos, err := normalizeGitHubRepoList(scope.Repos)
+		if err != nil {
+			return repoScope{}, err
+		}
+		if len(repos) == 0 {
+			return repoScope{}, errors.New("repo_scope repos requires at least one repo")
+		}
+		return repoScope{Kind: kind, Repos: repos}, nil
+	case "all_repos":
+		if strings.TrimSpace(scope.Repo) != "" || len(scope.Repos) > 0 {
+			return repoScope{}, errors.New("repo_scope all_repos rejects repo and repos")
+		}
+		return repoScope{Kind: kind}, nil
+	default:
+		return repoScope{}, errors.New("repo_scope.kind must be current_repo, repos, or all_repos")
+	}
+}
+
+func normalizeGitHubRepoList(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, raw := range values {
+		slug := strings.TrimSpace(raw)
+		if slug == "" {
+			continue
+		}
+		owner, name, ok := strings.Cut(slug, "/")
+		owner = strings.TrimSpace(owner)
+		name = strings.TrimSpace(name)
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return nil, errors.New("repo values must be GitHub slugs like owner/name")
+		}
+		slug = owner + "/" + name
+		if !seen[slug] {
+			out = append(out, slug)
+			seen[slug] = true
+		}
+	}
+	return out, nil
+}
+
+func normalizeBranchScope(scope branchScope, sessionID, repo string) (branchScope, error) {
+	kind := strings.TrimSpace(scope.Kind)
+	switch kind {
+	case "named":
+		if scope.Count != 0 {
+			return branchScope{}, errors.New("branch_scope named rejects count")
+		}
+		branches := normalizePRLaneBranchNames(scope.Branches, sessionID, repo)
+		if len(branches) == 0 {
+			return branchScope{}, errors.New("branch_scope named requires branches")
+		}
+		return branchScope{Kind: kind, Branches: branches}, nil
+	case "count":
+		if len(scope.Branches) > 0 {
+			return branchScope{}, errors.New("branch_scope count rejects branches")
+		}
+		if scope.Count <= 0 {
+			return branchScope{}, errors.New("branch_scope count requires a positive count")
+		}
+		return branchScope{Kind: kind, Count: normalizedPositiveLimit(scope.Count, 0, 50)}, nil
+	case "unlimited":
+		if len(scope.Branches) > 0 || scope.Count != 0 {
+			return branchScope{}, errors.New("branch_scope unlimited rejects branches and count")
+		}
+		return branchScope{Kind: kind}, nil
+	default:
+		return branchScope{}, errors.New("branch_scope.kind must be named, count, or unlimited")
+	}
+}
+
+func repoScopeRepos(scope repoScope) []string {
+	switch scope.Kind {
+	case "current_repo":
+		if scope.Repo == "" {
+			return []string{}
+		}
+		return []string{scope.Repo}
+	case "repos":
+		return append([]string{}, scope.Repos...)
+	default:
+		return []string{}
+	}
+}
+
+func repoScopeCoversRepo(scope repoScope, repo string) bool {
+	if scope.Kind == "all_repos" {
+		return true
+	}
+	if strings.TrimSpace(repo) == "" {
+		return false
+	}
+	return stringInSlice(repo, repoScopeRepos(scope))
+}
+
+func repoScopeTargetRef(sessionID string, scope repoScope, path string) string {
+	if scope.Kind == "all_repos" {
+		return "tank://session/" + sessionID + "/" + path + "/all-repos"
+	}
+	repos := repoScopeRepos(scope)
+	if len(repos) == 1 {
+		return "https://github.com/" + repos[0]
+	}
+	return "tank://session/" + sessionID + "/" + path + "/repos"
+}
+
+func rowDefaultRepo(row pgstore.ControlActionEvent) string {
+	if row.RepoOwner == "" || row.RepoName == "" {
+		return ""
+	}
+	return row.RepoOwner + "/" + row.RepoName
+}
+
+func singleRepoOwner(repos []string, allRepos bool) string {
+	if allRepos || len(repos) != 1 {
+		return ""
+	}
+	owner, _, _ := strings.Cut(repos[0], "/")
+	return owner
+}
+
+func singleRepoName(repos []string, allRepos bool) string {
+	if allRepos || len(repos) != 1 {
+		return ""
+	}
+	_, name, _ := strings.Cut(repos[0], "/")
+	return name
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func normalizedPositiveLimit(value, fallback, maximum int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if maximum > 0 && value > maximum {
+		return maximum
+	}
+	return value
 }
 
 func randomHex(n int) string {
