@@ -56,8 +56,8 @@ func TestHandleReturnTestSlotReturnsOwnedLeaseAndClearsState(t *testing.T) {
 				State:   "claimed",
 				Metadata: map[string]any{
 					"test_slot_checkout": true,
-					"native_slot_index":  "3",
-					"native_slot_name":   "tank-operator-slot-3",
+					"runner_slot_index":  "3",
+					"runner_slot_name":   "tank-operator-slot-3",
 					"requester_ref":      "tank-session-99",
 				},
 			}},
@@ -122,7 +122,7 @@ func TestHandleReturnTestSlotRejectsLeaseFromDifferentSession(t *testing.T) {
 				State:   "claimed",
 				Metadata: map[string]any{
 					"test_slot_checkout": true,
-					"native_slot_index":  3,
+					"runner_slot_index":  3,
 					"requester_ref":      "tank-session-123",
 				},
 			}},
