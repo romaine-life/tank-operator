@@ -229,7 +229,7 @@ test("mid-session run-config: a pick PUTs /run-config and only toggles the menu 
   );
 });
 
-test("per-turn model is captured from each turn's user message and shown in the turn summary", () => {
+test("per-turn model is captured and shown on the composer chip when paging back", () => {
   // Capture: the TurnViewItem builder harvests the model/effort the backend
   // stamps on each turn's user-message entry into a per-turn map — historical,
   // distinct from the session-level next-turn selection (selectedModelId).
@@ -245,11 +245,15 @@ test("per-turn model is captured from each turn's user message and shown in the 
   );
   // The summary normalizer must carry model so it survives the row-merge path.
   expect(appSource).toMatch(/model: stringRecordValue\(record, "model"\)/);
-  // Render: the turn summary shows the VIEWED turn's model via the shared
-  // label helper. It must read selected.model (per-turn), never the composer's
-  // selectedModelId (next-turn) — otherwise every historical turn would show
-  // the session's current model.
+  // Reuse the composer chip: a "previous turn" is a non-latest viewed turn in
+  // the Turns view.
   expect(appSource).toMatch(
-    /run-turn-view-model[\s\S]{0,220}modelDisplayLabel\(sessionMode as SessionMode,\s*selected\.model\)/,
+    /const viewingPreviousTurn =[\s\S]{0,300}effectiveSelectedTurnId !== latestTurnId/,
+  );
+  // On a previous turn the chip is a read-only (unselectable) chip showing the
+  // viewed turn's model — it must NOT fall through to the interactive
+  // run-model-trigger dropdown.
+  expect(appSource).toMatch(
+    /viewingPreviousTurn \? \([\s\S]{0,260}run-model-chip-historical[\s\S]{0,260}viewedTurnModelLabel/,
   );
 });

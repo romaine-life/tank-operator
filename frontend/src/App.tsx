@@ -12166,22 +12166,6 @@ function RunTurnActivityScreen({
               )}
             </div>
           )}
-          {sessionMode && selected.model && (
-            <div className="run-turn-view-model-line">
-              <span
-                className="run-turn-view-model"
-                title="Model this turn ran on"
-              >
-                {modelDisplayLabel(sessionMode as SessionMode, selected.model)}
-                {selected.effort
-                  ? ` · ${effortDisplayLabel(
-                      sessionMode as SessionMode,
-                      selected.effort,
-                    )}`
-                  : ""}
-              </span>
-            </div>
-          )}
           {showPromptContextShell && selected && (
             <div className="run-turn-view-prompt-section">
               <div
@@ -19712,6 +19696,28 @@ function ChatPane({
     selectedEffortId,
     sessionRunOptions,
   );
+  // When paging back through the Turns view to a turn that isn't the latest,
+  // the composer model chip shows THAT turn's model read-only — a past turn's
+  // model is immutable, so it is unselectable — instead of the interactive
+  // next-turn selector. It reverts to the live selector on the latest turn (and
+  // in the chat view). The session re-pinning to a different model is rare, so
+  // this read-only-when-historical view is the intended, low-friction behavior.
+  const viewedTurn =
+    activeTab === "turns"
+      ? turnViewItems.find((turn) => turn.turnId === effectiveSelectedTurnId)
+      : undefined;
+  const viewingPreviousTurn =
+    activeTab === "turns" &&
+    effectiveSelectedTurnId != null &&
+    latestTurnId != null &&
+    effectiveSelectedTurnId !== latestTurnId &&
+    Boolean(viewedTurn?.model);
+  const viewedTurnModelLabel = viewedTurn?.model
+    ? modelDisplayLabel(session.mode, viewedTurn.model, sessionRunOptions)
+    : "";
+  const viewedTurnEffortLabel = viewedTurn?.effort
+    ? effortDisplayLabel(session.mode, viewedTurn.effort, sessionRunOptions)
+    : "";
   const modelChipLabel = hasAppliedRuntimeConfig
     ? modelDisplayLabel(session.mode, appliedModelId, sessionRunOptions) ||
       configuredModelLabel
@@ -21234,7 +21240,26 @@ function ChatPane({
                 }}
                 modelChip={
                   usesModel ? (
-                    isClaude || isCodex ? (
+                    viewingPreviousTurn ? (
+                      <span
+                        className="run-model-chip run-model-chip-historical"
+                        title={`Model used for this turn: ${viewedTurnModelLabel}${viewedTurnEffortLabel ? ` / ${viewedTurnEffortLabel}` : ""}`}
+                        aria-label={`Model used for this turn: ${viewedTurnModelLabel}`}
+                      >
+                        <BrainIcon
+                          className="run-model-chip-icon"
+                          aria-hidden="true"
+                        />
+                        <span className="run-model-chip-label">
+                          {viewedTurnModelLabel}
+                        </span>
+                        {viewedTurnEffortLabel && (
+                          <span className="run-model-chip-effort">
+                            {viewedTurnEffortLabel}
+                          </span>
+                        )}
+                      </span>
+                    ) : isClaude || isCodex ? (
                       <span className="run-model-select" data-menu="run-model">
                         <button
                           type="button"

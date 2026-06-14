@@ -4415,25 +4415,6 @@ button:disabled {
   color: #bfdbfe;
 }
 
-/* The per-turn model badge: which model this turn actually ran on (distinct
-   from the composer chip's next-turn selection). Always visible on the turn
-   view (not gated by the collapsible stats panel), with a subtle violet accent
-   so it reads as a distinct, meaningful indicator. */
-.run-turn-view-model-line {
-  display: flex;
-  align-items: center;
-  padding: var(--space-2) var(--space-3) 0;
-}
-.run-turn-view-model-line .run-turn-view-model {
-  border-radius: 999px;
-  background: rgba(167, 139, 250, 0.16);
-  color: #ddd6fe;
-  padding: 0.2rem 0.5rem;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.2;
-}
-
 .collapsed-turn-mock-frame {
   width: min(100%, 48rem);
   overflow: hidden;
@@ -8317,6 +8298,18 @@ button:disabled {
 .run-model-trigger:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* Read-only historical model chip: shown on the composer when paging back to a
+   previous turn in the Turns view. It displays that turn's (immutable) model
+   instead of the interactive next-turn selector — no caret, not clickable. A
+   subtle violet tint distinguishes "the model this turn ran on" from the live
+   next-turn selection. */
+.run-model-chip-historical {
+  cursor: default;
+  border-color: rgba(167, 139, 250, 0.35);
+  background: rgba(167, 139, 250, 0.1);
+  color: #ddd6fe;
 }
 
 .run-model-chip-caret {
