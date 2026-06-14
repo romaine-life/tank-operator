@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   controlActionRowsToEntries,
+  pendingBreakGlassRequests,
   pendingPRLaneRequests,
   type ControlActionRow,
 } from "./controlActions";
@@ -111,6 +112,102 @@ describe("pendingPRLaneRequests", () => {
         reason: "split review",
         proposedBranch: undefined,
       },
+    ]);
+  });
+});
+
+describe("pendingBreakGlassRequests", () => {
+  const NOW = Date.parse("2026-06-13T08:00:00Z");
+
+  test("returns started break-glass requests with no active grant", () => {
+    const rows: ControlActionRow[] = [
+      {
+        event_id: "bg-2",
+        invocation_id: "bg-inv-2",
+        created_at: "2026-06-13T07:30:00Z",
+        action: "github.break_glass.request",
+        status: "started",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: { reason: "hotfix push", source: "agent" },
+      },
+      {
+        event_id: "bg-1",
+        invocation_id: "bg-inv-1",
+        created_at: "2026-06-13T07:00:00Z",
+        action: "github.break_glass.request",
+        status: "started",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: { reason: "earlier attempt" },
+      },
+    ];
+
+    expect(pendingBreakGlassRequests(rows, NOW)).toEqual([
+      {
+        eventId: "bg-2",
+        invocationId: "bg-inv-2",
+        createdAt: "2026-06-13T07:30:00Z",
+        repo: "romaine-life/tank-operator",
+        repoOwner: "romaine-life",
+        repoName: "tank-operator",
+        reason: "hotfix push",
+        source: "agent",
+        approvalUrl: undefined,
+      },
+    ]);
+  });
+
+  test("clears a request once an unexpired grant exists for the repo", () => {
+    const rows: ControlActionRow[] = [
+      {
+        event_id: "bg-1",
+        invocation_id: "bg-inv-1",
+        action: "github.break_glass.request",
+        status: "started",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: {},
+      },
+      {
+        event_id: "grant-1",
+        invocation_id: "grant-inv-1",
+        action: "github.break_glass.grant",
+        status: "succeeded",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: { expires_at: "2026-06-13T09:00:00Z" },
+      },
+    ];
+
+    expect(pendingBreakGlassRequests(rows, NOW)).toEqual([]);
+  });
+
+  test("keeps the request pending when the grant has expired", () => {
+    const rows: ControlActionRow[] = [
+      {
+        event_id: "bg-1",
+        invocation_id: "bg-inv-1",
+        created_at: "2026-06-13T07:00:00Z",
+        action: "github.break_glass.request",
+        status: "started",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: {},
+      },
+      {
+        event_id: "grant-1",
+        invocation_id: "grant-inv-1",
+        action: "github.break_glass.grant",
+        status: "succeeded",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: { expires_at: "2026-06-13T07:45:00Z" },
+      },
+    ];
+
+    expect(pendingBreakGlassRequests(rows, NOW).map((r) => r.eventId)).toEqual([
+      "bg-1",
     ]);
   });
 });
