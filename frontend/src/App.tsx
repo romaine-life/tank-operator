@@ -232,6 +232,10 @@ import {
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
 import { McpIcon } from "./McpIcon";
+import {
+  readHomeRestrictedGitEnabled,
+  writeHomeRestrictedGitEnabled,
+} from "./homePreferences";
 import { RepoPicker } from "./components/RepoPicker";
 import {
   REPO_SUPPORTED_MODES,
@@ -22450,7 +22454,9 @@ function AuthenticatedApp() {
   const [repoError, setRepoError] = useState<string | null>(null);
   const [homeBugLabels, setHomeBugLabels] = useState<string[]>([]);
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
-  const [homeRestrictedGitEnabled, setHomeRestrictedGitEnabled] = useState(false);
+  const [homeRestrictedGitEnabled, setHomeRestrictedGitEnabled] = useState(
+    readHomeRestrictedGitEnabled,
+  );
   const visibleRecentRepos = useMemo(() => {
     if (dismissedRecentRepos.length === 0) return recentRepos;
     const dismissed = new Set(
@@ -23170,11 +23176,15 @@ function AuthenticatedApp() {
     }
   }, [defaultSessionMode, spireLensMcpAvailable]);
 
+  // Persist the Restricted Git choice so it survives reloads and mode switches
+  // and is actually used on the next session create. The create-time
+  // REPO_SUPPORTED_MODES guard already withholds the capability for modes that
+  // can't use it (and the toggle is hidden for them), so there is no reason to
+  // silently clear the user's stored choice when the default mode changes —
+  // that silent reset is what dropped restricted_git from sessions 927/929.
   useEffect(() => {
-    if (!REPO_SUPPORTED_MODES.has(defaultSessionMode)) {
-      setHomeRestrictedGitEnabled(false);
-    }
-  }, [defaultSessionMode]);
+    writeHomeRestrictedGitEnabled(homeRestrictedGitEnabled);
+  }, [homeRestrictedGitEnabled]);
 
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
