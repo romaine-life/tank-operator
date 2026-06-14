@@ -160,7 +160,9 @@ test("files view becomes single-column master-detail on a phone", () => {
   expect(indexCss).toMatch(/\.run-files-body \{\s*grid-template-columns: 1fr;/);
   expect(indexCss).toContain(".run-files-body-detail .run-files-list");
   expect(appSource).toContain('className="run-files-viewer-back"');
+  // The detail-mode decision is a named, unit-tested rule (filesView.ts); the
+  // body wires it in. The rule's own matrix lives in filesView.test.ts.
   expect(appSource).toContain(
-    'isPhone && selectedFile ? " run-files-body-detail"',
+    "filesBodyClassName(isPhone, selectedFile != null)",
   );
 });

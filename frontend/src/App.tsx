@@ -70,6 +70,7 @@ import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureContro
 import { SessionRepoReport } from "./SessionRepoReport";
 import { WorkspaceShell } from "./WorkspaceShell";
 import { useViewport } from "./useViewport";
+import { filesBodyClassName } from "./filesView";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
 import { KEYBOARD_SHORTCUTS } from "./keyboardShortcuts";
@@ -20709,11 +20710,7 @@ function ChatPane({
                       );
                     })}
                 </div>
-                <div
-                  className={`run-files-body${
-                    isPhone && selectedFile ? " run-files-body-detail" : ""
-                  }`}
-                >
+                <div className={filesBodyClassName(isPhone, selectedFile != null)}>
                   <div className="run-files-list">
                     {filesPath && (
                       <button
