@@ -234,6 +234,20 @@ func TestProviderRateLimitColumnsExist(t *testing.T) {
 	}
 }
 
+func TestProviderQuotaTablesExist(t *testing.T) {
+	migrations := joinedMigrationSQL()
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS provider_quota_snapshots",
+		"CREATE TABLE IF NOT EXISTS provider_quota_refresh_state",
+		"PRIMARY KEY (session_scope, provider)",
+		"provider_quota_refresh_state_retry",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+}
+
 func TestRuntimeProviderSessionColumnsExist(t *testing.T) {
 	migrations := joinedMigrationSQL()
 	for _, want := range []string{

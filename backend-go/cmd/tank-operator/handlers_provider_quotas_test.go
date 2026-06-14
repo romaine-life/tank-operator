@@ -150,51 +150,118 @@ func TestProviderQuotaProviderForModeSeparatesClaudeAccounts(t *testing.T) {
 	}
 }
 
-func TestFreshProviderQuotaProvidersUsesRecentDurableRows(t *testing.T) {
+func TestProviderQuotaRefreshDecisionUsesDurableSnapshotFreshness(t *testing.T) {
 	now := time.Date(2026, 6, 14, 22, 30, 0, 0, time.UTC)
-	rows := []map[string]any{
-		{
-			"provider":      "anthropic",
-			"rateLimitType": "five_hour",
-			"observedAt":    "2026-06-14T22:05:00Z",
-		},
-		{
-			"provider":      "anthropic_secondary",
-			"rateLimitType": "five_hour",
-			"observedAt":    "2026-06-14T20:00:00Z",
-		},
-		{
-			"provider":      "bogus",
-			"rateLimitType": "five_hour",
-			"observedAt":    "2026-06-14T22:29:00Z",
-		},
+	cfg := providerQuotaRefreshConfig{
+		MinInterval:            5 * time.Minute,
+		MaxStaleness:           15 * time.Minute,
+		ResetRefreshGrace:      2 * time.Minute,
+		ActivityTokenThreshold: 250000,
+		RateLimitBackoff:       10 * time.Minute,
+		FailureBackoff:         2 * time.Minute,
+		CredentialBackoff:      15 * time.Minute,
 	}
+	summary := providerQuotaSnapshotSummary{ObservedAt: now.Add(-4 * time.Minute)}
 
-	got := freshProviderQuotaProviders(rows, now, time.Hour)
-
-	if _, ok := got["anthropic"]; !ok {
-		t.Fatalf("fresh providers missing anthropic: %#v", got)
+	got := decideProviderQuotaRefresh("anthropic", summary, providerQuotaRefreshState{}, 0, now, cfg)
+	if got.Refresh {
+		t.Fatalf("fresh snapshot selected refresh: %#v", got)
 	}
-	if _, ok := got["anthropic_secondary"]; ok {
-		t.Fatalf("stale secondary provider marked fresh: %#v", got)
-	}
-	if _, ok := got["bogus"]; ok {
-		t.Fatalf("invalid provider marked fresh: %#v", got)
+	if got.Reason != "fresh" {
+		t.Fatalf("fresh snapshot reason = %q, want fresh", got.Reason)
 	}
 }
 
-func TestProviderQuotaRefreshIntervalDefaultsAndAllowsForceRefresh(t *testing.T) {
-	t.Setenv("PROVIDER_QUOTA_REFRESH_INTERVAL", "")
-	if got := providerQuotaRefreshInterval(); got != time.Hour {
-		t.Fatalf("default refresh interval = %s, want 1h", got)
+func TestProviderQuotaRefreshDecisionUsesTokenActivity(t *testing.T) {
+	now := time.Date(2026, 6, 14, 22, 30, 0, 0, time.UTC)
+	cfg := providerQuotaRefreshConfig{
+		MinInterval:            5 * time.Minute,
+		MaxStaleness:           15 * time.Minute,
+		ResetRefreshGrace:      2 * time.Minute,
+		ActivityTokenThreshold: 250000,
 	}
-	t.Setenv("PROVIDER_QUOTA_REFRESH_INTERVAL", "0")
-	if got := providerQuotaRefreshInterval(); got != 0 {
-		t.Fatalf("zero refresh interval = %s, want 0", got)
+	summary := providerQuotaSnapshotSummary{ObservedAt: now.Add(-6 * time.Minute)}
+
+	got := decideProviderQuotaRefresh("anthropic_secondary", summary, providerQuotaRefreshState{}, 300000, now, cfg)
+	if !got.Refresh || got.Reason != "token_activity" {
+		t.Fatalf("token activity decision = %#v, want token_activity refresh", got)
 	}
-	t.Setenv("PROVIDER_QUOTA_REFRESH_INTERVAL", "15m")
-	if got := providerQuotaRefreshInterval(); got != 15*time.Minute {
-		t.Fatalf("custom refresh interval = %s, want 15m", got)
+}
+
+func TestProviderQuotaRefreshDecisionRefreshesAfterReset(t *testing.T) {
+	now := time.Date(2026, 6, 14, 22, 30, 0, 0, time.UTC)
+	cfg := providerQuotaRefreshConfig{
+		MinInterval:            5 * time.Minute,
+		MaxStaleness:           15 * time.Minute,
+		ResetRefreshGrace:      2 * time.Minute,
+		ActivityTokenThreshold: 250000,
+	}
+	summary := providerQuotaSnapshotSummary{
+		ObservedAt: now.Add(-30 * time.Minute),
+		ResetsAt:   []time.Time{now.Add(-3 * time.Minute)},
+	}
+
+	got := decideProviderQuotaRefresh("anthropic", summary, providerQuotaRefreshState{}, 0, now, cfg)
+	if !got.Refresh || got.Reason != "reset_elapsed" {
+		t.Fatalf("reset decision = %#v, want reset_elapsed refresh", got)
+	}
+}
+
+func TestProviderQuotaRefreshDecisionHonorsBackoffAndMinInterval(t *testing.T) {
+	now := time.Date(2026, 6, 14, 22, 30, 0, 0, time.UTC)
+	cfg := providerQuotaRefreshConfig{
+		MinInterval:            5 * time.Minute,
+		MaxStaleness:           15 * time.Minute,
+		ResetRefreshGrace:      2 * time.Minute,
+		ActivityTokenThreshold: 250000,
+	}
+	summary := providerQuotaSnapshotSummary{ObservedAt: now.Add(-30 * time.Minute)}
+
+	backoff := decideProviderQuotaRefresh("anthropic", summary, providerQuotaRefreshState{
+		NextRetryAt: now.Add(7 * time.Minute),
+	}, 500000, now, cfg)
+	if backoff.Refresh || backoff.Reason != "backoff" {
+		t.Fatalf("backoff decision = %#v, want blocked backoff", backoff)
+	}
+
+	minInterval := decideProviderQuotaRefresh("anthropic", summary, providerQuotaRefreshState{
+		LastAttemptedAt: now.Add(-2 * time.Minute),
+	}, 500000, now, cfg)
+	if minInterval.Refresh || minInterval.Reason != "min_interval" {
+		t.Fatalf("min interval decision = %#v, want blocked min_interval", minInterval)
+	}
+}
+
+func TestProviderQuotaSnapshotSummariesTrackLatestObservedAndReset(t *testing.T) {
+	rows := []map[string]any{
+		{
+			"provider":   "anthropic",
+			"observedAt": "2026-06-14T22:05:00Z",
+			"resetsAt":   "2026-06-14T23:00:00Z",
+		},
+		{
+			"provider":   "anthropic",
+			"observedAt": "2026-06-14T22:15:00Z",
+		},
+		{
+			"provider":   "bogus",
+			"observedAt": "2026-06-14T22:29:00Z",
+		},
+	}
+
+	got := providerQuotaSnapshotSummaries(rows)
+	summary, ok := got["anthropic"]
+	if !ok {
+		t.Fatalf("summary missing anthropic: %#v", got)
+	}
+	if want := time.Date(2026, 6, 14, 22, 15, 0, 0, time.UTC); !summary.ObservedAt.Equal(want) {
+		t.Fatalf("observedAt = %s, want %s", summary.ObservedAt, want)
+	}
+	if len(summary.ResetsAt) != 1 {
+		t.Fatalf("resets len = %d, want 1: %#v", len(summary.ResetsAt), summary.ResetsAt)
+	}
+	if _, ok := got["bogus"]; ok {
+		t.Fatalf("invalid provider included: %#v", got)
 	}
 }
 

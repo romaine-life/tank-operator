@@ -1985,6 +1985,21 @@ var schemaMigrations = []migration{
 	)`},
 	{ID: "0160", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_snapshots_scope_observed
 		ON provider_quota_snapshots (session_scope, observed_at DESC)`},
+	{ID: "0161", SQL: `CREATE TABLE IF NOT EXISTS provider_quota_refresh_state (
+		session_scope     text NOT NULL,
+		provider          text NOT NULL,
+		last_attempted_at timestamptz NOT NULL,
+		last_succeeded_at timestamptz,
+		status_code       integer,
+		status            text NOT NULL DEFAULT '',
+		error             text NOT NULL DEFAULT '',
+		next_retry_at     timestamptz,
+		updated_at        timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, provider),
+		CHECK (provider IN ('anthropic', 'anthropic_secondary', 'codex'))
+	)`},
+	{ID: "0162", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_refresh_state_retry
+		ON provider_quota_refresh_state (session_scope, next_retry_at)`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration
