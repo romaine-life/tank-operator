@@ -5039,6 +5039,12 @@ button:disabled {
   padding-left: 0;
 }
 
+.run-turn-view-body > .run-transcript-tool-single .run-transcript-tool {
+  grid-template-columns: 2.625rem minmax(0, 1fr);
+  column-gap: 0.55rem;
+  padding-right: 0;
+}
+
 .run-turn-view-body[data-page-kind="question"] {
   /* The question body is the card's scroll region, exactly like the activity
      page kind. It must NOT be overflow:visible: the Turn-view .run-main is

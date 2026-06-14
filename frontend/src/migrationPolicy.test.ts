@@ -1205,6 +1205,17 @@ test("expanded tool dumps preserve indentation instead of soft wrapping", () => 
   }
 });
 
+test("turn-view tool rows align with the activity message content column", () => {
+  const rule = cssRule(
+    indexCssSource,
+    ".run-turn-view-body > .run-transcript-tool-single .run-transcript-tool",
+  );
+
+  expect(rule).toContain("grid-template-columns: 2.625rem minmax(0, 1fr);");
+  expect(rule).toContain("column-gap: 0.55rem;");
+  expect(rule).toContain("padding-right: 0;");
+});
+
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
   expect(appSource).toMatch(/type InitialMessageMode =[\s\S]{0,260}\| "direct"[\s\S]{0,80}\| "diagnose"[\s\S]{0,80}\| "bug_report"[\s\S]{0,80}\| "quality_gaps"[\s\S]{0,80}\| "go_long"[\s\S]{0,80}\| "test"/);
   expect(appSource.includes("composeInitialMessageModePrompt")).toBe(true);
