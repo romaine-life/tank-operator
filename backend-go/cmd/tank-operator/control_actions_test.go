@@ -159,6 +159,12 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			targetRef:  "https://github.com/romaine-life/tank-operator/pull/857",
 		},
 		{
+			name:       "pull request renamed",
+			action:     "github.pull_request.rename",
+			targetKind: "github_pull_request",
+			targetRef:  "https://github.com/romaine-life/tank-operator/pull/857",
+		},
+		{
 			name:       "break glass requested",
 			action:     "github.break_glass.request",
 			targetKind: "github_repository",
@@ -318,6 +324,7 @@ func TestHandleAutoApprovePRLanesPersistsSessionGrant(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/auto-approve", strings.NewReader(`{
 		"repo": "romaine-life/tank-operator",
 		"limit": 12,
+		"branch_names": ["docs", "tank/session/47/tank-operator/backend"],
 		"reason": "planned split"
 	}`))
 	req.SetPathValue("session_id", "47")
@@ -338,6 +345,14 @@ func TestHandleAutoApprovePRLanesPersistsSessionGrant(t *testing.T) {
 	}
 	if got.RepoOwner != "romaine-life" || got.RepoName != "tank-operator" {
 		t.Fatalf("repo = %s/%s", got.RepoOwner, got.RepoName)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	names, ok := payload["branch_names"].([]any)
+	if !ok || len(names) != 2 || names[0] != "docs" || names[1] != "backend" {
+		t.Fatalf("branch_names = %#v", payload["branch_names"])
 	}
 }
 
@@ -368,11 +383,107 @@ func TestHandleInternalGetPRLaneAutoApprovalReturnsActiveGrant(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["active"] != true || body["event_id"] != "auto-1" || body["limit"] != float64(7) {
+	if body["active"] != true || body["event_id"] != "auto-1" || body["limit"] != float64(7) || body["remaining"] != float64(7) {
 		t.Fatalf("body = %#v", body)
 	}
 	if store.listOwner != "owner@example.test" || store.listSession != "47" {
 		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
+	}
+}
+
+func TestHandleInternalGetPRLaneAutoApprovalEnforcesBranchNamesAndLimit(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{
+		"limit":        1,
+		"branch_names": []string{"docs"},
+		"scope":        "session",
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:   "auto-1",
+			SessionID: "47",
+			Action:    "github.pr_lane.auto_approve",
+			Status:    "succeeded",
+			RepoOwner: "romaine-life",
+			RepoName:  "tank-operator",
+			Payload:   payload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/pr-lane-auto-approval?repo=romaine-life/tank-operator&lane_name=backend", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetPRLaneAutoApproval(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != false {
+		t.Fatalf("backend branch unexpectedly allowed: %#v", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/pr-lane-auto-approval?repo=romaine-life/tank-operator&lane_name=docs", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec = httptest.NewRecorder()
+	app.handleInternalGetPRLaneAutoApproval(rec, req)
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != true || body["remaining"] != float64(1) {
+		t.Fatalf("docs branch not allowed: %#v", body)
+	}
+}
+
+func TestHandleApprovePRLaneAllocationRequestCreatesAutoApproval(t *testing.T) {
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:      "lane-request-1",
+			InvocationID: "lane-invocation-1",
+			Action:       "github.pr_lane.request",
+			Status:       "started",
+			TargetKind:   "github_repository",
+			TargetRef:    "https://github.com/romaine-life/tank-operator",
+			RepoOwner:    "romaine-life",
+			RepoName:     "tank-operator",
+			Payload: []byte(`{
+				"allocation_request":true,
+				"lane_names":["docs","backend"],
+				"requested_count":2,
+				"reason":"split review"
+			}`),
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{"note":"ok"}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "lane-request-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleApprovePRLaneRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != "github.pr_lane.auto_approve" || got.InvocationID != "lane-invocation-1" {
+		t.Fatalf("allocation approval = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["limit"] != float64(2) {
+		t.Fatalf("limit = %#v", payload["limit"])
 	}
 }
 

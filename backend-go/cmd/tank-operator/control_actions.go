@@ -61,13 +61,18 @@ type hotSwapVerificationResponse struct {
 }
 
 type prLaneApprovalRequest struct {
-	Note string `json:"note"`
+	Note        string   `json:"note"`
+	BranchNames []string `json:"branch_names,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
+	Unlimited   bool     `json:"unlimited,omitempty"`
 }
 
 type prLaneAutoApprovalRequest struct {
-	Repo   string `json:"repo"`
-	Limit  int    `json:"limit"`
-	Reason string `json:"reason"`
+	Repo        string   `json:"repo"`
+	Limit       int      `json:"limit"`
+	Unlimited   bool     `json:"unlimited"`
+	BranchNames []string `json:"branch_names"`
+	Reason      string   `json:"reason"`
 }
 
 type prLaneAuthorizationResponse struct {
@@ -336,6 +341,75 @@ func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusNotFound, "pending PR lane request not found")
 		return
 	}
+	var requestPayload struct {
+		AllocationRequest bool     `json:"allocation_request"`
+		LaneNames         []string `json:"lane_names"`
+		ProposedBranches  []string `json:"proposed_branches"`
+		RequestedCount    int      `json:"requested_count"`
+		Unlimited         bool     `json:"unlimited"`
+		Reason            string   `json:"reason"`
+	}
+	_ = json.Unmarshal(request.Payload, &requestPayload)
+	if decision == "approve" && requestPayload.AllocationRequest {
+		branchNames := normalizePRLaneBranchNames(append(append([]string{}, requestPayload.LaneNames...), requestPayload.ProposedBranches...), sessionID, request.RepoName)
+		branchNames = append(branchNames, normalizePRLaneBranchNames(body.BranchNames, sessionID, request.RepoName)...)
+		branchNames = uniqueStrings(branchNames)
+		limit := body.Limit
+		if limit <= 0 {
+			limit = requestPayload.RequestedCount
+		}
+		if body.Unlimited {
+			requestPayload.Unlimited = true
+		}
+		if !requestPayload.Unlimited {
+			if limit <= 0 && len(branchNames) > 0 {
+				limit = len(branchNames)
+			}
+			if limit <= 0 {
+				limit = 10
+			}
+			if limit > 50 {
+				limit = 50
+			}
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"request_event_id": request.EventID,
+			"request_payload":  json.RawMessage(request.Payload),
+			"note":             strings.TrimSpace(body.Note),
+			"approved_by":      user.Email,
+			"repo":             strings.TrimSpace(request.RepoOwner + "/" + request.RepoName),
+			"limit":            limit,
+			"unlimited":        requestPayload.Unlimited,
+			"branch_names":     branchNames,
+			"reason":           firstNonEmptyControlAction(strings.TrimSpace(requestPayload.Reason), strings.TrimSpace(body.Note)),
+			"scope":            "session",
+		})
+		event := pgstore.ControlActionEvent{
+			EventID:       "tank-pr-lane-auto-approve-" + sessionID + "-" + randomHex(12),
+			InvocationID:  request.InvocationID,
+			OwnerEmail:    user.OwnerEmail(),
+			SessionScope:  s.sessionScope,
+			SessionID:     sessionID,
+			SourceService: "tank-operator",
+			SourceTool:    "pr_lane_approval",
+			Action:        "github.pr_lane.auto_approve",
+			Status:        "succeeded",
+			TargetKind:    request.TargetKind,
+			TargetRef:     request.TargetRef,
+			RepoOwner:     request.RepoOwner,
+			RepoName:      request.RepoName,
+			Payload:       payload,
+		}
+		row, err := s.controlActions.Append(r.Context(), event)
+		if err != nil {
+			recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+		writeJSON(w, http.StatusCreated, controlActionToJSON(row, false))
+		return
+	}
 	action := "github.pr_lane.approve"
 	status := "succeeded"
 	if decision == "deny" {
@@ -403,19 +477,27 @@ func (s *appServer) handleAutoApprovePRLanes(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
+	branchNames := normalizePRLaneBranchNames(body.BranchNames, sessionID, name)
 	limit := body.Limit
-	if limit <= 0 {
-		limit = 10
-	}
-	if limit > 50 {
-		limit = 50
+	if !body.Unlimited {
+		if limit <= 0 && len(branchNames) > 0 {
+			limit = len(branchNames)
+		}
+		if limit <= 0 {
+			limit = 10
+		}
+		if limit > 50 {
+			limit = 50
+		}
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"repo":        repo,
-		"limit":       limit,
-		"reason":      strings.TrimSpace(body.Reason),
-		"approved_by": user.Email,
-		"scope":       "session",
+		"repo":         repo,
+		"limit":        limit,
+		"unlimited":    body.Unlimited,
+		"branch_names": branchNames,
+		"reason":       strings.TrimSpace(body.Reason),
+		"approved_by":  user.Email,
+		"scope":        "session",
 	})
 	targetRef := "tank://session/" + sessionID + "/pr-lanes"
 	if repo != "" {
@@ -467,11 +549,16 @@ func (s *appServer) handleInternalGetPRLaneAutoApproval(w http.ResponseWriter, r
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	approved, eventID, limit := activePRLaneAutoApproval(rows, repo)
+	laneName := strings.TrimSpace(r.URL.Query().Get("lane_name"))
+	proposedBranch := strings.TrimSpace(r.URL.Query().Get("proposed_branch"))
+	grant := activePRLaneAutoApproval(rows, repo, laneName, proposedBranch)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"active":        approved,
-		"event_id":      eventID,
-		"limit":         limit,
+		"active":        grant.Active,
+		"event_id":      grant.EventID,
+		"limit":         grant.Limit,
+		"unlimited":     grant.Unlimited,
+		"remaining":     grant.Remaining,
+		"branch_names":  grant.BranchNames,
 		"repo":          repo,
 		"session_id":    sessionID,
 		"session_scope": s.sessionScope,
@@ -576,13 +663,14 @@ func evaluatePRLaneAuthorization(rows []pgstore.ControlActionEvent, requestEvent
 		Repo:           request.RepoOwner + "/" + request.RepoName,
 	}
 	var payload struct {
-		LaneName       string `json:"lane_name"`
-		Relationship   string `json:"relationship"`
-		Base           string `json:"base"`
-		Scope          string `json:"scope"`
-		Reason         string `json:"reason"`
-		ProposedBranch string `json:"proposed_branch"`
-		AutoApproved   bool   `json:"auto_approved"`
+		LaneName            string `json:"lane_name"`
+		Relationship        string `json:"relationship"`
+		Base                string `json:"base"`
+		Scope               string `json:"scope"`
+		Reason              string `json:"reason"`
+		ProposedBranch      string `json:"proposed_branch"`
+		AutoApproved        bool   `json:"auto_approved"`
+		AutoApprovalEventID string `json:"auto_approval_event_id"`
 	}
 	_ = json.Unmarshal(request.Payload, &payload)
 	resp.LaneName = strings.TrimSpace(payload.LaneName)
@@ -592,6 +680,9 @@ func evaluatePRLaneAuthorization(rows []pgstore.ControlActionEvent, requestEvent
 	resp.Reason = strings.TrimSpace(payload.Reason)
 	resp.ProposedBranch = strings.TrimSpace(payload.ProposedBranch)
 	resp.AutoApproved = payload.AutoApproved || request.Status == "succeeded"
+	if resp.AutoApproved {
+		resp.ApprovalEventID = strings.TrimSpace(payload.AutoApprovalEventID)
+	}
 	if resp.LaneName == "" || resp.ProposedBranch == "" || request.RepoOwner == "" || request.RepoName == "" {
 		resp.Reasons = append(resp.Reasons, "PR lane request is missing lane or repository metadata")
 	}
@@ -617,6 +708,10 @@ func evaluatePRLaneAuthorization(rows []pgstore.ControlActionEvent, requestEvent
 		}
 	}
 	if resp.AutoApproved && len(resp.Reasons) == 0 {
+		if resp.ApprovalEventID != "" && !prLaneAutoApprovalGrantAllows(rows, resp.ApprovalEventID, resp.Repo, resp.LaneName, resp.ProposedBranch) {
+			resp.Reasons = append(resp.Reasons, "PR lane auto-approval no longer covers this branch")
+			return resp
+		}
 		resp.Allowed = true
 		return resp
 	}
@@ -640,14 +735,24 @@ func findPendingPRLaneRequest(rows []pgstore.ControlActionEvent, eventID string)
 			continue
 		}
 		switch row.Action {
-		case "github.pr_lane.approve", "github.pr_lane.deny":
+		case "github.pr_lane.approve", "github.pr_lane.deny", "github.pr_lane.auto_approve":
 			return pgstore.ControlActionEvent{}, false
 		}
 	}
 	return request, true
 }
 
-func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo string) (bool, string, int) {
+type prLaneAutoApprovalGrant struct {
+	Active      bool
+	EventID     string
+	Limit       int
+	Unlimited   bool
+	Remaining   int
+	BranchNames []string
+}
+
+func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo, laneName, proposedBranch string) prLaneAutoApprovalGrant {
+	requestedLane := normalizePRLaneBranchName(firstNonEmptyControlAction(laneName, proposedBranch), "", "")
 	for _, row := range rows {
 		if row.Action != "github.pr_lane.auto_approve" || row.Status != "succeeded" {
 			continue
@@ -661,14 +766,144 @@ func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo string) (b
 		}
 		limit := 10
 		var payload struct {
-			Limit int `json:"limit"`
+			Limit       int      `json:"limit"`
+			Unlimited   bool     `json:"unlimited"`
+			BranchNames []string `json:"branch_names"`
 		}
-		if err := json.Unmarshal(row.Payload, &payload); err == nil && payload.Limit > 0 {
+		_ = json.Unmarshal(row.Payload, &payload)
+		branchNames := normalizePRLaneBranchNames(payload.BranchNames, row.SessionID, row.RepoName)
+		if requestedLane != "" && len(branchNames) > 0 && !stringInSlice(requestedLane, branchNames) {
+			continue
+		}
+		if payload.Unlimited {
+			return prLaneAutoApprovalGrant{
+				Active:      true,
+				EventID:     row.EventID,
+				Unlimited:   true,
+				BranchNames: branchNames,
+			}
+		}
+		if payload.Limit > 0 {
 			limit = payload.Limit
+		} else if len(branchNames) > 0 {
+			limit = len(branchNames)
 		}
-		return true, row.EventID, limit
+		used := countPRLaneAutoApprovalUses(rows, row.EventID)
+		if used >= limit {
+			continue
+		}
+		return prLaneAutoApprovalGrant{
+			Active:      true,
+			EventID:     row.EventID,
+			Limit:       limit,
+			Remaining:   limit - used,
+			BranchNames: branchNames,
+		}
 	}
-	return false, "", 0
+	return prLaneAutoApprovalGrant{}
+}
+
+func prLaneAutoApprovalGrantAllows(rows []pgstore.ControlActionEvent, eventID, repo, laneName, proposedBranch string) bool {
+	if strings.TrimSpace(eventID) == "" {
+		return false
+	}
+	requestedLane := normalizePRLaneBranchName(firstNonEmptyControlAction(laneName, proposedBranch), "", "")
+	for _, row := range rows {
+		if row.EventID != eventID || row.Action != "github.pr_lane.auto_approve" || row.Status != "succeeded" {
+			continue
+		}
+		rowRepo := strings.TrimSpace(row.RepoOwner + "/" + row.RepoName)
+		if repo != "" && rowRepo != "" && rowRepo != repo {
+			return false
+		}
+		var payload struct {
+			BranchNames []string `json:"branch_names"`
+		}
+		_ = json.Unmarshal(row.Payload, &payload)
+		branchNames := normalizePRLaneBranchNames(payload.BranchNames, row.SessionID, row.RepoName)
+		return requestedLane == "" || len(branchNames) == 0 || stringInSlice(requestedLane, branchNames)
+	}
+	return false
+}
+
+func countPRLaneAutoApprovalUses(rows []pgstore.ControlActionEvent, grantEventID string) int {
+	used := 0
+	for _, row := range rows {
+		if row.Action != "github.pr_lane.request" || row.Status != "succeeded" {
+			continue
+		}
+		if controlActionPayloadString(row.Payload, "auto_approval_event_id") == grantEventID {
+			used++
+		}
+	}
+	return used
+}
+
+func normalizePRLaneBranchNames(values []string, sessionID, repo string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if normalized := normalizePRLaneBranchName(value, sessionID, repo); normalized != "" {
+			out = append(out, normalized)
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func normalizePRLaneBranchName(value, sessionID, repo string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.TrimPrefix(trimmed, "refs/heads/")
+	if sessionID != "" && repo != "" {
+		trimmed = strings.TrimPrefix(trimmed, "tank/session/"+sessionID+"/"+repo+"/")
+	}
+	if strings.Contains(trimmed, "/") {
+		parts := strings.Split(trimmed, "/")
+		trimmed = parts[len(parts)-1]
+	}
+	var b strings.Builder
+	for _, ch := range trimmed {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' {
+			b.WriteRune(ch)
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-._")
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func stringInSlice(value string, values []string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmptyControlAction(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func isFullGitSHA(value string) bool {
@@ -814,6 +1049,7 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 	action := strings.TrimSpace(body.Action)
 	switch action {
 	case "github.pull_request.merge",
+		"github.pull_request.rename",
 		"github.pull_request.ready_for_review",
 		"github.pull_request.open",
 		"github.pull_request.mergeability",

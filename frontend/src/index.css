@@ -3087,6 +3087,13 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.pr-lane-approval-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
 .pr-lane-approval-head button,
 .pr-lane-approval-actions button {
   border: 1px solid var(--border-soft);
@@ -3134,6 +3141,7 @@ button:disabled {
 }
 
 .pr-lane-approval-meta,
+.pr-lane-approval-branches,
 .pr-lane-approval-scope,
 .pr-lane-approval-reason {
   margin-top: 0.15rem;
