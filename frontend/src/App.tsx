@@ -398,6 +398,10 @@ import {
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
+import {
+  collectGlimmungRunsFromEntries,
+  type GlimmungRunLink,
+} from "./glimmungRuns";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -2376,6 +2380,9 @@ interface ComposerToolButtonsProps {
     onCreateAndDrive?: () => void;
     onOpenReady?: () => void;
   };
+  glimmungRuns: {
+    runs: GlimmungRunLink[];
+  };
   pullRequest: {
     latestUrl?: string;
     linkedUrl?: string;
@@ -2605,11 +2612,146 @@ function PullRequestMenuButton({
   );
 }
 
+function GlimmungMark({ className }: { className?: string }) {
+  return (
+    <span className={className} aria-hidden="true">
+      g
+    </span>
+  );
+}
+
+function GlimmungRunMenuButton({
+  runs,
+}: ComposerToolButtonsProps["glimmungRuns"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+  const hasRuns = runs.length > 0;
+  const title = hasRuns
+    ? `Glimmung runs (${runs.length})`
+    : "No Glimmung runs found yet";
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="run-glimmung-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-glimmung-action-btn${hasRuns ? " is-ready" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={!hasRuns}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GlimmungMark className="run-glimmung-mark" />
+        {runs.length > 1 && (
+          <span className="run-command-menu-count">{runs.length}</span>
+        )}
+      </button>
+      {open &&
+        hasRuns &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover run-glimmung-menu-popover"
+            role="menu"
+            aria-label="Glimmung runs"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Glimmung runs</div>
+            {runs.map((run) => (
+              <a
+                key={run.key}
+                role="menuitem"
+                className="run-pr-menu-item run-glimmung-menu-item"
+                href={run.href}
+                target="_blank"
+                rel="noreferrer"
+                title={run.href}
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-glimmung-menu-main">
+                  <span className="run-pr-menu-name run-glimmung-menu-name">
+                    <GlimmungMark className="run-glimmung-menu-glyph" />
+                    {run.label}
+                  </span>
+                  <span className="run-slash-desc">
+                    {[run.state, run.toolName].filter(Boolean).join(" · ")}
+                  </span>
+                </span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 function ComposerToolButtons({
   attach,
   cost,
   rollout,
   test,
+  glimmungRuns,
   pullRequest,
   slash,
   mcp,
@@ -2705,6 +2847,7 @@ function ComposerToolButtons({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      <GlimmungRunMenuButton {...glimmungRuns} />
       <PullRequestMenuButton {...pullRequest} />
       {bugLabelControl}
       <button
@@ -4337,6 +4480,7 @@ function DemoLanding() {
                         disabled: true,
                         title: "Sign in to start a session",
                       }}
+                      glimmungRuns={{ runs: [] }}
                       pullRequest={{}}
                       slash={{
                         disabled: true,
@@ -19636,6 +19780,13 @@ function ChatPane({
     () => entries.filter((entry) => !entry.backgroundOnly),
     [entries],
   );
+  const glimmungRunLinks = useMemo(() => {
+    const runEntries = [...renderedEntries];
+    for (const activityEntries of Object.values(activityEntriesByTurn)) {
+      if (activityEntries) runEntries.push(...activityEntries);
+    }
+    return collectGlimmungRunsFromEntries(runEntries);
+  }, [activityEntriesByTurn, renderedEntries]);
   useEffect(() => {
     if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
@@ -22023,6 +22174,9 @@ function ChatPane({
                   title: testState?.active
                     ? "Choose a test action"
                     : "Start a test workflow",
+                }}
+                glimmungRuns={{
+                  runs: glimmungRunLinks,
                 }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
@@ -26607,6 +26761,7 @@ function AuthenticatedApp() {
                       disabled: true,
                       title: "Available in an active chat session",
                     }}
+                    glimmungRuns={{ runs: [] }}
                     pullRequest={{}}
                     slash={{
                       disabled: true,
