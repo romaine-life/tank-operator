@@ -47,10 +47,9 @@ const (
 type Source string
 
 const (
-	SourceTank        Source = "tank"
-	SourceClaude      Source = "claude"
-	SourceCodex       Source = "codex"
-	SourceAntigravity Source = "antigravity"
+	SourceTank   Source = "tank"
+	SourceClaude Source = "claude"
+	SourceCodex  Source = "codex"
 )
 
 // TurnSubmittedSource is an optional payload-level provenance marker for
@@ -62,12 +61,6 @@ const (
 	TurnSubmittedSourceScheduleWakeup TurnSubmittedSource = "schedule-wakeup"
 	TurnSubmittedSourceBackgroundTask TurnSubmittedSource = "background-task"
 	TurnSubmittedSourceLaunchDispatch TurnSubmittedSource = "launch-dispatch"
-	// TurnSubmittedSourceAgentContinuation marks a relay turn the antigravity
-	// runner asked the backend to open because agy self-continued after its own
-	// background task finished — NOT a Tank-fired wake. The runner relays agy's
-	// already-emitted output; the PTY is not re-prompted. The turn id reuses the
-	// turn_bgtask- prefix so it folds into the originating user-facing turn.
-	TurnSubmittedSourceAgentContinuation TurnSubmittedSource = "agent-continuation"
 )
 
 type Visibility string
@@ -833,7 +826,7 @@ func validActor(actor Actor) bool {
 
 func validSource(source Source) bool {
 	switch source {
-	case SourceTank, SourceClaude, SourceCodex, SourceAntigravity:
+	case SourceTank, SourceClaude, SourceCodex:
 		return true
 	default:
 		return false
@@ -844,8 +837,7 @@ func validTurnSubmittedSource(source TurnSubmittedSource) bool {
 	switch source {
 	case TurnSubmittedSourceScheduleWakeup,
 		TurnSubmittedSourceBackgroundTask,
-		TurnSubmittedSourceLaunchDispatch,
-		TurnSubmittedSourceAgentContinuation:
+		TurnSubmittedSourceLaunchDispatch:
 		return true
 	default:
 		return false

@@ -54,7 +54,6 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "claude_gui",
     "claude_secondary_gui",
     "codex_gui",
-    "antigravity_gui",
   ]) {
     expect(REPO_SUPPORTED_MODES.has(mode), `${mode} should support repos`).toBeTruthy();
   }
@@ -65,7 +64,6 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_cli",
     "config",
     "codex_config",
-    "antigravity_config",
     "api_key",
     "codex_exec_gui",
     "codex_app_server",

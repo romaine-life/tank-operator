@@ -21,17 +21,25 @@ account nkey:
 - **Session pods** connect with `user=<storage key>`, `pass=<projected SA
   token>` (audience `https://auth.romaine.life` — the same platform audience
   used by auth.romaine.life's exchange path and the MCP gateway). The callout
-  validates the token via audience-pinned `TokenReview`, takes the
-  **bound pod name from the token's claims**, reads the pod's
-  orchestrator-written labels (`tank-operator/session-id`, `-scope`), and
-  issues permissions for exactly that session:
+  POSTs that token to `auth.romaine.life/api/auth/exchange/k8s`, verifies the
+  returned platform JWT against auth.romaine.life's JWKS, derives the storage
+  key from the service-principal subject (`svc:tank:<id>` or
+  `svc:tank:slot-N-session-<id>`), and issues permissions for exactly that
+  session:
   - publish `tank.session.<scope>.<sid>.events`
   - the `TANK_SESSION_COMMANDS` consumer API (`$JS.API.CONSUMER.{DURABLE.
     CREATE,CREATE,INFO,MSG.NEXT}`) for the session's own per-provider
     durables (data + control planes), plus `$JS.API.INFO`
   - subscribe `_INBOX.>`
-  The claimed username is only ever checked for equality with the pod's
-  label binding — identity comes from the cluster, not the client.
+  The claimed username is only ever checked for equality with the
+  auth.romaine.life service identity — identity comes from the identity
+  provider, not the client.
+- **Session authorities** are closed and explicit at auth.romaine.life.
+  Production session pods exchange into `svc:tank:<id>`. Glimmung validation
+  slots share the production NATS broker and production auth-callout; their
+  auth exchange emits `svc:tank:slot-N-session-<id>`, which the callout maps to
+  the existing scoped storage key `tank-operator-slot-N:<id>`. The NATS
+  callout does not use Kubernetes TokenReview and has no pod-read RBAC.
 - **The orchestrator and the callout itself** are static `auth_users` in
   the NATS server config and never route through the callout — a callout
   outage cannot take down the command plane. Existing connections keep
@@ -40,7 +48,9 @@ account nkey:
   connect late".
 
 Outcomes are counted in `tank_nats_auth_callout_total{result}`:
-`session` / `denied_*` / `error`. The callout has no Service (it answers
+`session` / `denied_*` / `error`. Denials are bounded to credential,
+auth-exchange, subject-authority, and claimed-identity failures so slot auth
+regressions are visible without high-cardinality labels. The callout has no Service (it answers
 NATS, not HTTP), so the counter is scraped by the `tank-nats-auth-callout`
 PodMonitor in `k8s/templates/observability.yaml`; `TankNatsAuthCalloutDenials`
 surfaces the `denied_*`/`error` new-pod auth-failure class.
@@ -66,7 +76,6 @@ surfaces the `denied_*`/`error` new-pod auth-failure class.
    (the storage key) + `NATS_PASSWORD_FILE` (the projected
    auth.romaine.life-audience SA token path) instead of `NATS_TOKEN`;
    runners send user/pass. JavaScript runners read the password file from
-   the NATS authenticator so reconnects see token rotation; Antigravity's
    Go runner exits/restarts on permanent auth closure and reads the file on
    boot.
 4. **Drop the legacy grant** — completed after stage 3: the callout has no

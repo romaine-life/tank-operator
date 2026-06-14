@@ -69,6 +69,7 @@ roleRef:
 # Read-only cluster health for the authenticated home/sidebar surface. The
 # endpoint only needs node readiness/pressure; session pod health is covered by
 # the namespace-scoped sessions manager Role above.
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -91,6 +92,7 @@ roleRef:
   kind: ClusterRole
   name: {{ include "tank-operator.orchestratorServiceAccount" . }}-cluster-health
 ---
+{{- end }}
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 # Orchestrator SA needs auth-delegator so internal endpoints can call
 # TokenReview for audience-scoped service-account tokens.
@@ -124,5 +126,34 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cluster-admin
+{{- end }}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" }}
+---
+# The shared NATS auth-callout runs in the production orchestrator namespace,
+# but test-slot session pods live in per-slot namespaces. It must read the
+# bound pod's labels after TokenReview to issue the per-session NATS user.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tank-nats-auth-callout-pods
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tank-nats-auth-callout-pods
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+subjects:
+  - kind: ServiceAccount
+    name: nats-auth-callout
+    namespace: {{ .Values.namespaces.orchestrator }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tank-nats-auth-callout-pods
 {{- end }}
 {{- end }}

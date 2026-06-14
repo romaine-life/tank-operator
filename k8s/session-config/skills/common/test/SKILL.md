@@ -56,6 +56,20 @@ If no repo guide exists, use the generic Glimmung flow:
 - use the fastest faithful live update for the changed artifact
 - record what was applied and how it was verified
 
+**`static` (frontend/webapp) changes are the common trap.**
+`apply_test_slot_hot_swap` does **not** support `artifact_kind: static` — it
+covers `backend`, `agent_runner`, and `codex_runner`. A `static` rejection is
+**expected**; it is not a dead-end and is not a signal that a new Glimmung
+feature is needed. The norm for a webapp is a manual `kubectl cp` of the built
+assets into the app pod's static-override dir: build the frontend → clear the
+override dir → `kubectl cp dist/. <pod>:<override-dir> -c <container>` on every
+ready app pod → verify the served asset hash matches your local build (served
+live, usually no restart). `references/repos/tank-operator.md` and
+`references/repos/chess-tactics.md` are worked examples — mirror the closest one,
+and confirm the override path / selector / container from the live contract
+(`get_test_slot_hot_swap_contract`). Do not build or wrap the `glimmung-agent`
+CLI for this; the raw `kubectl cp` is the accepted path.
+
 If the repo looks like it will need repeated testing, add a concise guide under
 `references/repos/` rather than expanding this main skill with project-specific
 details.

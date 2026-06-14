@@ -106,7 +106,6 @@ product state.
   `CLAUDE_API_PROXY_HOST`, `CODEX_API_PROXY_HOST`, and
   `CLAUDE_OAUTH_GATEWAY_HOST` to production service DNS.
 - Production Helm renders configure `claude-api-proxy`, `codex-api-proxy`, and
-  `antigravity-api-proxy` Envoy downstream TLS with file-based SDS and
   `watched_directory: /etc/envoy/tls`, not static `tls_certificates` file
   references.
 - Production and validation-slot Tank public routes serve browser/app traffic

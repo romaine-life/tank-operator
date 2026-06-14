@@ -199,29 +199,10 @@ Project metadata for Glimmung:
       "container": "codex-runner",
       "pod_selector": "tank-operator/session-id,tank-operator/mode in (codex_gui,codex_exec_gui,codex_app_server)",
       "builder_image": "node:20-alpine"
-    },
-    "antigravity_runner": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates && curl -fsSL https://go.dev/dl/go1.26.0.linux-amd64.tar.gz -o /tmp/go.tgz && rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz && export PATH=/usr/local/go/bin:$PATH && rm -rf antigravity-runner-hot && mkdir -p antigravity-runner-hot && cd backend-go && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o ../antigravity-runner-hot/antigravity-cli-runner ./cmd/antigravity-runner",
-      "source": "antigravity-runner-hot",
-      "target": "/var/run/antigravity-runner-hot",
-      "restart": "SIGHUP",
-      "container": "antigravity-runner",
-      "pod_selector": "tank-operator/session-id,tank-operator/mode=antigravity_gui",
-      "builder_image": "node:20-bookworm-slim"
     }
   }
 }
 ```
-
-The `antigravity_runner` builder is a Node image that installs the Go
-toolchain at build time, not a stock `golang:` image. The shared
-`fidelity_classifier` (`node scripts/classify-tank-test-fidelity.mjs`) runs in
-the builder *before* the build command, so the builder image must carry `node`,
-while compiling the Go runner needs `go` — and no stock image ships both. A
-dedicated go+node builder image baked to ACR would be a cleaner future
-replacement for the install-at-build-time step.
 
 Auth: Microsoft sign-in is delegated to auth.romaine.life. The SPA fetches
 an auth.romaine.life JWT (silent if the `.romaine.life` session cookie is

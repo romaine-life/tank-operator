@@ -4,9 +4,9 @@ Per-session NATS credential issuer (tank-operator#1128).
 Session pods authenticate to NATS with their projected SA token (audience
 https://auth.romaine.life) instead of the shared fleet token; this service answers
 the NATS server's $SYS.REQ.USER.AUTH callout with a user JWT scoped to the
-pod's own session subjects. Identity is the pod's orchestrator-written
-labels, fetched via TokenReview (bound-pod claim) + pods/get — never the
-client's claimed username.
+pod's own session subjects. Identity comes from auth.romaine.life's existing
+k8s service-principal exchange and platform JWT — never the client's claimed
+username, and never a direct pod read by this callout.
 
 The NATS server routes non-static clients through authorization.auth_callout
 pointing at this issuer's account key. The orchestrator and this callout are
@@ -14,67 +14,11 @@ static auth_users, so a callout outage cannot take down the command plane:
 existing connections keep their authorization, and a NEW pod's connect just
 retries (maxReconnectAttempts -1; JetStream redelivers).
 
-Test slots never render this (isTestEnv excluded): slot NATS runs tokenless
-single-tenant.
+Test slots never render the Deployment (isTestEnv excluded): they share the
+production NATS broker and production auth-callout. Warm slot renders no NATS
+callout RBAC; auth.romaine.life owns pod-lineage reads for the exchange path.
 */}}
 {{- if and .Values.natsCallout.enabled (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: nats-auth-callout
-  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
----
-{{- /*
-TokenReview is a cluster-scoped create; the pod read is namespace-scoped to
-the sessions namespace only — the callout can verify session pods and
-nothing else.
-*/}}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: tank-nats-auth-callout-tokenreview
-rules:
-  - apiGroups: ["authentication.k8s.io"]
-    resources: ["tokenreviews"]
-    verbs: ["create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: tank-nats-auth-callout-tokenreview
-subjects:
-  - kind: ServiceAccount
-    name: nats-auth-callout
-    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: tank-nats-auth-callout-tokenreview
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: tank-nats-auth-callout-pods
-  namespace: {{ include "tank-operator.sessionsNamespace" . }}
-rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: tank-nats-auth-callout-pods
-  namespace: {{ include "tank-operator.sessionsNamespace" . }}
-subjects:
-  - kind: ServiceAccount
-    name: nats-auth-callout
-    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: tank-nats-auth-callout-pods
----
 {{- /*
 Issuer seed (account nkey that signs user JWTs; its PUBLIC key goes in the
 NATS server's auth_callout.issuer) and the callout's own static NATS user
@@ -129,7 +73,8 @@ spec:
       labels:
         app.kubernetes.io/name: nats-auth-callout
     spec:
-      serviceAccountName: nats-auth-callout
+      serviceAccountName: default
+      automountServiceAccountToken: false
       containers:
         - name: callout
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -150,10 +95,8 @@ spec:
                 secretKeyRef:
                   name: tank-nats-callout
                   key: issuer-seed
-            - name: NATS_CALLOUT_SESSIONS_NAMESPACE
-              value: {{ include "tank-operator.sessionsNamespace" . }}
-            - name: NATS_CALLOUT_SESSION_SERVICE_ACCOUNT
-              value: {{ .Values.session.serviceAccount | quote }}
+            - name: NATS_CALLOUT_AUTH_EXCHANGE_URL
+              value: "https://auth.romaine.life/api/auth/exchange/k8s"
             - name: NATS_CALLOUT_COMMAND_STREAM
               value: {{ .Values.sessionBus.commandStream | quote }}
             - name: METRICS_PORT

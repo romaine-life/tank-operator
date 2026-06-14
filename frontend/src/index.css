@@ -131,8 +131,6 @@
   --mode-codex-gui-fg: #8bd7c5;
   --mode-codex-config-bg: rgba(180, 200, 120, 0.10);
   --mode-codex-config-fg: #c9d68b;
-  --mode-antigravity-config-bg: rgba(66, 133, 244, 0.12);
-  --mode-antigravity-config-fg: #9db8f0;
 
   /* Radii */
   --radius-sm: 0.375rem;
@@ -2181,7 +2179,6 @@ button:disabled {
 .mode-codex_exec_gui,
 .mode-codex_app_server { background: var(--mode-codex-gui-bg); color: var(--mode-codex-gui-fg); }
 .mode-codex_config        { background: var(--mode-codex-config-bg); color: var(--mode-codex-config-fg); }
-.mode-antigravity_config  { background: var(--mode-antigravity-config-bg); color: var(--mode-antigravity-config-fg); }
 
 /* Cluster health ------------------------------------------------------------ */
 
@@ -3023,6 +3020,121 @@ button:disabled {
    of the way so the PromptInput's own layout owns positioning. */
 .chat-composer-shell {
   display: contents;
+}
+
+.pr-lane-approval {
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  padding: 0 var(--space-1);
+}
+
+.pr-lane-approval-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 1.75rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-sidebar-control);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.pr-lane-approval-trigger:hover {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.pr-lane-approval-panel {
+  position: absolute;
+  left: var(--space-1);
+  bottom: calc(100% + var(--space-2));
+  z-index: 25;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: min(24rem, 60vh);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-3);
+}
+
+.pr-lane-approval-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.pr-lane-approval-head button,
+.pr-lane-approval-actions button {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover-soft);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  padding: 0.2rem 0.45rem;
+}
+
+.pr-lane-approval-head button:hover,
+.pr-lane-approval-actions button:hover {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.pr-lane-approval-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.pr-lane-approval-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.pr-lane-approval-main {
+  min-width: 0;
+}
+
+.pr-lane-approval-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.pr-lane-approval-meta,
+.pr-lane-approval-scope,
+.pr-lane-approval-reason {
+  margin-top: 0.15rem;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.pr-lane-approval-reason {
+  color: var(--text-muted);
+}
+
+.pr-lane-approval-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
 }
 
 /* Repo picker — splash page chip-and-picker for selecting repos to
@@ -4795,7 +4907,7 @@ button:disabled {
 }
 
 .run-turn-view-body[data-page-kind="question"] .run-tool-ask {
-  width: min(100%, 48rem);
+  width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.035);
@@ -5949,6 +6061,94 @@ button:disabled {
   background: var(--status-error-bg);
 }
 
+.run-git-activity-screen {
+  width: min(52rem, 100%);
+}
+
+.run-git-activity-group {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.run-git-activity-heading {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.run-git-activity-list {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.run-git-activity-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 3rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-body);
+  text-decoration: none;
+}
+
+.run-git-activity-row:hover {
+  border-color: rgba(96, 165, 250, 0.25);
+  background: rgba(96, 165, 250, 0.08);
+  color: var(--text-primary);
+}
+
+.run-git-activity-icon {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-muted);
+}
+
+.run-git-activity-icon svg,
+.run-git-activity-external {
+  width: 1rem;
+  height: 1rem;
+}
+
+.run-git-activity-main {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.run-git-activity-label {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-git-activity-detail {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-git-activity-external {
+  color: var(--text-muted);
+}
+
 @media (max-width: 520px) {
   .run-session-data-screen {
     padding: var(--space-4) var(--space-3);
@@ -5995,6 +6195,24 @@ button:disabled {
   .run-session-data-repo-row {
     grid-template-columns: minmax(0, 1fr);
     justify-items: start;
+  }
+
+  .run-git-activity-row {
+    grid-template-columns: 1.75rem minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .run-git-activity-icon {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .run-git-activity-detail {
+    white-space: normal;
+  }
+
+  .run-git-activity-external {
+    grid-column: 2;
   }
 }
 

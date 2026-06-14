@@ -351,37 +351,6 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 	}
 }
 
-func TestHandleInternalSessionRuntimeConfigAcceptsAntigravity(t *testing.T) {
-	server := internalSessionRuntimeServer(t, "12")
-	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
-		ID:      "12",
-		Email:   "owner@example.test",
-		Mode:    sessionmodel.AntigravityGUIMode,
-		Visible: true,
-		Status:  "Active",
-	})
-	server.mgr = sessions.NewManager(server.k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
-	req := httptest.NewRequest(http.MethodPut, "/api/internal/sessions/12/runtime-config", strings.NewReader(`{
-		"model":"Gemini 3.5 Flash (Medium)"
-	}`))
-	req.SetPathValue("session_id", "12")
-	req.Header.Set("Authorization", "Bearer session-token")
-	rec := httptest.NewRecorder()
-
-	server.handleInternalSessionRuntimeConfig(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
-	if err != nil || !ok {
-		t.Fatalf("registry Get ok=%v err=%v", ok, err)
-	}
-	if record.RuntimeModel != "Gemini 3.5 Flash (Medium)" || record.RuntimeConfiguredAt == "" {
-		t.Fatalf("registry runtime config = %#v", record)
-	}
-}
-
 func TestHandleInternalSessionRuntimeConfigCountsIgnoredWindow(t *testing.T) {
 	server := internalSessionRuntimeServer(t, "12")
 	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
@@ -573,6 +542,8 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 		namespace:             "tank-operator-sessions",
 		sessionScope:          "default",
 		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
 	}
 	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
 
@@ -588,7 +559,11 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
-		strings.NewReader(`{"mode":"claude_gui","name":"My Recovery Session"}`))
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"My Recovery Session",
+			"initial_turn":{"client_nonce":"turn-name-test","prompt":"start the recovery"}
+		}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()
 
@@ -614,6 +589,106 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	if rec2.Name != "My Recovery Session" {
 		t.Fatalf("registry record Name = %q, want \"My Recovery Session\"", rec2.Name)
 	}
+	if !rec2.Visible {
+		t.Fatalf("registry record Visible = false, want true")
+	}
+	if got := len(server.sessionEvents.(*recordingSessionEventStore).upserts); got != 2 {
+		t.Fatalf("session-event upserts = %d, want 2", got)
+	}
+	if got := len(server.sessionBus.(*recordingSessionBus).commands); got != 1 {
+		t.Fatalf("published commands = %d, want 1", got)
+	}
+}
+
+func TestHandleInternalCreateSessionRejectsPromptlessGUI(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "default",
+		sessionServiceAccount: "claude-session",
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{"mode":"claude_gui","name":"Empty GUI"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "initial_turn.prompt is required") {
+		t.Fatalf("body = %s, want initial_turn prompt error", rec.Body.String())
+	}
+	if records, err := registry.List(context.Background(), "owner@example.test"); err != nil || len(records) != 0 {
+		t.Fatalf("registry rows = %d err=%v, want none", len(records), err)
+	}
+}
+
+func TestHandleInternalCreateSessionAllowsPromptlessCLI(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "default",
+		sessionServiceAccount: "claude-session",
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{"mode":"claude_cli","name":"CLI workspace"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode != sessionmodel.ClaudeCLIMode {
+		t.Fatalf("mode = %q, want claude_cli", info.Mode)
+	}
 }
 
 func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testing.T) {
@@ -629,6 +704,8 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 		namespace:             "tank-operator-slot-2-sessions",
 		sessionScope:          "tank-operator-slot-2",
 		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
 		platformSettings: &fakePlatformSettingsStore{
 			defaults: pgstore.TestSlotSessionDefaults{
 				Mode:   sessionmodel.CodexGUIMode,
@@ -651,7 +728,10 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
-		strings.NewReader(`{"name":"slot validation"}`))
+		strings.NewReader(`{
+			"name":"slot validation",
+			"initial_turn":{"client_nonce":"turn-slot-default","prompt":"validate the slot"}
+		}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()
 
@@ -673,6 +753,12 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 	}
 	if rec2.Mode != sessionmodel.CodexGUIMode || rec2.Model != "gpt-5.4-mini" || rec2.Effort != "low" {
 		t.Fatalf("registry record = mode %q model %q effort %q", rec2.Mode, rec2.Model, rec2.Effort)
+	}
+	if got := len(server.sessionEvents.(*recordingSessionEventStore).upserts); got != 2 {
+		t.Fatalf("session-event upserts = %d, want 2", got)
+	}
+	if got := len(server.sessionBus.(*recordingSessionBus).commands); got != 1 {
+		t.Fatalf("published commands = %d, want 1", got)
 	}
 }
 

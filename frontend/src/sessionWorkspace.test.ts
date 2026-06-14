@@ -13,7 +13,6 @@ test("workspace file support is limited to pod-backed GUI modes", () => {
   expect(sessionModeSupportsWorkspaceFiles("codex_gui")).toBe(true);
   expect(sessionModeSupportsWorkspaceFiles("codex_exec_gui")).toBe(true);
   expect(sessionModeSupportsWorkspaceFiles("codex_app_server")).toBe(true);
-  expect(sessionModeSupportsWorkspaceFiles("antigravity_gui")).toBe(true);
 
   expect(sessionModeSupportsWorkspaceFiles("claude_cli")).toBe(false);
   expect(sessionModeSupportsWorkspaceFiles("claude_secondary_cli")).toBe(false);

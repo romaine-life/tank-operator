@@ -175,66 +175,6 @@ TOML
 {"hasCompletedOnboarding": true}
 JSON
     ;;
-  antigravity_cli|antigravity_gui)
-    AGY_HOME="${HOME}/.gemini/antigravity-cli"
-    mkdir -p "${AGY_HOME}/cache"
-    mkdir -p "${HOME}/.gemini/config"
-    mkdir -p "${HOME}/.gemini/cache"
-
-    # Seed legacy directory (so interactive CLI finds its UI theme/onboarding)
-    cat > "${AGY_HOME}/settings.json" <<'EOF'
-{
-  "colorScheme": "dark"
-}
-EOF
-
-    cat > "${AGY_HOME}/cache/onboarding.json" <<'EOF'
-{
-  "consumerOnboardingComplete": true,
-  "enterpriseOnboardingComplete": false,
-  "onboardingComplete": true
-}
-EOF
-
-    cat > "${AGY_HOME}/antigravity-oauth-token" <<'EOF'
-{"token":{"access_token":"managed-by-tank-operator","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"},"auth_method":"consumer"}
-EOF
-    chmod 600 "${AGY_HOME}/antigravity-oauth-token"
-
-    # Seed new directory (so core runner & subcommands find auth/onboarding)
-    cat > "${HOME}/.gemini/config/settings.json" <<'EOF'
-{
-  "colorScheme": "dark"
-}
-EOF
-
-    cat > "${HOME}/.gemini/cache/onboarding.json" <<'EOF'
-{
-  "consumerOnboardingComplete": true,
-  "enterpriseOnboardingComplete": false,
-  "onboardingComplete": true
-}
-EOF
-
-    cat > "${HOME}/.gemini/config/antigravity-oauth-token" <<'EOF'
-{"token":{"access_token":"managed-by-tank-operator","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"},"auth_method":"consumer"}
-EOF
-    chmod 600 "${HOME}/.gemini/config/antigravity-oauth-token"
-
-    touch "${HOME}/.gemini/config/.migrated"
-
-    CA="/etc/oauth-gateway-ca/ca.crt"
-    if [ -f "${CA}" ]; then
-      BUNDLE="${AGY_HOME}/ca-bundle.crt"
-      SYS_BUNDLE=/etc/ssl/certs/ca-certificates.crt
-      if [ -f "${SYS_BUNDLE}" ]; then
-        cat "${SYS_BUNDLE}" "${CA}" > "${BUNDLE}"
-      else
-        cp "${CA}" "${BUNDLE}"
-      fi
-      echo "export SSL_CERT_FILE=${BUNDLE}" >> "${HOME}/.bash_profile"
-    fi
-    ;;
 esac
 
 # Ensure TERM is always set to xterm-256color in interactive shell sessions

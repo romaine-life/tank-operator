@@ -47,9 +47,6 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if want := []string{"claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5"}; !slices.Equal(opts.Models["claude"], want) {
 		t.Fatalf("claude models = %v, want %v", opts.Models["claude"], want)
 	}
-	if want := []string{"Gemini 3.1 Pro", "Gemini 3.5 Flash (Medium)"}; !slices.Equal(opts.Models["antigravity"], want) {
-		t.Fatalf("antigravity models = %v, want %v", opts.Models["antigravity"], want)
-	}
 	if want := []string{"low", "medium", "high", "xhigh"}; !slices.Equal(opts.Efforts["codex"], want) {
 		t.Fatalf("codex efforts = %v, want %v", opts.Efforts["codex"], want)
 	}
@@ -62,9 +59,6 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if opts.DefaultModels["codex"] != "gpt-5.5" || opts.DefaultEfforts["codex"] != "xhigh" {
 		t.Fatalf("codex defaults = model %q effort %q", opts.DefaultModels["codex"], opts.DefaultEfforts["codex"])
 	}
-	if opts.DefaultModels["antigravity"] != "Gemini 3.5 Flash (Medium)" {
-		t.Fatalf("antigravity default model = %q", opts.DefaultModels["antigravity"])
-	}
 	if opts.TestSlotDefaults.Mode != sessionmodel.ClaudeGUIMode || opts.TestSlotDefaults.Model != "" || opts.TestSlotDefaults.Effort != "" {
 		t.Fatalf("test slot defaults = %#v, want bare claude_gui", opts.TestSlotDefaults)
 	}
@@ -76,6 +70,21 @@ func TestSessionRunOptionsExposeConfiguredTestSlotDefaults(t *testing.T) {
 		opts.TestSlotDefaults.Model != "gpt-5.4-mini" ||
 		opts.TestSlotDefaults.Effort != "low" {
 		t.Fatalf("test slot defaults = %#v", opts.TestSlotDefaults)
+	}
+}
+
+func TestValidateCreateSessionCapabilitiesRestrictsRestrictedGitToRepoModes(t *testing.T) {
+	capabilities, status, detail := validateCreateSessionCapabilities(sessionmodel.CodexGUIMode, []string{sessionmodel.SessionCapabilityRestrictedGit})
+	if status != 0 || detail != "" {
+		t.Fatalf("repo-capable restricted git status=%d detail=%q", status, detail)
+	}
+	if !slices.Equal(capabilities, []string{sessionmodel.SessionCapabilityRestrictedGit}) {
+		t.Fatalf("capabilities = %#v", capabilities)
+	}
+
+	_, status, detail = validateCreateSessionCapabilities(sessionmodel.ClaudeCLIMode, []string{sessionmodel.SessionCapabilityRestrictedGit})
+	if status != http.StatusBadRequest || !strings.Contains(detail, "requires a repo-capable session mode") {
+		t.Fatalf("terminal restricted git status=%d detail=%q", status, detail)
 	}
 }
 

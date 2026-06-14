@@ -129,7 +129,7 @@ export function canonicalEventsForClaudeMessage(
         // Tank-canonical questions (claudeQuestionsToTankShape); the transcript
         // renders the question card in Turn activity, so there is no dangling
         // "started" tool item.
-        if (!isTankAskUserQuestionToolName(name)) {
+        if (!isTankPausingToolName(name)) {
           events.push(
             itemEvent({
               sessionID: cfg.sessionId,
@@ -264,6 +264,20 @@ export function canonicalEventsForClaudeMessage(
 
 function isTankAskUserQuestionToolName(name: string): boolean {
   return name === "AskUserQuestion" || name === "mcp__tank__AskUserQuestion";
+}
+
+// isTankPausingToolName covers the tools the runner intercepts via a Tank MCP
+// tool to pause the turn for human input: AskUserQuestion and ExitPlanMode
+// (plan approval). Both publish a durable turn.awaiting_input handoff instead
+// of an ordinary item.started, so the adapter must not also emit a tool item
+// — otherwise a dangling "started" tool chip would sit next to the question /
+// plan page.
+function isTankPausingToolName(name: string): boolean {
+  return (
+    isTankAskUserQuestionToolName(name) ||
+    name === "ExitPlanMode" ||
+    name === "mcp__tank__ExitPlanMode"
+  );
 }
 
 function isTankAskUserQuestionToolResult(

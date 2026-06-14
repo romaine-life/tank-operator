@@ -11,7 +11,6 @@ export const TANK_EVENT_SOURCES: readonly [
   "tank",
   "claude",
   "codex",
-  "antigravity",
 ];
 export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
 

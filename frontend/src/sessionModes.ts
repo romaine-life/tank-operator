@@ -1,8 +1,7 @@
 export type Provider =
   | "anthropic"
   | "anthropic_secondary"
-  | "codex"
-  | "antigravity";
+  | "codex";
 export type SessionInteraction = "gui" | "cli";
 
 export const SESSION_MODE_ORDER = [
@@ -18,9 +17,6 @@ export const SESSION_MODE_ORDER = [
   "codex_exec_gui",
   "codex_app_server",
   "codex_config",
-  "antigravity_config",
-  "antigravity_cli",
-  "antigravity_gui",
 ] as const;
 
 export type SessionMode = (typeof SESSION_MODE_ORDER)[number];
@@ -32,8 +28,6 @@ export type DefaultSessionMode = Extract<
   | "claude_secondary_gui"
   | "codex_cli"
   | "codex_gui"
-  | "antigravity_cli"
-  | "antigravity_gui"
 >;
 
 type RolloutContract = "claude" | "codex" | "gui" | null;
@@ -50,9 +44,6 @@ export interface SessionModeContract {
   rollout: RolloutContract;
 }
 
-// "antigravity" is Gemini-Ultra via `agy`. It participates in the same GUI chat
-// provider contract as Claude/Codex; only CLI and model/effort controls are
-// absent until the runner exposes equivalent choices.
 export const SESSION_MODE_CONTRACT = {
   api_key: {
     provider: "anthropic",
@@ -186,39 +177,6 @@ export const SESSION_MODE_CONTRACT = {
     repos: false,
     rollout: null,
   },
-  antigravity_config: {
-    provider: "antigravity",
-    interaction: null,
-    defaultSelectable: false,
-    configCredentials: true,
-    chatSurface: false,
-    sdkChat: false,
-    workspaceFiles: false,
-    repos: false,
-    rollout: null,
-  },
-  antigravity_cli: {
-    provider: "antigravity",
-    interaction: "cli",
-    defaultSelectable: true,
-    configCredentials: false,
-    chatSurface: false,
-    sdkChat: false,
-    workspaceFiles: false,
-    repos: false,
-    rollout: null,
-  },
-  antigravity_gui: {
-    provider: "antigravity",
-    interaction: "gui",
-    defaultSelectable: true,
-    configCredentials: false,
-    chatSurface: true,
-    sdkChat: true,
-    workspaceFiles: true,
-    repos: true,
-    rollout: "gui",
-  },
 } satisfies Record<SessionMode, SessionModeContract>;
 
 function modeSet(
@@ -235,7 +193,6 @@ export const PROVIDERS: readonly Provider[] = [
   "anthropic",
   "anthropic_secondary",
   "codex",
-  "antigravity",
 ];
 
 export const MODE_PROVIDERS: Record<SessionMode, Provider> =
@@ -246,6 +203,25 @@ export const MODE_PROVIDERS: Record<SessionMode, Provider> =
     },
     {} as Record<SessionMode, Provider>,
   );
+
+export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
+  api_key: "Claude API key",
+  claude_cli: "Claude CLI",
+  claude_gui: "Claude GUI",
+  config: "Claude config",
+  claude_secondary_cli: "Claude secondary CLI",
+  claude_secondary_gui: "Claude secondary GUI",
+  claude_secondary_config: "Claude secondary config",
+  codex_cli: "Codex CLI",
+  codex_gui: "Codex GUI",
+  codex_exec_gui: "Codex Legacy",
+  codex_app_server: "Codex App Server",
+  codex_config: "Codex config",
+};
+
+export function sessionModeLabel(mode: string): string {
+  return SESSION_MODE_LABELS[mode as SessionMode] ?? mode;
+}
 
 export const DEFAULT_SESSION_MODES = modeSet(
   (contract) => contract.defaultSelectable,

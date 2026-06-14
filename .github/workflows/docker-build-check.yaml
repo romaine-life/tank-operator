@@ -66,17 +66,6 @@ jobs:
             image-repo: codex-container
             fingerprint-image: codex
             fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-runner codex-runner runner-shared
-          # Antigravity session image — glibc (Debian) base baking the pinned
-          # `agy` native binary + sandbox-agent terminal. Separate Dockerfile
-          # because agy can't run on the Alpine/musl image the others share.
-          - name: session-agent-antigravity
-            file: antigravity-container/Dockerfile
-            context: .
-            build_args: ""
-            cache-ref: romainecr.azurecr.io/antigravity-container-build-cache:antigravity
-            image-repo: antigravity-container
-            fingerprint-image: antigravity
-            fingerprint-paths: antigravity-container .dockerignore claude-container/mcp-auth-proxy backend-go/go.mod backend-go/go.sum backend-go/internal backend-go/cmd/tank-supervisor backend-go/cmd/antigravity-runner
           # Standalone mcp-auth-proxy image for sibling consumers
           # (nelsong6/hermes today). Built from the same package source
           # Tank session pods bake inline, but published as its own

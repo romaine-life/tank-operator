@@ -32,46 +32,33 @@ const (
 	CodexGUIMode              = "codex_gui"
 	CodexExecGUIMode          = "codex_exec_gui"
 	CodexAppServerMode        = "codex_app_server"
-	// AntigravityConfigMode is the credential-mint terminal mode for
-	// Antigravity (Gemini-Ultra via Google's Antigravity CLI). The user runs
-	// `agy` in the terminal, completes the Google/Ultra login, and the
-	// save-credentials harvest writes the resulting OAuth token file to KV.
-	// Runs on the glibc antigravity-container image (agy + sandbox-agent).
-	AntigravityConfigMode = "antigravity_config"
-	// AntigravityGUIMode is the GUI chat mode for Antigravity (Gemini-Ultra).
-	// A pod-side antigravity-runner drives agy and maps its structured
-	// transcript stream onto the Tank conversation protocol. Runs on the glibc
-	// antigravity-container image and carries the mcp-auth-proxy sidecar like
-	// the other GUI modes. agy's OAuth is proxy-owned (the credential-boundary
-	// fix): the pod gets a placeholder + an antigravity-api-proxy host-alias so
-	// the real refresh token never lands on the model-readable filesystem — the
-	// same shape claude_gui / codex_gui use. See docs/api-proxy-auth.md.
-	AntigravityGUIMode      = "antigravity_gui"
-	AntigravityCLIMode      = "antigravity_cli"
-	DefaultSessionMode      = ClaudeGUIMode
-	GeminiRunnerMetricsPort = 9097
-	MaxNameLength           = 80
-	SessionsNamespace       = "tank-operator-sessions"
-	SessionServiceAccount   = "claude-session"
-	SessionConfigMap        = "tank-session-config"
-	SandboxAgentPort        = 2468
+	DefaultSessionMode        = ClaudeGUIMode
+	MaxNameLength             = 80
+	SessionsNamespace         = "tank-operator-sessions"
+	SessionServiceAccount     = "claude-session"
+	SessionConfigMap          = "tank-session-config"
+	SandboxAgentPort          = 2468
 	// SessionCapabilitySpireLensMCP opts a pod into the SpireLens game-host
 	// MCP path. The default session surface stays cluster-local; this rare
 	// capability joins the tailnet and mounts an MCP config with
 	// spire-lens-mcp on localhost :9997.
 	SessionCapabilitySpireLensMCP = "spirelens_mcp"
-	DefaultSpireLensMCPPort       = 15527
-	DefaultSpireLensTailscaleTag  = "tag:spirelens-orchestrator"
+	// SessionCapabilityRestrictedGit opts a pod into the experimental
+	// governed Git surface: Tank-owned session branches, guarded MCP writes,
+	// post-commit publishing, and PR lane approvals. Sessions without this
+	// capability keep the historical direct Git/GitHub behavior.
+	SessionCapabilityRestrictedGit = "restricted_git"
+	DefaultSpireLensMCPPort        = 15527
+	DefaultSpireLensTailscaleTag   = "tag:spirelens-orchestrator"
 	// Per-container metrics ports inside session pods. The
 	// k8s/templates/podmonitor-sessions.yaml PodMonitor scrapes each by
 	// the named container port (mcp-auth-proxy: "metrics", runners:
 	// "runner-metrics"). Numbers are documented in docs/observability.md;
 	// changing them requires bumping both the values here and the
 	// PodMonitor port-name references.
-	MCPAuthProxyMetricsPort      = 9990
-	AgentRunnerMetricsPort       = 9095
-	CodexRunnerMetricsPort       = 9096
-	AntigravityRunnerMetricsPort = 9097
+	MCPAuthProxyMetricsPort = 9990
+	AgentRunnerMetricsPort  = 9095
+	CodexRunnerMetricsPort  = 9096
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -100,14 +87,11 @@ var (
 		CodexGUIMode:              {},
 		CodexExecGUIMode:          {},
 		CodexAppServerMode:        {},
-
-		AntigravityConfigMode: {},
-		AntigravityCLIMode:    {},
-		AntigravityGUIMode:    {},
 	}
 
 	sessionCapabilities = map[string]struct{}{
-		SessionCapabilitySpireLensMCP: {},
+		SessionCapabilitySpireLensMCP:  {},
+		SessionCapabilityRestrictedGit: {},
 	}
 )
 
@@ -328,12 +312,8 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 
 // noClaudeHijackModes are modes that must not receive the *Claude* OAuth
 // gateway / api-proxy host aliases (platform.claude.com, api.anthropic.com).
-// Codex and antigravity_gui are listed here because they route their own
-// provider host through a dedicated proxy via the separate blocks below
-// (codex-api-proxy, antigravity-api-proxy) — they just must not also get
-// Claude's aliases. antigravity_config is the interactive login mode: it must
-// talk to real Google to complete OAuth and have its token harvested, so it
-// gets no proxy hijack at all.
+// Codex routes its own provider host through codex-api-proxy, so it must not
+// also get Claude's aliases.
 var noClaudeHijackModes = map[string]bool{
 	ConfigMode:                true,
 	ClaudeSecondaryCLIMode:    true,
@@ -344,31 +324,25 @@ var noClaudeHijackModes = map[string]bool{
 	CodexGUIMode:              true,
 	CodexExecGUIMode:          true,
 	CodexAppServerMode:        true,
-	AntigravityConfigMode:     true,
-	AntigravityGUIMode:        true,
-	AntigravityCLIMode:        true,
 }
 
 type ManifestOptions struct {
-	SessionImage                    string
-	CodexSessionImage               string
-	AntigravitySessionImage         string
-	SessionImageMetadata            ImageVersionMetadata
-	CodexSessionImageMetadata       ImageVersionMetadata
-	AntigravitySessionImageMetadata ImageVersionMetadata
-	SessionsNamespace               string
-	SessionScope                    string
-	SessionServiceAccount           string
-	SessionConfigMap                string
-	ArgoCDTrackingApp               string
-	SandboxAgentPort                int
-	TankOperatorInternalURL         string
+	SessionImage              string
+	CodexSessionImage         string
+	SessionImageMetadata      ImageVersionMetadata
+	CodexSessionImageMetadata ImageVersionMetadata
+	SessionsNamespace         string
+	SessionScope              string
+	SessionServiceAccount     string
+	SessionConfigMap          string
+	ArgoCDTrackingApp         string
+	SandboxAgentPort          int
+	TankOperatorInternalURL   string
 	// Optional: in-cluster Service IPs for host alias injection.
 	OAuthGatewayIP            string
 	APIProxyIP                string
 	ClaudeSecondaryAPIProxyIP string
 	CodexAPIProxyIP           string
-	AntigravityAPIProxyIP     string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
 	// SDK runners use NATS JetStream for durable command/event delivery.
@@ -443,18 +417,6 @@ func IsCodexMode(mode string) bool {
 	}
 }
 
-// IsAntigravityMode reports whether a session mode runs the Antigravity agent
-// (agy) and so is stamped with AntigravitySessionImage. Covers both the
-// credential-mint terminal mode and the GUI chat mode.
-func IsAntigravityMode(mode string) bool {
-	switch NormalizeSessionMode(mode) {
-	case AntigravityConfigMode, AntigravityGUIMode, AntigravityCLIMode:
-		return true
-	default:
-		return false
-	}
-}
-
 func IsClaudeSecondaryMode(mode string) bool {
 	switch NormalizeSessionMode(mode) {
 	case ClaudeSecondaryCLIMode, ClaudeSecondaryGUIMode, ClaudeSecondaryConfigMode:
@@ -468,9 +430,6 @@ func IsClaudeSecondaryMode(mode string) bool {
 // already-resolved manifest options. Callers must invoke any override resolver
 // before calling this when they need the create-time truth.
 func ResolvedSessionImage(mode string, opts ManifestOptions) string {
-	if IsAntigravityMode(mode) {
-		return opts.AntigravitySessionImage
-	}
 	if IsCodexMode(mode) {
 		return opts.CodexSessionImage
 	}
@@ -478,9 +437,6 @@ func ResolvedSessionImage(mode string, opts ManifestOptions) string {
 }
 
 func ResolvedSessionImageMetadata(mode string, opts ManifestOptions) ImageVersionMetadata {
-	if IsAntigravityMode(mode) {
-		return opts.AntigravitySessionImageMetadata.Clone()
-	}
 	if IsCodexMode(mode) {
 		return opts.CodexSessionImageMetadata.Clone()
 	}
@@ -663,6 +619,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 
 	// Build configmap volume mounts for both containers.
 	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)
+	restrictedGitEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilityRestrictedGit)
 	mcpConfigKey := "mcp.json"
 	if spireLensMCPEnabled {
 		mcpConfigKey = "mcp.spirelens.json"
@@ -705,6 +662,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				},
 			},
 		)
+	}
+	if restrictedGitEnabled {
+		env = append(env, map[string]any{"name": "TANK_RESTRICTED_GIT", "value": "true"})
 	}
 
 	claudeVolumeMounts := append([]any{}, configMounts...)
@@ -762,8 +722,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode || mode == ClaudeSecondaryGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantAntigravityRunner := mode == AntigravityGUIMode || mode == AntigravityCLIMode
-	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantAntigravityRunner
+	wantSDKRunner := wantAgentRunner || wantCodexRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
 			"name":     "workspace",
@@ -798,7 +757,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
 				map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+				map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 				map[string]any{"name": "AGENT_POST_COMMIT_HOOK", "value": "/opt/tank/agent-post-commit-hook.sh"},
+				map[string]any{"name": "AGENT_PRE_PUSH_HOOK", "value": "/opt/tank/agent-pre-push-hook.sh"},
 			},
 			"volumeMounts": []any{
 				map[string]any{
@@ -811,6 +772,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					"name":      "session-config",
 					"mountPath": "/opt/tank/agent-post-commit-hook.sh",
 					"subPath":   "agent-post-commit-hook.sh",
+					"readOnly":  true,
+				},
+				map[string]any{
+					"name":      "session-config",
+					"mountPath": "/opt/tank/agent-pre-push-hook.sh",
+					"subPath":   "agent-pre-push-hook.sh",
 					"readOnly":  true,
 				},
 				map[string]any{
@@ -908,28 +875,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 	}
 
-	// Antigravity API proxy host alias. agy (Gemini-Ultra) is a Go binary that
-	// calls Google Code Assist hosts with a Bearer access token; pointing those
-	// hosts at the antigravity-api-proxy lets the proxy inject the real token so
-	// the agy pod never holds the refresh token.
-	// The CA-trust + placeholder wiring lives in the antigravity-runner block
-	// below (agy runs in that container, so SSL_CERT_FILE belongs there, not on
-	// the sandbox-agent container). Only the GUI mode is hijacked;
-	// antigravity_config must reach real Google to complete the login.
-	if (mode == AntigravityGUIMode || mode == AntigravityCLIMode) && opts.AntigravityAPIProxyIP != "" {
-		hostAliases = append(hostAliases, map[string]any{
-			"ip":        opts.AntigravityAPIProxyIP,
-			"hostnames": []any{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com", "play.googleapis.com", "www.googleapis.com", "oauth2.googleapis.com"},
-		})
-		if mode == AntigravityCLIMode && opts.OAuthGatewayCAConfigMap != "" {
-			claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
-				"name":      "oauth-gateway-ca",
-				"mountPath": "/etc/oauth-gateway-ca",
-				"readOnly":  true,
-			})
-		}
-	}
-
 	claudeContainer := map[string]any{
 		"name":            "sandbox",
 		"image":           sessionImage,
@@ -948,6 +893,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	mcpProxyVolumeMounts := append([]any{}, configMounts...)
+	if wantSDKRunner {
+		mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
+			"name":      "workspace",
+			"mountPath": "/workspace",
+		})
+	}
 	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
 		"name":      "auth-romaine-sa-token",
 		"mountPath": "/var/run/secrets/auth.romaine.life",
@@ -955,6 +906,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	})
 	mcpProxyEnv := []any{
 		map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
+		map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+		map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
+		map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+		map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 		// Session identity forwarded by mcp-auth-proxy on outbound calls to
 		// Tank/Glimmung MCP servers. SESSION_ID still feeds the older
 		// X-Tank-Origin-Session-Id handoff-avatar path for mcp-tank-operator;
@@ -1010,13 +965,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"resources":    mcpAuthProxyResources(),
 	}
 	containers := []any{}
-	// The glibc antigravity-container image does not bake the (Python)
-	// mcp-auth-proxy binary, and the antigravity_config credential-mint mode
-	// is a terminal login that needs no MCP gateway. Skip the sidecar there;
-	// antigravity_gui will bake mcp-auth-proxy into its image and restore it.
-	if mode != AntigravityConfigMode {
-		containers = append(containers, mcpAuthProxyContainer)
-	}
+	containers = append(containers, mcpAuthProxyContainer)
 	containers = append(containers, claudeContainer)
 
 	// SDK claude-runner sidecar - Claude SDK GUI modes only. Shares /workspace
@@ -1068,6 +1017,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
+			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 		}
 		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude
 		// container gets, so the SDK's spawned claude binary trusts the
@@ -1204,6 +1154,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 		}
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			codexRunnerEnv = append(codexRunnerEnv,
@@ -1261,108 +1212,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"resources": codexRunnerResources(),
 		}
 		containers = append(containers, codexRunnerContainer)
-	}
-
-	// Antigravity-runner sidecar (antigravity_gui). Drives agy (Gemini-Ultra)
-	// and maps its structured transcript onto the Tank conversation protocol.
-	// Same workspace + session-bus contract as the other runners.
-	//
-	// Credential boundary: agy NEVER holds the real Google OAuth blob. The
-	// launch script writes a placeholder token (far-future expiry, no refresh
-	// token) into agy's data dir, and agy's cloudcode-pa.googleapis.com traffic
-	// is host-aliased to the antigravity-api-proxy, which injects the real
-	// access token and owns the refresh chain — the same boundary the Claude
-	// and Codex proxies enforce. agy is a Go binary, so it trusts the proxy's
-	// leaf via SSL_CERT_FILE (a system-bundle + oauth-gateway-ca concat built
-	// by the launch script), not NODE_EXTRA_CA_CERTS.
-	if wantAntigravityRunner {
-		// The runner drives agy + the session bus. The launch script copies
-		// Tank's canonical mcp.json into agy's native
-		// ~/.gemini/config/mcp_config.json before the first turn, and mounts
-		// the session-config bundle to hydrate Tank skills and expand skill
-		// turns into explicit prompt context for Gemini.
-		runnerVolumeMounts := []any{
-			map[string]any{"name": "workspace", "mountPath": "/workspace"},
-			map[string]any{"name": "session-config", "mountPath": SessionConfigDirMount, "readOnly": true},
-			map[string]any{"name": "tank-operator-sa-token", "mountPath": "/var/run/secrets/tank-operator", "readOnly": true},
-			map[string]any{"name": "auth-romaine-sa-token", "mountPath": "/var/run/secrets/auth.romaine.life", "readOnly": true},
-		}
-		antigravityProxied := opts.AntigravityAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != ""
-		if antigravityProxied {
-			volumes = append(volumes, map[string]any{
-				"name":      "oauth-gateway-ca",
-				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
-			})
-			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-				"name": "oauth-gateway-ca", "mountPath": "/etc/oauth-gateway-ca", "readOnly": true,
-			})
-		}
-		antigravityRunnerEnv := []any{
-			map[string]any{
-				"name": "SESSION_ID",
-				"valueFrom": map[string]any{
-					"fieldRef": map[string]any{"fieldPath": "metadata.labels['tank-operator/session-id']"},
-				},
-			},
-			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
-			map[string]any{
-				"name": "POD_OWNER_EMAIL",
-				"valueFrom": map[string]any{
-					"fieldRef": map[string]any{"fieldPath": "metadata.annotations['tank-operator/owner-email']"},
-				},
-			},
-			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
-			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
-			map[string]any{"name": "NATS_COMMAND_STREAM", "value": opts.NATSCommandStream},
-			map[string]any{"name": "NATS_USER", "value": storageKey},
-			map[string]any{"name": "NATS_PASSWORD_FILE", "value": "/var/run/secrets/auth.romaine.life/token"},
-			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
-			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
-			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
-			map[string]any{"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AntigravityRunnerMetricsPort)},
-		}
-		if strings.TrimSpace(opts.Model) != "" {
-			antigravityRunnerEnv = append(antigravityRunnerEnv, map[string]any{"name": "TANK_SESSION_MODEL", "value": strings.TrimSpace(opts.Model)})
-		}
-		if strings.TrimSpace(opts.Effort) != "" {
-			antigravityRunnerEnv = append(antigravityRunnerEnv, map[string]any{"name": "TANK_SESSION_EFFORT", "value": strings.TrimSpace(opts.Effort)})
-		}
-		if antigravityProxied {
-			// The launch script concatenates this CA with the system bundle and
-			// exports SSL_CERT_FILE so the Go-based agy trusts the proxy leaf.
-			antigravityRunnerEnv = append(antigravityRunnerEnv,
-				map[string]any{"name": "ANTIGRAVITY_OAUTH_GATEWAY_CA", "value": "/etc/oauth-gateway-ca/ca.crt"},
-			)
-		}
-		if opts.HotSwapAgentRunner {
-			volumes = append(volumes, map[string]any{
-				"name":     "antigravity-runner-hot",
-				"emptyDir": map[string]any{},
-			})
-			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-				"name":      "antigravity-runner-hot",
-				"mountPath": "/var/run/antigravity-runner-hot",
-			})
-			antigravityRunnerEnv = append(antigravityRunnerEnv,
-				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/antigravity-runner-launch-binary.sh"},
-				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/antigravity-runner-hot/antigravity-runner-launch-binary.sh"},
-				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
-			)
-		}
-		command := []any{"bash", "/opt/tank/antigravity-runner-launch.sh"}
-		antigravityRunnerContainer := map[string]any{
-			"name":            "antigravity-runner",
-			"image":           sessionImage,
-			"imagePullPolicy": "Always",
-			"command":         command,
-			"env":             antigravityRunnerEnv,
-			"volumeMounts":    runnerVolumeMounts,
-			"ports": []any{
-				map[string]any{"name": "runner-metrics", "containerPort": AntigravityRunnerMetricsPort},
-			},
-			"resources": codexRunnerResources(),
-		}
-		containers = append(containers, antigravityRunnerContainer)
 	}
 
 	spec := map[string]any{
@@ -1612,6 +1461,13 @@ func mcpAuthProxyResources() map[string]any {
 			"memory": "256Mi",
 		},
 	}
+}
+
+func boolEnv(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func itoa(n int) string {

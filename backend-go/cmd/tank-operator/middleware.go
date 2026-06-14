@@ -98,10 +98,6 @@ var providerModels = map[string][]string{
 		"gpt-5.4-mini",
 		"gpt-5.3-codex-spark",
 	},
-	"antigravity": {
-		"Gemini 3.1 Pro",
-		"Gemini 3.5 Flash (Medium)",
-	},
 }
 
 func allowedModelsForProvider(provider string) []string {

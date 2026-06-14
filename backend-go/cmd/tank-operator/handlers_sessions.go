@@ -43,6 +43,9 @@ func validateCreateSessionCapabilities(mode string, raw []string) ([]string, int
 	if err != nil {
 		return nil, http.StatusBadRequest, err.Error()
 	}
+	if sessionmodel.HasSessionCapability(capabilities, sessionmodel.SessionCapabilityRestrictedGit) && !sessionModeSupportsRepos(mode) {
+		return nil, http.StatusBadRequest, sessionmodel.SessionCapabilityRestrictedGit + " capability requires a repo-capable session mode"
+	}
 	return capabilities, 0, ""
 }
 

@@ -104,17 +104,22 @@ func TestHandleSetSessionRunConfig_CodexMissingModelReturns400(t *testing.T) {
 	}
 }
 
-func TestHandleSetSessionRunConfig_AntigravityReturns400(t *testing.T) {
-	app := registryOnlyAuthTestServer(t, runConfigRecord(sessionmodel.AntigravityGUIMode))
-	res, req := runConfigRequest(t, "71", `{"model":"Gemini 3.5 Flash (Medium)"}`)
+func TestHandleSetSessionRunConfig_NonSDKModeReturns400(t *testing.T) {
+	// A session whose mode is not an SDK run-config mode (claude_gui /
+	// codex_gui) cannot change model/effort mid-session — the handler rejects
+	// it at the sdkProviderForMode choke point. (This case previously also
+	// covered Antigravity, which was removed from the backend mode set
+	// upstream; any non-SDK mode now exercises the same rejection.)
+	app := registryOnlyAuthTestServer(t, runConfigRecord(sessionmodel.ClaudeCLIMode))
+	res, req := runConfigRequest(t, "71", `{"model":"claude-opus-4-8"}`)
 
 	app.handleSetSessionRunConfig(res, req)
 
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s, want 400", res.Code, res.Body.String())
 	}
-	if !strings.Contains(res.Body.String(), "Antigravity") {
-		t.Fatalf("body = %s, want Antigravity exclusion detail", res.Body.String())
+	if !strings.Contains(res.Body.String(), "does not support") {
+		t.Fatalf("body = %s, want non-SDK mode rejection detail", res.Body.String())
 	}
 }
 

@@ -103,7 +103,7 @@
     },
     "source": {
       "type": "string",
-      "enum": ["tank", "claude", "codex", "antigravity"]
+      "enum": ["tank", "claude", "codex"]
     },
     "type": {
       "type": "string",
@@ -145,7 +145,7 @@
     "runtime": {
       "description": "Session-events storage runtime stamp.",
       "type": "string",
-      "enum": ["claude", "codex", "antigravity"]
+      "enum": ["claude", "codex"]
     },
     "producer": {
       "type": "object",
@@ -246,7 +246,8 @@
               "type": "array",
               "minItems": 1,
               "items": { "$ref": "#/$defs/askUserQuestion" }
-            }
+            },
+            "plan": { "type": "string" }
           }
         }
       }
@@ -321,6 +322,10 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/askUserQuestion" }
         },
+        "plan": {
+          "description": "ExitPlanMode plan markdown rendered on the question page above the Approve/Request-changes question. Absent for ordinary AskUserQuestion pauses.",
+          "type": "string"
+        },
         "provider_item_id": { "type": "string", "minLength": 1 },
         "timeline_id": { "type": "string", "minLength": 1 }
       }
@@ -352,7 +357,7 @@
         "status": { "$ref": "#/$defs/nonEmptyString" },
         "source": {
           "description": "Optional payload-level provenance for backend-originated self-submit paths. The turn.submitted envelope source remains tank.",
-          "enum": ["schedule-wakeup", "background-task", "launch-dispatch", "agent-continuation"]
+          "enum": ["schedule-wakeup", "background-task", "launch-dispatch"]
         },
         "prompt": {
           "description": "Optional backend-owned prompt text for self-submit paths whose user-facing message is not persisted as a main-transcript user_message.created row. Background-task wake projection uses this as a turn-only system-user message in Turn activity.",
@@ -389,7 +394,7 @@
         "final_answer": { "$ref": "#/$defs/finalAnswer" },
         "background_work_pending": {
           "type": "boolean",
-          "description": "Harness observation stamped by the antigravity runner: true when the agent still has background work (a timer/build/run_command task) running at this terminal, so the user-facing turn is mid-flight, not an end. The activity fold folds a would-be-ready terminal carrying this to the non-summoning scheduled status. See backend-go/cmd/antigravity-runner/ARCHITECTURE.md."
+          "description": "Harness observation stamped by a runner: true when the agent still has background work in flight at this terminal, so the user-facing turn is mid-flight, not an end. The activity fold folds a would-be-ready terminal carrying this to the non-summoning scheduled status."
         }
       }
     },

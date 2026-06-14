@@ -331,7 +331,6 @@ All metric names are prefixed `tank_`. The full namespace:
     `turn.started` timestamp for its whole life — only ledger silence
     distinguishes a wedged turn boundary from a live turn. This class
     exists because of sessions 828/829 (tank-operator#1085): the
-    antigravity turn-settle window was cancelled by a
     transcript-rewrite replay and never re-armed, leaving turns open
     and ledger-silent for 30+ minutes while the accepted-only gauge
     read 0. A streaming hit is suspicion, not a verdict (a single long
@@ -447,44 +446,23 @@ All metric names are prefixed `tank_`. The full namespace:
   subagent authority regression is a nonzero
   `{agent_kind="subagent",tool_family="mcp",server="<configured server>"}`
   series while the parent can use that server.
-- `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
-  This runner has its own namespace because it drives the native `agy` binary
-  rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`
-  is the red signal for failed agy turns. `reason="skill_missing"` means the
   backend accepted a skill turn but the runner could not find
-  `$HOME/.gemini/skills/<skill>/SKILL.md`, so the turn fails before provider
-  execution. `reason="provider_executor_error"` means agy emitted a provider
   executor terminal error such as `UNKNOWN (code 500)` or
   `PlannerResponse without ModifiedResponse`; `reason="provider_no_final_answer"`
-  means agy exited successfully after tool activity but produced no assistant
   prose to promote as the final answer. `reason="provider_process_exited"`
-  means the agy process died while a turn was in flight;
-  `reason="provider_process_unavailable"` means a submit arrived after agy was
   already gone (the inert post-fatal drain); `reason="prompt_not_accepted"`
   means the submit-ack watchdog saw no transcript movement at all within
-  `ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS` after the PTY prompt write.
-  `tank_antigravity_runner_process_exit_total{phase}` counts agy exits with
   `during_turn`/`idle`; process death is session-terminal by design (no
   revival) and this counter is the "does this come up often" input to ever
   revisiting that decision.
-  `tank_antigravity_runner_interrupt_outcome_total{outcome}` records how Stop
-  resolved: `graceful_done` (agy settled a DONE response), `grace_forced` (the
-  `ANTIGRAVITY_INTERRUPT_GRACE_MS` window forced the durable terminal), or
-  `process_exited` (the SIGINT killed agy).
-  `tank_antigravity_runner_turn_settle_total{outcome}` records turn-boundary
   settlement: `quiet` means transcript silence confirmed the terminal,
   `extended` means a further step canceled an armed window — the answer-first
   frequency signal that keeps the silence-window constant honest
   (tank-operator#1035; see ARCHITECTURE.md → "Silence Is the Boundary").
-  `tank_antigravity_runner_task_lifecycle_total{event}` records durable
-  `shell_task.*` publishes for agy-tracked background tasks
   (`started`/`completed`), plus the fold-regression signals
   `orphaned_start`/`orphaned_completion` (a task signal whose originating turn
-  was unknowable — the agent-continuation relay for that task renders
   standalone instead of folding; tank-operator#1035) and `publish_error`.
-  `tank_antigravity_runner_step_replay_suppressed_total{context}` records
   transcript steps skipped because the (provider step, status) pair was
-  already observed earlier in the session. agy performs its larger transcript
   writes as an in-place truncate + byte-identical full rewrite (verified live,
   probe session 799); when a sweep's stat lands inside that sub-second window
   the byte cursor rewinds and the whole history re-arrives. Replay is
@@ -493,41 +471,29 @@ All metric names are prefixed `tank_`. The full namespace:
   `context="turn"` is a replay suppressed while a turn was active;
   `context="idle"` is a replay suppressed between turns, where an
   unsuppressed replay would re-buffer history into the next turn or
-  manufacture a phantom self-continuation relay. An antigravity session whose
   later turns re-publish earlier turns' items in `session_events` while this
   counter stays flat is the regression signature for the session-791 turn
   re-attribution bug (expanding turn N showed turns 1..N).
-  `tank_antigravity_runner_submit_watchdog_total{result}` records
   `cleared`/`fired` for the submit-ack watchdog, and
-  `tank_antigravity_runner_provider_fatal_report_total{result}` records the
   runner's provider-fatal report to the orchestrator. The orchestrator side
   counts the same reports as `tank_session_provider_fatal_total{provider,result}`
   on the internal provider-fatal endpoint that moves the session row to
   Failed.
   `reason="transcript_event_source_unavailable"` and
   `reason="transcript_event_source_error"` mean the local file-backed event
-  source for agy's JSONL transcript failed before or during the turn; these are
   durable `turn.failed` outcomes, not silent live-update degradation.
-  `tank_antigravity_runner_transcript_event_source_total{result}` records the
   underlying watcher health with `started`, `unavailable`, and `error` buckets.
-  `tank_antigravity_runner_agy_diagnostic_total{kind}`
-  records bounded non-terminal diagnostics from agy output:
   `auxiliary_userinfo_401` and `telemetry_clearcut_401` classify the known
   placeholder-token profile/telemetry noise and must not be treated as Code
-  Assist auth failure. The real Antigravity auth failure signature is
   proxy-observed
-  `tank_api_proxy_upstream_401_total{provider="antigravity"}` or a
   `provider_auth_failed` terminal.
-  `tank_antigravity_runner_schedule_intent_total{kind}` records the schedule
   decision boundary before durable wakeup registration. `native_schedule_call`
-  means agy emitted the native `schedule` tool, `malformed_schedule_call` means
   the tool call existed but was not registerable, `parked_after_schedule` means
   the runner interrupted the native timer after durable registration, and
   `wait_text_without_schedule` is the diagnostic signature for a planner text
   step that says it will wait while emitting no native schedule tool call.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
-  `provider` (`claude`, `codex`, `antigravity`, `unknown`) and bounded
   `result`.
 - `tank_session_container_terminations_total{container,reason,exit_code}` —
   session pod container terminations observed by the leader-elected K8s watch.
@@ -538,14 +504,12 @@ All metric names are prefixed `tank_`. The full namespace:
 - `tank_session_run_config_rejected_total` - backend rejections of invalid
   session mode/model/effort requests before runner dispatch. Labels are bounded:
   `surface` (`create`, `turn`, `runtime_config`, `other`), `provider`
-  (`claude`, `codex`, `antigravity`, `unknown`, `other`), and `reason`
   (`invalid_mode`, `retired_mode`, `unsupported_model`,
   `unsupported_effort`, `missing_model`, `default_model`, `other`). This is the
   red signal for agents or browser prefs attempting retired Codex modes or
   unavailable model strings; the corresponding HTTP response must be a hard
   400 with an actionable allowed-value list, never a silent default.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
-  label: `provider` ("claude", "codex", or "antigravity"), bound from
   `PROXY_PROVIDER`.
   `tank_api_proxy_upstream_status_total{provider,status_class}` buckets every
   upstream response; `tank_api_proxy_upstream_401_total` and
@@ -566,17 +530,16 @@ All metric names are prefixed `tank_`. The full namespace:
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
 - `tank_nats_auth_callout_total{result}` — outcomes of the per-session NATS
   credential issuer (`backend-go/cmd/nats-auth-callout`, #1128). `result` is
-  bounded to `session` (per-session JWT issued), `legacy` (shared fleet-token
-  transition grant), `denied_no_credentials`, `denied_token_invalid`,
-  `denied_pod_unbound`, `denied_identity_mismatch`, and `error`. The callout
-  has no Service — it answers NATS `$SYS.REQ.USER.AUTH`, not HTTP — so it is
-  scraped by the `tank-nats-auth-callout` **PodMonitor**, not a ServiceMonitor.
-  `TankNatsAuthCalloutDenials` alerts on the rejection/error results (the #1148
-  new-pod auth-failure class that wedges submitted turns);
-  `TankNatsAuthCalloutLegacyTokenInUse` surfaces the `legacy` result, which is
-  both the migration audit checklist's "old path is being used again" counter
-  and the #1128 stage-4 gate — the legacy grant cannot be removed until it
-  flatlines at zero for a full pre-stage-3 pod-age window.
+  bounded to `session` (per-session JWT issued), `denied_no_credentials`,
+  `denied_token_invalid`, `denied_auth_exchange`,
+  `denied_auth_jwt_invalid`, `denied_subject_untrusted`,
+  `denied_identity_mismatch`, and `error`. The
+  callout has no Service — it answers NATS `$SYS.REQ.USER.AUTH`, not HTTP — so
+  it is scraped by the `tank-nats-auth-callout` **PodMonitor**, not a
+  ServiceMonitor. `TankNatsAuthCalloutDenials` alerts on the rejection/error
+  results (the #1148 new-pod auth-failure class that wedges submitted turns),
+  including Glimmung test-slot auth.romaine.life exchange or identity-shape
+  mismatches.
 - `tank_schema_migration*` — startup schema-migration engine
   (`pgstore.RunMigrationsWithMetrics`) counters emitted once per boot,
   before the HTTP/`/metrics` server comes up. `tank_schema_migrations_pending`
@@ -906,8 +869,6 @@ Response fields:
     observation, `""` if none.
 
 To localize a listed session, read its runner logs and its
-`session_events` ledger tail; for antigravity sessions also check
-`tank_antigravity_runner_turn_settle_total` (a healthy boundary shows
 a `quiet` outcome after the last `extended`). The endpoint never
 mutates state. Emits a structured `slog` line per call
 (`caller_email`, `session_scope`, `threshold_seconds`,
@@ -1146,14 +1107,15 @@ declares one rule group per subsystem:
 - **NATS**: disconnect storm (>6/min for 5m).
 - **NATS auth-callout** (#1128): `TankNatsAuthCalloutDenials` (warning) fires
   when the per-session credential issuer rejects session-pod auth
-  (`denied_token_invalid`/`denied_pod_unbound`/`denied_identity_mismatch`/
-  `error`) — the #1148 class where a pod cannot reach the session bus and its
-  turns stay stuck with no terminal. `TankNatsAuthCalloutLegacyTokenInUse`
-  (info) is the migration's "old path still in use" signal and the stage-4
-  gate: while the callout still issues the legacy shared-token grant, removing
-  it would strand pre-stage-3 pods. Both depend on the `tank-nats-auth-callout`
-  PodMonitor scraping the callout `/metrics` — without it the issuer (the only
-  fleet component with no Service) was invisible to Prometheus.
+  (`denied_token_invalid`/`denied_auth_exchange`/
+  `denied_auth_jwt_invalid`/`denied_subject_untrusted`/
+  `denied_identity_mismatch`/`error`) — the #1148
+  class where a pod cannot reach the session bus and its turns stay stuck with
+  no terminal. The same alert covers Glimmung test-slot session runners because
+  they share the production broker and callout. It depends on the
+  `tank-nats-auth-callout` PodMonitor scraping the callout `/metrics` — without
+  it the issuer (the only fleet component with no Service) is invisible to
+  Prometheus.
 - **api-proxy**: upstream 401 rate (refresh-storm signature), refresh
   failures (any non-success result), and sustained upstream 429s
   (`TankApiProxyRateLimited` — the shared provider account's usage cap is

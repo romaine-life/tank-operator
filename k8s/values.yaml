@@ -3,16 +3,16 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-e0de6166f72c98cc1864fa6544050b50ecf176e79ff96802333dc36c2f3805de"
+  tag: "app-ea76ad2da7c86693e0d3af11793c4213dc7bbc48f6c04662144616c581542d17"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-13T08:29:56Z"
-    git_sha: "8aa52b90a6dd698f9338096c35fe1ce2550327d6"
+    built_at: "2026-06-14T00:41:33Z"
+    git_sha: "018bd6597d12505ff00a9923c6e6f5507473a64b"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/8aa52b90a6dd698f9338096c35fe1ce2550327d6"
-    pr_number: "1143"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1143"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27461669999"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/018bd6597d12505ff00a9923c6e6f5507473a64b"
+    pr_number: "1156"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1156"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27483708508"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
@@ -72,49 +72,29 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-0e1a1bd17623622e3c661874aa8299a9de87bd8afdd3f3a4204815e49c2c2821"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-162f364eb70f1e8bd39cb8951899cfe857379bf8a0ecb59b235c136b2aa1898d"
-  # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
-  # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
-  # antigravity_config credential-mint mode. session-images-build.yml rewrites
-  # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: "romainecr.azurecr.io/antigravity-container:antigravity-9d9be6a5541dc1fcc58826e9cb5e69becadf3c0dd830a0753bdcc1bc405cf79c"
+  image: "romainecr.azurecr.io/claude-container:claude-f288d719bf920f9b4a6965327d9f8cbde195aee4eb17dc01377eb08416c2b425"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-6034ba572a4948a79f4ffc55c8bafeb8f13e6c6a7e2bb385cfdd6525196ba90e"
   imageMetadata:
     claude:
-      built_at: "2026-06-13T07:46:07Z"
-      git_sha: "8dc4485019ac0297ec8879d41faecb1e783ffa97"
+      built_at: "2026-06-14T00:40:36Z"
+      git_sha: "018bd6597d12505ff00a9923c6e6f5507473a64b"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/8dc4485019ac0297ec8879d41faecb1e783ffa97"
-      pr_number: "1144"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1144"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27460723786"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/018bd6597d12505ff00a9923c6e6f5507473a64b"
+      pr_number: "1156"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1156"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27483708491"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
     codex:
-      built_at: "2026-06-13T07:46:07Z"
-      git_sha: "8dc4485019ac0297ec8879d41faecb1e783ffa97"
+      built_at: "2026-06-14T00:40:36Z"
+      git_sha: "018bd6597d12505ff00a9923c6e6f5507473a64b"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/8dc4485019ac0297ec8879d41faecb1e783ffa97"
-      pr_number: "1144"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1144"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27460723786"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/018bd6597d12505ff00a9923c6e6f5507473a64b"
+      pr_number: "1156"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1156"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27483708491"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
-    antigravity:
-      built_at: "2026-06-13T07:46:07Z"
-      git_sha: "8dc4485019ac0297ec8879d41faecb1e783ffa97"
-      git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/8dc4485019ac0297ec8879d41faecb1e783ffa97"
-      pr_number: "1144"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1144"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27460723786"
-      repository: "romaine-life/tank-operator"
-      actor: "tank-operator-host[bot]"
-  # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
-  # orchestrator namespace where the antigravity-api-proxy mounts it; agy
-  # session pods never mount it (they get a placeholder + proxy injection).
-  antigravityCredentialsSecret: antigravity-credentials
-  antigravityCredentialsSecretKey: antigravity-oauth-token
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -144,7 +124,7 @@ session:
 
 # Per-session NATS credential issuer (#1128): answers the NATS server's
 # auth_callout with user JWTs scoped to one session's subjects, identity
-# anchored in projected SA tokens + orchestrator-written pod labels.
+# anchored in auth.romaine.life's k8s service-principal exchange.
 # DISABLED until the staged rollout starts; flipping `enabled` only deploys
 # the issuer — nothing routes through it until infra-bootstrap's NATS chart
 # turns on authorization.auth_callout with this issuer's account public key
@@ -218,11 +198,10 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-e0ad4d6615a334574603dd6f8f8152e00e324bf3d15ae5513660ba511919e748"
+    tag: "api-proxy-a43c007240c6f401994b0dc2aa0c067a559013339c6c26e2ff0c33fa02f63398"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
-  # Replica count shared by all four proxy Deployments (claude,
-  # claude-secondary, codex, antigravity). HOLD AT 1 until the refresh
+  # Replica count shared by all provider proxy Deployments. HOLD AT 1 until the refresh
   # lease proves itself in production: cross-replica rotation safety rides
   # the api-proxy-refresh-<kv-secret-name> coordination.k8s.io Lease
   # (api-proxy/src/tank_api_proxy/lease.py), and the gate for raising this
@@ -236,12 +215,6 @@ apiProxy:
   # Published to KV by infra/api_proxy.tf â€” separate UAMI from the
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
-  # KV key holding the Google installed-app OAuth client_secret used by the
-  # antigravity-api-proxy refresh exchange. Seeded out-of-band (like the
-  # provider credential blobs); the value is extractable from the public agy
-  # binary so it is not confidential, but is kept out of git regardless.
-  kvAntigravityClientSecretKey: antigravity-oauth-client-secret
-
 claudeSecondaryApiProxy:
   serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
 
@@ -251,13 +224,6 @@ claudeSecondaryApiProxy:
 # and validation slots.
 codexApiProxy:
   serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
-
-# Antigravity API proxy: a third production Envoy + ext_proc deployment using
-# the same image and UAMI as apiProxy. It fronts cloudcode-pa.googleapis.com
-# (Google Code Assist data plane) and owns the Google OAuth refresh chain for
-# agy (Gemini-Ultra) GUI sessions in production and validation slots.
-antigravityApiProxy:
-  serviceHost: antigravity-api-proxy.tank-operator.svc.cluster.local
 
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
