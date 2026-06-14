@@ -424,6 +424,11 @@ type TurnActivitySummary = {
   sourceEventId?: string;
   turnUsage?: unknown;
   usageObservation?: unknown;
+  // The model/effort this turn ran on (carried on the shell's activity summary
+  // by the backend projection). Lets the Turns surface show each turn's model
+  // independent of the composer chip's next-turn selection.
+  model?: string;
+  effort?: string;
 };
 type TurnActivityCollapseSummary = {
   collapsible?: boolean;
@@ -5741,6 +5746,8 @@ function normalizeTurnActivitySummary(
     sourceEventId: stringRecordValue(record, "sourceEventId"),
     turnUsage: record.turnUsage,
     usageObservation: record.usageObservation,
+    model: stringRecordValue(record, "model") || undefined,
+    effort: stringRecordValue(record, "effort") || undefined,
   };
 }
 
@@ -11031,8 +11038,19 @@ function buildTurnViewItems(
           contextWindow,
           turnId,
         ),
-        model: runConfigByTurn.get(turnId)?.model ?? null,
-        effort: runConfigByTurn.get(turnId)?.effort ?? null,
+        // Prefer the shell's per-turn run config (always loaded for the viewed
+        // turn, including turn-page deep-links); fall back to the user-message
+        // capture for any path where only the message entry is present.
+        model:
+          shellSummary?.model ||
+          (typeof shell?.model === "string" ? shell.model.trim() : "") ||
+          runConfigByTurn.get(turnId)?.model ||
+          null,
+        effort:
+          shellSummary?.effort ||
+          (typeof shell?.effort === "string" ? shell.effort.trim() : "") ||
+          runConfigByTurn.get(turnId)?.effort ||
+          null,
         startedAt,
         completedAt,
         lastActivityAt,
@@ -12138,20 +12156,6 @@ function RunTurnActivityScreen({
               {selected.completedAt && !selected.active && (
                 <span>{formatToolFullTime(selected.completedAt)}</span>
               )}
-              {sessionMode && selected.model && (
-                <span
-                  className="run-turn-view-model"
-                  title="Model this turn ran on"
-                >
-                  {modelDisplayLabel(sessionMode as SessionMode, selected.model)}
-                  {selected.effort
-                    ? ` · ${effortDisplayLabel(
-                        sessionMode as SessionMode,
-                        selected.effort,
-                      )}`
-                    : ""}
-                </span>
-              )}
               {selected.costEstimate && (
                 <ComposerCostEstimate
                   amountUsd={selected.costEstimate.amountUsd}
@@ -12160,6 +12164,22 @@ function RunTurnActivityScreen({
                   scopeLabel="turn"
                 />
               )}
+            </div>
+          )}
+          {sessionMode && selected.model && (
+            <div className="run-turn-view-model-line">
+              <span
+                className="run-turn-view-model"
+                title="Model this turn ran on"
+              >
+                {modelDisplayLabel(sessionMode as SessionMode, selected.model)}
+                {selected.effort
+                  ? ` · ${effortDisplayLabel(
+                      sessionMode as SessionMode,
+                      selected.effort,
+                    )}`
+                  : ""}
+              </span>
             </div>
           )}
           {showPromptContextShell && selected && (

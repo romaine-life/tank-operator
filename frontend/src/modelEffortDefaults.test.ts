@@ -237,7 +237,14 @@ test("per-turn model is captured from each turn's user message and shown in the 
   expect(appSource).toMatch(
     /isUserMessageEntry\(entry\) && !runConfigByTurn\.has\(turnId\)[\s\S]{0,160}entry\.model/,
   );
-  expect(appSource).toMatch(/model:\s*runConfigByTurn\.get\(turnId\)\?\.model/);
+  // TurnViewItem reads the per-turn model from the shell's activity summary
+  // (the carrier the turn-summary normalizer preserves), then the shell
+  // top-level, then the user-message capture.
+  expect(appSource).toMatch(
+    /shellSummary\?\.model[\s\S]{0,220}runConfigByTurn\.get\(turnId\)\?\.model/,
+  );
+  // The summary normalizer must carry model so it survives the row-merge path.
+  expect(appSource).toMatch(/model: stringRecordValue\(record, "model"\)/);
   // Render: the turn summary shows the VIEWED turn's model via the shared
   // label helper. It must read selected.model (per-turn), never the composer's
   // selectedModelId (next-turn) — otherwise every historical turn would show

@@ -4416,11 +4416,22 @@ button:disabled {
 }
 
 /* The per-turn model badge: which model this turn actually ran on (distinct
-   from the composer chip's next-turn selection). Subtle violet accent so it
-   reads as a distinct, meaningful indicator among the gray stat pills. */
-.run-turn-view-summary > span.run-turn-view-model {
+   from the composer chip's next-turn selection). Always visible on the turn
+   view (not gated by the collapsible stats panel), with a subtle violet accent
+   so it reads as a distinct, meaningful indicator. */
+.run-turn-view-model-line {
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-3) 0;
+}
+.run-turn-view-model-line .run-turn-view-model {
+  border-radius: 999px;
   background: rgba(167, 139, 250, 0.16);
   color: #ddd6fe;
+  padding: 0.2rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.2;
 }
 
 .collapsed-turn-mock-frame {
