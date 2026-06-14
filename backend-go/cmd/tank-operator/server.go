@@ -252,6 +252,9 @@ type backgroundTaskWakeStore interface {
 type controlActionStore interface {
 	Append(context.Context, pgstore.ControlActionEvent) (pgstore.ControlActionEvent, error)
 	ListBySession(context.Context, string, string, string, int) ([]pgstore.ControlActionEvent, error)
+	ListBreakGlassRequests(context.Context, string, int) ([]pgstore.ControlActionEvent, error)
+	GetBySessionEvent(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
+	BreakGlassDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 }
 
 // sessionImageOverrideStore is the durable per-scope session-image override
@@ -313,6 +316,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/admin/test-slot-session-defaults", s.handleAdminSetTestSlotSessionDefaults)
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
+	mux.HandleFunc("GET /api/admin/break-glass-requests", s.handleAdminBreakGlassRequests)
 	// Admin-only durable support surface for avatar upload failures. The
 	// form error returns attempt_id; this endpoint turns that reference into
 	// a curl-able diagnosis without browser devtools.
@@ -445,6 +449,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
 	mux.HandleFunc("POST /api/sessions/{session_id}/scheduled-wakeups/cancel", s.handleCancelScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
+	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests/{request_event_id}", s.handleGetBreakGlassRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/approve", s.handleApproveBreakGlassRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/deny", s.handleDenyBreakGlassRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/approve", s.handleApprovePRLaneRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)
@@ -495,9 +502,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/hot-swap/verify", s.handleInternalVerifyHotSwap)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-auto-approval", s.handleInternalGetPRLaneAutoApproval)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
-	mux.HandleFunc("POST /api/internal/sessions/{session_id}/git-break-glass/grants", s.handleInternalGrantGitBreakGlass)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
-	mux.HandleFunc("POST /api/internal/sessions/{session_id}/azure-break-glass/grants", s.handleInternalGrantAzureBreakGlass)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/azure-break-glass/grant", s.handleInternalGetAzureBreakGlassGrant)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)

@@ -6537,6 +6537,192 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
+.admin-break-glass {
+  gap: var(--space-3);
+}
+
+.admin-break-glass-toolbar,
+.admin-break-glass-meta,
+.admin-break-glass-actions,
+.admin-break-glass-decision {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.admin-break-glass-toolbar {
+  flex-wrap: wrap;
+}
+
+.admin-break-glass-filter {
+  min-height: 1.85rem;
+  padding: 0 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm, 0.375rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.admin-break-glass-filter:hover:not(:disabled),
+.admin-break-glass-filter.is-active {
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(125, 211, 252, 0.1);
+  color: var(--text-primary);
+}
+
+.admin-break-glass-scope,
+.admin-break-glass-scope-line {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.admin-break-glass-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.admin-break-glass-row {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(10, 15, 25, 0.42);
+}
+
+.admin-break-glass-row.is-pending {
+  border-color: rgba(251, 191, 36, 0.24);
+}
+
+.admin-break-glass-row.is-approved {
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.admin-break-glass-row.is-denied {
+  border-color: rgba(248, 113, 113, 0.22);
+}
+
+.admin-break-glass-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.admin-break-glass-title {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.admin-break-glass-kind {
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.admin-break-glass-target {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.admin-break-glass-status {
+  flex: 0 0 auto;
+  min-height: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.48rem;
+  border-radius: var(--radius-sm, 0.375rem);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.admin-break-glass-status.is-pending {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--status-agent-working);
+}
+
+.admin-break-glass-status.is-approved {
+  background: var(--status-online-bg);
+  color: var(--status-online);
+}
+
+.admin-break-glass-status.is-denied {
+  background: var(--status-error-bg);
+  color: var(--status-error-fg);
+}
+
+.admin-break-glass-reason {
+  color: var(--text-body);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.admin-break-glass-meta {
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.admin-break-glass-meta span,
+.admin-break-glass-decision span {
+  min-height: 1.3rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm, 0.375rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.admin-break-glass-decision {
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.admin-break-glass-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.admin-break-glass-actions a {
+  text-decoration: none;
+}
+
+.admin-break-glass-empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 640px) {
+  .admin-break-glass-row-head,
+  .admin-break-glass-actions {
+    align-items: stretch;
+  }
+
+  .admin-break-glass-row-head {
+    flex-direction: column;
+  }
+
+  .admin-break-glass-actions > * {
+    flex: 1 1 9rem;
+  }
+}
+
 @media (max-width: 768px) {
   .run-settings-admin-form {
     grid-template-columns: minmax(0, 1fr);
@@ -9117,6 +9303,16 @@ button:disabled {
 .run-pr-menu-breakglass .run-slash-desc {
   flex: 1 1 auto;
   text-align: right;
+}
+
+.break-glass-approval .pr-lane-approval-trigger {
+  border-color: rgba(240, 180, 41, 0.45);
+  color: #f5d37b;
+}
+
+.break-glass-approval .pr-lane-approval-item.is-focused {
+  border-color: rgba(240, 180, 41, 0.55);
+  box-shadow: inset 3px 0 0 rgba(240, 180, 41, 0.85);
 }
 
 .run-pr-menu-sep {
