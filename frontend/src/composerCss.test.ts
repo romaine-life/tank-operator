@@ -233,6 +233,20 @@ test("turn view transcript rows share the same avatar gutter", () => {
   expect(inlineActivityContentRule).toMatch(/max-width:\s*100%;/);
 });
 
+test("question page answer card aligns with assistant bubble content gutter", () => {
+  const questionCardRule = cssRule('.run-turn-view-body[data-page-kind="question"] .run-tool-ask');
+  expect(questionCardRule).toMatch(
+    /width:\s*calc\(100%\s*-\s*\(2\.625rem\s*\+\s*0\.55rem\)\);/,
+  );
+  expect(questionCardRule).toMatch(
+    /margin-left:\s*calc\(2\.625rem\s*\+\s*0\.55rem\);/,
+  );
+
+  expect(indexCssSource).toMatch(
+    /@media \(max-width:\s*640px\)\s*\{[\s\S]*?\.run-turn-view-body\[data-page-kind="question"\]\s+\.run-tool-ask\s*\{[\s\S]*?width:\s*100%;[\s\S]*?margin-left:\s*0;/,
+  );
+});
+
 test("non-compact user message footer floats into the final prose line", () => {
   expect(appSource).toMatch(
     /const inlineFooter =\s*variant === "user" && !compact && visibleAttachments\.length === 0;/,
