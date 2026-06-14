@@ -1966,7 +1966,40 @@ var schemaMigrations = []migration{
 		ALTER TABLE deployment_image_versions
 			ADD CONSTRAINT deployment_image_versions_image_kind_check
 			CHECK (image_kind IN ('app', 'session_claude', 'session_codex'))`},
-	{ID: "0159", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS control_action_events_break_glass_request_decision
+	{ID: "0159", SQL: `CREATE TABLE IF NOT EXISTS provider_quota_snapshots (
+		session_scope text NOT NULL,
+		provider      text NOT NULL,
+		window_id     text NOT NULL,
+		status        text NOT NULL,
+		utilization   double precision,
+		resets_at     text,
+		observed_at   timestamptz NOT NULL,
+		source        text NOT NULL,
+		raw           jsonb NOT NULL DEFAULT '{}'::jsonb,
+		updated_at    timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, provider, window_id),
+		CHECK (provider IN ('anthropic', 'anthropic_secondary', 'codex')),
+		CHECK (window_id IN ('five_hour', 'weekly', 'opus_weekly')),
+		CHECK (status <> '')
+	)`},
+	{ID: "0160", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_snapshots_scope_observed
+		ON provider_quota_snapshots (session_scope, observed_at DESC)`},
+	{ID: "0161", SQL: `CREATE TABLE IF NOT EXISTS provider_quota_refresh_state (
+		session_scope     text NOT NULL,
+		provider          text NOT NULL,
+		last_attempted_at timestamptz NOT NULL,
+		last_succeeded_at timestamptz,
+		status_code       integer,
+		status            text NOT NULL DEFAULT '',
+		error             text NOT NULL DEFAULT '',
+		next_retry_at     timestamptz,
+		updated_at        timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, provider),
+		CHECK (provider IN ('anthropic', 'anthropic_secondary', 'codex'))
+	)`},
+	{ID: "0162", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_refresh_state_retry
+		ON provider_quota_refresh_state (session_scope, next_retry_at)`},
+	{ID: "0163", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS control_action_events_break_glass_request_decision
 		ON control_action_events (session_scope, session_id, (payload->>'request_event_id'))
 		WHERE action IN (
 			'github.break_glass.grant',
