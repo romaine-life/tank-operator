@@ -38,7 +38,11 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 
 	sources := map[string]string{
 		"anthropic": envDefault("CLAUDE_PROVIDER_USAGE_URL", s.defaultProviderUsageURL("claude")),
-		"codex":     envDefault("CODEX_PROVIDER_USAGE_URL", s.defaultProviderUsageURL("codex")),
+		"anthropic_secondary": envDefault(
+			"CLAUDE_SECONDARY_PROVIDER_USAGE_URL",
+			s.defaultProviderUsageURL("claude_secondary"),
+		),
+		"codex": envDefault("CODEX_PROVIDER_USAGE_URL", s.defaultProviderUsageURL("codex")),
 	}
 	out := providerQuotaResponse{
 		RateLimits: []map[string]any{},
@@ -93,6 +97,8 @@ func (s *appServer) defaultProviderUsageURL(provider string) string {
 	switch provider {
 	case "claude":
 		return fmt.Sprintf("http://claude-api-proxy.%s.svc.cluster.local:9100/usage/claude", ns)
+	case "claude_secondary":
+		return fmt.Sprintf("http://claude-secondary-api-proxy.%s.svc.cluster.local:9100/usage/claude", ns)
 	case "codex":
 		return fmt.Sprintf("http://codex-api-proxy.%s.svc.cluster.local:9100/usage/codex", ns)
 	default:

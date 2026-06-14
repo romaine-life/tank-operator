@@ -79,6 +79,15 @@ func TestProviderUsageNamespaceTrimsSessionNamespace(t *testing.T) {
 	}
 }
 
+func TestDefaultProviderUsageURLIncludesClaudeSecondaryProxy(t *testing.T) {
+	s := &appServer{namespace: "tank-operator-slot-7-sessions"}
+	got := s.defaultProviderUsageURL("claude_secondary")
+	want := "http://claude-secondary-api-proxy.tank-operator-slot-7.svc.cluster.local:9100/usage/claude"
+	if got != want {
+		t.Fatalf("defaultProviderUsageURL = %q, want %q", got, want)
+	}
+}
+
 func assertEvidence(t *testing.T, got map[string]any, provider, rateLimitType string, utilization float64) {
 	t.Helper()
 	if got["provider"] != provider {
