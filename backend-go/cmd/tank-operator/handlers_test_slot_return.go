@@ -139,10 +139,10 @@ func matchingTestSlotLease(leases []glimmung.Lease, project string, slotIndex in
 		if state := strings.TrimSpace(lease.State); state != "claimed" && state != "pending" {
 			continue
 		}
-		if idx, ok := intFromMap(lease.Metadata, "native_slot_index"); ok && idx == slotIndex {
+		if idx, ok := intFromMap(lease.Metadata, "runner_slot_index"); ok && idx == slotIndex {
 			return lease, true
 		}
-		if slotName != "" && strings.EqualFold(strings.TrimSpace(stringFromMapValue(lease.Metadata, "native_slot_name")), slotName) {
+		if slotName != "" && strings.EqualFold(strings.TrimSpace(stringFromMapValue(lease.Metadata, "runner_slot_name")), slotName) {
 			return lease, true
 		}
 	}
