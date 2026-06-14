@@ -448,7 +448,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/approve", s.handleApprovePRLaneRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)
-	mux.HandleFunc("POST /api/sessions/{session_id}/git-break-glass/approve", s.handleApproveGitBreakGlass)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	// Durable resolver for the public per-session turn number: the canonical
 	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor

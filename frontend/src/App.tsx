@@ -2380,9 +2380,6 @@ interface ComposerToolButtonsProps {
     linkedUrl?: string;
     breakGlass?: {
       pending: BreakGlassRequest[];
-      busyId: string | null;
-      onApprove: (request: BreakGlassRequest) => void;
-      disabled?: boolean;
     };
   };
   slash: {
@@ -2417,9 +2414,6 @@ function PullRequestMenuButton({
 }: ComposerToolButtonsProps["pullRequest"]) {
   const breakGlass = breakGlassProp ?? {
     pending: [] as BreakGlassRequest[],
-    busyId: null,
-    onApprove: () => {},
-    disabled: true,
   };
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -2557,49 +2551,51 @@ function PullRequestMenuButton({
           {pendingCount === 0 ? (
             <div className="run-slash-empty">No break-glass request pending</div>
           ) : (
-            pending.map((request) => {
-              const busy = breakGlass.busyId === request.eventId;
-              const disabled = busy || Boolean(breakGlass.disabled);
-              return (
-                <button
-                  key={request.eventId}
-                  type="button"
-                  role="menuitem"
-                  className="run-pr-menu-item run-pr-menu-breakglass"
-                  disabled={disabled}
-                  title={
-                    request.reason
-                      ? `${request.repo} — ${request.reason}`
-                      : `Approve break glass for ${request.repo}`
+            pending.map((request) => (
+              // "Approve break glass" is a link to the auth.romaine.life
+              // approval page (payload.approval_url) so the operator can
+              // inspect exactly what the agent requested — repo, session,
+              // reason — and grant there. The grant happens on that page, not
+              // in-app; the chip only surfaces the pending request.
+              <a
+                key={request.eventId}
+                role="menuitem"
+                className="run-pr-menu-item run-pr-menu-breakglass"
+                href={request.approvalUrl || "#"}
+                target="_blank"
+                rel="noreferrer"
+                aria-disabled={request.approvalUrl ? undefined : true}
+                title={
+                  request.reason
+                    ? `${request.repo} — ${request.reason}`
+                    : `Open break-glass approval for ${request.repo}`
+                }
+                onClick={(event) => {
+                  if (!request.approvalUrl) {
+                    event.preventDefault();
+                    return;
                   }
-                  onClick={() => {
-                    if (disabled) return;
-                    breakGlass.onApprove(request);
-                  }}
-                >
-                  <span className="run-pr-menu-name">
-                    {busy ? (
-                      <Loader2Icon
-                        className="run-spin run-pr-menu-glyph"
-                        size={14}
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <ShieldAlertIcon
-                        className="run-pr-menu-glyph"
-                        size={14}
-                        aria-hidden="true"
-                      />
-                    )}
-                    Approve break glass
-                  </span>
-                  <span className="run-slash-desc">
-                    {request.repo}
-                    {request.reason ? ` — ${request.reason}` : ""}
-                  </span>
-                </button>
-              );
-            })
+                  setOpen(false);
+                }}
+              >
+                <span className="run-pr-menu-name">
+                  <ShieldAlertIcon
+                    className="run-pr-menu-glyph"
+                    size={14}
+                    aria-hidden="true"
+                  />
+                  Approve break glass
+                  <ExternalLinkIcon
+                    className="run-pr-menu-icon"
+                    aria-hidden="true"
+                  />
+                </span>
+                <span className="run-slash-desc">
+                  {request.repo}
+                  {request.reason ? ` — ${request.reason}` : ""}
+                </span>
+              </a>
+            ))
           )}
           </div>,
           document.body,
@@ -15577,7 +15573,6 @@ function ChatPane({
   const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
     string | null
   >(null);
-  const [breakGlassBusyId, setBreakGlassBusyId] = useState<string | null>(null);
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -15696,40 +15691,6 @@ function ChatPane({
   const breakGlassRequests = useMemo(
     () => pendingBreakGlassRequests(controlActionRows),
     [controlActionRows],
-  );
-  const postBreakGlassApproval = useCallback(
-    async (request: BreakGlassRequest) => {
-      if (publicView || readOnly) return;
-      setBreakGlassBusyId(request.eventId);
-      try {
-        const res = await authedFetch(
-          scopedSessionPathForPane(
-            `/api/sessions/${encodeURIComponent(session.id)}/git-break-glass/approve`,
-          ),
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              repo: request.repo,
-              request_event_id: request.eventId,
-            }),
-          },
-        );
-        if (!res.ok) {
-          throw new Error(`break-glass approval failed: ${res.status}`);
-        }
-        await fetchControlActionEntries();
-      } finally {
-        setBreakGlassBusyId(null);
-      }
-    },
-    [
-      fetchControlActionEntries,
-      publicView,
-      readOnly,
-      scopedSessionPathForPane,
-      session.id,
-    ],
   );
   const postPRLaneDecision = useCallback(
     async (
@@ -22027,9 +21988,6 @@ function ChatPane({
                   linkedUrl: linkedPullRequestURL,
                   breakGlass: {
                     pending: breakGlassRequests,
-                    busyId: breakGlassBusyId,
-                    onApprove: postBreakGlassApproval,
-                    disabled: readOnly,
                   },
                 }}
                 slash={{

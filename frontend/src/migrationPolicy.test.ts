@@ -953,7 +953,7 @@ test("home splash test action stays disabled on the splash page", () => {
         )).toBe(false);
 });
 
-test("pull request composer action is a popup menu with in-app break-glass approval", () => {
+test("pull request composer action is a popup menu with a break-glass approval link", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
   // The PR control is a self-contained popup menu, not a single hard-coded link.
   expect(appSource).toMatch(/function PullRequestMenuButton\(/);
@@ -968,10 +968,14 @@ test("pull request composer action is a popup menu with in-app break-glass appro
   // The retired single-URL link shape must not come back.
   expect(appSource.includes("aria-label=\"Pull request link unavailable\"")).toBe(false);
   expect(appSource.includes("aria-label=\"Open pull request in new tab\"")).toBe(false);
-  // Break-glass approval is an in-app POST, not the auth.romaine.life URL hand-off.
-  expect(appSource).toMatch(/git-break-glass\/approve/);
-  expect(appSource).toMatch(/onApprove: postBreakGlassApproval/);
+  // Break-glass approval is a LINK to the auth.romaine.life approval page
+  // (payload.approval_url) so the operator can inspect the request and grant
+  // there — NOT an in-app grant POST.
+  expect(appSource).toMatch(/href=\{request\.approvalUrl \|\| "#"\}/);
   expect(appSource).toMatch(/pendingBreakGlassRequests\(controlActionRows\)/);
+  // The retired in-app approval POST must not return.
+  expect(appSource.includes("git-break-glass/approve")).toBe(false);
+  expect(appSource.includes("postBreakGlassApproval")).toBe(false);
   // Disabled placeholder composers still omit a live PR menu.
   expect((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length).toBe(2);
   expect(appSource.includes("testState?.active && testState.pull_request_url")).toBe(false);

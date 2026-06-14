@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -225,83 +224,6 @@ func (s *appServer) handleInternalGrantGitBreakGlass(w http.ResponseWriter, r *h
 	})
 }
 
-// handleApproveGitBreakGlass lets the authenticated session owner approve a
-// pending break-glass request straight from the Tank UI. The agent-facing
-// request tool only ever returned an auth.romaine.life approval URL whose
-// console callback into Tank's internal grant endpoint does not yet exist, so
-// in practice the URL was a dead end. This human-facing route writes the same
-// github.break_glass.grant control-action the internal endpoint would, scoped
-// to the session owner's ledger partition so the session's MCP grant lookup
-// finds it on the next request_git_break_glass call.
-func (s *appServer) handleApproveGitBreakGlass(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	if s.controlActions == nil {
-		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
-		return
-	}
-	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "session_id is required")
-		return
-	}
-	var body struct {
-		Repo           string   `json:"repo"`
-		RequestEventID string   `json:"request_event_id"`
-		TTLSeconds     int      `json:"ttl_seconds"`
-		Operations     []string `json:"operations"`
-		Reason         string   `json:"reason"`
-	}
-	if r.Body != nil {
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil &&
-			!errors.Is(err, io.EOF) && !errors.Is(err, http.ErrBodyReadAfterClose) {
-			writeError(w, http.StatusBadRequest, "invalid body")
-			return
-		}
-	}
-	rows, err := s.controlActions.ListBySession(r.Context(), user.OwnerEmail(), s.sessionScope, sessionID, 200)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	request, ok := findPendingGitBreakGlassRequest(rows, body.RequestEventID, body.Repo, time.Now().UTC())
-	if !ok {
-		writeError(w, http.StatusNotFound, "no pending break-glass request found")
-		return
-	}
-	reason := firstNonEmptyControlAction(strings.TrimSpace(body.Reason), controlActionPayloadString(request.Payload, "reason"))
-	row, expiresAt, err := s.appendGitBreakGlassGrant(r.Context(), gitBreakGlassGrantInput{
-		SessionID:      sessionID,
-		OwnerEmail:     user.OwnerEmail(),
-		RepoOwner:      request.RepoOwner,
-		RepoName:       request.RepoName,
-		TTLSeconds:     body.TTLSeconds,
-		Operations:     body.Operations,
-		RequestEventID: request.EventID,
-		Reason:         reason,
-		ApprovedBy:     user.Email,
-	})
-	if err != nil {
-		recordControlActionEvent("tank-operator", "git_break_glass_approval", "github.break_glass.grant", "succeeded", "store_error")
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"active":           true,
-		"event_id":         row.EventID,
-		"repo":             request.RepoOwner + "/" + request.RepoName,
-		"expires_at":       expiresAt.Format(time.RFC3339),
-		"operations":       normalizeBreakGlassOperations(body.Operations),
-		"request_event_id": request.EventID,
-		"approved_by":      user.Email,
-		"session_id":       sessionID,
-		"session_scope":    s.sessionScope,
-	})
-}
-
 type gitBreakGlassGrantInput struct {
 	SessionID      string
 	OwnerEmail     string
@@ -356,70 +278,6 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 	}
 	row, err := s.controlActions.Append(ctx, event)
 	return row, expiresAt, err
-}
-
-// activeBreakGlassRepos returns the set of "owner/name" slugs that currently
-// hold an unexpired break-glass grant.
-func activeBreakGlassRepos(rows []pgstore.ControlActionEvent, now time.Time) map[string]bool {
-	active := map[string]bool{}
-	for _, row := range rows {
-		if row.Action != "github.break_glass.grant" || row.Status != "succeeded" {
-			continue
-		}
-		if row.RepoOwner == "" || row.RepoName == "" {
-			continue
-		}
-		var payload struct {
-			ExpiresAt string `json:"expires_at"`
-		}
-		_ = json.Unmarshal(row.Payload, &payload)
-		expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(payload.ExpiresAt))
-		if err != nil || !expiresAt.After(now) {
-			continue
-		}
-		active[row.RepoOwner+"/"+row.RepoName] = true
-	}
-	return active
-}
-
-// findPendingGitBreakGlassRequest selects a started github.break_glass.request
-// whose repo has no active grant. eventID, when set, pins a specific request;
-// otherwise repo (when set) or the newest pending request overall is returned.
-func findPendingGitBreakGlassRequest(rows []pgstore.ControlActionEvent, eventID, repo string, now time.Time) (pgstore.ControlActionEvent, bool) {
-	active := activeBreakGlassRepos(rows, now)
-	eventID = strings.TrimSpace(eventID)
-	repo = strings.TrimSpace(repo)
-	var best pgstore.ControlActionEvent
-	found := false
-	for _, row := range rows {
-		if row.Action != "github.break_glass.request" || row.Status != "started" {
-			continue
-		}
-		if row.RepoOwner == "" || row.RepoName == "" {
-			continue
-		}
-		rowRepo := row.RepoOwner + "/" + row.RepoName
-		if active[rowRepo] {
-			continue
-		}
-		if eventID != "" {
-			if row.EventID == eventID {
-				return row, true
-			}
-			continue
-		}
-		if repo != "" && rowRepo != repo {
-			continue
-		}
-		if !found || row.CreatedAt.After(best.CreatedAt) {
-			best = row
-			found = true
-		}
-	}
-	if eventID != "" {
-		return pgstore.ControlActionEvent{}, false
-	}
-	return best, found
 }
 
 // splitRepoSlug parses a trimmed "owner/name" GitHub slug.
