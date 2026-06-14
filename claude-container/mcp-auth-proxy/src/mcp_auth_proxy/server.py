@@ -93,6 +93,7 @@ _TANK_PUBLISH_TOOL = "publish_current_head"
 _TANK_BREAK_GLASS_TOOL = "request_git_break_glass"
 _TANK_PR_LANE_TOOL = "request_pr_lane"
 _TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
+_TANK_MERGE_TOOL = "merge_current_session_pr"
 _GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
@@ -261,17 +262,21 @@ def _github_tool_block_response(body: bytes, tool_name: str) -> web.Response | N
         return None
     method = _parse_mcp_method(body)
     request_id = method[2] if method else None
+    replacement_tool = _TANK_MERGE_TOOL if tool_name == "merge_pull_request" else _TANK_PUBLISH_TOOL
+    replacement_text = (
+        f"Use the Tank MCP {replacement_tool} tool; direct GitHub write "
+        "tokens and file/PR writes are reserved for break-glass approval. "
+    )
     return _mcp_error_response(
         request_id,
         -32010,
         (
             f"GitHub MCP tool '{tool_name}' is disabled in Tank restricted Git mode. "
-            "Use the Tank MCP publish_current_head tool; direct GitHub write "
-            "tokens and file/PR writes are reserved for break-glass approval. "
+            f"{replacement_text}"
             "If governed publish is not sufficient, call the Tank MCP "
             "request_git_break_glass tool to get an approval URL."
         ),
-        {"blocked_tool": tool_name, "replacement_tool": _TANK_PUBLISH_TOOL, "break_glass_tool": _TANK_BREAK_GLASS_TOOL},
+        {"blocked_tool": tool_name, "replacement_tool": replacement_tool, "break_glass_tool": _TANK_BREAK_GLASS_TOOL},
     )
 
 
@@ -370,6 +375,7 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     has_break_glass = any(isinstance(tool, dict) and tool.get("name") == _TANK_BREAK_GLASS_TOOL for tool in tools)
     has_pr_lane = any(isinstance(tool, dict) and tool.get("name") == _TANK_PR_LANE_TOOL for tool in tools)
     has_create_pr_lane = any(isinstance(tool, dict) and tool.get("name") == _TANK_CREATE_PR_LANE_TOOL for tool in tools)
+    has_merge = any(isinstance(tool, dict) and tool.get("name") == _TANK_MERGE_TOOL for tool in tools)
     changed = False
     for tool in tools:
         if isinstance(tool, dict) and tool.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
@@ -476,6 +482,53 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         },
                     },
                     "required": ["request_event_id"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    if not has_merge:
+        tools.append(
+            {
+                "name": _TANK_MERGE_TOOL,
+                "description": (
+                    "Merge the open pull request for the current Tank-governed "
+                    "session branch after verifying local HEAD, remote branch, "
+                    "PR head, CI, mergeability, and Tank's governed publish ledger."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Optional GitHub slug, for example romaine-life/tank-operator.",
+                        },
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional absolute or /workspace-relative path to the repo.",
+                        },
+                        "pr_number": {
+                            "type": "integer",
+                            "description": "Optional PR number; if provided it must match the governed branch's open PR.",
+                        },
+                        "merge_method": {
+                            "type": "string",
+                            "enum": ["merge", "squash", "rebase"],
+                            "description": "Optional GitHub merge method.",
+                        },
+                        "commit_title": {
+                            "type": "string",
+                            "description": "Optional merge commit title.",
+                        },
+                        "commit_message": {
+                            "type": "string",
+                            "description": "Optional merge commit message.",
+                        },
+                        "mark_ready": {
+                            "type": "boolean",
+                            "description": "Convert a draft PR to ready for review before merging. Defaults to true.",
+                        },
+                    },
                     "additionalProperties": False,
                 },
             }
@@ -1261,7 +1314,14 @@ async def _push_head_with_token(repo_path: Path, branch: str, token: str) -> Non
                 pass
 
 
-async def _github_api_json(http: ClientSession, token: str, method: str, path: str) -> tuple[int, dict | list | None]:
+async def _github_api_json(
+    http: ClientSession,
+    token: str,
+    method: str,
+    path: str,
+    *,
+    json_body: dict | None = None,
+) -> tuple[int, dict | list | None]:
     async with http.request(
         method,
         f"https://api.github.com{path}",
@@ -1270,6 +1330,7 @@ async def _github_api_json(http: ClientSession, token: str, method: str, path: s
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },
+        json=json_body,
     ) as resp:
         text = await resp.text()
         if not text:
@@ -1278,6 +1339,27 @@ async def _github_api_json(http: ClientSession, token: str, method: str, path: s
             return resp.status, json.loads(text)
         except json.JSONDecodeError:
             return resp.status, {"raw": text[:1000]}
+
+
+async def _github_graphql_json(http: ClientSession, token: str, query: str, variables: dict) -> tuple[int, dict | None]:
+    async with http.request(
+        "POST",
+        "https://api.github.com/graphql",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json={"query": query, "variables": variables},
+    ) as resp:
+        text = await resp.text()
+        if not text:
+            return resp.status, None
+        try:
+            body = json.loads(text)
+        except json.JSONDecodeError:
+            return resp.status, {"raw": text[:1000]}
+        return resp.status, body if isinstance(body, dict) else {"body": body}
 
 
 def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, str, dict]:
@@ -1534,6 +1616,284 @@ async def _handle_tank_publish_tool(
             -32011,
             str(exc),
             {"tool": _TANK_PUBLISH_TOOL, "invocation_id": invocation_id},
+        )
+
+
+async def _mark_pull_request_ready_for_review(
+    http: ClientSession,
+    github_token: str,
+    node_id: str,
+) -> None:
+    status, body = await _github_graphql_json(
+        http,
+        github_token,
+        """
+        mutation MarkPullRequestReadyForReview($pullRequestId: ID!) {
+          markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) {
+            pullRequest {
+              id
+              isDraft
+            }
+          }
+        }
+        """,
+        {"pullRequestId": node_id},
+    )
+    if status >= 400 or not isinstance(body, dict):
+        raise RuntimeError(f"GitHub mark ready failed with HTTP {status}: {body!r}")
+    errors = body.get("errors")
+    if isinstance(errors, list) and errors:
+        messages = "; ".join(str(error.get("message") or error) for error in errors if isinstance(error, dict))
+        raise RuntimeError(f"GitHub mark ready failed: {messages or errors!r}")
+
+
+async def _handle_tank_merge_tool(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    arguments: dict,
+) -> web.Response:
+    invocation_id = f"tank-merge-{uuid4().hex}"
+    service_token = ""
+    headers: dict[str, str] = {}
+    owner = ""
+    repo = ""
+    repo_slug = ""
+    branch = ""
+    sha = ""
+    pr_number: int | None = None
+    pr_url = ""
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for governed PR merge")
+        repo_path = _repo_path_from_arguments(arguments)
+        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
+        if not git_dir:
+            raise ValueError(f"{repo_path} is not a git repository")
+        branch = await _git_output(repo_path, "branch", "--show-current")
+        if not branch:
+            raise ValueError("current repo is detached; checkout the Tank session branch before merging")
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
+        owner, repo = slug
+        repo_slug = f"{owner}/{repo}"
+        requested_repo = str(arguments.get("repo") or "").strip()
+        if requested_repo and requested_repo != repo_slug:
+            raise ValueError(f"repo argument {requested_repo!r} does not match origin {repo_slug}")
+        if not _is_tank_session_branch(branch, repo):
+            raise ValueError(f"current branch is {branch!r}; expected Tank session branch {_default_tank_session_branch(repo)!r} or one of its approved lanes")
+        rc, stdout, stderr = await _run_git(repo_path, "status", "--porcelain")
+        if rc != 0:
+            raise RuntimeError(stderr or stdout or "git status failed")
+        if stdout.strip():
+            raise ValueError("worktree has uncommitted changes; commit and publish before merging")
+        sha = await _git_output(repo_path, "rev-parse", "HEAD")
+
+        raw_pr_number = arguments.get("pr_number")
+        requested_pr_number: int | None = None
+        if raw_pr_number not in (None, ""):
+            try:
+                requested_pr_number = int(raw_pr_number)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("pr_number must be an integer") from exc
+            if requested_pr_number <= 0:
+                raise ValueError("pr_number must be positive")
+
+        merge_method = str(arguments.get("merge_method") or "").strip()
+        if merge_method and merge_method not in {"merge", "squash", "rebase"}:
+            raise ValueError("merge_method must be one of merge, squash, or rebase")
+        mark_ready = arguments.get("mark_ready")
+        if mark_ready is None:
+            mark_ready = True
+        else:
+            mark_ready = bool(mark_ready)
+
+        service_token = await auth_romaine_provider.token()
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        # The token is never returned to the agent. Governed merge needs the
+        # App's pull-request write permission, but only after the lane checks
+        # below have proven this is the session-owned branch and exact PR head.
+        github_token = await _mint_github_installation_token(http, service_token, repo_slug, full=True)
+        tank_verify = await _post_tank_hot_swap_verify(
+            http,
+            service_token,
+            {
+                "repo": repo_slug,
+                "branch": branch,
+                "sha": sha,
+                "source_tool": _TANK_MERGE_TOOL,
+            },
+        )
+        live_verify = await _verify_github_hot_swap_head(http, github_token, owner, repo, branch, sha)
+        reasons: list[str] = []
+        if tank_verify.get("allowed") is not True:
+            tank_reasons = tank_verify.get("reasons")
+            if isinstance(tank_reasons, list):
+                reasons.extend(f"Tank ledger: {reason}" for reason in tank_reasons)
+            else:
+                reasons.append("Tank ledger did not confirm governed publish, green CI, and clean mergeability")
+        if live_verify.get("allowed") is not True:
+            live_reasons = live_verify.get("reasons")
+            if isinstance(live_reasons, list):
+                reasons.extend(f"GitHub live state: {reason}" for reason in live_reasons)
+            else:
+                reasons.append("GitHub live state did not confirm latest branch head, open PR, green CI, and clean mergeability")
+        pr_number = int(live_verify.get("pr_number") or tank_verify.get("pr_number") or 0) or None
+        pr_url = str(live_verify.get("pr_url") or "")
+        if requested_pr_number is not None and pr_number != requested_pr_number:
+            reasons.append(f"requested PR #{requested_pr_number} does not match governed branch PR #{pr_number or 'unknown'}")
+        if pr_number is None:
+            reasons.append("no governed PR number was verified")
+        if reasons:
+            raise ValueError("merge blocked:\n- " + "\n- ".join(reasons))
+
+        detail_status, detail_body = await _github_api_json(
+            http,
+            github_token,
+            "GET",
+            f"/repos/{owner}/{repo}/pulls/{pr_number}",
+        )
+        if detail_status >= 400 or not isinstance(detail_body, dict):
+            raise RuntimeError(f"could not read PR #{pr_number}: HTTP {detail_status}")
+        pr_url = str(detail_body.get("html_url") or pr_url or f"https://github.com/{repo_slug}/pull/{pr_number}")
+        pr_head = detail_body.get("head")
+        pr_head_sha = str(pr_head.get("sha") or "") if isinstance(pr_head, dict) else ""
+        pr_head_ref = str(pr_head.get("ref") or "") if isinstance(pr_head, dict) else ""
+        if pr_head_sha != sha:
+            raise ValueError(f"PR #{pr_number} head is {pr_head_sha[:12] or 'unknown'}, not local HEAD {sha[:12]}")
+        if pr_head_ref and pr_head_ref != branch:
+            raise ValueError(f"PR #{pr_number} head branch is {pr_head_ref!r}, not local branch {branch!r}")
+
+        if detail_body.get("draft") is True:
+            if not mark_ready:
+                raise ValueError(f"PR #{pr_number} is still draft; pass mark_ready=true or mark it ready before merging")
+            node_id = str(detail_body.get("node_id") or "").strip()
+            if not node_id:
+                raise ValueError(f"PR #{pr_number} is draft and GitHub did not return node_id for ready-for-review")
+            ready_payload = {
+                "event_id": f"tank-merge-ready-start-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "invocation_id": invocation_id,
+                "source_service": "mcp-tank-operator",
+                "source_tool": _TANK_MERGE_TOOL,
+                "action": "github.pull_request.ready_for_review",
+                "status": "started",
+                "target_kind": "github_pull_request",
+                "target_ref": pr_url,
+                "repo_owner": owner,
+                "repo_name": repo,
+                "pr_number": pr_number,
+                "result_sha": sha,
+                "payload": {"branch": branch},
+            }
+            await _post_tank_control_action(http, headers, ready_payload)
+            await _mark_pull_request_ready_for_review(http, github_token, node_id)
+            await _post_tank_control_action(
+                http,
+                headers,
+                ready_payload | {"event_id": f"tank-merge-ready-succeeded-{ORIGIN_SESSION_ID}-{uuid4().hex}", "status": "succeeded"},
+            )
+
+        merge_payload = {
+            "event_id": f"tank-merge-start-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+            "invocation_id": invocation_id,
+            "source_service": "mcp-tank-operator",
+            "source_tool": _TANK_MERGE_TOOL,
+            "action": "github.pull_request.merge",
+            "status": "started",
+            "target_kind": "github_pull_request",
+            "target_ref": pr_url,
+            "repo_owner": owner,
+            "repo_name": repo,
+            "pr_number": pr_number,
+            "result_sha": sha,
+            "payload": {"branch": branch, "merge_method": merge_method or "", "head_sha": sha},
+        }
+        await _post_tank_control_action(http, headers, merge_payload)
+        merge_request: dict[str, object] = {"sha": sha}
+        if merge_method:
+            merge_request["merge_method"] = merge_method
+        for arg_name, request_name in (("commit_title", "commit_title"), ("commit_message", "commit_message")):
+            value = str(arguments.get(arg_name) or "").strip()
+            if value:
+                merge_request[request_name] = value
+        merge_status, merge_body = await _github_api_json(
+            http,
+            github_token,
+            "PUT",
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/merge",
+            json_body=merge_request,
+        )
+        if merge_status >= 400 or not isinstance(merge_body, dict) or merge_body.get("merged") is not True:
+            message = ""
+            if isinstance(merge_body, dict):
+                message = str(merge_body.get("message") or merge_body.get("raw") or "")
+            raise RuntimeError(f"GitHub merge failed with HTTP {merge_status}: {message or merge_body!r}")
+        merge_sha = str(merge_body.get("sha") or "")
+        await _post_tank_control_action(
+            http,
+            headers,
+            merge_payload
+            | {
+                "event_id": f"tank-merge-succeeded-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "status": "succeeded",
+                "result_sha": merge_sha or sha,
+                "payload": merge_payload["payload"] | {"merge_sha": merge_sha},
+            },
+        )
+        text = (
+            f"Merged governed PR #{pr_number} for {repo_slug}.\n"
+            f"Branch: {branch}\n"
+            f"Head: {sha[:12]}\n"
+            f"PR: {pr_url}"
+        )
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": text}],
+                "structuredContent": {
+                    "repo": repo_slug,
+                    "branch": branch,
+                    "sha": sha,
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "merge_sha": merge_sha,
+                    "merged": True,
+                },
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank merge_current_session_pr failed", exc_info=True)
+        if service_token and owner and repo:
+            try:
+                await _post_tank_control_action(
+                    http,
+                    headers or {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
+                    {
+                        "event_id": f"tank-merge-failed-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                        "invocation_id": invocation_id,
+                        "source_service": "mcp-tank-operator",
+                        "source_tool": _TANK_MERGE_TOOL,
+                        "action": "github.pull_request.merge",
+                        "status": "failed",
+                        "target_kind": "github_pull_request" if pr_url else "github_repository",
+                        "target_ref": pr_url or f"https://github.com/{owner}/{repo}",
+                        "repo_owner": owner,
+                        "repo_name": repo,
+                        "pr_number": pr_number,
+                        "result_sha": sha,
+                        "error": str(exc),
+                        "payload": {"branch": branch, "repo_path": str(arguments.get("repo_path") or "")},
+                    },
+                )
+            except Exception:
+                log.warning("failed to record governed merge failure", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32015,
+            str(exc),
+            {"tool": _TANK_MERGE_TOOL, "invocation_id": invocation_id},
         )
 
 
@@ -2716,7 +3076,13 @@ def _make_handler(
         parsed_method = _parse_mcp_method(body)
         if tank_publish_provider is not None and parsed_method is not None:
             method, params, request_id = parsed_method
-            if method == "tools/call" and params.get("name") in {_TANK_PUBLISH_TOOL, _TANK_BREAK_GLASS_TOOL, _TANK_PR_LANE_TOOL, _TANK_CREATE_PR_LANE_TOOL}:
+            if method == "tools/call" and params.get("name") in {
+                _TANK_PUBLISH_TOOL,
+                _TANK_BREAK_GLASS_TOOL,
+                _TANK_PR_LANE_TOOL,
+                _TANK_CREATE_PR_LANE_TOOL,
+                _TANK_MERGE_TOOL,
+            }:
                 arguments = params.get("arguments") or {}
                 if not isinstance(arguments, dict):
                     return _mcp_error_response(request_id, -32602, "arguments must be an object")
@@ -2727,6 +3093,8 @@ def _make_handler(
                     return await _handle_tank_break_glass_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_CREATE_PR_LANE_TOOL:
                     return await _handle_tank_create_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
+                if params.get("name") == _TANK_MERGE_TOOL:
+                    return await _handle_tank_merge_tool(http, tank_publish_provider, request_id, arguments)
                 return await _handle_tank_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
 
         if glimmung_hot_swap_provider is not None and parsed_method is not None:

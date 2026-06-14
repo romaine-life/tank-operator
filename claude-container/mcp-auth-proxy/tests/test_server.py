@@ -26,6 +26,7 @@ from mcp_auth_proxy.server import (
     _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
     _handle_tank_create_pr_lane_tool,
+    _handle_tank_merge_tool,
     _handle_tank_pr_lane_tool,
     _handle_break_glass_mcp,
     _json_objects_from_mcp_body,
@@ -141,8 +142,10 @@ class _HotSwapHTTP:
             }),
         )
 
-    def request(self, method: str, url: str, *, headers: dict, **_kwargs):
-        self.requests.append({"method": method, "url": url, "headers": headers})
+    def request(self, method: str, url: str, *, headers: dict, **kwargs):
+        self.requests.append({"method": method, "url": url, "headers": headers, "kwargs": kwargs})
+        if method == "PUT" and "/pulls/1113/merge" in url:
+            return _FakeRawResponse(200, json_module_dumps({"merged": True, "sha": "merge-sha"}))
         if "/branches/" in url:
             return _FakeRawResponse(200, json_module_dumps({"commit": {"sha": self.sha}}))
         if "/pulls?head=" in url:
@@ -157,7 +160,16 @@ class _HotSwapHTTP:
                 ]),
             )
         if "/pulls/1113" in url:
-            return _FakeRawResponse(200, json_module_dumps({"mergeable": True, "mergeable_state": "clean"}))
+            return _FakeRawResponse(
+                200,
+                json_module_dumps({
+                    "html_url": "https://github.com/romaine-life/tank-operator/pull/1113",
+                    "mergeable": True,
+                    "mergeable_state": "clean",
+                    "draft": False,
+                    "head": {"sha": self.sha, "ref": "tank/session/95/tank-operator"},
+                }),
+            )
         if "/check-runs" in url:
             return _FakeRawResponse(
                 200,
@@ -443,6 +455,81 @@ def test_glimmung_hot_swap_gate_rewrites_git_ref_to_verified_sha(monkeypatch, tm
     assert verification["sha"] == sha
 
 
+def test_tank_merge_tool_merges_verified_session_branch(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path
+    repo = workspace / "tank-operator"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
+    (repo / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    http = _HotSwapHTTP(sha)
+    response = asyncio.run(
+        _handle_tank_merge_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            14,
+            {"repo_path": str(repo), "pr_number": 1113, "merge_method": "squash"},
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    assert structured["merged"] is True
+    assert structured["pr_number"] == 1113
+    assert structured["branch"] == "tank/session/95/tank-operator"
+    token_posts = [call for call in http.posts if "mcp-github" in call["url"]]
+    assert token_posts[0]["json"]["params"]["arguments"] == {
+        "repos": ["romaine-life/tank-operator"],
+        "write": True,
+        "full": True,
+    }
+    merge_requests = [call for call in http.requests if call["method"] == "PUT" and "/pulls/1113/merge" in call["url"]]
+    assert merge_requests[0]["kwargs"]["json"] == {"sha": sha, "merge_method": "squash"}
+    actions = [call["json"]["action"] for call in http.posts if "control-actions" in call["url"]]
+    assert actions == ["github.pull_request.merge", "github.pull_request.merge"]
+
+
+def test_tank_merge_tool_rejects_non_session_branch(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path
+    repo = workspace / "tank-operator"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
+    (repo / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "checkout", "-b", "feature/outside-lane"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    http = _HotSwapHTTP("unused")
+    response = asyncio.run(
+        _handle_tank_merge_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            15,
+            {"repo_path": str(repo), "pr_number": 1113},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["error"]["code"] == -32015
+    assert "expected Tank session branch" in payload["error"]["message"]
+    assert http.posts == []
+    assert http.requests == []
+
+
 def test_append_tank_publish_tool_augments_event_prefixed_sse_tools_list() -> None:
     raw = (
         b"event: message\n"
@@ -455,6 +542,7 @@ def test_append_tank_publish_tool_augments_event_prefixed_sse_tools_list() -> No
     assert "publish_current_head" in augmented
     assert "request_git_break_glass" in augmented
     assert "request_pr_lane" in augmented
+    assert "merge_current_session_pr" in augmented
 
 
 def test_tank_publish_tool_is_added_to_tools_list() -> None:
@@ -463,7 +551,14 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     augmented = json.loads(_append_tank_publish_tool(raw))
 
     names = [tool["name"] for tool in augmented["result"]["tools"]]
-    assert names == ["read_transcript", "publish_current_head", "request_pr_lane", "create_pr_lane", "request_git_break_glass"]
+    assert names == [
+        "read_transcript",
+        "publish_current_head",
+        "request_pr_lane",
+        "create_pr_lane",
+        "merge_current_session_pr",
+        "request_git_break_glass",
+    ]
     publish = augmented["result"]["tools"][1]
     assert publish["inputSchema"]["properties"]["repo_path"]["type"] == "string"
     pr_lane = augmented["result"]["tools"][2]
@@ -471,7 +566,10 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert "pull request" in pr_lane["description"]
     create_lane = augmented["result"]["tools"][3]
     assert create_lane["inputSchema"]["required"] == ["request_event_id"]
-    break_glass = augmented["result"]["tools"][4]
+    merge = augmented["result"]["tools"][4]
+    assert "pr_number" in merge["inputSchema"]["properties"]
+    assert "session branch" in merge["description"]
+    break_glass = augmented["result"]["tools"][5]
     assert "approval URL" in break_glass["description"]
     assert "token" not in break_glass["inputSchema"]["properties"]
 
@@ -871,6 +969,22 @@ def test_github_write_tool_block_response_returns_mcp_error() -> None:
     assert "restricted Git mode" in payload["error"]["message"]
     assert payload["error"]["data"]["replacement_tool"] == "publish_current_head"
     assert payload["error"]["data"]["break_glass_tool"] == "request_git_break_glass"
+
+
+def test_github_merge_tool_block_response_points_to_governed_merge() -> None:
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {"name": "merge_pull_request", "arguments": {"owner": "romaine-life", "name": "tank-operator", "pullNumber": 1}},
+    }).encode()
+
+    response = _github_tool_block_response(body, "merge_pull_request")
+
+    assert response is not None
+    payload = json.loads(response.text)
+    assert payload["error"]["data"]["replacement_tool"] == "merge_current_session_pr"
+    assert "merge_current_session_pr" in payload["error"]["message"]
 
 
 def test_filter_github_write_tools_removes_denied_tools_from_sse_list() -> None:
