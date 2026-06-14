@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,14 +30,6 @@ type providerQuotaResponse struct {
 	SourceURLs map[string]string `json:"source_urls,omitempty"`
 }
 
-type providerQuotaCachedEvidence struct {
-	ObservedAt string
-	RateLimits []map[string]any
-	StoredAt   time.Time
-}
-
-const providerQuotaCacheMaxAge = 30 * time.Minute
-
 func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -58,6 +51,8 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		Errors:     map[string]string{},
 		SourceURLs: map[string]string{},
 	}
+	scope := s.providerQuotaScope()
+	liveRows := []map[string]any{}
 	latestObserved := ""
 	for provider, url := range sources {
 		url = strings.TrimSpace(url)
@@ -69,23 +64,10 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		snapshot, err := fetchProviderQuotaProxy(ctx, url)
 		if err != nil {
 			out.Errors[provider] = err.Error()
-			if rows, observedAt, ok := s.cachedProviderQuotaEvidence(provider, time.Now().UTC()); ok {
-				slog.Info("provider quota source using cached rows",
-					"provider", provider,
-					"rows", len(rows),
-					"observed_at", observedAt,
-					"error", err.Error(),
-				)
-				out.RateLimits = append(out.RateLimits, rows...)
-				if latestObserved == "" || observedAfter(observedAt, latestObserved) {
-					latestObserved = observedAt
-				}
-			} else {
-				slog.Info("provider quota source failed without cache",
-					"provider", provider,
-					"error", err.Error(),
-				)
-			}
+			slog.Info("provider quota source failed",
+				"provider", provider,
+				"error", err.Error(),
+			)
 			continue
 		}
 		if snapshot.Status != "ok" {
@@ -96,27 +78,12 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 			} else {
 				out.Errors[provider] = sourceError
 			}
-			if rows, observedAt, ok := s.cachedProviderQuotaEvidence(provider, time.Now().UTC()); ok {
-				slog.Info("provider quota source using cached rows",
-					"provider", provider,
-					"rows", len(rows),
-					"observed_at", observedAt,
-					"status", snapshot.Status,
-					"status_code", snapshot.StatusCode,
-					"error", sourceError,
-				)
-				out.RateLimits = append(out.RateLimits, rows...)
-				if latestObserved == "" || observedAfter(observedAt, latestObserved) {
-					latestObserved = observedAt
-				}
-			} else {
-				slog.Info("provider quota source non-ok without cache",
-					"provider", provider,
-					"status", snapshot.Status,
-					"status_code", snapshot.StatusCode,
-					"error", sourceError,
-				)
-			}
+			slog.Info("provider quota source non-ok",
+				"provider", provider,
+				"status", snapshot.Status,
+				"status_code", snapshot.StatusCode,
+				"error", sourceError,
+			)
 			continue
 		}
 		observedAt := normalizeObservedAt(snapshot.ObservedAt)
@@ -128,7 +95,15 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		}
 		rows := providerUsageEvidence(provider, observedAt, snapshot.Usage)
 		if len(rows) > 0 {
-			s.rememberProviderQuotaEvidence(provider, observedAt, rows, time.Now().UTC())
+			if err := s.upsertProviderQuotaSnapshots(ctx, scope, rows, "provider_usage_proxy"); err != nil {
+				out.Errors[provider] = "durable quota snapshot write failed"
+				slog.Error("provider quota snapshot write failed",
+					"provider", provider,
+					"rows", len(rows),
+					"error", err,
+				)
+			}
+			liveRows = append(liveRows, rows...)
 		}
 		slog.Info("provider quota source ok",
 			"provider", provider,
@@ -136,7 +111,24 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 			"observed_at", observedAt,
 			"status_code", snapshot.StatusCode,
 		)
-		out.RateLimits = append(out.RateLimits, rows...)
+	}
+	if s.pgPool != nil {
+		rows, err := s.loadProviderQuotaSnapshots(ctx, scope)
+		if err != nil {
+			out.Errors["_durable"] = "durable quota snapshot read failed"
+			out.RateLimits = liveRows
+			slog.Error("provider quota snapshot read failed", "scope", scope, "error", err)
+		} else {
+			out.RateLimits = rows
+			for _, row := range rows {
+				if observedAt, ok := stringish(row["observedAt"]); ok && observedAt != "" &&
+					(latestObserved == "" || observedAfter(observedAt, latestObserved)) {
+					latestObserved = observedAt
+				}
+			}
+		}
+	} else {
+		out.RateLimits = liveRows
 	}
 	out.ObservedAt = latestObserved
 	if len(out.Errors) == 0 {
@@ -148,49 +140,114 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *appServer) rememberProviderQuotaEvidence(provider, observedAt string, rows []map[string]any, now time.Time) {
-	if provider == "" || len(rows) == 0 {
-		return
+func (s *appServer) providerQuotaScope() string {
+	scope := strings.TrimSpace(s.sessionScope)
+	if scope == "" {
+		return "default"
 	}
-	s.providerQuotaMu.Lock()
-	defer s.providerQuotaMu.Unlock()
-	if s.providerQuotaCache == nil {
-		s.providerQuotaCache = map[string]providerQuotaCachedEvidence{}
-	}
-	s.providerQuotaCache[provider] = providerQuotaCachedEvidence{
-		ObservedAt: observedAt,
-		RateLimits: copyProviderQuotaRows(rows, false),
-		StoredAt:   now,
-	}
+	return scope
 }
 
-func (s *appServer) cachedProviderQuotaEvidence(provider string, now time.Time) ([]map[string]any, string, bool) {
-	s.providerQuotaMu.Lock()
-	defer s.providerQuotaMu.Unlock()
-	cached, ok := s.providerQuotaCache[provider]
-	if !ok || len(cached.RateLimits) == 0 {
-		return nil, "", false
+func (s *appServer) upsertProviderQuotaSnapshots(ctx context.Context, scope string, rows []map[string]any, source string) error {
+	if s.pgPool == nil || len(rows) == 0 {
+		return nil
 	}
-	if !cached.StoredAt.IsZero() && now.Sub(cached.StoredAt) > providerQuotaCacheMaxAge {
-		delete(s.providerQuotaCache, provider)
-		return nil, "", false
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "unknown"
 	}
-	return copyProviderQuotaRows(cached.RateLimits, true), cached.ObservedAt, true
-}
-
-func copyProviderQuotaRows(rows []map[string]any, cached bool) []map[string]any {
-	out := make([]map[string]any, 0, len(rows))
+	const q = `
+		INSERT INTO provider_quota_snapshots
+			(session_scope, provider, window_id, status, utilization, resets_at, observed_at, source, raw, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		ON CONFLICT (session_scope, provider, window_id) DO UPDATE
+		SET status = EXCLUDED.status,
+			utilization = EXCLUDED.utilization,
+			resets_at = EXCLUDED.resets_at,
+			observed_at = EXCLUDED.observed_at,
+			source = EXCLUDED.source,
+			raw = EXCLUDED.raw,
+			updated_at = now()
+		WHERE provider_quota_snapshots.observed_at <= EXCLUDED.observed_at
+	`
 	for _, row := range rows {
-		next := make(map[string]any, len(row)+1)
-		for key, value := range row {
-			next[key] = value
+		provider, _ := stringish(row["provider"])
+		windowID, _ := stringish(row["rateLimitType"])
+		status, _ := stringish(row["status"])
+		if status == "" {
+			status = "ok"
 		}
-		if cached {
-			next["cached"] = true
+		observedAt, _ := stringish(row["observedAt"])
+		observed := parseProviderQuotaObservedAt(observedAt)
+		if observed.IsZero() {
+			observed = time.Now().UTC()
 		}
-		out = append(out, next)
+		if !validProviderQuotaProvider(provider) || !validProviderQuotaWindow(windowID) {
+			continue
+		}
+		var utilization any
+		if v, ok := numericAny(row["utilization"]); ok {
+			utilization = v
+		}
+		var resetsAt any
+		if v := row["resetsAt"]; v != nil {
+			resetsAt = fmt.Sprint(v)
+		}
+		raw, err := json.Marshal(row)
+		if err != nil {
+			return err
+		}
+		if _, err := s.pgPool.Exec(ctx, q, scope, provider, windowID, status, utilization, resetsAt, observed, source, raw); err != nil {
+			return err
+		}
 	}
-	return out
+	return nil
+}
+
+func (s *appServer) loadProviderQuotaSnapshots(ctx context.Context, scope string) ([]map[string]any, error) {
+	if s.pgPool == nil {
+		return nil, nil
+	}
+	const q = `
+		SELECT provider, window_id, status, utilization, resets_at,
+			to_char(observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS observed_at,
+			source
+		FROM provider_quota_snapshots
+		WHERE session_scope = $1
+		ORDER BY provider, window_id
+	`
+	rows, err := s.pgPool.Query(ctx, q, scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var provider, windowID, status, observedAt, source string
+		var utilization sql.NullFloat64
+		var resetsAt sql.NullString
+		if err := rows.Scan(&provider, &windowID, &status, &utilization, &resetsAt, &observedAt, &source); err != nil {
+			return nil, err
+		}
+		row := map[string]any{
+			"provider":      provider,
+			"rateLimitType": windowID,
+			"status":        status,
+			"observedAt":    observedAt,
+			"source":        source,
+		}
+		if utilization.Valid {
+			row["utilization"] = utilization.Float64
+		}
+		if resetsAt.Valid && resetsAt.String != "" {
+			row["resetsAt"] = resetsAt.String
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *appServer) defaultProviderUsageURL(provider string) string {
@@ -453,4 +510,33 @@ func observedAfter(a, b string) bool {
 		return a > b
 	}
 	return ta.After(tb)
+}
+
+func parseProviderQuotaObservedAt(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
+func validProviderQuotaProvider(provider string) bool {
+	switch provider {
+	case "anthropic", "anthropic_secondary", "codex":
+		return true
+	default:
+		return false
+	}
+}
+
+func validProviderQuotaWindow(windowID string) bool {
+	switch windowID {
+	case "five_hour", "weekly", "opus_weekly":
+		return true
+	default:
+		return false
+	}
 }

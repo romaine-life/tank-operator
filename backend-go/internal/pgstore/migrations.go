@@ -1967,6 +1967,24 @@ var schemaMigrations = []migration{
 		ALTER TABLE deployment_image_versions
 			ADD CONSTRAINT deployment_image_versions_image_kind_check
 			CHECK (image_kind IN ('app', 'session_claude', 'session_codex'))`},
+	{ID: "0159", SQL: `CREATE TABLE IF NOT EXISTS provider_quota_snapshots (
+		session_scope text NOT NULL,
+		provider      text NOT NULL,
+		window_id     text NOT NULL,
+		status        text NOT NULL,
+		utilization   double precision,
+		resets_at     text,
+		observed_at   timestamptz NOT NULL,
+		source        text NOT NULL,
+		raw           jsonb NOT NULL DEFAULT '{}'::jsonb,
+		updated_at    timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, provider, window_id),
+		CHECK (provider IN ('anthropic', 'anthropic_secondary', 'codex')),
+		CHECK (window_id IN ('five_hour', 'weekly', 'opus_weekly')),
+		CHECK (status <> '')
+	)`},
+	{ID: "0160", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_snapshots_scope_observed
+		ON provider_quota_snapshots (session_scope, observed_at DESC)`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

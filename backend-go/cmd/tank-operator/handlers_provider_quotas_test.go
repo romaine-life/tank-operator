@@ -2,7 +2,6 @@ package main
 
 import (
 	"testing"
-	"time"
 )
 
 func TestProviderUsageEvidenceNormalizesClaudeOAuthUsage(t *testing.T) {
@@ -29,6 +28,35 @@ func TestProviderUsageEvidenceNormalizesClaudeOAuthUsage(t *testing.T) {
 	assertEvidence(t, got[0], "anthropic", "five_hour", 37.0)
 	assertEvidence(t, got[1], "anthropic", "weekly", 64.0)
 	assertEvidence(t, got[2], "anthropic", "opus_weekly", 12.0)
+}
+
+func TestProviderUsageEvidenceNormalizesClaudeSDKUsage(t *testing.T) {
+	raw := map[string]any{
+		"rate_limits_available": true,
+		"rate_limits": map[string]any{
+			"five_hour": map[string]any{
+				"utilization": 29.0,
+				"resets_at":   "2026-06-14T22:00:00Z",
+			},
+			"seven_day": map[string]any{
+				"utilization": 66.0,
+				"resets_at":   "2026-06-18T22:00:00Z",
+			},
+			"seven_day_opus": map[string]any{
+				"utilization": 11.0,
+				"resets_at":   "2026-06-18T22:00:00Z",
+			},
+		},
+	}
+
+	got := providerUsageEvidence("anthropic_secondary", "2026-06-14T21:00:00Z", raw)
+
+	if len(got) != 3 {
+		t.Fatalf("evidence len = %d, want 3: %#v", len(got), got)
+	}
+	assertEvidence(t, got[0], "anthropic_secondary", "five_hour", 29.0)
+	assertEvidence(t, got[1], "anthropic_secondary", "weekly", 66.0)
+	assertEvidence(t, got[2], "anthropic_secondary", "opus_weekly", 11.0)
 }
 
 func TestProviderUsageEvidenceKeepsHighestDuplicateWeeklyUtilization(t *testing.T) {
@@ -109,53 +137,15 @@ func TestDefaultProviderUsageURLUsesConfiguredProxyHosts(t *testing.T) {
 	}
 }
 
-func TestProviderQuotaCacheReturnsCopiedCachedEvidence(t *testing.T) {
-	s := &appServer{}
-	now := time.Date(2026, 6, 14, 20, 0, 0, 0, time.UTC)
-	rows := []map[string]any{{
-		"provider":      "anthropic",
-		"rateLimitType": "five_hour",
-		"utilization":   42.0,
-		"observedAt":    "2026-06-14T20:00:00Z",
-	}}
-
-	s.rememberProviderQuotaEvidence("anthropic", "2026-06-14T20:00:00Z", rows, now)
-	rows[0]["utilization"] = 99.0
-
-	got, observedAt, ok := s.cachedProviderQuotaEvidence("anthropic", now.Add(time.Minute))
-	if !ok {
-		t.Fatal("cachedProviderQuotaEvidence returned ok=false")
+func TestProviderQuotaProviderForModeSeparatesClaudeAccounts(t *testing.T) {
+	if got := providerQuotaProviderForMode("claude_gui"); got != "anthropic" {
+		t.Fatalf("primary provider = %q, want anthropic", got)
 	}
-	if observedAt != "2026-06-14T20:00:00Z" {
-		t.Fatalf("observedAt = %q", observedAt)
+	if got := providerQuotaProviderForMode("claude_secondary_gui"); got != "anthropic_secondary" {
+		t.Fatalf("secondary provider = %q, want anthropic_secondary", got)
 	}
-	if got[0]["utilization"] != 42.0 {
-		t.Fatalf("cached utilization = %#v, want 42", got[0]["utilization"])
-	}
-	if got[0]["cached"] != true {
-		t.Fatalf("cached marker = %#v, want true", got[0]["cached"])
-	}
-	got[0]["utilization"] = 7.0
-	gotAgain, _, ok := s.cachedProviderQuotaEvidence("anthropic", now.Add(2*time.Minute))
-	if !ok {
-		t.Fatal("cachedProviderQuotaEvidence second read returned ok=false")
-	}
-	if gotAgain[0]["utilization"] != 42.0 {
-		t.Fatalf("cached row was mutated through returned map: %#v", gotAgain[0])
-	}
-}
-
-func TestProviderQuotaCacheExpires(t *testing.T) {
-	s := &appServer{}
-	now := time.Date(2026, 6, 14, 20, 0, 0, 0, time.UTC)
-	s.rememberProviderQuotaEvidence("anthropic", "2026-06-14T20:00:00Z", []map[string]any{{
-		"provider":      "anthropic",
-		"rateLimitType": "five_hour",
-		"utilization":   42.0,
-	}}, now)
-
-	if _, _, ok := s.cachedProviderQuotaEvidence("anthropic", now.Add(providerQuotaCacheMaxAge+time.Second)); ok {
-		t.Fatal("cachedProviderQuotaEvidence returned expired evidence")
+	if got := providerQuotaProviderForMode("codex_gui"); got != "codex" {
+		t.Fatalf("codex provider = %q, want codex", got)
 	}
 }
 
