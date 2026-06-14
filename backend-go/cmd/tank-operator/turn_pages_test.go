@@ -468,6 +468,61 @@ func TestProjectTurnPagesQuestionOnlyTurnOwnsOnlyQuestionPages(t *testing.T) {
 	}
 }
 
+func TestProjectTurnPagesQuestionOnlyTurnIncludesAskingFinalAnswerContext(t *testing.T) {
+	finalMessage := projectionTestEvent("final", "00000003", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:final", map[string]any{
+		"kind": "message",
+		"text": "I found two deployment paths. The safer one is the staged rollout.",
+	})
+	finalMessage[questionFinalAnswerContextForTurnField] = "turn-2"
+
+	events := []map[string]any{
+		projectionTestEvent("submitted", "00000004", "turn.submitted", "runner", "tank", "turn-2", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("await", "00000005", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{
+			"asking_turn_id":       "turn-1",
+			"question_turn_id":     "turn-2",
+			"provider_item_id":     "toolu_ask",
+			"timeline_id":          "turn-2:item:ask",
+			"provider_timeline_id": "turn-1:item:ask",
+			"asking_turn_final_answer": map[string]any{
+				"timeline_ids":      []any{"turn-1:item:final"},
+				"provider_item_ids": []any{"assistant:final"},
+			},
+			"questions": []any{
+				map[string]any{"question": "Which path?"},
+			},
+		}),
+		finalMessage,
+	}
+
+	proj := projectTurnPages("turn-2", events)
+	if len(proj.Pages) != 1 {
+		t.Fatalf("page count = %d, want only the question page", len(proj.Pages))
+	}
+	page := proj.Pages[0]
+	if page.Kind != "question" {
+		t.Fatalf("page kind = %q, want question", page.Kind)
+	}
+	if proj.TotalEventCount != 2 {
+		t.Fatalf("total event count = %d, want question-turn events only", proj.TotalEventCount)
+	}
+	if len(page.Entries) != 2 {
+		t.Fatalf("page entries = %d, want final message context + awaiting card: %#v", len(page.Entries), page.Entries)
+	}
+	context := page.Entries[0]
+	if context["questionFinalAnswerContext"] != true || context["kind"] != "message" || context["role"] != "assistant" {
+		t.Fatalf("first entry = %#v, want assistant final-answer context message", context)
+	}
+	if got := transcriptMapString(context, "text"); got != "I found two deployment paths. The safer one is the staged rollout." {
+		t.Fatalf("context text = %q", got)
+	}
+	if context["turnId"] != "turn-1" {
+		t.Fatalf("context turnId = %v, want asking turn", context["turnId"])
+	}
+	if page.Entries[1]["metaKind"] != "awaiting_input" {
+		t.Fatalf("second entry = %#v, want awaiting input card", page.Entries[1])
+	}
+}
+
 func TestProjectTurnPagesQuestionOnlyTurnSealsAfterDurableAnswer(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("await", "00000001", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{

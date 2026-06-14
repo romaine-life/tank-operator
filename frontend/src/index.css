@@ -4934,11 +4934,19 @@ button:disabled {
 }
 
 .run-turn-view-body[data-page-kind="question"] .run-tool-ask {
-  width: 100%;
+  width: calc(100% - (2.625rem + 0.55rem));
+  margin-left: calc(2.625rem + 0.55rem);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.035);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+}
+
+@media (max-width: 640px) {
+  .run-turn-view-body[data-page-kind="question"] .run-tool-ask {
+    width: 100%;
+    margin-left: 0;
+  }
 }
 
 .run-turn-view-loading {

@@ -182,6 +182,10 @@ export function askUserQuestionHandoffEvents(args) {
   // above the question. Empty/absent for ordinary AskUserQuestion pauses.
   const plan =
     typeof args.plan === "string" && args.plan.trim() ? args.plan : undefined;
+  const askingTurnFinalAnswer =
+    args.finalAnswer === undefined
+      ? undefined
+      : normalizeFinalAnswer(args.finalAnswer);
   const awaitingInput = {
     asking_turn_id: askingTurnID,
     question_turn_id: questionTurnID,
@@ -190,6 +194,9 @@ export function askUserQuestionHandoffEvents(args) {
     provider_timeline_id: providerTimelineID,
     questions,
     ...(plan ? { plan } : {}),
+    ...(askingTurnFinalAnswer
+      ? { asking_turn_final_answer: askingTurnFinalAnswer }
+      : {}),
   };
   return {
     questionClientNonce: questionNonce,
