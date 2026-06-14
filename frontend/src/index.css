@@ -12189,6 +12189,14 @@ textarea.run-files-viewer-editor:focus {
   width: auto;
 }
 
+.run-transcript-tool-header-row[data-has-question-target="true"] > .run-transcript-tool-header {
+  flex: 0 1 auto;
+}
+
+.run-transcript-tool-header-row[data-has-question-target="true"] .run-transcript-tool-label {
+  flex: 0 1 auto !important;
+}
+
 .run-transcript-code,
 .run-transcript-code-muted {
   display: block;

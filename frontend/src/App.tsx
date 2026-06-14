@@ -10787,7 +10787,10 @@ function RunToolItem({
         <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
-        <div className="run-transcript-tool-header-row">
+        <div
+          className="run-transcript-tool-header-row"
+          data-has-question-target={questionTarget ? "true" : undefined}
+        >
           <button
             type="button"
             className="run-transcript-tool-header"
