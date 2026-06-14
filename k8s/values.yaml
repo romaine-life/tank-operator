@@ -3,16 +3,16 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-6b03fb27c4ef43dfe85c594a46d9e1717d03d70a85fd184fcf9f0feb2563f06a"
+  tag: "app-01b7f1905bd317e47a1b35791060dc70d166e2266d0dbdcfed6c631dfc1289f9"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-14T19:10:58Z"
-    git_sha: "369396398fc4f6cc278230c6af0204ccae475a0d"
+    built_at: "2026-06-14T19:18:59Z"
+    git_sha: "0857b075f6c1cf83f7209ac7b275695715a77244"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/369396398fc4f6cc278230c6af0204ccae475a0d"
-    pr_number: "1186"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1186"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27509119614"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/0857b075f6c1cf83f7209ac7b275695715a77244"
+    pr_number: ""
+    pr_url: ""
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27509322957"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
