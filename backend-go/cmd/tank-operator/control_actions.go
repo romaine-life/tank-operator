@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -190,49 +191,24 @@ func (s *appServer) handleInternalGrantGitBreakGlass(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	repo := strings.TrimSpace(body.Repo)
-	owner, name, ok := strings.Cut(repo, "/")
-	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
+	owner, name, ok := splitRepoSlug(body.Repo)
+	if !ok {
 		writeError(w, http.StatusBadRequest, "repo must be a GitHub slug like owner/name")
 		return
 	}
-	ttl := body.TTLSeconds
-	if ttl <= 0 {
-		ttl = 3600
-	}
-	if ttl > 24*3600 {
-		ttl = 24 * 3600
-	}
-	operations := normalizeBreakGlassOperations(body.Operations)
-	now := time.Now().UTC()
-	expiresAt := now.Add(time.Duration(ttl) * time.Second)
-	payload, _ := json.Marshal(map[string]any{
-		"approved_by":      user.ActorEmail,
-		"expires_at":       expiresAt.Format(time.RFC3339),
-		"ttl_seconds":      ttl,
-		"operations":       operations,
-		"request_event_id": strings.TrimSpace(body.RequestEventID),
-		"reason":           strings.TrimSpace(body.Reason),
+	row, expiresAt, err := s.appendGitBreakGlassGrant(r.Context(), gitBreakGlassGrantInput{
+		SessionID:      sessionID,
+		OwnerEmail:     user.ActorEmail,
+		RepoOwner:      owner,
+		RepoName:       name,
+		TTLSeconds:     body.TTLSeconds,
+		Operations:     body.Operations,
+		RequestEventID: body.RequestEventID,
+		Reason:         body.Reason,
+		ApprovedBy:     user.ActorEmail,
 	})
-	event := pgstore.ControlActionEvent{
-		EventID:       "tank-break-glass-grant-" + sessionID + "-" + randomHex(12),
-		InvocationID:  "tank-break-glass-grant-" + randomHex(12),
-		OwnerEmail:    user.ActorEmail,
-		SessionScope:  s.sessionScope,
-		SessionID:     sessionID,
-		SourceService: "tank-operator",
-		SourceTool:    "git_break_glass_approval",
-		Action:        "github.break_glass.grant",
-		Status:        "succeeded",
-		TargetKind:    "github_repository",
-		TargetRef:     "https://github.com/" + repo,
-		RepoOwner:     owner,
-		RepoName:      name,
-		Payload:       payload,
-	}
-	row, err := s.controlActions.Append(r.Context(), event)
 	if err != nil {
-		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
+		recordControlActionEvent("tank-operator", "git_break_glass_approval", "github.break_glass.grant", "succeeded", "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -240,12 +216,79 @@ func (s *appServer) handleInternalGrantGitBreakGlass(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"active":        true,
 		"event_id":      row.EventID,
-		"repo":          repo,
+		"repo":          owner + "/" + name,
 		"expires_at":    expiresAt.Format(time.RFC3339),
-		"operations":    operations,
+		"operations":    normalizeBreakGlassOperations(body.Operations),
 		"session_id":    sessionID,
 		"session_scope": s.sessionScope,
 	})
+}
+
+type gitBreakGlassGrantInput struct {
+	SessionID      string
+	OwnerEmail     string
+	RepoOwner      string
+	RepoName       string
+	TTLSeconds     int
+	Operations     []string
+	RequestEventID string
+	Reason         string
+	ApprovedBy     string
+}
+
+// appendGitBreakGlassGrant writes a github.break_glass.grant control-action and
+// returns the persisted row plus its computed expiry. Shared by the internal
+// (auth-console) grant endpoint and the human-facing UI approval endpoint so
+// the durable grant shape stays identical regardless of who approved.
+func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGlassGrantInput) (pgstore.ControlActionEvent, time.Time, error) {
+	ttl := in.TTLSeconds
+	if ttl <= 0 {
+		ttl = 3600
+	}
+	if ttl > 24*3600 {
+		ttl = 24 * 3600
+	}
+	operations := normalizeBreakGlassOperations(in.Operations)
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(ttl) * time.Second)
+	repo := in.RepoOwner + "/" + in.RepoName
+	payload, _ := json.Marshal(map[string]any{
+		"approved_by":      strings.TrimSpace(in.ApprovedBy),
+		"expires_at":       expiresAt.Format(time.RFC3339),
+		"ttl_seconds":      ttl,
+		"operations":       operations,
+		"request_event_id": strings.TrimSpace(in.RequestEventID),
+		"reason":           strings.TrimSpace(in.Reason),
+	})
+	event := pgstore.ControlActionEvent{
+		EventID:       "tank-break-glass-grant-" + in.SessionID + "-" + randomHex(12),
+		InvocationID:  "tank-break-glass-grant-" + randomHex(12),
+		OwnerEmail:    in.OwnerEmail,
+		SessionScope:  s.sessionScope,
+		SessionID:     in.SessionID,
+		SourceService: "tank-operator",
+		SourceTool:    "git_break_glass_approval",
+		Action:        "github.break_glass.grant",
+		Status:        "succeeded",
+		TargetKind:    "github_repository",
+		TargetRef:     "https://github.com/" + repo,
+		RepoOwner:     in.RepoOwner,
+		RepoName:      in.RepoName,
+		Payload:       payload,
+	}
+	row, err := s.controlActions.Append(ctx, event)
+	return row, expiresAt, err
+}
+
+// splitRepoSlug parses a trimmed "owner/name" GitHub slug.
+func splitRepoSlug(repo string) (string, string, bool) {
+	owner, name, ok := strings.Cut(strings.TrimSpace(repo), "/")
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	if !ok || owner == "" || name == "" {
+		return "", "", false
+	}
+	return owner, name, true
 }
 
 func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r *http.Request) {
