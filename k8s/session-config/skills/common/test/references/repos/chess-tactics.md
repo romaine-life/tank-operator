@@ -15,11 +15,15 @@ container name, listens on port 3000, and has health at `/health`.
 
 ## Frontend (static) hot-swap — the common case
 
-`apply_test_slot_hot_swap` does **not** cover `static` (it supports `backend`,
-`agent_runner`, `codex_runner`; chess-tactics registers none of those runner
-kinds). Static assets are served live from the override dir, so the verified
-workflow is a raw `kubectl` copy of the built `dist` into the app pod — no image
-build, no restart, no `glimmung-agent` CLI needed.
+`apply_test_slot_hot_swap` now supports `artifact_kind: static`, but
+chess-tactics' static contract isn't configured for the apply endpoint yet — it
+needs `build_command`, `pod_selector`, `container`, `builder_image`, and its
+`source` corrected to `frontend/dist` (see "Known gaps"). Until that's
+registered on the chess-tactics Glimmung project, the interim is the manual
+`kubectl` copy below. **This manual path is being retired** — raw `kubectl`
+write/exec into slot pods is going away cluster-wide — so the real fix is to
+register the contract and switch to the MCP tool, mirroring
+`references/repos/tank-operator.md`.
 
 Verified live (session 909): after the copy the slot served the locally-built
 asset hashes (`index-*.js` / `index-*.css`) and `/design/main-menu` returned 200
@@ -104,6 +108,9 @@ affect slot runtime, a fresh or repaired slot.
   is unaffected, but do **not** run `glimmung-agent test-slot-hot-swap
   --static-only --project chess-tactics` (it reads the contract `source`) until
   the contract is corrected to `frontend/dist`, or it copies an unbuilt tree.
-- Adding `static` to the `apply_test_slot_hot_swap` MCP surface would remove the
-  manual step for every webapp project (shared gap with tank-operator and
-  ambience).
+- `static` is now supported by the `apply_test_slot_hot_swap` MCP surface
+  (shipped for tank-operator). To use it here, register chess-tactics' static
+  contract with the apply-endpoint fields (`build_command`, `pod_selector`,
+  `container`, `builder_image`) and `source: frontend/dist`. Since raw `kubectl`
+  into slots is being removed cluster-wide, register the contract rather than
+  leaning on the manual recipe above.
