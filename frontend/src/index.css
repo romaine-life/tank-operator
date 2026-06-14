@@ -10917,7 +10917,9 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 16rem;
   overflow: auto;
 }
@@ -10931,8 +10933,10 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-code-sm);
   color: #a7f3d0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  overflow-x: auto;
 }
 
 .run-tool-bash-out {
@@ -10942,8 +10946,9 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(0, 0, 0, 0.3);
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 16rem;
   overflow: auto;
   color: var(--text-body);
@@ -11010,8 +11015,9 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 18rem;
   overflow: auto;
 }
