@@ -12,6 +12,7 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 type fakeControlActionStore struct {
@@ -49,11 +50,15 @@ func (s *fakeControlActionStore) ListBySession(_ context.Context, ownerEmail, se
 
 func controlActionTestServer(t *testing.T, store controlActionStore) *appServer {
 	t.Helper()
-	return &appServer{
-		verifier:       auth.NewVerifier(testJWT(t)),
-		sessionScope:   "tank-operator-slot-3",
-		controlActions: store,
-	}
+	app := testTurnsApp(
+		t,
+		&recordingSessionBus{},
+		sdkSessionPod("session-47", "47", "owner@example.test", sessionmodel.ClaudeGUIMode, "claude-runner"),
+	)
+	app.verifier = auth.NewVerifier(testJWT(t))
+	app.sessionScope = "tank-operator-slot-3"
+	app.controlActions = store
+	return app
 }
 
 func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T) {
@@ -791,6 +796,102 @@ func TestHandleInternalGrantGitBreakGlassPersistsGrant(t *testing.T) {
 	}
 	if _, ok := payload["branch_scope"].(map[string]any); !ok {
 		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+}
+
+func TestHandleInternalGrantGitBreakGlassStartsSystemApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
+		"ttl_seconds": 900,
+		"operations": ["mint_full_git_token"],
+		"request_event_id": "request-approval-1",
+		"reason": "repair branch"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.Type != "submit_turn" || command.Source != "break-glass-approval" {
+		t.Fatalf("command type/source = %s/%s", command.Type, command.Source)
+	}
+	if command.Email != "owner@example.test" || command.SessionID != "47" {
+		t.Fatalf("command target = %s/%s", command.Email, command.SessionID)
+	}
+	if !strings.Contains(command.Prompt, "System message: Your GitHub break-glass request was approved by the user.") {
+		t.Fatalf("prompt missing approval notice: %q", command.Prompt)
+	}
+	if !strings.Contains(command.Prompt, "Call request_git_break_glass again") {
+		t.Fatalf("prompt missing activation instruction: %q", command.Prompt)
+	}
+	if want := gitBreakGlassApprovalTurnNonce("47:request-approval-1"); command.ClientNonce != want {
+		t.Fatalf("client nonce = %q, want %q", command.ClientNonce, want)
+	}
+	events := app.sessionEvents.(*recordingSessionEventStore).upserts
+	if len(events) < 2 {
+		t.Fatalf("persisted events = %d, want at least 2", len(events))
+	}
+	userMessage := events[0]
+	if userMessage["type"] != "user_message.created" || userMessage["author_kind"] != "system" {
+		t.Fatalf("user message event = %#v", userMessage)
+	}
+	submitted := events[1]
+	payload, _ := submitted["payload"].(map[string]any)
+	if submitted["type"] != "turn.submitted" || payload["source"] != "break-glass-approval" {
+		t.Fatalf("submitted event = %#v", submitted)
+	}
+	var body struct {
+		AgentNotification struct {
+			Delivered bool   `json:"delivered"`
+			TurnID    string `json:"turn_id"`
+		} `json:"agent_notification"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.AgentNotification.Delivered || body.AgentNotification.TurnID == "" {
+		t.Fatalf("agent notification response = %#v", body.AgentNotification)
+	}
+}
+
+func TestHandleInternalGrantGitBreakGlassReturnsErrorWhenApprovalTurnFails(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	app.sessionBus = &recordingSessionBus{err: errors.New("nats down")}
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
+		"ttl_seconds": 900,
+		"operations": ["mint_full_git_token"],
+		"request_event_id": "request-approval-1",
+		"reason": "repair branch"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want persisted grant before retryable notification failure", len(store.appendCalls))
+	}
+	if !strings.Contains(rec.Body.String(), "agent notification failed") {
+		t.Fatalf("body missing notification failure: %s", rec.Body.String())
 	}
 }
 
