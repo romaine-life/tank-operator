@@ -499,6 +499,56 @@ func TestHandleApprovePRLaneAllocationRequestCreatesAutoApproval(t *testing.T) {
 	}
 }
 
+func TestHandleApprovePRLaneAllocationRequestAllowsExplicitOverride(t *testing.T) {
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:      "lane-request-1",
+			InvocationID: "lane-invocation-1",
+			Action:       "github.pr_lane.request",
+			Status:       "started",
+			TargetKind:   "github_repository",
+			TargetRef:    "https://github.com/romaine-life/tank-operator",
+			RepoOwner:    "romaine-life",
+			RepoName:     "tank-operator",
+			Payload: []byte(`{
+				"allocation_request":true,
+				"lane_names":["docs","backend"],
+				"requested_count":2,
+				"reason":"split review"
+			}`),
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
+		"note":"override",
+		"limit":10,
+		"unlimited":true,
+		"branch_names":["ops"]
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "lane-request-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleApprovePRLaneRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := store.appendCalls[0]
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["limit"] != float64(10) || payload["unlimited"] != true {
+		t.Fatalf("override payload = %#v", payload)
+	}
+	names, ok := payload["branch_names"].([]any)
+	if !ok || len(names) != 1 || names[0] != "ops" {
+		t.Fatalf("branch_names = %#v", payload["branch_names"])
+	}
+}
+
 func TestHandleInternalGetPRLaneAuthorizationAllowsApprovedRequest(t *testing.T) {
 	store := &fakeControlActionStore{
 		listRows: []pgstore.ControlActionEvent{

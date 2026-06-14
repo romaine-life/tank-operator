@@ -9207,7 +9207,7 @@ function PRLaneApprovalIndicator({
 }: {
   requests: PRLaneRequest[];
   busyEventId: string | null;
-  onApprove: (request: PRLaneRequest) => void;
+  onApprove: (request: PRLaneRequest, override?: "listed" | "count" | "unlimited") => void;
   onDeny: (request: PRLaneRequest) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -9270,6 +9270,21 @@ function PRLaneApprovalIndicator({
                     <button type="button" disabled={busy} onClick={() => onApprove(request)}>
                       {request.allocationRequest ? "approve request" : "approve"}
                     </button>
+                    {request.allocationRequest && (
+                      <>
+                        {(request.laneNames?.length || request.proposedBranches?.length) ? (
+                          <button type="button" disabled={busy} onClick={() => onApprove(request, "listed")}>
+                            listed only
+                          </button>
+                        ) : null}
+                        <button type="button" disabled={busy} onClick={() => onApprove(request, "count")}>
+                          10
+                        </button>
+                        <button type="button" disabled={busy} onClick={() => onApprove(request, "unlimited")}>
+                          unlimited
+                        </button>
+                      </>
+                    )}
                     <button type="button" disabled={busy} onClick={() => onDeny(request)}>
                       deny
                     </button>
@@ -15358,20 +15373,32 @@ function ChatPane({
     [controlActionRows],
   );
   const postPRLaneDecision = useCallback(
-    async (request: PRLaneRequest, decision: "approve" | "deny") => {
+    async (
+      request: PRLaneRequest,
+      decision: "approve" | "deny",
+      override?: "listed" | "count" | "unlimited",
+    ) => {
       if (publicView || readOnly) return;
       setPRLaneApprovalBusyId(request.eventId);
       try {
+        const requestedBranches = [
+          ...(request.laneNames ?? []),
+          ...(request.proposedBranches ?? []),
+        ];
         const body =
           decision === "approve" && request.allocationRequest
             ? {
-                note: "agent-requested allocation approved",
-                branch_names: [
-                  ...(request.laneNames ?? []),
-                  ...(request.proposedBranches ?? []),
-                ],
-                limit: request.requestedCount ?? 0,
-                unlimited: request.unlimited === true,
+                note: override
+                  ? `agent-requested allocation approved with ${override} override`
+                  : "agent-requested allocation approved",
+                branch_names: override === "count" || override === "unlimited" ? [] : requestedBranches,
+                limit:
+                  override === "count"
+                    ? 10
+                    : override === "listed"
+                      ? requestedBranches.length
+                      : request.requestedCount ?? 0,
+                unlimited: override === "unlimited" || (override === undefined && request.unlimited === true),
               }
             : {};
         await authedFetch(
@@ -21326,8 +21353,8 @@ function ChatPane({
             <PRLaneApprovalIndicator
               requests={prLaneRequests}
               busyEventId={prLaneApprovalBusyId}
-              onApprove={(request) => {
-                void postPRLaneDecision(request, "approve");
+              onApprove={(request, override) => {
+                void postPRLaneDecision(request, "approve", override);
               }}
               onDeny={(request) => {
                 void postPRLaneDecision(request, "deny");

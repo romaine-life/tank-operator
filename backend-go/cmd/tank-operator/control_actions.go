@@ -354,7 +354,18 @@ func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request,
 		branchNames := normalizePRLaneBranchNames(append(append([]string{}, requestPayload.LaneNames...), requestPayload.ProposedBranches...), sessionID, request.RepoName)
 		branchNames = uniqueStrings(branchNames)
 		limit := requestPayload.RequestedCount
-		if !requestPayload.Unlimited {
+		unlimited := requestPayload.Unlimited
+		overrideBranchNames := normalizePRLaneBranchNames(body.BranchNames, sessionID, request.RepoName)
+		if len(overrideBranchNames) > 0 {
+			branchNames = overrideBranchNames
+		}
+		if body.Limit > 0 {
+			limit = body.Limit
+		}
+		if body.Unlimited {
+			unlimited = true
+		}
+		if !unlimited {
 			if limit <= 0 && len(branchNames) > 0 {
 				limit = len(branchNames)
 			}
@@ -372,7 +383,7 @@ func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request,
 			"approved_by":      user.Email,
 			"repo":             strings.TrimSpace(request.RepoOwner + "/" + request.RepoName),
 			"limit":            limit,
-			"unlimited":        requestPayload.Unlimited,
+			"unlimited":        unlimited,
 			"branch_names":     branchNames,
 			"reason":           firstNonEmptyControlAction(strings.TrimSpace(requestPayload.Reason), strings.TrimSpace(body.Note)),
 			"scope":            "session",
