@@ -282,3 +282,25 @@ test("compact user message preview keeps controls on the same row", () => {
   expect(compactFooterRule).toMatch(/flex:\s*0\s+0\s+auto;/);
   expect(compactFooterRule).not.toMatch(/margin-left:\s*auto;/);
 });
+
+test("question page card stays scrollable when taller than the Turn view", () => {
+  // Regression guard: the Turn-view outer scroller is intentionally
+  // overflow-y:hidden because the inner body owns scrolling. If the question
+  // page body is overflow:visible, a tall AskUserQuestion card has NO scroll
+  // container anywhere — it is clipped by .run-main and its lower options and
+  // the set-level Submit button drop below an unreachable fold. The question
+  // body must therefore be its own scroll region, like the activity page kind.
+  const turnViewMainRule = cssRule('.run-main[aria-label="Turn view"]');
+  expect(turnViewMainRule).toMatch(/overflow-y:\s*hidden;/);
+
+  const questionBodyRule = cssRule('.run-turn-view-body[data-page-kind="question"]');
+  expect(questionBodyRule).toMatch(/overflow-y:\s*auto;/);
+  expect(questionBodyRule).not.toMatch(/overflow:\s*visible;/);
+
+  // The base body rule supplies min-height:0 so the shrink-to-fit flex child
+  // can shrink below content height and actually engage overflow-y:auto.
+  expect(cssRule(".run-turn-view-body")).toMatch(/min-height:\s*0;/);
+
+  // The "Question N of M" head is pinned so it stays visible while scrolling.
+  expect(cssRule(".run-turn-question-page-head")).toMatch(/flex:\s*0\s+0\s+auto;/);
+});

@@ -4813,6 +4813,9 @@ button:disabled {
 
 .run-turn-question-page-head {
   display: flex;
+  /* Pinned above the scrolling question body so "Question N of M" stays put
+     while the card scrolls. */
+  flex: 0 0 auto;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
@@ -4901,8 +4904,17 @@ button:disabled {
 }
 
 .run-turn-view-body[data-page-kind="question"] {
+  /* The question body is the card's scroll region, exactly like the activity
+     page kind. It must NOT be overflow:visible: the Turn-view .run-main is
+     overflow-y:hidden (the inner body owns scrolling), so a visible-overflow
+     body leaves a tall question card with no scroll container anywhere in the
+     chain — the card overflows this shrink-to-fit flex item and is clipped by
+     .run-main, putting lower options and the set-level Submit button below an
+     unreachable fold. min-height:0 (from the base .run-turn-view-body rule)
+     lets this flex child shrink so overflow-y engages instead of overflowing
+     .run-main. Regression guard: composerCss.test.ts. */
   flex: 0 1 auto;
-  overflow: visible;
+  overflow-y: auto;
   padding-top: 0;
 }
 
