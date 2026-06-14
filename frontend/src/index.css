@@ -5039,6 +5039,12 @@ button:disabled {
   padding-left: 0;
 }
 
+.run-turn-view-body > .run-transcript-tool-single .run-transcript-tool {
+  grid-template-columns: 2.625rem minmax(0, 1fr);
+  column-gap: 0.55rem;
+  padding-right: 0;
+}
+
 .run-turn-view-body[data-page-kind="question"] {
   /* The question body is the card's scroll region, exactly like the activity
      page kind. It must NOT be overflow:visible: the Turn-view .run-main is
@@ -10917,7 +10923,9 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 16rem;
   overflow: auto;
 }
@@ -10931,8 +10939,10 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-code-sm);
   color: #a7f3d0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  overflow-x: auto;
 }
 
 .run-tool-bash-out {
@@ -10942,8 +10952,9 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(0, 0, 0, 0.3);
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 16rem;
   overflow: auto;
   color: var(--text-body);
@@ -11010,8 +11021,9 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 18rem;
   overflow: auto;
 }
