@@ -38,6 +38,7 @@ from mcp_auth_proxy.server import (
     _parse_mcp_tool_call,
     _push_head_with_token,
     _repo_slug_from_remote,
+    _watch_published_commit,
 )
 
 
@@ -1290,6 +1291,62 @@ def test_checks_state_classifies_pending_failure_and_success() -> None:
     )
     assert succeeded == "succeeded"
     assert success_payload["completed"] == 1
+
+
+def test_checks_state_uses_latest_run_per_name() -> None:
+    # A stale failed run plus a newer success run for the SAME check name must
+    # read as succeeded — GitHub branch protection evaluates the latest run per
+    # name, and a check re-run from failure->success must not block forever.
+    runs = [
+        {"name": "check-pr-body", "status": "completed", "conclusion": "failure", "started_at": "2026-06-14T09:50:00Z", "id": 1},
+        {"name": "check-pr-body", "status": "completed", "conclusion": "success", "started_at": "2026-06-14T10:31:00Z", "id": 2},
+    ]
+    status, error, payload = _checks_state(runs, None)
+    assert status == "succeeded", (status, error)
+    assert payload["failed"] == []
+    assert payload["completed"] == 1
+    # Order-independent (GitHub does not guarantee ordering in the response).
+    assert _checks_state(list(reversed(runs)), None)[0] == "succeeded"
+
+
+def test_checks_state_latest_pending_run_overrides_old_success() -> None:
+    # If the newest run for a name is still running, the check is pending even
+    # when an older run for that name succeeded.
+    runs = [
+        {"name": "test", "status": "completed", "conclusion": "success", "started_at": "2026-06-14T09:00:00Z", "id": 1},
+        {"name": "test", "status": "in_progress", "conclusion": None, "started_at": "2026-06-14T10:00:00Z", "id": 2},
+    ]
+    status, _, payload = _checks_state(runs, None)
+    assert status == "started"
+    assert "test" in payload["pending"]
+
+
+def test_watch_published_commit_records_clean_mergeability_via_single_pr(monkeypatch) -> None:
+    # The /pulls?head= list endpoint returns mergeable=null (the mock PR in the
+    # list carries no mergeable field); the watcher must fetch the single PR
+    # (/pulls/{n}, which the mock reports clean) so it records a *succeeded*
+    # mergeability observation instead of looping on "unknown" forever.
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+    http = _HotSwapHTTP("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+    asyncio.run(
+        asyncio.wait_for(
+            _watch_published_commit(
+                http,
+                _StaticTokenProvider("service-token"),
+                "romaine-life",
+                "tank-operator",
+                "tank/session/95/tank-operator",
+                "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                "tank-publish-test",
+            ),
+            timeout=10,
+        )
+    )
+    actions = [(c["json"]["action"], c["json"]["status"]) for c in http.posts if "control-actions" in c["url"]]
+    assert ("github.commit.ci", "succeeded") in actions
+    assert ("github.pull_request.mergeability", "succeeded") in actions
+    # The single-PR GET (not just the list) was issued for mergeability.
+    assert any(call["method"] == "GET" and call["url"].endswith("/pulls/1113") for call in http.requests)
 
 
 # --- retry-loop tests ----------------------------------------------
