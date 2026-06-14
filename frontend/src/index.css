@@ -3087,13 +3087,6 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.pr-lane-approval-head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--space-1);
-}
-
 .pr-lane-approval-head button,
 .pr-lane-approval-actions button {
   border: 1px solid var(--border-soft);

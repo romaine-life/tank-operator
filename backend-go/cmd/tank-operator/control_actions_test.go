@@ -246,7 +246,12 @@ func TestHandleApprovePRLaneRequestRecordsDecision(t *testing.T) {
 		}},
 	}
 	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{"note":"ok"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
+		"note":"ok",
+		"limit":50,
+		"unlimited":true,
+		"branch_names":["human-added"]
+	}`))
 	req.SetPathValue("session_id", "47")
 	req.SetPathValue("request_event_id", "lane-request-1")
 	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
@@ -484,6 +489,13 @@ func TestHandleApprovePRLaneAllocationRequestCreatesAutoApproval(t *testing.T) {
 	}
 	if payload["limit"] != float64(2) {
 		t.Fatalf("limit = %#v", payload["limit"])
+	}
+	if payload["unlimited"] != false {
+		t.Fatalf("unlimited = %#v", payload["unlimited"])
+	}
+	names, ok := payload["branch_names"].([]any)
+	if !ok || len(names) != 2 || names[0] != "docs" || names[1] != "backend" {
+		t.Fatalf("branch_names = %#v", payload["branch_names"])
 	}
 }
 

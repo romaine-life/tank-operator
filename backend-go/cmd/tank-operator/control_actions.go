@@ -352,15 +352,8 @@ func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request,
 	_ = json.Unmarshal(request.Payload, &requestPayload)
 	if decision == "approve" && requestPayload.AllocationRequest {
 		branchNames := normalizePRLaneBranchNames(append(append([]string{}, requestPayload.LaneNames...), requestPayload.ProposedBranches...), sessionID, request.RepoName)
-		branchNames = append(branchNames, normalizePRLaneBranchNames(body.BranchNames, sessionID, request.RepoName)...)
 		branchNames = uniqueStrings(branchNames)
-		limit := body.Limit
-		if limit <= 0 {
-			limit = requestPayload.RequestedCount
-		}
-		if body.Unlimited {
-			requestPayload.Unlimited = true
-		}
+		limit := requestPayload.RequestedCount
 		if !requestPayload.Unlimited {
 			if limit <= 0 && len(branchNames) > 0 {
 				limit = len(branchNames)

@@ -9204,13 +9204,11 @@ function PRLaneApprovalIndicator({
   busyEventId,
   onApprove,
   onDeny,
-  onAutoApprove,
 }: {
   requests: PRLaneRequest[];
   busyEventId: string | null;
   onApprove: (request: PRLaneRequest) => void;
   onDeny: (request: PRLaneRequest) => void;
-  onAutoApprove: (mode: "listed" | "count" | "unlimited") => void;
 }) {
   const [open, setOpen] = useState(false);
   if (requests.length === 0) return null;
@@ -9230,17 +9228,6 @@ function PRLaneApprovalIndicator({
         <div className="pr-lane-approval-panel">
           <div className="pr-lane-approval-head">
             <span>branch requests</span>
-            <div className="pr-lane-approval-head-actions">
-              <button type="button" onClick={() => onAutoApprove("listed")}>
-                approve listed
-              </button>
-              <button type="button" onClick={() => onAutoApprove("count")}>
-                approve 10
-              </button>
-              <button type="button" onClick={() => onAutoApprove("unlimited")}>
-                unlimited
-              </button>
-            </div>
           </div>
           <div className="pr-lane-approval-list">
             {requests.map((request) => {
@@ -9281,7 +9268,7 @@ function PRLaneApprovalIndicator({
                   </div>
                   <div className="pr-lane-approval-actions">
                     <button type="button" disabled={busy} onClick={() => onApprove(request)}>
-                      approve
+                      {request.allocationRequest ? "approve request" : "approve"}
                     </button>
                     <button type="button" disabled={busy} onClick={() => onDeny(request)}>
                       deny
@@ -15375,6 +15362,18 @@ function ChatPane({
       if (publicView || readOnly) return;
       setPRLaneApprovalBusyId(request.eventId);
       try {
+        const body =
+          decision === "approve" && request.allocationRequest
+            ? {
+                note: "agent-requested allocation approved",
+                branch_names: [
+                  ...(request.laneNames ?? []),
+                  ...(request.proposedBranches ?? []),
+                ],
+                limit: request.requestedCount ?? 0,
+                unlimited: request.unlimited === true,
+              }
+            : {};
         await authedFetch(
           scopedSessionPathForPane(
             `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/${decision}`,
@@ -15382,7 +15381,7 @@ function ChatPane({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify(body),
           },
         );
         await fetchControlActionEntries();
@@ -15398,69 +15397,6 @@ function ChatPane({
       session.id,
     ],
   );
-  const autoApprovePRLanes = useCallback(async (mode: "listed" | "count" | "unlimited") => {
-    if (publicView || readOnly) return;
-    setPRLaneApprovalBusyId("__auto__");
-    try {
-      const repo = prLaneRequests[0]?.repo ?? "";
-      const branchNames = Array.from(
-        new Set(
-          prLaneRequests.flatMap((request) =>
-            [
-              ...(request.laneNames ?? []),
-              ...(request.proposedBranches ?? []),
-              request.proposedBranch ?? "",
-              request.allocationRequest ? "" : request.laneName,
-            ].flatMap((value) => (value ? [value] : [])),
-          ),
-        ),
-      );
-      await authedFetch(
-        scopedSessionPathForPane(
-          `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/auto-approve`,
-        ),
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            repo,
-            branch_names: mode === "listed" ? branchNames : [],
-            limit: mode === "listed" ? branchNames.length : mode === "count" ? 10 : 0,
-            unlimited: mode === "unlimited",
-            reason:
-              mode === "unlimited"
-                ? "unlimited PR lanes approved from session composer"
-                : mode === "listed"
-                  ? "listed PR lanes approved from session composer"
-                  : "10 PR lanes approved from session composer",
-          }),
-        },
-      );
-      const pending = [...prLaneRequests];
-      for (const request of pending) {
-        await authedFetch(
-          scopedSessionPathForPane(
-            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/approve`,
-          ),
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ note: "session auto-approval enabled" }),
-          },
-        );
-      }
-      await fetchControlActionEntries();
-    } finally {
-      setPRLaneApprovalBusyId(null);
-    }
-  }, [
-    fetchControlActionEntries,
-    prLaneRequests,
-    publicView,
-    readOnly,
-    scopedSessionPathForPane,
-    session.id,
-  ]);
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
       setBackgroundTaskLedgerEntries([]);
@@ -21395,9 +21331,6 @@ function ChatPane({
               }}
               onDeny={(request) => {
                 void postPRLaneDecision(request, "deny");
-              }}
-              onAutoApprove={(mode) => {
-                void autoApprovePRLanes(mode);
               }}
             />
             {attachments.length > 0 && (
