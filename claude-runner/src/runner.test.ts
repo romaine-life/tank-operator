@@ -179,6 +179,16 @@ test("AskUserQuestion handoff emits a route-safe question turn id", () => {
     handoff.awaitingInput.payload.question_turn_id,
     handoff.questionTurnID,
   );
+  assert.ok(handoff.invocation.payload);
+  assert.equal(
+    handoff.invocation.payload.question_turn_id,
+    handoff.questionTurnID,
+  );
+  assert.equal(
+    handoff.invocation.payload.question_timeline_id,
+    handoff.questionTimelineID,
+  );
+  assert.equal(handoff.invocation.payload.question_page, 1);
   assert.deepEqual(handoff.awaitingInput.payload.asking_turn_final_answer, {
     timeline_ids: ["turn_askq-test-1780648459:item:final"],
     provider_item_ids: ["assistant:final"],

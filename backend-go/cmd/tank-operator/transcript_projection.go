@@ -793,7 +793,7 @@ func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
 		"toolName":       "AskUserQuestion",
 		"toolStatus":     "completed",
 		"toolInput":      projectionFormatValue(map[string]any{"questions": questions}),
-		"toolOutput":     "Question set opened on the next turn page.",
+		"toolOutput":     "Question set opened on the linked turn page.",
 		"turnId":         turnID,
 		"providerItemId": transcriptPayloadString(event, "provider_item_id"),
 		"time":           transcriptString(event, "created_at"),
@@ -805,11 +805,33 @@ func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
 	if summary != "" {
 		entry["toolSummary"] = summary
 	}
+	if questionTarget := projectedAwaitingInputInvocationQuestionTarget(event); questionTarget != nil {
+		entry["questionTarget"] = questionTarget
+	}
 	s.awaitingInputTools = append(s.awaitingInputTools, projectedEntryItem{
 		entry:    entry,
 		orderKey: orderKey,
 		index:    len(s.awaitingInputTools),
 	})
+}
+
+func projectedAwaitingInputInvocationQuestionTarget(event map[string]any) map[string]any {
+	payload := transcriptPayload(event)
+	questionTurnID := transcriptMapString(payload, "question_turn_id")
+	if questionTurnID == "" {
+		return nil
+	}
+	target := map[string]any{
+		"turnId": questionTurnID,
+		"page":   1,
+	}
+	if timelineID := transcriptMapString(payload, "question_timeline_id"); timelineID != "" {
+		target["timelineId"] = timelineID
+	}
+	if page, ok := transcriptNumeric(payload["question_page"]); ok && page > 0 {
+		target["page"] = int(page)
+	}
+	return target
 }
 
 func projectionAwaitingInputQuestions(event map[string]any) []any {
@@ -1090,6 +1112,7 @@ func (s *projectionState) upsertScheduledWakeup(event map[string]any) {
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
+	s.fillAwaitingInputToolQuestionTargets()
 	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.scheduledWakeups)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.wakePrompts)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
@@ -1222,6 +1245,62 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 		out = append(out, annotateProjectionTerminal(item.entry, s.turnTerminals))
 	}
 	return out
+}
+
+func (s *projectionState) fillAwaitingInputToolQuestionTargets() {
+	if len(s.awaitingInputTools) == 0 || len(s.messages) == 0 {
+		return
+	}
+	for toolIdx := range s.awaitingInputTools {
+		toolEntry := s.awaitingInputTools[toolIdx].entry
+		if toolEntry == nil {
+			continue
+		}
+		if questionTarget, _ := toolEntry["questionTarget"].(map[string]any); questionTarget != nil {
+			continue
+		}
+		toolTurnID := transcriptMapString(toolEntry, "turnId")
+		toolProviderItemID := transcriptMapString(toolEntry, "providerItemId")
+		toolID := transcriptMapString(toolEntry, "id")
+		for _, message := range s.messages {
+			awaiting, _ := message.entry["awaitingInput"].(map[string]any)
+			if awaiting == nil {
+				continue
+			}
+			if askingTurnID := transcriptMapString(awaiting, "askingTurnId"); askingTurnID != "" && askingTurnID != toolTurnID {
+				continue
+			}
+			target := questionTargetFromProjectedAwaitingInput(awaiting)
+			if target == nil {
+				continue
+			}
+			providerItemID := transcriptMapString(awaiting, "providerItemId")
+			if providerItemID != "" && providerItemID == toolProviderItemID {
+				toolEntry["questionTarget"] = target
+				break
+			}
+			providerTimelineID := transcriptMapString(awaiting, "providerTimelineId")
+			if providerTimelineID != "" && (toolID == providerTimelineID || strings.HasPrefix(toolID, providerTimelineID+":")) {
+				toolEntry["questionTarget"] = target
+				break
+			}
+		}
+	}
+}
+
+func questionTargetFromProjectedAwaitingInput(awaiting map[string]any) map[string]any {
+	questionTurnID := transcriptMapString(awaiting, "questionTurnId")
+	if questionTurnID == "" {
+		return nil
+	}
+	target := map[string]any{
+		"turnId": questionTurnID,
+		"page":   1,
+	}
+	if timelineID := transcriptMapString(awaiting, "timelineId"); timelineID != "" {
+		target["timelineId"] = timelineID
+	}
+	return target
 }
 
 func (s *projectionState) backgroundProviderItemIDs() map[string]bool {

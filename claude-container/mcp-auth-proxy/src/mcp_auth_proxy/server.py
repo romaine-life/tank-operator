@@ -101,6 +101,12 @@ _TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
 _GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
+# azure-personal is absent from the default session .mcp.json (it is locked by
+# default); an approved azure break-glass grant activates it back in, which is
+# the harness reconnect trigger that surfaces its tools. The listener is the
+# always-running azure proxy port (AZURE_MCP_PORT = 9991).
+_AZURE_MCP_SERVER_NAME = "azure-personal"
+_AZURE_MCP_LISTENER_PORT = 9991
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
 _GITHUB_WRITE_TOOL_DENYLIST = {
@@ -1739,6 +1745,84 @@ def _activate_break_glass_mcp_config(repo_slug: str, grant: dict) -> dict:
     }
 
 
+def _azure_break_glass_activation_path() -> Path:
+    return WORKSPACE_ROOT / ".tank" / "azure-break-glass-active.json"
+
+
+def _activate_azure_break_glass_mcp_config(grant: dict) -> dict:
+    # Mirror _activate_break_glass_mcp_config, for the azure-personal MCP. While
+    # locked, azure-personal is absent from the agent's runtime MCP config (it is
+    # not in the default session .mcp.json), so the harness never connects to a
+    # locked server. On an approved grant we add it back — pointed at the
+    # always-running azure proxy listener (127.0.0.1:9991) — which is the
+    # reconnect trigger that surfaces its tools, exactly how git break-glass
+    # surfaces mint_full_git_token. mcp-azure-personal still re-checks the grant
+    # on every call, so the config entry alone grants nothing.
+    changed: list[str] = []
+    server_url = f"http://127.0.0.1:{_AZURE_MCP_LISTENER_PORT}/"
+    marker_path = _azure_break_glass_activation_path()
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker = {
+        "server_name": _AZURE_MCP_SERVER_NAME,
+        "server_url": server_url,
+        "grant_event_id": grant.get("event_id"),
+        "expires_at": grant.get("expires_at"),
+        "activated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    }
+    marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    changed.append(str(marker_path))
+
+    mcp_path = WORKSPACE_ROOT / ".mcp.json"
+    try:
+        config = json.loads(mcp_path.read_text(encoding="utf-8"))
+    except Exception:
+        config = {}
+    try:
+        servers = config.setdefault("mcpServers", {})
+        if isinstance(servers, dict):
+            wanted = {"type": "http", "url": server_url}
+            if servers.get(_AZURE_MCP_SERVER_NAME) != wanted:
+                servers[_AZURE_MCP_SERVER_NAME] = wanted
+                mcp_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                changed.append(str(mcp_path))
+    except Exception:
+        log.warning("failed to update workspace MCP config for azure break-glass", exc_info=True)
+
+    codex_config = WORKSPACE_ROOT / ".tank" / "codex" / "config.toml"
+    block = f'[mcp_servers.{_AZURE_MCP_SERVER_NAME}]\nurl = "{server_url}"\n'
+    try:
+        if codex_config.exists():
+            text = codex_config.read_text(encoding="utf-8")
+            if f"[mcp_servers.{_AZURE_MCP_SERVER_NAME}]" not in text:
+                codex_config.write_text(text.rstrip() + "\n\n" + block, encoding="utf-8")
+                changed.append(str(codex_config))
+    except Exception:
+        log.warning("failed to update Codex MCP config for azure break-glass", exc_info=True)
+
+    claude_settings = WORKSPACE_ROOT / ".tank" / "claude" / "settings.json"
+    try:
+        if claude_settings.exists():
+            settings = json.loads(claude_settings.read_text(encoding="utf-8"))
+            permissions = settings.setdefault("permissions", {})
+            allow = permissions.setdefault("allow", [])
+            if isinstance(allow, list) and f"mcp__{_AZURE_MCP_SERVER_NAME}" not in allow:
+                allow.append(f"mcp__{_AZURE_MCP_SERVER_NAME}")
+                allow.sort()
+                claude_settings.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                changed.append(str(claude_settings))
+    except Exception:
+        log.warning("failed to update Claude settings for azure break-glass", exc_info=True)
+
+    return {
+        "server_name": _AZURE_MCP_SERVER_NAME,
+        "server_url": server_url,
+        "grant_event_id": grant.get("event_id"),
+        "expires_at": grant.get("expires_at"),
+        "changed_files": changed,
+        "reload_required": True,
+    }
+
+
 async def _mint_github_installation_token(http: ClientSession, service_token: str, repo_slug: str, *, workflows: bool = False, full: bool = False) -> str:
     arguments: dict[str, object] = {"repos": [repo_slug], "write": True}
     if workflows:
@@ -3043,11 +3127,11 @@ async def _handle_tank_azure_break_glass_tool(
     request_id: object,
     arguments: dict,
 ) -> web.Response:
-    # Mirrors _handle_tank_break_glass_tool. Records the request and returns a
-    # Tank approval URL; it never mints or reveals a token. Unlike
-    # git break-glass there is no activation step: azure-personal is already in
-    # .mcp.json and the server (mcp-azure-personal) is the enforcement point, so
-    # once a grant exists the server simply starts serving its tools.
+    # Mirrors _handle_tank_break_glass_tool. Records the request and returns an
+    # Tank approval URL; it never mints or reveals a token. On an active grant
+    # it activates azure-personal into the agent's runtime MCP config
+    # (azure-personal is absent from the default .mcp.json while locked), and
+    # mcp-azure-personal still re-checks the grant on every call.
     invocation_id = f"tank-azure-break-glass-{uuid4().hex}"
     try:
         if not ORIGIN_SESSION_ID:
@@ -3081,10 +3165,13 @@ async def _handle_tank_azure_break_glass_tool(
             },
         )
         if grant:
+            activation = _activate_azure_break_glass_mcp_config(grant)
             text = (
-                "Break-glass azure-personal access is approved and active.\n"
+                "Break-glass azure-personal access is approved and active; the "
+                "azure-personal MCP was activated into this session's MCP config.\n"
                 f"Grant expires: {grant.get('expires_at')}\n"
-                "If the azure-personal tools do not appear, reload or restart the agent MCP registry."
+                "Reload or restart the agent MCP registry if the azure-personal tools "
+                "do not appear automatically."
             )
             structured = {
                 "resource": "azure-personal",
@@ -3093,6 +3180,7 @@ async def _handle_tank_azure_break_glass_tool(
                 "approval_url": approval_url,
                 "expires_at": grant.get("expires_at"),
                 "privileged_tools_visible": True,
+                "activation": activation,
             }
         else:
             text = (
@@ -3954,6 +4042,11 @@ SESSION_SCOPE = (os.environ.get("SESSION_SCOPE") or "").strip()
 #   9997 â€” optional SpireLens MCP, only when SPIRELENS_MCP_UPSTREAM is set
 #   9998 â€” mcp-grafana
 LISTENERS: list[tuple[int, str]] = [
+    # azure-personal: the listener always runs, but azure-personal is NOT in the
+    # default session .mcp.json (k8s/session-config/mcp.json) — it is locked by
+    # default and activated into .mcp.json only on an approved break-glass grant
+    # (_activate_azure_break_glass_mcp_config). So this 9991 entry intentionally
+    # has no default config-side counterpart.
     (9991, "http://mcp-azure-personal.mcp-azure-personal.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
     (9993, "http://mcp-k8s.mcp-k8s.svc:80"),

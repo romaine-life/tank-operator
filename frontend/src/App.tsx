@@ -398,6 +398,10 @@ import {
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
+import {
+  collectGlimmungRunsFromEntries,
+  type GlimmungRunLink,
+} from "./glimmungRuns";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -553,6 +557,12 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     dismissed?: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
+  };
+  questionTarget?: {
+    turnId?: string;
+    turnNumber?: number;
+    page?: number;
+    timelineId?: string;
   };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
@@ -2392,6 +2402,9 @@ interface ComposerToolButtonsProps {
     onCreateAndDrive?: () => void;
     onOpenReady?: () => void;
   };
+  glimmungRuns: {
+    runs: GlimmungRunLink[];
+  };
   pullRequest: {
     latestUrl?: string;
     linkedUrl?: string;
@@ -2625,11 +2638,146 @@ function PullRequestMenuButton({
   );
 }
 
+function GlimmungMark({ className }: { className?: string }) {
+  return (
+    <span className={className} aria-hidden="true">
+      g
+    </span>
+  );
+}
+
+function GlimmungRunMenuButton({
+  runs,
+}: ComposerToolButtonsProps["glimmungRuns"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+  const hasRuns = runs.length > 0;
+  const title = hasRuns
+    ? `Glimmung runs (${runs.length})`
+    : "No Glimmung runs found yet";
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="run-glimmung-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-glimmung-action-btn${hasRuns ? " is-ready" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={!hasRuns}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GlimmungMark className="run-glimmung-mark" />
+        {runs.length > 1 && (
+          <span className="run-command-menu-count">{runs.length}</span>
+        )}
+      </button>
+      {open &&
+        hasRuns &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover run-glimmung-menu-popover"
+            role="menu"
+            aria-label="Glimmung runs"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Glimmung runs</div>
+            {runs.map((run) => (
+              <a
+                key={run.key}
+                role="menuitem"
+                className="run-pr-menu-item run-glimmung-menu-item"
+                href={run.href}
+                target="_blank"
+                rel="noreferrer"
+                title={run.href}
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-glimmung-menu-main">
+                  <span className="run-pr-menu-name run-glimmung-menu-name">
+                    <GlimmungMark className="run-glimmung-menu-glyph" />
+                    {run.label}
+                  </span>
+                  <span className="run-slash-desc">
+                    {[run.state, run.toolName].filter(Boolean).join(" · ")}
+                  </span>
+                </span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 function ComposerToolButtons({
   attach,
   cost,
   rollout,
   test,
+  glimmungRuns,
   pullRequest,
   slash,
   mcp,
@@ -2725,6 +2873,7 @@ function ComposerToolButtons({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      <GlimmungRunMenuButton {...glimmungRuns} />
       <PullRequestMenuButton {...pullRequest} />
       {bugLabelControl}
       <button
@@ -4357,6 +4506,7 @@ function DemoLanding() {
                         disabled: true,
                         title: "Sign in to start a session",
                       }}
+                      glimmungRuns={{ runs: [] }}
                       pullRequest={{}}
                       slash={{
                         disabled: true,
@@ -4907,6 +5057,7 @@ type TurnViewScrollAnchor = "bottom" | "top";
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
   resetPage?: boolean;
+  page?: number;
 };
 
 type TurnViewScrollRequest = {
@@ -5814,6 +5965,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
           usageObservation: entry.usageObservation,
+          questionTarget: entry.questionTarget,
         };
       }
       if (entry.kind === "reasoning") {
@@ -10108,7 +10260,11 @@ function AgentGitActivityScreen({
   );
 }
 
-function ToolBody({ entry }: { entry: TranscriptEntry }) {
+function ToolBody({
+  entry,
+}: {
+  entry: TranscriptEntry;
+}) {
   const name = entry.toolName ?? "";
   const input = tryParseJson(entry.toolInput) as Record<string, unknown> | null;
   if (
@@ -10740,20 +10896,124 @@ function ToolDefaultBody({
   );
 }
 
+export type AskUserQuestionTarget = {
+  turnId: string;
+  turnNumber?: number;
+  page: number;
+};
+
+function askUserQuestionToolTarget(
+  entry: TranscriptEntry,
+): AskUserQuestionTarget | null {
+  if (!isAskUserQuestionTool(entry)) return null;
+  const raw = entry.questionTarget;
+  const turnId = raw?.turnId?.trim() ?? "";
+  if (!turnId) return null;
+  const page =
+    typeof raw?.page === "number" && Number.isSafeInteger(raw.page) && raw.page > 0
+      ? raw.page
+      : 1;
+  const turnNumber =
+    typeof raw?.turnNumber === "number" &&
+    Number.isSafeInteger(raw.turnNumber) &&
+    raw.turnNumber > 0
+      ? raw.turnNumber
+      : undefined;
+  return { turnId, turnNumber, page };
+}
+
+export function askUserQuestionTargetHref(
+  currentHref: string,
+  sessionId: string,
+  target: AskUserQuestionTarget,
+): string | undefined {
+  if (!target.turnNumber) return undefined;
+  return buildSessionRouteUrl(
+    currentHref,
+    sessionId,
+    "turns",
+    target.turnNumber,
+    null,
+    target.page,
+  );
+}
+
+function AskUserQuestionToolTargetButton({
+  sessionId,
+  target,
+  onOpenTurn,
+  compact = false,
+}: {
+  sessionId: string;
+  target: AskUserQuestionTarget;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  compact?: boolean;
+}) {
+  const label = "Open question page";
+  const href = askUserQuestionTargetHref(window.location.href, sessionId, target);
+  const className = `run-tool-question-target${compact ? " run-tool-question-target-compact" : ""}`;
+  const open = () =>
+    onOpenTurn?.(target.turnId, { anchor: "top", page: target.page });
+  if (href) {
+    return (
+      <a
+        className={className}
+        href={href}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (
+            e.button !== 0 ||
+            e.metaKey ||
+            e.ctrlKey ||
+            e.shiftKey ||
+            e.altKey ||
+            !onOpenTurn
+          )
+            return;
+          e.preventDefault();
+          open();
+        }}
+      >
+        <MessageSquareIcon size={13} aria-hidden="true" />
+        <span>{label}</span>
+      </a>
+    );
+  }
+  if (!onOpenTurn) return null;
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={(e) => {
+        e.stopPropagation();
+        open();
+      }}
+    >
+      <MessageSquareIcon size={13} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
 function RunToolItem({
   entry,
   showTimestamps,
   expanded,
   onExpandedChange,
+  sessionId,
+  onOpenTurn,
 }: {
   entry: TranscriptEntry;
   showTimestamps: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  sessionId: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
+  const questionTarget = askUserQuestionToolTarget(entry);
   return (
     <div
       className="run-transcript-tool"
@@ -10768,66 +11028,81 @@ function RunToolItem({
         <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
-        <button
-          type="button"
-          className="run-transcript-tool-header"
-          data-slot="tool-item-header"
-          onClick={() => onExpandedChange(!expanded)}
-          aria-expanded={expanded}
+        <div
+          className="run-transcript-tool-header-row"
+          data-has-question-target={questionTarget ? "true" : undefined}
         >
-          <span
-            className="run-transcript-tool-icon"
-            data-slot="tool-item-icon"
-            title={cfg.tooltip}
-            aria-label={cfg.tooltip}
+          <button
+            type="button"
+            className="run-transcript-tool-header"
+            data-slot="tool-item-header"
+            onClick={() => onExpandedChange(!expanded)}
+            aria-expanded={expanded}
           >
             <span
-              className={`run-tool-icon-glyph ${cfg.colorClass}`}
-              aria-hidden="true"
+              className="run-transcript-tool-icon"
+              data-slot="tool-item-icon"
+              title={cfg.tooltip}
+              aria-label={cfg.tooltip}
             >
-              <cfg.Icon size={14} strokeWidth={2} />
+              <span
+                className={`run-tool-icon-glyph ${cfg.colorClass}`}
+                aria-hidden="true"
+              >
+                <cfg.Icon size={14} strokeWidth={2} />
+              </span>
             </span>
-          </span>
-          <span
-            className="run-transcript-tool-label"
-            data-slot="tool-item-label"
-          >
-            {entry.toolName ?? "tool"}
-          </span>
-          {showTimestamps && (
-            <ToolTiming
-              startedAt={entry.startedAt ?? entry.time}
-              completedAt={entry.completedAt}
-              running={running}
-            />
-          )}
-          {running && !showTimestamps && (
-            <Loader2Icon
-              size={12}
-              className="run-spin run-tool-spinner"
-              aria-hidden="true"
-            />
-          )}
-          <span
-            className="run-transcript-tool-chevron"
-            data-slot="tool-item-chevron"
-          >
-            {expanded ? (
-              <ChevronUpIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
-              />
-            ) : (
-              <ChevronDownIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
+            <span
+              className="run-transcript-tool-label"
+              data-slot="tool-item-label"
+            >
+              {entry.toolName ?? "tool"}
+            </span>
+            {showTimestamps && (
+              <ToolTiming
+                startedAt={entry.startedAt ?? entry.time}
+                completedAt={entry.completedAt}
+                running={running}
               />
             )}
-          </span>
-        </button>
-        {expanded && <ToolBody entry={entry} />}
+            {running && !showTimestamps && (
+              <Loader2Icon
+                size={12}
+                className="run-spin run-tool-spinner"
+                aria-hidden="true"
+              />
+            )}
+            <span
+              className="run-transcript-tool-chevron"
+              data-slot="tool-item-chevron"
+            >
+              {expanded ? (
+                <ChevronUpIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              ) : (
+                <ChevronDownIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              )}
+            </span>
+          </button>
+          {questionTarget && (
+            <AskUserQuestionToolTargetButton
+              sessionId={sessionId}
+              target={questionTarget}
+              onOpenTurn={onOpenTurn}
+              compact
+            />
+          )}
+        </div>
+        {expanded && (
+          <ToolBody entry={entry} />
+        )}
       </div>
     </div>
   );
@@ -10841,6 +11116,8 @@ function RunToolGroup({
   onOpenChange,
   toolExpansionOverrides,
   onToolExpandedChange,
+  sessionId,
+  onOpenTurn,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
@@ -10849,6 +11126,8 @@ function RunToolGroup({
   onOpenChange: (open: boolean) => void;
   toolExpansionOverrides: Record<string, boolean>;
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
+  sessionId: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   if (entries.length === 0) return null;
   if (entries.length === 1) {
@@ -10862,6 +11141,8 @@ function RunToolGroup({
           onExpandedChange={(expanded) =>
             onToolExpandedChange(entry.id, expanded)
           }
+          sessionId={sessionId}
+          onOpenTurn={onOpenTurn}
         />
       </div>
     );
@@ -10944,6 +11225,8 @@ function RunToolGroup({
               onExpandedChange={(expanded) =>
                 onToolExpandedChange(e.id, expanded)
               }
+              sessionId={sessionId}
+              onOpenTurn={onOpenTurn}
             />
           ))}
         </div>
@@ -12374,6 +12657,8 @@ function RunTurnActivityGroup({
                           }
                           toolExpansionOverrides={toolExpansionOverrides}
                           onToolExpandedChange={onToolExpandedChange}
+                          sessionId={sessionId}
+                          onOpenTurn={onOpenTurn}
                         />
                       );
                     }
@@ -12491,6 +12776,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
+  onOpenTurn,
   transcriptHrefForEntry,
   onOpenTranscriptMessage,
   scrollRequest,
@@ -12515,6 +12801,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn: TurnActivityLoadStateByTurn;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
   onOpenTranscriptMessage?: (entryId: string) => void;
   scrollRequest?: TurnViewScrollRequest | null;
@@ -12784,6 +13071,8 @@ function RunTurnActivityScreen({
           onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
           toolExpansionOverrides={toolExpansionOverrides}
           onToolExpandedChange={setToolExpanded}
+          sessionId={sessionId}
+          onOpenTurn={onOpenTurn}
         />
       );
     }
@@ -13701,6 +13990,8 @@ export function RunMessages({
             onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
             toolExpansionOverrides={toolExpansionOverrides}
             onToolExpandedChange={setToolExpanded}
+            sessionId={sessionId}
+            onOpenTurn={onOpenTurn}
           />
         );
       }
@@ -19802,6 +20093,13 @@ function ChatPane({
     () => entries.filter((entry) => !entry.backgroundOnly),
     [entries],
   );
+  const glimmungRunLinks = useMemo(() => {
+    const runEntries = [...renderedEntries];
+    for (const activityEntries of Object.values(activityEntriesByTurn)) {
+      if (activityEntries) runEntries.push(...activityEntries);
+    }
+    return collectGlimmungRunsFromEntries(runEntries);
+  }, [activityEntriesByTurn, renderedEntries]);
   useEffect(() => {
     if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
@@ -20261,17 +20559,36 @@ function ChatPane({
         effectiveSelectedTurnId ||
         latestTurnId;
       if (target) {
+        const targetPage =
+          typeof options?.page === "number" &&
+          Number.isSafeInteger(options.page) &&
+          options.page > 0
+            ? options.page
+            : null;
         setPendingRouteTurnNumber(null);
         setRouteTurnUnavailable(false);
         setPendingTurnViewRouteAnchor(null);
         setSelectedTurnNumberAnchor(null);
-        if (options?.resetPage) {
+        if (targetPage != null) {
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [target]: targetPage,
+          };
+        } else if (options?.resetPage) {
           const nextSelectedPages = { ...selectedTurnPageRef.current };
           delete nextSelectedPages[target];
           selectedTurnPageRef.current = nextSelectedPages;
         }
         setSelectedTurnId(target);
-        ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        if (targetPage != null) {
+          startTurnActivityLoad(target, {
+            force: true,
+            page: targetPage,
+            reason: "page",
+          });
+        } else {
+          ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        }
         if (options?.anchor) {
           turnViewScrollRequestSeqRef.current += 1;
           setTurnViewScrollRequest({
@@ -20288,6 +20605,7 @@ function ChatPane({
       effectiveSelectedTurnId,
       ensureTurnActivityLoaded,
       latestTurnId,
+      startTurnActivityLoad,
     ],
   );
 
@@ -21584,6 +21902,7 @@ function ChatPane({
                   onOpenBackgroundTask={
                     publicView ? undefined : openBackgroundPage
                   }
+                  onOpenTurn={publicView ? undefined : openTurnPage}
                   transcriptHrefForEntry={transcriptHrefForEntry}
                   onOpenTranscriptMessage={openTranscriptMessage}
                   scrollRequest={turnViewScrollRequest}
@@ -22205,6 +22524,9 @@ function ChatPane({
                   title: testState?.active
                     ? "Choose a test action"
                     : "Start a test workflow",
+                }}
+                glimmungRuns={{
+                  runs: glimmungRunLinks,
                 }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
@@ -26790,6 +27112,7 @@ function AuthenticatedApp() {
                       disabled: true,
                       title: "Available in an active chat session",
                     }}
+                    glimmungRuns={{ runs: [] }}
                     pullRequest={{}}
                     slash={{
                       disabled: true,

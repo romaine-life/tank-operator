@@ -89,6 +89,9 @@ export interface AskUserQuestionHandoffEventArgs {
 export interface AskUserQuestionHandoffEvents {
   questionClientNonce: string;
   questionTurnID: string;
+  // Stable target for the user-facing synthetic question turn. The invocation
+  // event carries this before the synthetic turn's numbered page is materialized
+  // so UIs can open the target by turn id and later upgrade to a numbered href.
   questionTimelineID: string;
   questionMessage: TankConversationEvent;
   invocation: TankConversationEvent;

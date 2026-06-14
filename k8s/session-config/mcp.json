@@ -1,9 +1,5 @@
 {
   "mcpServers": {
-    "azure-personal": {
-      "type": "http",
-      "url": "http://127.0.0.1:9991/"
-    },
     "github": {
       "type": "http",
       "url": "http://127.0.0.1:9992/"
