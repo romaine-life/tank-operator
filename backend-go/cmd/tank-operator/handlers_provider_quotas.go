@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -69,24 +70,52 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		if err != nil {
 			out.Errors[provider] = err.Error()
 			if rows, observedAt, ok := s.cachedProviderQuotaEvidence(provider, time.Now().UTC()); ok {
+				slog.Info("provider quota source using cached rows",
+					"provider", provider,
+					"rows", len(rows),
+					"observed_at", observedAt,
+					"error", err.Error(),
+				)
 				out.RateLimits = append(out.RateLimits, rows...)
 				if latestObserved == "" || observedAfter(observedAt, latestObserved) {
 					latestObserved = observedAt
 				}
+			} else {
+				slog.Info("provider quota source failed without cache",
+					"provider", provider,
+					"error", err.Error(),
+				)
 			}
 			continue
 		}
 		if snapshot.Status != "ok" {
+			sourceError := fmt.Sprintf("usage source returned status %q", snapshot.Status)
 			if snapshot.Error != "" {
 				out.Errors[provider] = snapshot.Error
+				sourceError = snapshot.Error
 			} else {
-				out.Errors[provider] = fmt.Sprintf("usage source returned status %q", snapshot.Status)
+				out.Errors[provider] = sourceError
 			}
 			if rows, observedAt, ok := s.cachedProviderQuotaEvidence(provider, time.Now().UTC()); ok {
+				slog.Info("provider quota source using cached rows",
+					"provider", provider,
+					"rows", len(rows),
+					"observed_at", observedAt,
+					"status", snapshot.Status,
+					"status_code", snapshot.StatusCode,
+					"error", sourceError,
+				)
 				out.RateLimits = append(out.RateLimits, rows...)
 				if latestObserved == "" || observedAfter(observedAt, latestObserved) {
 					latestObserved = observedAt
 				}
+			} else {
+				slog.Info("provider quota source non-ok without cache",
+					"provider", provider,
+					"status", snapshot.Status,
+					"status_code", snapshot.StatusCode,
+					"error", sourceError,
+				)
 			}
 			continue
 		}
@@ -101,6 +130,12 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		if len(rows) > 0 {
 			s.rememberProviderQuotaEvidence(provider, observedAt, rows, time.Now().UTC())
 		}
+		slog.Info("provider quota source ok",
+			"provider", provider,
+			"rows", len(rows),
+			"observed_at", observedAt,
+			"status_code", snapshot.StatusCode,
+		)
 		out.RateLimits = append(out.RateLimits, rows...)
 	}
 	out.ObservedAt = latestObserved
