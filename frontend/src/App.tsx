@@ -10021,12 +10021,8 @@ function AgentGitActivityScreen({
 
 function ToolBody({
   entry,
-  sessionId,
-  onOpenTurn,
 }: {
   entry: TranscriptEntry;
-  sessionId: string;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const name = entry.toolName ?? "";
   const input = tryParseJson(entry.toolInput) as Record<string, unknown> | null;
@@ -10047,14 +10043,7 @@ function ToolBody({
   if (name === "Read") {
     return <ToolReadBody input={input} />;
   }
-  return (
-    <ToolDefaultBody
-      entry={entry}
-      input={input}
-      sessionId={sessionId}
-      onOpenTurn={onOpenTurn}
-    />
-  );
+  return <ToolDefaultBody entry={entry} input={input} />;
 }
 
 interface AskUserQuestion {
@@ -10639,18 +10628,13 @@ function ToolReadBody({ input }: { input: Record<string, unknown> | null }) {
 function ToolDefaultBody({
   entry,
   input,
-  sessionId,
-  onOpenTurn,
 }: {
   entry: TranscriptEntry;
   input: Record<string, unknown> | null;
-  sessionId?: string;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const inputText = input
     ? JSON.stringify(input, null, 2)
     : (entry.toolInput ?? "");
-  const questionTarget = askUserQuestionToolTarget(entry);
   return (
     <div className="run-tool-body">
       {inputText && (
@@ -10666,13 +10650,6 @@ function ToolDefaultBody({
             {entry.toolOutput}
           </PreWithLinks>
         </>
-      )}
-      {questionTarget && sessionId && (
-        <AskUserQuestionToolTargetButton
-          sessionId={sessionId}
-          target={questionTarget}
-          onOpenTurn={onOpenTurn}
-        />
       )}
     </div>
   );
@@ -10724,19 +10701,22 @@ function AskUserQuestionToolTargetButton({
   sessionId,
   target,
   onOpenTurn,
+  compact = false,
 }: {
   sessionId: string;
   target: AskUserQuestionTarget;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  compact?: boolean;
 }) {
   const label = "Open question page";
   const href = askUserQuestionTargetHref(window.location.href, sessionId, target);
+  const className = `run-tool-question-target${compact ? " run-tool-question-target-compact" : ""}`;
   const open = () =>
     onOpenTurn?.(target.turnId, { anchor: "top", page: target.page });
   if (href) {
     return (
       <a
-        className="run-tool-question-target"
+        className={className}
         href={href}
         onClick={(e) => {
           e.stopPropagation();
@@ -10762,7 +10742,7 @@ function AskUserQuestionToolTargetButton({
   return (
     <button
       type="button"
-      className="run-tool-question-target"
+      className={className}
       onClick={(e) => {
         e.stopPropagation();
         open();
@@ -10792,6 +10772,7 @@ function RunToolItem({
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
+  const questionTarget = askUserQuestionToolTarget(entry);
   return (
     <div
       className="run-transcript-tool"
@@ -10806,71 +10787,77 @@ function RunToolItem({
         <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
-        <button
-          type="button"
-          className="run-transcript-tool-header"
-          data-slot="tool-item-header"
-          onClick={() => onExpandedChange(!expanded)}
-          aria-expanded={expanded}
-        >
-          <span
-            className="run-transcript-tool-icon"
-            data-slot="tool-item-icon"
-            title={cfg.tooltip}
-            aria-label={cfg.tooltip}
+        <div className="run-transcript-tool-header-row">
+          <button
+            type="button"
+            className="run-transcript-tool-header"
+            data-slot="tool-item-header"
+            onClick={() => onExpandedChange(!expanded)}
+            aria-expanded={expanded}
           >
             <span
-              className={`run-tool-icon-glyph ${cfg.colorClass}`}
-              aria-hidden="true"
+              className="run-transcript-tool-icon"
+              data-slot="tool-item-icon"
+              title={cfg.tooltip}
+              aria-label={cfg.tooltip}
             >
-              <cfg.Icon size={14} strokeWidth={2} />
+              <span
+                className={`run-tool-icon-glyph ${cfg.colorClass}`}
+                aria-hidden="true"
+              >
+                <cfg.Icon size={14} strokeWidth={2} />
+              </span>
             </span>
-          </span>
-          <span
-            className="run-transcript-tool-label"
-            data-slot="tool-item-label"
-          >
-            {entry.toolName ?? "tool"}
-          </span>
-          {showTimestamps && (
-            <ToolTiming
-              startedAt={entry.startedAt ?? entry.time}
-              completedAt={entry.completedAt}
-              running={running}
-            />
-          )}
-          {running && !showTimestamps && (
-            <Loader2Icon
-              size={12}
-              className="run-spin run-tool-spinner"
-              aria-hidden="true"
-            />
-          )}
-          <span
-            className="run-transcript-tool-chevron"
-            data-slot="tool-item-chevron"
-          >
-            {expanded ? (
-              <ChevronUpIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
-              />
-            ) : (
-              <ChevronDownIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
+            <span
+              className="run-transcript-tool-label"
+              data-slot="tool-item-label"
+            >
+              {entry.toolName ?? "tool"}
+            </span>
+            {showTimestamps && (
+              <ToolTiming
+                startedAt={entry.startedAt ?? entry.time}
+                completedAt={entry.completedAt}
+                running={running}
               />
             )}
-          </span>
-        </button>
+            {running && !showTimestamps && (
+              <Loader2Icon
+                size={12}
+                className="run-spin run-tool-spinner"
+                aria-hidden="true"
+              />
+            )}
+            <span
+              className="run-transcript-tool-chevron"
+              data-slot="tool-item-chevron"
+            >
+              {expanded ? (
+                <ChevronUpIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              ) : (
+                <ChevronDownIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              )}
+            </span>
+          </button>
+          {questionTarget && (
+            <AskUserQuestionToolTargetButton
+              sessionId={sessionId}
+              target={questionTarget}
+              onOpenTurn={onOpenTurn}
+              compact
+            />
+          )}
+        </div>
         {expanded && (
-          <ToolBody
-            entry={entry}
-            sessionId={sessionId}
-            onOpenTurn={onOpenTurn}
-          />
+          <ToolBody entry={entry} />
         )}
       </div>
     </div>
