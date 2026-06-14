@@ -4950,38 +4950,35 @@ button:disabled {
   white-space: nowrap;
 }
 
-.run-turn-question-page-head {
-  display: flex;
-  /* Pinned above the scrolling question body so "Question N of M" stays put
-     while the card scrolls. */
-  flex: 0 0 auto;
+/* The Turns-view question page heading ("Question N of M") renders as a
+   system-user message (RunQuestionHeadingMessage) inside the scrolling question
+   body, not a pinned orphan banner. The shared system-avatar message frame owns
+   the avatar gutter and column layout; these rules only style the inline label
+   and position counter so the heading reads as a normal message authored by the
+   session's system identity. */
+.run-question-heading {
+  display: inline-flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-  width: min(100% - (var(--space-3) * 2), 48rem);
-  margin: 0 var(--space-3);
-  padding: 0.55rem 0.7rem;
-  border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 40%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--status-agent-needs-input) 8%, transparent);
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
-.run-turn-question-page-head[data-answered="true"] {
-  border-color: var(--status-online-border);
-  background: var(--status-online-bg);
-}
-
-.run-turn-question-page-title {
+.run-question-heading-label {
   color: var(--text-primary);
   font-size: var(--text-sm);
   font-weight: 600;
 }
 
-.run-turn-question-page-count {
+.run-question-heading-count {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+.run-transcript-message[data-kind="question-heading"][data-answered="true"]
+  .run-question-heading-label {
+  color: var(--status-online);
 }
 
 .run-turn-view-summary .run-cost-estimate {

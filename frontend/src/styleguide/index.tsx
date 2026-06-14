@@ -51,6 +51,7 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
       { slug: "portfolio-onboarding", label: "portfolio: onboarding", sub: "first-run wall" },
       { slug: "portfolio-transcript", label: "portfolio: transcript states", sub: "highlight / active / composer" },
       { slug: "collapsed-turn-activity", label: "collapsed turn activity", sub: "divider chevron" },
+      { slug: "question-heading", label: "ask-user-question heading", sub: "system-user question message" },
       { slug: "prompt-collapse-parity", label: "prompt collapse parity", sub: "one-line expand/collapse footer" },
       { slug: "mobile-shell", label: "compact shell", sub: "phone top bar + drawer + gate" },
     ],
