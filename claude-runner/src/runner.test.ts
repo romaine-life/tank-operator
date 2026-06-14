@@ -161,6 +161,10 @@ test("AskUserQuestion handoff emits a route-safe question turn id", () => {
     providerItemID: "toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
     providerTimelineID:
       "turn_askq-test-1780648459:item:toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
+    finalAnswer: {
+      timelineIDs: ["turn_askq-test-1780648459:item:final"],
+      providerItemIDs: ["assistant:final"],
+    },
     questions: [
       { question: "Which cat coat color do you like best?" },
       { question: "Which cat behavior is your favorite?" },
@@ -175,6 +179,10 @@ test("AskUserQuestion handoff emits a route-safe question turn id", () => {
     handoff.awaitingInput.payload.question_turn_id,
     handoff.questionTurnID,
   );
+  assert.deepEqual(handoff.awaitingInput.payload.asking_turn_final_answer, {
+    timeline_ids: ["turn_askq-test-1780648459:item:final"],
+    provider_item_ids: ["assistant:final"],
+  });
 });
 
 test("claudeRateLimitEventIsTerminal follows primary quota status, not overage status", () => {
@@ -772,6 +780,10 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
     turnID: "turn-active",
     clientNonce: "turn-active",
     terminalEmitted: false,
+    finalAnswer: {
+      timelineIDs: ["turn-active:item:final"],
+      providerItemIDs: ["assistant:final"],
+    },
     commandRecord: {},
   };
 
@@ -807,8 +819,16 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
     "AskUserQuestion is the Tank-visible response, but the provider command stays in flight for MCP reply delivery",
   );
   const payload = (awaiting as {
-    payload?: { provider_item_id?: string; provider_timeline_id?: string };
+    payload?: {
+      provider_item_id?: string;
+      provider_timeline_id?: string;
+      asking_turn_final_answer?: unknown;
+    };
   }).payload;
+  assert.deepEqual(payload?.asking_turn_final_answer, {
+    timeline_ids: ["turn-active:item:final"],
+    provider_item_ids: ["assistant:final"],
+  });
 
   await runner.acceptInputReply({
     type: "input_reply",

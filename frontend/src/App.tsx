@@ -491,6 +491,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // row in the main transcript.
   turnOnly?: boolean;
   wakePrompt?: boolean;
+  questionFinalAnswerContext?: boolean;
   backendTurnId?: string;
   turnDetailRole?: "final_answer";
   // metaKind specializes a meta-kind row into a distinguishable transcript

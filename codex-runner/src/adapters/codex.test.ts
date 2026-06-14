@@ -184,6 +184,30 @@ test("marks only the latest completed Codex assistant message as the final answe
   });
 });
 
+test("exposes a defensive copy of the current Codex final-answer candidate", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const turn = acceptedTurn();
+  adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.completed",
+    item: {
+      id: "item_agent_final",
+      type: "agent_message",
+      text: "Use the staged rollout.",
+    },
+  });
+
+  const first = adapter.finalAnswerForTurn(turn.turnID);
+  assert.deepEqual(first, {
+    timelineIDs: ["turn-run-123:item:item_agent_final"],
+    providerItemIDs: ["item_agent_final"],
+  });
+  first?.timelineIDs.push("mutated");
+  assert.deepEqual(adapter.finalAnswerForTurn(turn.turnID), {
+    timelineIDs: ["turn-run-123:item:item_agent_final"],
+    providerItemIDs: ["item_agent_final"],
+  });
+});
+
 test("clears a Codex assistant final-answer candidate when later tool activity arrives", () => {
   const adapter = new CodexTankEventAdapter(cfg());
   const turn = acceptedTurn();

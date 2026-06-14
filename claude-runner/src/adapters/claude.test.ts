@@ -292,6 +292,44 @@ test("adapter emits no item events for Claude AskUserQuestion (the runner pauses
   assert.deepEqual(events, []);
 });
 
+test("adapter preserves the pre-question burst as final-answer candidate for Claude AskUserQuestion", () => {
+  const ctx = turn();
+  canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "assistant",
+    uuid: "claude-msg-burst",
+    message: {
+      content: [
+        {
+          type: "text",
+          text: "Here is the full context and recommendation before I ask you to choose.",
+        },
+      ],
+    },
+  });
+
+  const events = canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "assistant",
+    uuid: "claude-msg-ask",
+    message: {
+      content: [
+        { type: "text", text: "One quick choice before I continue." },
+        {
+          type: "tool_use",
+          id: "toolu_ask",
+          name: "AskUserQuestion",
+          input: { question: "Proceed?" },
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(events.map((event) => event.payload?.text), ["One quick choice before I continue."]);
+  assert.deepEqual(ctx.finalAnswer, {
+    timelineIDs: ["turn-run-123:item:assistant:claude-msg-burst:text:0"],
+    providerItemIDs: ["assistant:claude-msg-burst:text:0"],
+  });
+});
+
 test("adapter emits no item events for Tank AskUserQuestion MCP alias", () => {
   const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
     type: "assistant",

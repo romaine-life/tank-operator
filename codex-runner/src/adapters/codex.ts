@@ -70,6 +70,15 @@ export class CodexTankEventAdapter {
 
   constructor(private readonly cfg: Config) {}
 
+  finalAnswerForTurn(turnID: string): { timelineIDs: string[]; providerItemIDs: string[] } | undefined {
+    const finalAnswer = this.finalAnswerByTurn.get(turnID);
+    if (!finalAnswer) return undefined;
+    return {
+      timelineIDs: [...finalAnswer.timelineIDs],
+      providerItemIDs: [...finalAnswer.providerItemIDs],
+    };
+  }
+
   canonicalEventsForCodexEvent(
     turn: CodexAdapterTurn,
     event: CodexEvent,
