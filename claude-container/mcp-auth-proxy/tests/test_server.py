@@ -20,6 +20,7 @@ from mcp_auth_proxy.server import (
     _activate_break_glass_mcp_config,
     _checks_state,
     _effective_listeners,
+    _feature_contracts_body_status,
     _first_pr_from_response,
     _filter_github_write_tools,
     _github_tool_block_response,
@@ -28,6 +29,7 @@ from mcp_auth_proxy.server import (
     _handle_tank_create_pr_lane_tool,
     _handle_tank_merge_tool,
     _handle_tank_rename_pr_tool,
+    _handle_tank_update_pr_body_tool,
     _handle_tank_pr_lane_tool,
     _handle_break_glass_mcp,
     _json_objects_from_mcp_body,
@@ -540,6 +542,140 @@ def test_tank_rename_pr_tool_renames_verified_session_pr(monkeypatch, tmp_path) 
     assert actions == ["github.pull_request.rename", "github.pull_request.rename"]
 
 
+def test_tank_update_pr_body_tool_updates_verified_session_pr(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path
+    repo = workspace / "tank-operator"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
+    (repo / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    body = (
+        "## Summary\n\n- Add governed PR body tool.\n\n"
+        "## Feature Contracts\n\nAffected contracts:\n"
+        "- [x] Session Lifecycle\n- [ ] Observability\n\n"
+        "Evidence:\n- New control-action ledger entry github.pull_request.update_body.\n"
+    )
+    http = _HotSwapHTTP("unused")
+    response = asyncio.run(
+        _handle_tank_update_pr_body_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            18,
+            {"repo_path": str(repo), "pr_number": 1113, "body": body},
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    assert structured["pr_number"] == 1113
+    assert structured["body_length"] == len(body)
+    assert structured["feature_contracts_ready"] is True
+    assert structured["feature_contracts_missing"] == []
+    patch_requests = [call for call in http.requests if call["method"] == "PATCH" and "/issues/1113" in call["url"]]
+    assert patch_requests[0]["kwargs"]["json"] == {"body": body}
+    posts = [call for call in http.posts if "control-actions" in call["url"]]
+    actions = [call["json"]["action"] for call in posts]
+    assert actions == ["github.pull_request.update_body", "github.pull_request.update_body"]
+    # The governed ledger payload must stay small (backend caps it at 16 KiB):
+    # it records body metadata, not the full body text.
+    assert posts[0]["json"]["payload"]["body_length"] == len(body)
+    assert posts[0]["json"]["payload"]["feature_contracts_ready"] is True
+    assert "body" not in posts[0]["json"]["payload"]
+
+
+def test_tank_update_pr_body_tool_flags_incomplete_feature_contracts(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path
+    repo = workspace / "tank-operator"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
+    (repo / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    # A body the agent might write that does NOT satisfy check-pr-body.
+    http = _HotSwapHTTP("unused")
+    response = asyncio.run(
+        _handle_tank_update_pr_body_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            19,
+            {"repo_path": str(repo), "pr_number": 1113, "body": "Just a plain description.\n"},
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    # The body is still updated (the tool is a general PR-body editor), but the
+    # advisory flags it as not satisfying the gate.
+    assert structured["feature_contracts_ready"] is False
+    assert structured["feature_contracts_missing"]
+    posts = [call for call in http.posts if "control-actions" in call["url"]]
+    assert posts[0]["json"]["payload"]["feature_contracts_ready"] is False
+
+
+def test_tank_update_pr_body_tool_requires_body(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+    http = _HotSwapHTTP("unused")
+    response = asyncio.run(
+        _handle_tank_update_pr_body_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            20,
+            {"repo_path": str(tmp_path), "body": "   "},
+        )
+    )
+    payload = json.loads(response.text)
+    assert payload["error"]["code"] == -32017
+    assert "body is required" in payload["error"]["message"]
+    assert http.posts == []
+    assert http.requests == []
+
+
+def test_feature_contracts_body_status_accepts_filled_section() -> None:
+    body = (
+        "## Feature Contracts\n\nAffected contracts:\n"
+        "- [x] Session Lifecycle\n- [ ] None\n\n"
+        "Evidence:\n- Concrete evidence line.\n"
+    )
+    ready, missing = _feature_contracts_body_status(body)
+    assert ready is True
+    assert missing == []
+
+
+def test_feature_contracts_body_status_rejects_default_template() -> None:
+    # Mirrors .github/pull_request_template.md with nothing filled in.
+    body = (
+        "## Summary\n\n-\n\n## Feature Contracts\n\nAffected contracts:\n"
+        "- [ ] Transcript\n- [ ] None\n\nEvidence:\n-\n"
+    )
+    ready, missing = _feature_contracts_body_status(body)
+    assert ready is False
+    assert any("affected contract" in reason for reason in missing)
+    assert any("Evidence" in reason for reason in missing)
+
+
+def test_feature_contracts_body_status_reports_missing_markers() -> None:
+    ready, missing = _feature_contracts_body_status("no contracts here")
+    assert ready is False
+    assert any("## Feature Contracts" in reason for reason in missing)
+    assert any("Affected contracts:" in reason for reason in missing)
+    assert any("Evidence:" in reason for reason in missing)
+
+
 def test_tank_merge_tool_rejects_non_session_branch(monkeypatch, tmp_path) -> None:
     workspace = tmp_path
     repo = workspace / "tank-operator"
@@ -586,6 +722,7 @@ def test_append_tank_publish_tool_augments_event_prefixed_sse_tools_list() -> No
     assert "request_pr_lane" in augmented
     assert "merge_current_session_pr" in augmented
     assert "rename_current_session_pr" in augmented
+    assert "update_current_session_pr_body" in augmented
 
 
 def test_tank_publish_tool_is_added_to_tools_list() -> None:
@@ -601,6 +738,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
         "create_pr_lane",
         "merge_current_session_pr",
         "rename_current_session_pr",
+        "update_current_session_pr_body",
         "request_git_break_glass",
     ]
     publish = augmented["result"]["tools"][1]
@@ -617,7 +755,11 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert "session branch" in merge["description"]
     rename = augmented["result"]["tools"][5]
     assert rename["inputSchema"]["required"] == ["title"]
-    break_glass = augmented["result"]["tools"][6]
+    update_body = augmented["result"]["tools"][6]
+    assert update_body["inputSchema"]["required"] == ["body"]
+    assert "body" in update_body["inputSchema"]["properties"]
+    assert "Feature Contracts" in update_body["description"]
+    break_glass = augmented["result"]["tools"][7]
     assert "approval URL" in break_glass["description"]
     assert "token" not in break_glass["inputSchema"]["properties"]
 
@@ -1092,7 +1234,10 @@ def test_github_update_issue_block_response_points_to_governed_rename() -> None:
     assert response is not None
     payload = json.loads(response.text)
     assert payload["error"]["data"]["replacement_tool"] == "rename_current_session_pr"
+    assert payload["error"]["data"]["body_tool"] == "update_current_session_pr_body"
     assert "rename_current_session_pr" in payload["error"]["message"]
+    assert "update_current_session_pr_body" in payload["error"]["message"]
+    assert "Feature Contracts" in payload["error"]["message"]
 
 
 def test_filter_github_write_tools_removes_denied_tools_from_sse_list() -> None:

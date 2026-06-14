@@ -63,6 +63,14 @@ the test directly proves the contract invariant. Do not mark a PR ready, ask
 for merge, or merge it yourself when the Feature Contracts section is missing
 or incomplete.
 
+In restricted Git mode (`TANK_RESTRICTED_GIT=true`) the PR body is not directly
+editable through the raw GitHub MCP tools. Set it — including the filled Feature
+Contracts section — with the Tank MCP `update_current_session_pr_body` tool,
+which writes the body of this session's governed PR and previews whether the
+`check-pr-body` workflow will pass. A PR comment does not satisfy that check; it
+only reads `pull_request.body`. Do not file a break-glass request just to edit
+the PR body.
+
 Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main. This includes the PR body checklist check (check-pr-body) — do not bypass or ignore these failures.
 
 Tank session repos use a governed Git flow. `repo-cloner` creates a
@@ -71,6 +79,10 @@ start. The post-commit hook auto-publishes every local commit through the Tank
 MCP `publish_current_head` tool so Tank can record the commit and watch
 GitHub CI/mergeability from the first SHA. Direct `git push` is blocked in
 normal mode; use the Tank MCP publish tool to retry a failed auto-publish.
+The governed PR itself is mutated only through Tank MCP tools, each recorded in
+the control-action ledger: `rename_current_session_pr` (title),
+`update_current_session_pr_body` (body/description), and
+`merge_current_session_pr` (merge after CI/mergeability verification).
 For ad-hoc existing worktrees that predate the template, run:
 
 ```sh

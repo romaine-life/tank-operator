@@ -1054,6 +1054,7 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 	switch action {
 	case "github.pull_request.merge",
 		"github.pull_request.rename",
+		"github.pull_request.update_body",
 		"github.pull_request.ready_for_review",
 		"github.pull_request.open",
 		"github.pull_request.mergeability",

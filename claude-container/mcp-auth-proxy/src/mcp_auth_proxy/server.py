@@ -96,6 +96,7 @@ _TANK_PR_LANE_TOOL = "request_pr_lane"
 _TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
 _TANK_MERGE_TOOL = "merge_current_session_pr"
 _TANK_RENAME_PR_TOOL = "rename_current_session_pr"
+_TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
 _GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
@@ -265,16 +266,35 @@ def _github_tool_block_response(body: bytes, tool_name: str) -> web.Response | N
         return None
     method = _parse_mcp_method(body)
     request_id = method[2] if method else None
+    body_tool: str | None = None
     if tool_name == "merge_pull_request":
         replacement_tool = _TANK_MERGE_TOOL
     elif tool_name == "update_issue":
+        # update_issue edits both the PR title and body. Point at the
+        # governed title rename and, separately, the governed PR-body
+        # editor so an agent can fill the Feature Contracts section the
+        # check-pr-body workflow reads without break-glass.
         replacement_tool = _TANK_RENAME_PR_TOOL
+        body_tool = _TANK_UPDATE_PR_BODY_TOOL
     else:
         replacement_tool = _TANK_PUBLISH_TOOL
     replacement_text = (
         f"Use the Tank MCP {replacement_tool} tool; direct GitHub write "
         "tokens and file/PR writes are reserved for break-glass approval. "
     )
+    if body_tool is not None:
+        replacement_text += (
+            f"To edit the pull request body (for example to fill the Feature "
+            f"Contracts section the check-pr-body workflow validates), use the "
+            f"Tank MCP {body_tool} tool. "
+        )
+    data = {
+        "blocked_tool": tool_name,
+        "replacement_tool": replacement_tool,
+        "break_glass_tool": _TANK_BREAK_GLASS_TOOL,
+    }
+    if body_tool is not None:
+        data["body_tool"] = body_tool
     return _mcp_error_response(
         request_id,
         -32010,
@@ -284,7 +304,7 @@ def _github_tool_block_response(body: bytes, tool_name: str) -> web.Response | N
             "If governed publish is not sufficient, call the Tank MCP "
             "request_git_break_glass tool to get an approval URL."
         ),
-        {"blocked_tool": tool_name, "replacement_tool": replacement_tool, "break_glass_tool": _TANK_BREAK_GLASS_TOOL},
+        data,
     )
 
 
@@ -385,6 +405,7 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     has_create_pr_lane = any(isinstance(tool, dict) and tool.get("name") == _TANK_CREATE_PR_LANE_TOOL for tool in tools)
     has_merge = any(isinstance(tool, dict) and tool.get("name") == _TANK_MERGE_TOOL for tool in tools)
     has_rename_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_RENAME_PR_TOOL for tool in tools)
+    has_update_pr_body = any(isinstance(tool, dict) and tool.get("name") == _TANK_UPDATE_PR_BODY_TOOL for tool in tools)
     changed = False
     for tool in tools:
         if isinstance(tool, dict) and tool.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
@@ -586,6 +607,44 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         },
                     },
                     "required": ["title"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    if not has_update_pr_body:
+        tools.append(
+            {
+                "name": _TANK_UPDATE_PR_BODY_TOOL,
+                "description": (
+                    "Replace the body/description of the open pull request for the "
+                    "current Tank-governed session branch after verifying the repo, "
+                    "branch, and PR head belong to this session lane. Use this to "
+                    "fill the Feature Contracts section the check-pr-body workflow "
+                    "validates; a PR comment does not satisfy that check. Direct "
+                    "GitHub PR-body edits are disabled in restricted Git mode."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Optional GitHub slug, for example romaine-life/tank-operator.",
+                        },
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional absolute or /workspace-relative path to the repo.",
+                        },
+                        "pr_number": {
+                            "type": "integer",
+                            "description": "Optional PR number; if provided it must match the current governed branch's open PR.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "New pull request body in Markdown. Replaces the existing body in full.",
+                        },
+                    },
+                    "required": ["body"],
                     "additionalProperties": False,
                 },
             }
@@ -2147,6 +2206,223 @@ async def _handle_tank_rename_pr_tool(
         )
 
 
+# GitHub caps issue/PR bodies at 65536 characters.
+_GITHUB_PR_BODY_MAX = 65536
+
+
+def _feature_contracts_body_status(body: str) -> tuple[bool, list[str]]:
+    """Advisory preview of the check-pr-body result for a PR body.
+
+    Mirrors `.github/workflows/pr-feature-contracts.yml` so
+    `update_current_session_pr_body` can tell the caller whether the body it
+    just set will satisfy the `check-pr-body` status check, without waiting for
+    a CI round-trip. This is advisory only; the GitHub workflow remains the
+    authoritative gate. Keep this in sync with that workflow.
+    """
+    text = body or ""
+    missing: list[str] = []
+    for marker in ("## Feature Contracts", "Affected contracts:", "Evidence:"):
+        if marker not in text:
+            missing.append(f"missing required marker {marker!r}")
+    affected_match = re.search(r"Affected contracts:\s*([\s\S]*?)\n\s*Evidence:", text, re.IGNORECASE)
+    affected = affected_match.group(1) if affected_match else ""
+    evidence_match = re.search(r"Evidence:\s*([\s\S]*)", text, re.IGNORECASE)
+    evidence = evidence_match.group(1) if evidence_match else ""
+    if not re.search(r"- \[[xX]\] ", affected):
+        missing.append("no affected contract is checked; use '- [x]', including None when no contract applies")
+    evidence_lines = [
+        line.strip()
+        for line in re.split(r"\r?\n", evidence)
+        if line.strip() and line.strip() != "-" and not line.strip().startswith("<!--")
+    ]
+    if not evidence_lines:
+        missing.append("Evidence section has no concrete text")
+    return (not missing, missing)
+
+
+async def _handle_tank_update_pr_body_tool(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    arguments: dict,
+) -> web.Response:
+    invocation_id = f"tank-update-pr-body-{uuid4().hex}"
+    service_token = ""
+    headers: dict[str, str] = {}
+    owner = ""
+    repo = ""
+    repo_slug = ""
+    branch = ""
+    sha = ""
+    pr_number: int | None = None
+    pr_url = ""
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for governed PR body update")
+        body_text = str(arguments.get("body") or "")
+        if not body_text.strip():
+            raise ValueError("body is required")
+        if len(body_text) > _GITHUB_PR_BODY_MAX:
+            raise ValueError(f"body must be {_GITHUB_PR_BODY_MAX} characters or fewer")
+        contracts_ready, contracts_missing = _feature_contracts_body_status(body_text)
+        repo_path = _repo_path_from_arguments(arguments)
+        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
+        if not git_dir:
+            raise ValueError(f"{repo_path} is not a git repository")
+        branch = await _git_output(repo_path, "branch", "--show-current")
+        if not branch:
+            raise ValueError("current repo is detached; checkout the Tank session branch before updating its PR body")
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
+        owner, repo = slug
+        repo_slug = f"{owner}/{repo}"
+        requested_repo = str(arguments.get("repo") or "").strip()
+        if requested_repo and requested_repo != repo_slug:
+            raise ValueError(f"repo argument {requested_repo!r} does not match origin {repo_slug}")
+        if not _is_tank_session_branch(branch, repo):
+            raise ValueError(f"current branch is {branch!r}; expected Tank session branch {_default_tank_session_branch(repo)!r} or one of its approved lanes")
+        sha = await _git_output(repo_path, "rev-parse", "HEAD")
+
+        raw_pr_number = arguments.get("pr_number")
+        requested_pr_number: int | None = None
+        if raw_pr_number not in (None, ""):
+            try:
+                requested_pr_number = int(raw_pr_number)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("pr_number must be an integer") from exc
+            if requested_pr_number <= 0:
+                raise ValueError("pr_number must be positive")
+
+        service_token = await auth_romaine_provider.token()
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        github_token = await _mint_github_installation_token(http, service_token, repo_slug, full=True)
+        head = quote(f"{owner}:{branch}", safe="")
+        pr_status, pr_body = await _github_api_json(
+            http,
+            github_token,
+            "GET",
+            f"/repos/{owner}/{repo}/pulls?head={head}&state=open",
+        )
+        if pr_status >= 400 or not isinstance(pr_body, list) or not pr_body:
+            raise ValueError(f"no open PR exists for {owner}:{branch}")
+        pr = pr_body[0] if isinstance(pr_body[0], dict) else {}
+        pr_number = int(pr.get("number") or 0) or None
+        pr_url = str(pr.get("html_url") or "")
+        if pr_number is None:
+            raise ValueError("open PR response did not include a PR number")
+        if requested_pr_number is not None and pr_number != requested_pr_number:
+            raise ValueError(f"requested PR #{requested_pr_number} does not match governed branch PR #{pr_number}")
+        pr_head = pr.get("head")
+        pr_head_ref = str(pr_head.get("ref") or "") if isinstance(pr_head, dict) else ""
+        if pr_head_ref and pr_head_ref != branch:
+            raise ValueError(f"PR #{pr_number} head branch is {pr_head_ref!r}, not local branch {branch!r}")
+
+        # The governed ledger payload must stay under the backend's 16 KiB
+        # control-action cap, so record body metadata (length + contract
+        # readiness) rather than the full body text.
+        started_payload = {
+            "event_id": f"tank-update-pr-body-start-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+            "invocation_id": invocation_id,
+            "source_service": "mcp-tank-operator",
+            "source_tool": _TANK_UPDATE_PR_BODY_TOOL,
+            "action": "github.pull_request.update_body",
+            "status": "started",
+            "target_kind": "github_pull_request",
+            "target_ref": pr_url or f"https://github.com/{repo_slug}/pull/{pr_number}",
+            "repo_owner": owner,
+            "repo_name": repo,
+            "pr_number": pr_number,
+            "result_sha": sha,
+            "payload": {
+                "branch": branch,
+                "body_length": len(body_text),
+                "feature_contracts_ready": contracts_ready,
+            },
+        }
+        await _post_tank_control_action(http, headers, started_payload)
+        update_status, update_body = await _github_api_json(
+            http,
+            github_token,
+            "PATCH",
+            f"/repos/{owner}/{repo}/issues/{pr_number}",
+            json_body={"body": body_text},
+        )
+        if update_status >= 400 or not isinstance(update_body, dict):
+            raise RuntimeError(f"GitHub PR body update failed with HTTP {update_status}: {update_body!r}")
+        pr_url = str(update_body.get("html_url") or pr_url or f"https://github.com/{repo_slug}/pull/{pr_number}")
+        await _post_tank_control_action(
+            http,
+            headers,
+            started_payload
+            | {
+                "event_id": f"tank-update-pr-body-succeeded-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "status": "succeeded",
+                "target_ref": pr_url,
+            },
+        )
+        if contracts_ready:
+            contracts_line = "Feature Contracts: ready for check-pr-body."
+        else:
+            contracts_line = "Feature Contracts: NOT ready for check-pr-body -> " + "; ".join(contracts_missing)
+        text = (
+            f"Updated governed PR #{pr_number} body for {repo_slug}.\n"
+            f"Branch: {branch}\n"
+            f"Body length: {len(body_text)} characters\n"
+            f"{contracts_line}\n"
+            f"PR: {pr_url}"
+        )
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": text}],
+                "structuredContent": {
+                    "repo": repo_slug,
+                    "branch": branch,
+                    "sha": sha,
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "body_length": len(body_text),
+                    "feature_contracts_ready": contracts_ready,
+                    "feature_contracts_missing": contracts_missing,
+                },
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank update_current_session_pr_body failed", exc_info=True)
+        if service_token and owner and repo:
+            try:
+                await _post_tank_control_action(
+                    http,
+                    headers or {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
+                    {
+                        "event_id": f"tank-update-pr-body-failed-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                        "invocation_id": invocation_id,
+                        "source_service": "mcp-tank-operator",
+                        "source_tool": _TANK_UPDATE_PR_BODY_TOOL,
+                        "action": "github.pull_request.update_body",
+                        "status": "failed",
+                        "target_kind": "github_pull_request" if pr_url else "github_repository",
+                        "target_ref": pr_url or f"https://github.com/{owner}/{repo}",
+                        "repo_owner": owner,
+                        "repo_name": repo,
+                        "pr_number": pr_number,
+                        "result_sha": sha,
+                        "error": str(exc),
+                        "payload": {"branch": branch, "repo_path": str(arguments.get("repo_path") or "")},
+                    },
+                )
+            except Exception:
+                log.warning("failed to record governed PR body update failure", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32017,
+            str(exc),
+            {"tool": _TANK_UPDATE_PR_BODY_TOOL, "invocation_id": invocation_id},
+        )
+
+
 async def _prepare_glimmung_hot_swap_call(
     http: ClientSession,
     auth_romaine_provider,
@@ -3428,6 +3704,7 @@ def _make_handler(
                 _TANK_CREATE_PR_LANE_TOOL,
                 _TANK_MERGE_TOOL,
                 _TANK_RENAME_PR_TOOL,
+                _TANK_UPDATE_PR_BODY_TOOL,
             }:
                 arguments = params.get("arguments") or {}
                 if not isinstance(arguments, dict):
@@ -3443,6 +3720,8 @@ def _make_handler(
                     return await _handle_tank_merge_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_RENAME_PR_TOOL:
                     return await _handle_tank_rename_pr_tool(http, tank_publish_provider, request_id, arguments)
+                if params.get("name") == _TANK_UPDATE_PR_BODY_TOOL:
+                    return await _handle_tank_update_pr_body_tool(http, tank_publish_provider, request_id, arguments)
                 return await _handle_tank_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
 
         if glimmung_hot_swap_provider is not None and parsed_method is not None:

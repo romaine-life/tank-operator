@@ -358,6 +358,16 @@ Contract impact:
   reminder-only guidance.
 - Commit publication, CI state, PR creation, and mergeability are durable
   `control_action_events`, so the UI can show PR/commit evidence after reload.
+- The governed PR's title, body, and merge are mutated only through Tank MCP
+  tools — `rename_current_session_pr`, `update_current_session_pr_body`, and
+  `merge_current_session_pr` — each recorded as a `github.pull_request.*`
+  control-action event (`tank_control_action_events_total`).
+  `update_current_session_pr_body` exists because the `check-pr-body` workflow
+  validates the Feature Contracts section in `pull_request.body`, which a
+  restricted-git agent otherwise cannot edit without break-glass (a PR comment
+  does not satisfy the check). The tool writes the full body via the sidecar's
+  governed GitHub token and previews the `check-pr-body` result so the body can
+  be corrected before CI runs.
 
 Open hardening:
 - Network/RBAC policy still needs a dedicated pass if the threat model includes
