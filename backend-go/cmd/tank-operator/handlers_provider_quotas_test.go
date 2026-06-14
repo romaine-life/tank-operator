@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 )
 
 func TestProviderUsageEvidenceNormalizesClaudeOAuthUsage(t *testing.T) {
@@ -146,6 +147,54 @@ func TestProviderQuotaProviderForModeSeparatesClaudeAccounts(t *testing.T) {
 	}
 	if got := providerQuotaProviderForMode("codex_gui"); got != "codex" {
 		t.Fatalf("codex provider = %q, want codex", got)
+	}
+}
+
+func TestFreshProviderQuotaProvidersUsesRecentDurableRows(t *testing.T) {
+	now := time.Date(2026, 6, 14, 22, 30, 0, 0, time.UTC)
+	rows := []map[string]any{
+		{
+			"provider":      "anthropic",
+			"rateLimitType": "five_hour",
+			"observedAt":    "2026-06-14T22:05:00Z",
+		},
+		{
+			"provider":      "anthropic_secondary",
+			"rateLimitType": "five_hour",
+			"observedAt":    "2026-06-14T20:00:00Z",
+		},
+		{
+			"provider":      "bogus",
+			"rateLimitType": "five_hour",
+			"observedAt":    "2026-06-14T22:29:00Z",
+		},
+	}
+
+	got := freshProviderQuotaProviders(rows, now, time.Hour)
+
+	if _, ok := got["anthropic"]; !ok {
+		t.Fatalf("fresh providers missing anthropic: %#v", got)
+	}
+	if _, ok := got["anthropic_secondary"]; ok {
+		t.Fatalf("stale secondary provider marked fresh: %#v", got)
+	}
+	if _, ok := got["bogus"]; ok {
+		t.Fatalf("invalid provider marked fresh: %#v", got)
+	}
+}
+
+func TestProviderQuotaRefreshIntervalDefaultsAndAllowsForceRefresh(t *testing.T) {
+	t.Setenv("PROVIDER_QUOTA_REFRESH_INTERVAL", "")
+	if got := providerQuotaRefreshInterval(); got != time.Hour {
+		t.Fatalf("default refresh interval = %s, want 1h", got)
+	}
+	t.Setenv("PROVIDER_QUOTA_REFRESH_INTERVAL", "0")
+	if got := providerQuotaRefreshInterval(); got != 0 {
+		t.Fatalf("zero refresh interval = %s, want 0", got)
+	}
+	t.Setenv("PROVIDER_QUOTA_REFRESH_INTERVAL", "15m")
+	if got := providerQuotaRefreshInterval(); got != 15*time.Minute {
+		t.Fatalf("custom refresh interval = %s, want 15m", got)
 	}
 }
 

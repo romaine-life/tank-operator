@@ -30,6 +30,8 @@ type providerQuotaResponse struct {
 	SourceURLs map[string]string `json:"source_urls,omitempty"`
 }
 
+const defaultProviderQuotaRefreshInterval = time.Hour
+
 func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -54,7 +56,35 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 	scope := s.providerQuotaScope()
 	liveRows := []map[string]any{}
 	latestObserved := ""
+	durableRows := []map[string]any{}
+	durableLoaded := false
+	wroteLiveRows := false
+	freshProviders := map[string]time.Time{}
+	if s.pgPool != nil {
+		rows, err := s.loadProviderQuotaSnapshots(ctx, scope)
+		if err != nil {
+			out.Errors["_durable"] = "durable quota snapshot read failed"
+			slog.Error("provider quota snapshot read failed", "scope", scope, "error", err)
+		} else {
+			durableRows = rows
+			durableLoaded = true
+			freshProviders = freshProviderQuotaProviders(rows, time.Now().UTC(), providerQuotaRefreshInterval())
+			for _, row := range rows {
+				if observedAt, ok := stringish(row["observedAt"]); ok && observedAt != "" &&
+					(latestObserved == "" || observedAfter(observedAt, latestObserved)) {
+					latestObserved = observedAt
+				}
+			}
+		}
+	}
 	for provider, url := range sources {
+		if observedAt, ok := freshProviders[provider]; ok {
+			slog.Info("provider quota source skipped; durable snapshot is fresh",
+				"provider", provider,
+				"observed_at", observedAt.Format(time.RFC3339),
+			)
+			continue
+		}
 		url = strings.TrimSpace(url)
 		if url == "" {
 			out.Errors[provider] = "usage source not configured"
@@ -104,6 +134,7 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 				)
 			}
 			liveRows = append(liveRows, rows...)
+			wroteLiveRows = true
 		}
 		slog.Info("provider quota source ok",
 			"provider", provider,
@@ -113,7 +144,11 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		)
 	}
 	if s.pgPool != nil {
-		rows, err := s.loadProviderQuotaSnapshots(ctx, scope)
+		rows := durableRows
+		var err error
+		if !durableLoaded || wroteLiveRows {
+			rows, err = s.loadProviderQuotaSnapshots(ctx, scope)
+		}
 		if err != nil {
 			out.Errors["_durable"] = "durable quota snapshot read failed"
 			out.RateLimits = liveRows
@@ -248,6 +283,41 @@ func (s *appServer) loadProviderQuotaSnapshots(ctx context.Context, scope string
 		return nil, err
 	}
 	return out, nil
+}
+
+func providerQuotaRefreshInterval() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("PROVIDER_QUOTA_REFRESH_INTERVAL"))
+	if raw == "" {
+		return defaultProviderQuotaRefreshInterval
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		slog.Warn("invalid PROVIDER_QUOTA_REFRESH_INTERVAL; using default", "value", raw)
+		return defaultProviderQuotaRefreshInterval
+	}
+	return d
+}
+
+func freshProviderQuotaProviders(rows []map[string]any, now time.Time, maxAge time.Duration) map[string]time.Time {
+	fresh := map[string]time.Time{}
+	if maxAge <= 0 || now.IsZero() {
+		return fresh
+	}
+	for _, row := range rows {
+		provider, _ := stringish(row["provider"])
+		if !validProviderQuotaProvider(provider) {
+			continue
+		}
+		observedAt, _ := stringish(row["observedAt"])
+		observed := parseProviderQuotaObservedAt(observedAt)
+		if observed.IsZero() || now.Sub(observed) > maxAge {
+			continue
+		}
+		if current, ok := fresh[provider]; !ok || observed.After(current) {
+			fresh[provider] = observed
+		}
+	}
+	return fresh
 }
 
 func (s *appServer) defaultProviderUsageURL(provider string) string {
