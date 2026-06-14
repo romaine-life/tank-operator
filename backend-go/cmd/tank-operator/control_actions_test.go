@@ -967,3 +967,131 @@ func TestHandleListControlActionsReturnsStoreErrors(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestHandleApproveGitBreakGlassRecordsGrant(t *testing.T) {
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:      "bg-request-1",
+			InvocationID: "bg-invocation-1",
+			Action:       "github.break_glass.request",
+			Status:       "started",
+			TargetKind:   "github_repository",
+			TargetRef:    "https://github.com/romaine-life/tank-operator",
+			RepoOwner:    "romaine-life",
+			RepoName:     "tank-operator",
+			OwnerEmail:   "owner@example.test",
+			Payload:      []byte(`{"reason":"need to push a hotfix"}`),
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/git-break-glass/approve", strings.NewReader(`{
+		"repo":"romaine-life/tank-operator",
+		"request_event_id":"bg-request-1"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if store.listOwner != "owner@example.test" || store.listSession != "47" {
+		t.Fatalf("list scope = owner %q session %q", store.listOwner, store.listSession)
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != "github.break_glass.grant" || got.Status != "succeeded" {
+		t.Fatalf("grant action/status = %s/%s", got.Action, got.Status)
+	}
+	if got.RepoOwner != "romaine-life" || got.RepoName != "tank-operator" {
+		t.Fatalf("grant repo = %s/%s", got.RepoOwner, got.RepoName)
+	}
+	if got.OwnerEmail != "owner@example.test" {
+		t.Fatalf("grant owner email = %q, want session owner partition", got.OwnerEmail)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["approved_by"] != "owner@example.test" {
+		t.Fatalf("approved_by = %#v", payload["approved_by"])
+	}
+	if payload["request_event_id"] != "bg-request-1" {
+		t.Fatalf("request_event_id = %#v", payload["request_event_id"])
+	}
+	if payload["reason"] != "need to push a hotfix" {
+		t.Fatalf("reason inherited from request = %#v", payload["reason"])
+	}
+	ops, ok := payload["operations"].([]any)
+	if !ok || len(ops) == 0 {
+		t.Fatalf("operations = %#v", payload["operations"])
+	}
+}
+
+func TestHandleApproveGitBreakGlassRejectsWhenAlreadyGranted(t *testing.T) {
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				EventID:    "bg-request-1",
+				Action:     "github.break_glass.request",
+				Status:     "started",
+				RepoOwner:  "romaine-life",
+				RepoName:   "tank-operator",
+				OwnerEmail: "owner@example.test",
+				Payload:    []byte(`{}`),
+			},
+			{
+				EventID:   "bg-grant-1",
+				Action:    "github.break_glass.grant",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				Payload:   []byte(`{"expires_at":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339) + `"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/git-break-glass/approve", strings.NewReader(`{"repo":"romaine-life/tank-operator","request_event_id":"bg-request-1"}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestFindPendingGitBreakGlassRequestSkipsExpiredGrant(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	rows := []pgstore.ControlActionEvent{
+		{
+			EventID:   "bg-grant-old",
+			Action:    "github.break_glass.grant",
+			Status:    "succeeded",
+			RepoOwner: "romaine-life",
+			RepoName:  "tank-operator",
+			Payload:   []byte(`{"expires_at":"` + now.Add(-time.Minute).Format(time.RFC3339) + `"}`),
+		},
+		{
+			EventID:   "bg-request-1",
+			Action:    "github.break_glass.request",
+			Status:    "started",
+			RepoOwner: "romaine-life",
+			RepoName:  "tank-operator",
+			Payload:   []byte(`{}`),
+		},
+	}
+	req, ok := findPendingGitBreakGlassRequest(rows, "", "", now)
+	if !ok || req.EventID != "bg-request-1" {
+		t.Fatalf("expected pending request after grant expiry, got ok=%v id=%q", ok, req.EventID)
+	}
+}

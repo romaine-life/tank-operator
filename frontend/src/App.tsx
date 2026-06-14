@@ -154,6 +154,7 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SettingsIcon,
+  ShieldAlertIcon,
   SquareTerminalIcon,
   SquareIcon,
   SquarePenIcon,
@@ -230,7 +231,9 @@ import {
 import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
+  pendingBreakGlassRequests,
   pendingPRLaneRequests,
+  type BreakGlassRequest,
   type ControlActionRow,
   type ControlActionStatus,
   type PRLaneRequest,
@@ -2372,7 +2375,14 @@ interface ComposerToolButtonsProps {
     onReadyClick?: () => void;
   };
   pullRequest: {
-    url?: string;
+    latestUrl?: string;
+    linkedUrl?: string;
+    breakGlass?: {
+      pending: BreakGlassRequest[];
+      busyId: string | null;
+      onApprove: (request: BreakGlassRequest) => void;
+      disabled?: boolean;
+    };
   };
   slash: {
     disabled?: boolean;
@@ -2390,6 +2400,170 @@ interface ComposerToolButtonsProps {
   modelChip?: ReactNode;
 }
 
+// PullRequestMenuButton turns the composer pull-request icon into a small popup
+// menu instead of a single hard-coded link. It exposes the latest PR the agent
+// opened, the PR explicitly linked to the session (test/rollout), and an
+// in-app "Approve break glass" action. The break-glass entry lights up (amber
+// dot) whenever a `request_git_break_glass` call is awaiting a grant, which
+// replaces the brittle auth.romaine.life approval URL the agent used to hand
+// out (its console callback into Tank does not exist yet, so the URL was a dead
+// end). Self-contained open/outside-click/escape handling mirrors
+// BugLabelPicker so it composes cleanly inside the composer toolbar.
+function PullRequestMenuButton({
+  latestUrl,
+  linkedUrl,
+  breakGlass: breakGlassProp,
+}: ComposerToolButtonsProps["pullRequest"]) {
+  const breakGlass = breakGlassProp ?? {
+    pending: [] as BreakGlassRequest[],
+    busyId: null,
+    onApprove: () => {},
+    disabled: true,
+  };
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (target instanceof Node && ref.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const latest = latestUrl?.trim() ?? "";
+  const linked = linkedUrl?.trim() ?? "";
+  const showLinkedDistinct = Boolean(linked) && linked !== latest;
+  const pending = breakGlass.pending;
+  const pendingCount = pending.length;
+  const hasLinks = Boolean(latest || linked);
+  const hasMenu = hasLinks || pendingCount > 0;
+  const title =
+    pendingCount > 0
+      ? `Break-glass request awaiting approval (${pendingCount})`
+      : hasLinks
+        ? "Pull request"
+        : "No pull request linked yet";
+
+  return (
+    <span ref={ref} className="run-pr-menu">
+      <button
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}${pendingCount > 0 ? " has-alert" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={!hasMenu}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+        {pendingCount > 0 && (
+          <span className="run-pr-alert-dot" aria-hidden="true" />
+        )}
+      </button>
+      {open && hasMenu && (
+        <div
+          className="run-pr-menu-popover"
+          role="menu"
+          aria-label="Pull request actions"
+        >
+          <div className="run-slash-palette-label">Pull request</div>
+          {latest ? (
+            <a
+              role="menuitem"
+              className="run-pr-menu-item"
+              href={latest}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setOpen(false)}
+            >
+              <span className="run-pr-menu-name">Latest PR</span>
+              <ExternalLinkIcon className="run-pr-menu-icon" aria-hidden="true" />
+            </a>
+          ) : null}
+          {showLinkedDistinct ? (
+            <a
+              role="menuitem"
+              className="run-pr-menu-item"
+              href={linked}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setOpen(false)}
+            >
+              <span className="run-pr-menu-name">Pull request page</span>
+              <ExternalLinkIcon className="run-pr-menu-icon" aria-hidden="true" />
+            </a>
+          ) : null}
+          {!hasLinks && (
+            <div className="run-slash-empty">No pull request linked yet</div>
+          )}
+          <div className="run-pr-menu-sep" aria-hidden="true" />
+          {pendingCount === 0 ? (
+            <div className="run-slash-empty">No break-glass request pending</div>
+          ) : (
+            pending.map((request) => {
+              const busy = breakGlass.busyId === request.eventId;
+              const disabled = busy || Boolean(breakGlass.disabled);
+              return (
+                <button
+                  key={request.eventId}
+                  type="button"
+                  role="menuitem"
+                  className="run-pr-menu-item run-pr-menu-breakglass"
+                  disabled={disabled}
+                  title={
+                    request.reason
+                      ? `${request.repo} — ${request.reason}`
+                      : `Approve break glass for ${request.repo}`
+                  }
+                  onClick={() => {
+                    if (disabled) return;
+                    breakGlass.onApprove(request);
+                  }}
+                >
+                  <span className="run-pr-menu-name">
+                    {busy ? (
+                      <Loader2Icon
+                        className="run-spin run-pr-menu-glyph"
+                        size={14}
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <ShieldAlertIcon
+                        className="run-pr-menu-glyph"
+                        size={14}
+                        aria-hidden="true"
+                      />
+                    )}
+                    Approve break glass
+                  </span>
+                  <span className="run-slash-desc">
+                    {request.repo}
+                    {request.reason ? ` — ${request.reason}` : ""}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function ComposerToolButtons({
   attach,
   cost,
@@ -2401,7 +2575,6 @@ function ComposerToolButtons({
   bugLabelControl,
   modelChip,
 }: ComposerToolButtonsProps) {
-  const pullRequestURL = pullRequest.url?.trim() || "";
   const testReadyURL = test.readyUrl?.trim() || "";
 
   return (
@@ -2457,38 +2630,7 @@ function ComposerToolButtons({
           <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
         </button>
       )}
-      {pullRequestURL ? (
-        <a
-          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
-          href={pullRequestURL}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Open pull request in new tab"
-          title="Open pull request in new tab"
-        >
-          <GitPullRequestIcon
-            className="run-composer-icon"
-            aria-hidden="true"
-          />
-          <ExternalLinkIcon
-            className="run-test-ready-icon"
-            aria-hidden="true"
-          />
-        </a>
-      ) : (
-        <button
-          type="button"
-          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn"
-          disabled
-          aria-label="Pull request link unavailable"
-          title="No pull request linked yet"
-        >
-          <GitPullRequestIcon
-            className="run-composer-icon"
-            aria-hidden="true"
-          />
-        </button>
-      )}
+      <PullRequestMenuButton {...pullRequest} />
       {bugLabelControl}
       <button
         type="button"
@@ -15344,6 +15486,7 @@ function ChatPane({
   const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
     string | null
   >(null);
+  const [breakGlassBusyId, setBreakGlassBusyId] = useState<string | null>(null);
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -15458,6 +15601,44 @@ function ChatPane({
   const prLaneRequests = useMemo(
     () => pendingPRLaneRequests(controlActionRows),
     [controlActionRows],
+  );
+  const breakGlassRequests = useMemo(
+    () => pendingBreakGlassRequests(controlActionRows),
+    [controlActionRows],
+  );
+  const postBreakGlassApproval = useCallback(
+    async (request: BreakGlassRequest) => {
+      if (publicView || readOnly) return;
+      setBreakGlassBusyId(request.eventId);
+      try {
+        const res = await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/git-break-glass/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              repo: request.repo,
+              request_event_id: request.eventId,
+            }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`break-glass approval failed: ${res.status}`);
+        }
+        await fetchControlActionEntries();
+      } finally {
+        setBreakGlassBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
   );
   const postPRLaneDecision = useCallback(
     async (
@@ -20159,10 +20340,11 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const pullRequestURL =
-    agentGitActivity.pullRequests[0]?.href ||
-    testState?.pull_request_url?.trim() ||
-    "";
+  // The composer pull-request menu surfaces two links separately: the latest PR
+  // the agent opened (derived from control-action git activity) and the PR
+  // explicitly linked to the session via set_pull_request_link (test/rollout).
+  const latestPullRequestURL = agentGitActivity.pullRequests[0]?.href ?? "";
+  const linkedPullRequestURL = testState?.pull_request_url?.trim() ?? "";
   const sessionDataRows = useMemo(
     () =>
       buildSessionDataStatusRows({
@@ -21749,7 +21931,16 @@ function ChatPane({
                     ? "Test skill is active"
                     : "Use the test skill",
                 }}
-                pullRequest={{ url: pullRequestURL }}
+                pullRequest={{
+                  latestUrl: latestPullRequestURL,
+                  linkedUrl: linkedPullRequestURL,
+                  breakGlass: {
+                    pending: breakGlassRequests,
+                    busyId: breakGlassBusyId,
+                    onApprove: postBreakGlassApproval,
+                    disabled: readOnly,
+                  },
+                }}
                 slash={{
                   title: "Show slash commands",
                   count: slashCommands.length,
