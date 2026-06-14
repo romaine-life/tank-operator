@@ -464,6 +464,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   transcriptSource?: "server" | "realtime";
   sourceEventId?: string;
   orderKey?: string;
+  contentOrderKey?: string;
   activityEndOrderKey?: string;
   localOnly?: boolean;
   turnId?: string;
@@ -20484,7 +20485,15 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    // The answer lands durably over SSE; no local activity-cache patch.
+    // turn.input_answered is a state marker, not a normal transcript row, so
+    // the open Turns page may not receive a row-driven activity refresh. Pull
+    // the affected question turn directly; this is the same projection manual
+    // refresh would load, scoped to the card the user just answered. Mark it
+    // pending first so an already-running live refresh schedules one more pass.
+    if (!activityLiveRefreshPendingCursorRef.current.has(turnID)) {
+      activityLiveRefreshPendingCursorRef.current.set(turnID, "");
+    }
+    silentlyRefreshCachedTurnActivity(turnID);
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
