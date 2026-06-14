@@ -677,10 +677,6 @@ const TANK_EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
 const TANK_EXIT_PLAN_MODE_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_EXIT_PLAN_MODE_TOOL}`;
 
 const askUserQuestionInputSchema = {
-  question: z
-    .string()
-    .optional()
-    .describe("Single question text when not using the questions array."),
   questions: z
     .array(
       z
@@ -701,24 +697,10 @@ const askUserQuestionInputSchema = {
         })
         .passthrough(),
     )
-    .optional()
-    .describe("One or more questions to ask the user."),
-  options: z
-    .array(
-      z
-        .object({
-          label: z.string().describe("Selectable answer label."),
-          description: z.string().optional(),
-          preview: z.string().optional(),
-        })
-        .passthrough(),
-    )
-    .optional()
-    .describe("Options for the single-question shorthand."),
-  allowFreeForm: z
-    .boolean()
-    .optional()
-    .describe("Whether the user may answer with free-form text."),
+    .min(1)
+    .describe(
+      "One or more questions to ask the user. For a single question, pass a one-element array.",
+    ),
 };
 
 const exitPlanModeInputSchema = {
@@ -1437,6 +1419,17 @@ export class Runner {
     }
     const providerItemID = this.nextTankAskUserQuestionProviderItemID(turn);
     const questions = claudeQuestionsToTankShape(input);
+    if (questions.length === 0) {
+      return Promise.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "AskUserQuestion requires questions: a non-empty array of question objects.",
+          },
+        ],
+      });
+    }
     return this.pauseTurnForInput(turn, questions, providerItemID);
   }
 

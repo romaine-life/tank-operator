@@ -861,6 +861,47 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
   );
 });
 
+test("Tank AskUserQuestion MCP tool rejects the retired top-level question shorthand", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    handleTankAskUserQuestion: (input: unknown) => Promise<{
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    }>;
+    activeTurn: unknown;
+    publishTerminalWithRetry: (
+      event: TankConversationEvent,
+    ) => Promise<boolean>;
+    sink: { upsert: (event: TankConversationEvent) => Promise<void> };
+  };
+
+  runner.activeTurn = {
+    turnID: "turn-active",
+    clientNonce: "turn-active",
+    terminalEmitted: false,
+    commandRecord: {},
+  };
+  runner.sink = {
+    async upsert() {
+      assert.fail("invalid AskUserQuestion input must not publish events");
+    },
+  };
+  runner.publishTerminalWithRetry = async () => {
+    assert.fail("invalid AskUserQuestion input must not publish a pause");
+    return false;
+  };
+
+  const result = await runner.handleTankAskUserQuestion({
+    question: "Proceed?",
+    options: [{ label: "Yes" }],
+  });
+
+  assert.equal(result.isError, true);
+  assert.match(
+    result.content[0]?.text ?? "",
+    /requires questions: a non-empty array/,
+  );
+});
+
 test("Tank AskUserQuestion MCP tool delivers free-form Other text instead of synthetic label", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     handleTankAskUserQuestion: (input: unknown) => Promise<{

@@ -1103,11 +1103,12 @@ do not sit open forever in the first place.
 
 - **Claude**: the runner exposes a Tank-owned SDK MCP server named `tank` and
   aliases provider `AskUserQuestion` calls to `mcp__tank__AskUserQuestion`.
-  The MCP handler publishes `turn.awaiting_input` and keeps that tool call
-  pending. When `input_reply` arrives, the runner resolves the MCP call with
-  the user's answers so the provider turn continues. Claude SDK permissions run
-  in bypass mode; AskUserQuestion is not implemented through permission
-  interception.
+  The MCP tool input is a `questions` array; one question is represented as a
+  one-element array, matching the durable Tank conversation protocol. The MCP
+  handler publishes `turn.awaiting_input` and keeps that tool call pending.
+  When `input_reply` arrives, the runner resolves the MCP call with the user's
+  answers so the provider turn continues. Claude SDK permissions run in bypass
+  mode; AskUserQuestion is not implemented through permission interception.
 - **Codex** (`codex_gui`): on the App Server's `item/tool/requestUserInput`,
   the runner publishes `turn.awaiting_input`, keeps the JSON-RPC request
   pending, then responds with the submitted answers when `input_reply` arrives.
