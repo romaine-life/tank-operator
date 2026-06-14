@@ -238,6 +238,9 @@ export function askUserQuestionHandoffEvents(args) {
       payload: {
         provider_item_id: providerItemID,
         timeline_id: providerTimelineID,
+        question_turn_id: questionTurnID,
+        question_timeline_id: questionTimelineID,
+        question_page: 1,
         questions,
       },
     },

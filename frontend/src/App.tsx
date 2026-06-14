@@ -554,6 +554,12 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
   };
+  questionTarget?: {
+    turnId?: string;
+    turnNumber?: number;
+    page?: number;
+    timelineId?: string;
+  };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
   taskSummary?: string;
@@ -4887,6 +4893,7 @@ type TurnViewScrollAnchor = "bottom" | "top";
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
   resetPage?: boolean;
+  page?: number;
 };
 
 type TurnViewScrollRequest = {
@@ -5794,6 +5801,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
           usageObservation: entry.usageObservation,
+          questionTarget: entry.questionTarget,
         };
       }
       if (entry.kind === "reasoning") {
@@ -10011,7 +10019,15 @@ function AgentGitActivityScreen({
   );
 }
 
-function ToolBody({ entry }: { entry: TranscriptEntry }) {
+function ToolBody({
+  entry,
+  sessionId,
+  onOpenTurn,
+}: {
+  entry: TranscriptEntry;
+  sessionId: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+}) {
   const name = entry.toolName ?? "";
   const input = tryParseJson(entry.toolInput) as Record<string, unknown> | null;
   if (
@@ -10031,7 +10047,14 @@ function ToolBody({ entry }: { entry: TranscriptEntry }) {
   if (name === "Read") {
     return <ToolReadBody input={input} />;
   }
-  return <ToolDefaultBody entry={entry} input={input} />;
+  return (
+    <ToolDefaultBody
+      entry={entry}
+      input={input}
+      sessionId={sessionId}
+      onOpenTurn={onOpenTurn}
+    />
+  );
 }
 
 interface AskUserQuestion {
@@ -10616,13 +10639,18 @@ function ToolReadBody({ input }: { input: Record<string, unknown> | null }) {
 function ToolDefaultBody({
   entry,
   input,
+  sessionId,
+  onOpenTurn,
 }: {
   entry: TranscriptEntry;
   input: Record<string, unknown> | null;
+  sessionId?: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const inputText = input
     ? JSON.stringify(input, null, 2)
     : (entry.toolInput ?? "");
+  const questionTarget = askUserQuestionToolTarget(entry);
   return (
     <div className="run-tool-body">
       {inputText && (
@@ -10639,7 +10667,110 @@ function ToolDefaultBody({
           </PreWithLinks>
         </>
       )}
+      {questionTarget && sessionId && (
+        <AskUserQuestionToolTargetButton
+          sessionId={sessionId}
+          target={questionTarget}
+          onOpenTurn={onOpenTurn}
+        />
+      )}
     </div>
+  );
+}
+
+export type AskUserQuestionTarget = {
+  turnId: string;
+  turnNumber?: number;
+  page: number;
+};
+
+function askUserQuestionToolTarget(
+  entry: TranscriptEntry,
+): AskUserQuestionTarget | null {
+  if (!isAskUserQuestionTool(entry)) return null;
+  const raw = entry.questionTarget;
+  const turnId = raw?.turnId?.trim() ?? "";
+  if (!turnId) return null;
+  const page =
+    typeof raw?.page === "number" && Number.isSafeInteger(raw.page) && raw.page > 0
+      ? raw.page
+      : 1;
+  const turnNumber =
+    typeof raw?.turnNumber === "number" &&
+    Number.isSafeInteger(raw.turnNumber) &&
+    raw.turnNumber > 0
+      ? raw.turnNumber
+      : undefined;
+  return { turnId, turnNumber, page };
+}
+
+export function askUserQuestionTargetHref(
+  currentHref: string,
+  sessionId: string,
+  target: AskUserQuestionTarget,
+): string | undefined {
+  if (!target.turnNumber) return undefined;
+  return buildSessionRouteUrl(
+    currentHref,
+    sessionId,
+    "turns",
+    target.turnNumber,
+    null,
+    target.page,
+  );
+}
+
+function AskUserQuestionToolTargetButton({
+  sessionId,
+  target,
+  onOpenTurn,
+}: {
+  sessionId: string;
+  target: AskUserQuestionTarget;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+}) {
+  const label = "Open question page";
+  const href = askUserQuestionTargetHref(window.location.href, sessionId, target);
+  const open = () =>
+    onOpenTurn?.(target.turnId, { anchor: "top", page: target.page });
+  if (href) {
+    return (
+      <a
+        className="run-tool-question-target"
+        href={href}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (
+            e.button !== 0 ||
+            e.metaKey ||
+            e.ctrlKey ||
+            e.shiftKey ||
+            e.altKey ||
+            !onOpenTurn
+          )
+            return;
+          e.preventDefault();
+          open();
+        }}
+      >
+        <MessageSquareIcon size={13} aria-hidden="true" />
+        <span>{label}</span>
+      </a>
+    );
+  }
+  if (!onOpenTurn) return null;
+  return (
+    <button
+      type="button"
+      className="run-tool-question-target"
+      onClick={(e) => {
+        e.stopPropagation();
+        open();
+      }}
+    >
+      <MessageSquareIcon size={13} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
   );
 }
 
@@ -10648,11 +10779,15 @@ function RunToolItem({
   showTimestamps,
   expanded,
   onExpandedChange,
+  sessionId,
+  onOpenTurn,
 }: {
   entry: TranscriptEntry;
   showTimestamps: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  sessionId: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
@@ -10730,7 +10865,13 @@ function RunToolItem({
             )}
           </span>
         </button>
-        {expanded && <ToolBody entry={entry} />}
+        {expanded && (
+          <ToolBody
+            entry={entry}
+            sessionId={sessionId}
+            onOpenTurn={onOpenTurn}
+          />
+        )}
       </div>
     </div>
   );
@@ -10744,6 +10885,8 @@ function RunToolGroup({
   onOpenChange,
   toolExpansionOverrides,
   onToolExpandedChange,
+  sessionId,
+  onOpenTurn,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
@@ -10752,6 +10895,8 @@ function RunToolGroup({
   onOpenChange: (open: boolean) => void;
   toolExpansionOverrides: Record<string, boolean>;
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
+  sessionId: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   if (entries.length === 0) return null;
   if (entries.length === 1) {
@@ -10765,6 +10910,8 @@ function RunToolGroup({
           onExpandedChange={(expanded) =>
             onToolExpandedChange(entry.id, expanded)
           }
+          sessionId={sessionId}
+          onOpenTurn={onOpenTurn}
         />
       </div>
     );
@@ -10847,6 +10994,8 @@ function RunToolGroup({
               onExpandedChange={(expanded) =>
                 onToolExpandedChange(e.id, expanded)
               }
+              sessionId={sessionId}
+              onOpenTurn={onOpenTurn}
             />
           ))}
         </div>
@@ -12277,6 +12426,8 @@ function RunTurnActivityGroup({
                           }
                           toolExpansionOverrides={toolExpansionOverrides}
                           onToolExpandedChange={onToolExpandedChange}
+                          sessionId={sessionId}
+                          onOpenTurn={onOpenTurn}
                         />
                       );
                     }
@@ -12394,6 +12545,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
+  onOpenTurn,
   transcriptHrefForEntry,
   onOpenTranscriptMessage,
   scrollRequest,
@@ -12418,6 +12570,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn: TurnActivityLoadStateByTurn;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
   onOpenTranscriptMessage?: (entryId: string) => void;
   scrollRequest?: TurnViewScrollRequest | null;
@@ -12687,6 +12840,8 @@ function RunTurnActivityScreen({
           onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
           toolExpansionOverrides={toolExpansionOverrides}
           onToolExpandedChange={setToolExpanded}
+          sessionId={sessionId}
+          onOpenTurn={onOpenTurn}
         />
       );
     }
@@ -13604,6 +13759,8 @@ export function RunMessages({
             onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
             toolExpansionOverrides={toolExpansionOverrides}
             onToolExpandedChange={setToolExpanded}
+            sessionId={sessionId}
+            onOpenTurn={onOpenTurn}
           />
         );
       }
@@ -20090,17 +20247,36 @@ function ChatPane({
         effectiveSelectedTurnId ||
         latestTurnId;
       if (target) {
+        const targetPage =
+          typeof options?.page === "number" &&
+          Number.isSafeInteger(options.page) &&
+          options.page > 0
+            ? options.page
+            : null;
         setPendingRouteTurnNumber(null);
         setRouteTurnUnavailable(false);
         setPendingTurnViewRouteAnchor(null);
         setSelectedTurnNumberAnchor(null);
-        if (options?.resetPage) {
+        if (targetPage != null) {
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [target]: targetPage,
+          };
+        } else if (options?.resetPage) {
           const nextSelectedPages = { ...selectedTurnPageRef.current };
           delete nextSelectedPages[target];
           selectedTurnPageRef.current = nextSelectedPages;
         }
         setSelectedTurnId(target);
-        ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        if (targetPage != null) {
+          startTurnActivityLoad(target, {
+            force: true,
+            page: targetPage,
+            reason: "page",
+          });
+        } else {
+          ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        }
         if (options?.anchor) {
           turnViewScrollRequestSeqRef.current += 1;
           setTurnViewScrollRequest({
@@ -20117,6 +20293,7 @@ function ChatPane({
       effectiveSelectedTurnId,
       ensureTurnActivityLoaded,
       latestTurnId,
+      startTurnActivityLoad,
     ],
   );
 
@@ -21413,6 +21590,7 @@ function ChatPane({
                   onOpenBackgroundTask={
                     publicView ? undefined : openBackgroundPage
                   }
+                  onOpenTurn={publicView ? undefined : openTurnPage}
                   transcriptHrefForEntry={transcriptHrefForEntry}
                   onOpenTranscriptMessage={openTranscriptMessage}
                   scrollRequest={turnViewScrollRequest}

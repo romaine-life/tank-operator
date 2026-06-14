@@ -793,7 +793,7 @@ func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
 		"toolName":       "AskUserQuestion",
 		"toolStatus":     "completed",
 		"toolInput":      projectionFormatValue(map[string]any{"questions": questions}),
-		"toolOutput":     "Question set opened on the next turn page.",
+		"toolOutput":     "Question set opened on the linked turn page.",
 		"turnId":         turnID,
 		"providerItemId": transcriptPayloadString(event, "provider_item_id"),
 		"time":           transcriptString(event, "created_at"),
@@ -805,11 +805,33 @@ func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
 	if summary != "" {
 		entry["toolSummary"] = summary
 	}
+	if questionTarget := projectedAwaitingInputInvocationQuestionTarget(event); questionTarget != nil {
+		entry["questionTarget"] = questionTarget
+	}
 	s.awaitingInputTools = append(s.awaitingInputTools, projectedEntryItem{
 		entry:    entry,
 		orderKey: orderKey,
 		index:    len(s.awaitingInputTools),
 	})
+}
+
+func projectedAwaitingInputInvocationQuestionTarget(event map[string]any) map[string]any {
+	payload := transcriptPayload(event)
+	questionTurnID := transcriptMapString(payload, "question_turn_id")
+	if questionTurnID == "" {
+		return nil
+	}
+	target := map[string]any{
+		"turnId": questionTurnID,
+		"page":   1,
+	}
+	if timelineID := transcriptMapString(payload, "question_timeline_id"); timelineID != "" {
+		target["timelineId"] = timelineID
+	}
+	if page, ok := transcriptNumeric(payload["question_page"]); ok && page > 0 {
+		target["page"] = int(page)
+	}
+	return target
 }
 
 func projectionAwaitingInputQuestions(event map[string]any) []any {

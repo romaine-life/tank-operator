@@ -10821,6 +10821,29 @@ textarea.run-files-viewer-editor:focus {
   margin-top: 0.6rem;
 }
 
+.run-tool-question-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  width: fit-content;
+  margin-top: 0.6rem;
+  border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 55%, transparent);
+  border-radius: 0.45rem;
+  background: color-mix(in oklch, var(--status-agent-needs-input) 12%, transparent);
+  color: var(--text-strong);
+  padding: 0.42rem 0.65rem;
+  font-family: var(--font-primary);
+  font-size: var(--run-chat-font-code-xs);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.run-tool-question-target:hover {
+  border-color: color-mix(in oklch, var(--status-agent-needs-input) 75%, transparent);
+  background: color-mix(in oklch, var(--status-agent-needs-input) 18%, transparent);
+}
+
 /* Diff body — Edit/Write/MultiEdit/ApplyPatch. */
 .run-tool-diff {
   font-family: var(--font-mono);
