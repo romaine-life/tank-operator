@@ -118,3 +118,34 @@ Evidence:
   new sessions; `SessionDataScreen` exposes the transcript action.
 - Tests: `appRoutes.test.ts`, `sessionSidebarNavigation.test.ts`,
   `sessionDataStatus.test.ts`, and `migrationPolicy.test.ts`.
+
+## Compact transcript pager
+
+Status: active
+
+Intent:
+On a phone-width viewport the desktop turn/page navigation (the 7-control stepper
+plus the combined turn/page `Select`) is too dense, so it collapses into a single
+always-present position button showing "Turn N · Page P". Tapping it opens the
+identical controls in a bottom sheet, so a reader on a compact screen keeps the
+same turn and page navigation a desktop reader has.
+
+Affected contracts:
+- Transcript Navigation (primary — the never-hidden page/turn affordance)
+- App Chrome (the run-pane chrome reflows on the compact shell)
+
+Contract impact:
+- This is the sanctioned compact form of the never-hidden Page/turn affordance:
+  on `useViewport().isCompact` (<= BP_COMPACT) `App.tsx` `RunTurnViewControls`
+  renders one `.run-turn-pager-compact-trigger` button that opens a bottom `Sheet`
+  (`side="bottom"`, `components/ui/sheet.tsx`) carrying the same controls fragment
+  and reusing `selectTurnAndPage`. The button is never omitted while a turn is
+  selected and renders disabled ("No turns") when there is none; navigating closes
+  the sheet. Desktop rendering is unchanged.
+
+Evidence:
+- `frontend/src/mobileShell.test.ts` pins the compact pager branch ("turn/page
+  pager collapses to a single sheet-backed button on compact"), the bottom-anchored
+  `Sheet` variant ("sheet primitive supports a bottom-anchored variant"), and the
+  disabled empty state ("compact pager stays present with no turns instead of
+  vanishing").

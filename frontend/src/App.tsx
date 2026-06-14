@@ -10898,8 +10898,18 @@ function RunTurnViewControls({
     }
   }, [combinedEntries, selectedEntry]);
 
-  return (
-    <div className="run-turn-titlebar-controls" aria-label="Turn view controls">
+  const { isCompact } = useViewport();
+  const [pagerOpen, setPagerOpen] = useState(false);
+  // Shared by the desktop inline controls and the compact bottom-sheet form so
+  // both render byte-identical navigation. On compact, navigating also closes
+  // the sheet (mirrors the nav drawer's close-on-navigate; design-system.md).
+  const navigate = (turnId: string, page: number) => {
+    onNavigate(turnId, page);
+    setPagerOpen(false);
+  };
+
+  const controls = (
+    <>
       <div
         className="run-turn-view-nav run-turn-view-combined-nav"
         role="group"
@@ -10910,7 +10920,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-triple"
           onClick={() => {
             const firstEntry = combinedEntries[0];
-            if (firstEntry) onNavigate(firstEntry.turnId, firstEntry.pageNumber);
+            if (firstEntry) navigate(firstEntry.turnId, firstEntry.pageNumber);
           }}
           disabled={
             !selectedEntry ||
@@ -10927,7 +10937,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-double"
           onClick={() => {
             if (prevTurnStartEntry) {
-              onNavigate(prevTurnStartEntry.turnId, prevTurnStartEntry.pageNumber);
+              navigate(prevTurnStartEntry.turnId, prevTurnStartEntry.pageNumber);
             }
           }}
           disabled={!prevTurnStartEntry}
@@ -10941,7 +10951,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn"
           onClick={() => {
             if (prevPageEntry) {
-              onNavigate(prevPageEntry.turnId, prevPageEntry.pageNumber);
+              navigate(prevPageEntry.turnId, prevPageEntry.pageNumber);
             }
           }}
           disabled={!prevPageEntry}
@@ -10955,7 +10965,7 @@ function RunTurnViewControls({
           value={selectedEntry?.key ?? ""}
           onValueChange={(value) => {
             const entry = combinedEntries.find((e) => e.key === value);
-            if (entry) onNavigate(entry.turnId, entry.pageNumber);
+            if (entry) navigate(entry.turnId, entry.pageNumber);
           }}
           disabled={combinedEntries.length === 0}
         >
@@ -11032,7 +11042,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn"
           onClick={() => {
             if (nextPageEntry) {
-              onNavigate(nextPageEntry.turnId, nextPageEntry.pageNumber);
+              navigate(nextPageEntry.turnId, nextPageEntry.pageNumber);
             }
           }}
           disabled={!nextPageEntry}
@@ -11046,7 +11056,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-double"
           onClick={() => {
             if (nextTurnEndEntry) {
-              onNavigate(nextTurnEndEntry.turnId, nextTurnEndEntry.pageNumber);
+              navigate(nextTurnEndEntry.turnId, nextTurnEndEntry.pageNumber);
             }
           }}
           disabled={!nextTurnEndEntry}
@@ -11060,7 +11070,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-triple"
           onClick={() => {
             const lastEntry = combinedEntries[combinedEntries.length - 1];
-            if (lastEntry) onNavigate(lastEntry.turnId, lastEntry.pageNumber);
+            if (lastEntry) navigate(lastEntry.turnId, lastEntry.pageNumber);
           }}
           disabled={
             !selectedEntry ||
@@ -11105,6 +11115,66 @@ function RunTurnViewControls({
           <ChevronDownIcon size={14} aria-hidden="true" />
         )}
       </button>
+    </>
+  );
+
+  // Compact: the full stepper + combined picker do not fit a phone titlebar, so
+  // they collapse to a single always-present button that shows the current
+  // position and opens the identical controls in a bottom sheet. The button is
+  // never omitted while a turn is selected, satisfying the transcript-navigation
+  // "page control is never hidden" invariant in its sanctioned compact form.
+  if (isCompact) {
+    return (
+      <div className="run-turn-pager-compact">
+        <button
+          type="button"
+          className="run-turn-pager-compact-trigger"
+          onClick={() => setPagerOpen(true)}
+          disabled={combinedEntries.length === 0}
+          aria-haspopup="dialog"
+          aria-expanded={pagerOpen}
+          aria-label="Turn and page navigation"
+          title="Turn and page navigation"
+        >
+          {selectedEntry && selectedEntryParts ? (
+            <span className="run-turn-pager-compact-label">
+              <span className="run-turn-view-combined-turn">
+                {selectedEntry.turnLabel}
+              </span>
+              <span className="run-turn-pager-compact-sep" aria-hidden="true">
+                ·
+              </span>
+              <span>Page {selectedEntry.pageNumber}</span>
+              {selectedEntryParts.isQuestion && (
+                <span
+                  className="run-turn-view-combined-kind"
+                  aria-label={selectedEntryParts.semanticLabel}
+                  title={selectedEntryParts.semanticLabel}
+                >
+                  <MessageSquareIcon size={13} aria-hidden="true" />
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="run-turn-pager-compact-label">No turns</span>
+          )}
+          <ChevronDownIcon size={14} aria-hidden="true" />
+        </button>
+        <Sheet open={pagerOpen} onOpenChange={setPagerOpen}>
+          <SheetContent side="bottom" className="run-turn-pager-sheet">
+            <SheetTitle className="run-turn-pager-sheet-title">
+              Navigate transcript
+            </SheetTitle>
+            <div className="run-turn-pager-sheet-body">{controls}</div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    );
+  }
+
+  return (
+    <div className="run-turn-titlebar-controls" aria-label="Turn view controls">
+      {controls}
     </div>
   );
 }
@@ -15076,6 +15146,7 @@ function ChatPane({
   sidebarTurnsOpenRequest?: number;
   avatarEditorOpenRequest?: number;
 }) {
+  const { isPhone } = useViewport();
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [turnActivityLoadsByTurn, setTurnActivityLoadsByTurn] =
     useState<TurnActivityLoadStateByTurn>({});
@@ -20630,7 +20701,11 @@ function ChatPane({
                       );
                     })}
                 </div>
-                <div className="run-files-body">
+                <div
+                  className={`run-files-body${
+                    isPhone && selectedFile ? " run-files-body-detail" : ""
+                  }`}
+                >
                   <div className="run-files-list">
                     {filesPath && (
                       <button
@@ -20804,6 +20879,20 @@ function ChatPane({
                     ) : (
                       <>
                         <div className="run-files-viewer-header">
+                          {isPhone && (
+                            <button
+                              type="button"
+                              className="run-files-viewer-back"
+                              onClick={() => {
+                                setSelectedFile(null);
+                                setSelectedFileLine(null);
+                              }}
+                              aria-label="Back to file list"
+                            >
+                              <ArrowLeftIcon size={14} aria-hidden="true" />
+                              <span>Files</span>
+                            </button>
+                          )}
                           <span className="run-files-viewer-path">
                             {selectedFile.path}
                             {selectedFileLine ? `:${selectedFileLine}` : ""}

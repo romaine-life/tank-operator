@@ -158,7 +158,7 @@ test("run pane keeps the composer inside the viewport at high browser zoom", () 
   expect(appSource).toMatch(/composerWrapClassName=\{\[\s*"run-composer-wrap-runpane",[\s\S]*?dragActive \? "run-composer-wrap-drag" : "",[\s\S]*?\]\.filter\(Boolean\)\.join\(" "\)\}/);
   expect(appSource).not.toMatch(/composerWrapStyle=\{chatFontScaleStyle\}/);
   expect(portfolioTranscriptSource).toMatch(/composerWrapClassName="run-composer-wrap-runpane"/);
-  expect(indexCssSource).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-wrap-runpane\s*\{[\s\S]*?padding-left:\s*var\(--space-3\);/);
+  expect(indexCssSource).toMatch(/@media \(max-width:\s*768px\)\s*\{[\s\S]*?\.run-composer-wrap-runpane\s*\{[\s\S]*?padding-left:\s*var\(--space-3\);/);
 });
 
 test("session font scaling does not leak into the shared composer", () => {
@@ -198,8 +198,8 @@ test("composer footer reflows controls instead of clipping them under zoom", () 
   expect(indexCssSource).toMatch(/@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate-label\s*\{[\s\S]*?display:\s*none;/);
   expect(indexCssSource).toMatch(/@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-model-chip\s*\{[\s\S]*?max-width:\s*min\(11rem,\s*100%\);/);
 
-  expect(indexCssSource).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-hint\s*\{[\s\S]*?flex-basis:\s*100%;/);
-  expect(indexCssSource).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-submit-btn\s*\{[\s\S]*?margin-left:\s*auto;/);
+  expect(indexCssSource).toMatch(/@media \(max-width:\s*768px\)\s*\{[\s\S]*?\.run-composer-hint\s*\{[\s\S]*?flex-basis:\s*100%;/);
+  expect(indexCssSource).toMatch(/@media \(max-width:\s*768px\)\s*\{[\s\S]*?\.run-submit-btn\s*\{[\s\S]*?margin-left:\s*auto;/);
 });
 
 test("turn view transcript rows share the same avatar gutter", () => {
