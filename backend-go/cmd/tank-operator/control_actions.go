@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
@@ -235,17 +238,31 @@ func (s *appServer) handleInternalGrantGitBreakGlass(w http.ResponseWriter, r *h
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	agentNotification := map[string]any{"delivered": false}
+	if notifyResp, status, detail := s.enqueueGitBreakGlassApprovalTurn(r.Context(), row, expiresAt); status != 0 {
+		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "notify_error")
+		slog.Warn("git break-glass approval grant persisted but agent notification turn failed",
+			"session_id", sessionID, "grant_event_id", row.EventID, "status", status, "detail", detail)
+		writeError(w, http.StatusInternalServerError, "git break-glass grant persisted but agent notification failed: "+strings.TrimSpace(detail))
+		return
+	} else {
+		agentNotification["delivered"] = true
+		if turnID := turnIDFromEnqueueResponse(notifyResp); turnID != "" {
+			agentNotification["turn_id"] = turnID
+		}
+	}
 	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"active":        true,
-		"event_id":      row.EventID,
-		"repo":          strings.Trim(strings.TrimSpace(owner+"/"+name), "/"),
-		"repo_scope":    repoScope,
-		"branch_scope":  branchScope,
-		"expires_at":    expiresAt.Format(time.RFC3339),
-		"operations":    normalizeBreakGlassOperations(body.Operations),
-		"session_id":    sessionID,
-		"session_scope": s.sessionScope,
+		"active":             true,
+		"event_id":           row.EventID,
+		"repo":               strings.Trim(strings.TrimSpace(owner+"/"+name), "/"),
+		"repo_scope":         repoScope,
+		"branch_scope":       branchScope,
+		"expires_at":         expiresAt.Format(time.RFC3339),
+		"operations":         normalizeBreakGlassOperations(body.Operations),
+		"session_id":         sessionID,
+		"session_scope":      s.sessionScope,
+		"agent_notification": agentNotification,
 	})
 }
 
@@ -315,6 +332,65 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 	}
 	row, err := s.controlActions.Append(ctx, event)
 	return row, expiresAt, err
+}
+
+func (s *appServer) enqueueGitBreakGlassApprovalTurn(ctx context.Context, grant pgstore.ControlActionEvent, expiresAt time.Time) (map[string]any, int, string) {
+	if s == nil || s.sessionBus == nil || s.mgr == nil {
+		return nil, http.StatusServiceUnavailable, "session turn enqueue unavailable"
+	}
+	sessionID := strings.TrimSpace(grant.SessionID)
+	ownerEmail := strings.TrimSpace(grant.OwnerEmail)
+	if sessionID == "" || ownerEmail == "" {
+		return nil, http.StatusBadRequest, "grant missing session or owner"
+	}
+	seed := controlActionPayloadString(grant.Payload, "request_event_id")
+	if seed == "" {
+		seed = grant.EventID
+	}
+	seed = sessionID + ":" + seed
+	prompt := gitBreakGlassApprovalPrompt(grant, expiresAt)
+	return s.enqueueSDKTurn(ctx, ownerEmail, sessionID, sdkTurnRequest{
+		ClientNonce:  gitBreakGlassApprovalTurnNonce(seed),
+		RequireNonce: true,
+		Prompt:       prompt,
+		DisplayText:  gitBreakGlassApprovalDisplayText(grant, expiresAt),
+		Source:       string(conversation.TurnSubmittedSourceBreakGlassApproval),
+		CreatedAt:    time.Now().UTC(),
+		AuthorKind:   string(conversation.AuthorKindSystem),
+	})
+}
+
+func gitBreakGlassApprovalTurnNonce(seed string) string {
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		seed = randomHex(12)
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return "turn_breakglass_approved_" + hex.EncodeToString(sum[:12])
+}
+
+func gitBreakGlassApprovalDisplayText(grant pgstore.ControlActionEvent, expiresAt time.Time) string {
+	repo := strings.Trim(strings.TrimSpace(grant.RepoOwner+"/"+grant.RepoName), "/")
+	if repo == "" {
+		repo = "the approved repo scope"
+	}
+	expiry := ""
+	if !expiresAt.IsZero() {
+		expiry = " The grant expires at " + expiresAt.UTC().Format(time.RFC3339) + "."
+	}
+	return "Break-glass approval granted for " + repo + "." + expiry
+}
+
+func gitBreakGlassApprovalPrompt(grant pgstore.ControlActionEvent, expiresAt time.Time) string {
+	lines := []string{
+		"System message: Your GitHub break-glass request was approved by the user.",
+		gitBreakGlassApprovalDisplayText(grant, expiresAt),
+		"Call request_git_break_glass again to activate the tank-git-break-glass MCP server for this session, then continue with the approved work.",
+	}
+	if reason := controlActionPayloadString(grant.Payload, "reason"); reason != "" {
+		lines = append(lines, "Approval reason: "+reason)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // splitRepoSlug parses a trimmed "owner/name" GitHub slug.

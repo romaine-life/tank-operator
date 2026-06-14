@@ -385,9 +385,10 @@ Open hardening:
   Claude. That privileged server lists no tools before activation, rechecks the
   grant on every list/call, and records token/push use as
   `github.break_glass.token` or `github.break_glass.push`. The auth.romaine.life
-  console is expected to approve by calling Tank's internal grant endpoint;
-  that callback does not exist in the auth app yet, so the agent-facing approval
-  URL is a dead end in practice.
+  console approves by calling Tank's internal grant endpoint. When that grant is
+  persisted, Tank starts a system-authored follow-up turn telling the agent the
+  user approved the request and to call `request_git_break_glass` again to
+  activate the privileged MCP server.
 - Break-glass approval chip + link (added 2026-06-14). A started
   `github.break_glass.request` with no unexpired grant for its repo is surfaced
   as a "chip": the composer pull-request button turns amber with an alert dot,
