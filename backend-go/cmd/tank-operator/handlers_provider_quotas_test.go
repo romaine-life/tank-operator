@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestProviderUsageEvidenceNormalizesClaudeOAuthUsage(t *testing.T) {
 	raw := map[string]any{
@@ -103,6 +106,56 @@ func TestDefaultProviderUsageURLUsesConfiguredProxyHosts(t *testing.T) {
 		if got := s.defaultProviderUsageURL(provider); got != want {
 			t.Fatalf("defaultProviderUsageURL(%q) = %q, want %q", provider, got, want)
 		}
+	}
+}
+
+func TestProviderQuotaCacheReturnsCopiedCachedEvidence(t *testing.T) {
+	s := &appServer{}
+	now := time.Date(2026, 6, 14, 20, 0, 0, 0, time.UTC)
+	rows := []map[string]any{{
+		"provider":      "anthropic",
+		"rateLimitType": "five_hour",
+		"utilization":   42.0,
+		"observedAt":    "2026-06-14T20:00:00Z",
+	}}
+
+	s.rememberProviderQuotaEvidence("anthropic", "2026-06-14T20:00:00Z", rows, now)
+	rows[0]["utilization"] = 99.0
+
+	got, observedAt, ok := s.cachedProviderQuotaEvidence("anthropic", now.Add(time.Minute))
+	if !ok {
+		t.Fatal("cachedProviderQuotaEvidence returned ok=false")
+	}
+	if observedAt != "2026-06-14T20:00:00Z" {
+		t.Fatalf("observedAt = %q", observedAt)
+	}
+	if got[0]["utilization"] != 42.0 {
+		t.Fatalf("cached utilization = %#v, want 42", got[0]["utilization"])
+	}
+	if got[0]["cached"] != true {
+		t.Fatalf("cached marker = %#v, want true", got[0]["cached"])
+	}
+	got[0]["utilization"] = 7.0
+	gotAgain, _, ok := s.cachedProviderQuotaEvidence("anthropic", now.Add(2*time.Minute))
+	if !ok {
+		t.Fatal("cachedProviderQuotaEvidence second read returned ok=false")
+	}
+	if gotAgain[0]["utilization"] != 42.0 {
+		t.Fatalf("cached row was mutated through returned map: %#v", gotAgain[0])
+	}
+}
+
+func TestProviderQuotaCacheExpires(t *testing.T) {
+	s := &appServer{}
+	now := time.Date(2026, 6, 14, 20, 0, 0, 0, time.UTC)
+	s.rememberProviderQuotaEvidence("anthropic", "2026-06-14T20:00:00Z", []map[string]any{{
+		"provider":      "anthropic",
+		"rateLimitType": "five_hour",
+		"utilization":   42.0,
+	}}, now)
+
+	if _, _, ok := s.cachedProviderQuotaEvidence("anthropic", now.Add(providerQuotaCacheMaxAge+time.Second)); ok {
+		t.Fatal("cachedProviderQuotaEvidence returned expired evidence")
 	}
 }
 

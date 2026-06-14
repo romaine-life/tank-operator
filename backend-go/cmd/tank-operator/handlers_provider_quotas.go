@@ -28,6 +28,14 @@ type providerQuotaResponse struct {
 	SourceURLs map[string]string `json:"source_urls,omitempty"`
 }
 
+type providerQuotaCachedEvidence struct {
+	ObservedAt string
+	RateLimits []map[string]any
+	StoredAt   time.Time
+}
+
+const providerQuotaCacheMaxAge = 30 * time.Minute
+
 func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -60,6 +68,12 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		snapshot, err := fetchProviderQuotaProxy(ctx, url)
 		if err != nil {
 			out.Errors[provider] = err.Error()
+			if rows, observedAt, ok := s.cachedProviderQuotaEvidence(provider, time.Now().UTC()); ok {
+				out.RateLimits = append(out.RateLimits, rows...)
+				if latestObserved == "" || observedAfter(observedAt, latestObserved) {
+					latestObserved = observedAt
+				}
+			}
 			continue
 		}
 		if snapshot.Status != "ok" {
@@ -67,6 +81,12 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 				out.Errors[provider] = snapshot.Error
 			} else {
 				out.Errors[provider] = fmt.Sprintf("usage source returned status %q", snapshot.Status)
+			}
+			if rows, observedAt, ok := s.cachedProviderQuotaEvidence(provider, time.Now().UTC()); ok {
+				out.RateLimits = append(out.RateLimits, rows...)
+				if latestObserved == "" || observedAfter(observedAt, latestObserved) {
+					latestObserved = observedAt
+				}
 			}
 			continue
 		}
@@ -77,7 +97,11 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		if latestObserved == "" || observedAfter(observedAt, latestObserved) {
 			latestObserved = observedAt
 		}
-		out.RateLimits = append(out.RateLimits, providerUsageEvidence(provider, observedAt, snapshot.Usage)...)
+		rows := providerUsageEvidence(provider, observedAt, snapshot.Usage)
+		if len(rows) > 0 {
+			s.rememberProviderQuotaEvidence(provider, observedAt, rows, time.Now().UTC())
+		}
+		out.RateLimits = append(out.RateLimits, rows...)
 	}
 	out.ObservedAt = latestObserved
 	if len(out.Errors) == 0 {
@@ -87,6 +111,51 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 		out.SourceURLs = nil
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *appServer) rememberProviderQuotaEvidence(provider, observedAt string, rows []map[string]any, now time.Time) {
+	if provider == "" || len(rows) == 0 {
+		return
+	}
+	s.providerQuotaMu.Lock()
+	defer s.providerQuotaMu.Unlock()
+	if s.providerQuotaCache == nil {
+		s.providerQuotaCache = map[string]providerQuotaCachedEvidence{}
+	}
+	s.providerQuotaCache[provider] = providerQuotaCachedEvidence{
+		ObservedAt: observedAt,
+		RateLimits: copyProviderQuotaRows(rows, false),
+		StoredAt:   now,
+	}
+}
+
+func (s *appServer) cachedProviderQuotaEvidence(provider string, now time.Time) ([]map[string]any, string, bool) {
+	s.providerQuotaMu.Lock()
+	defer s.providerQuotaMu.Unlock()
+	cached, ok := s.providerQuotaCache[provider]
+	if !ok || len(cached.RateLimits) == 0 {
+		return nil, "", false
+	}
+	if !cached.StoredAt.IsZero() && now.Sub(cached.StoredAt) > providerQuotaCacheMaxAge {
+		delete(s.providerQuotaCache, provider)
+		return nil, "", false
+	}
+	return copyProviderQuotaRows(cached.RateLimits, true), cached.ObservedAt, true
+}
+
+func copyProviderQuotaRows(rows []map[string]any, cached bool) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		next := make(map[string]any, len(row)+1)
+		for key, value := range row {
+			next[key] = value
+		}
+		if cached {
+			next["cached"] = true
+		}
+		out = append(out, next)
+	}
+	return out
 }
 
 func (s *appServer) defaultProviderUsageURL(provider string) string {

@@ -115,6 +115,9 @@ type appServer struct {
 	// nil when pgPool is unset (stub mode).
 	providerHealth *providerhealth.Manager
 
+	providerQuotaMu    sync.Mutex
+	providerQuotaCache map[string]providerQuotaCachedEvidence
+
 	// scheduledWakeups is the durable backend-owned provider wakeup store.
 	// Runners register self-resume schedule tool_use items here; the
 	// orchestrator claims due rows and feeds them through the normal SDK
