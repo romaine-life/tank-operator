@@ -7941,6 +7941,66 @@ function RunMetaBlock({
   );
 }
 
+// RunQuestionHeadingMessage renders the Turns-view question page's
+// "Question N of M" heading as a system-user message rather than an orphaned
+// banner pinned above the column. AskUserQuestion is the session's system
+// identity asking the user to choose; like session.status banners, RunMetaBlock
+// status lines, and the background-wake prompt that lands "when the timer goes
+// off", it speaks through the shared system-avatar message frame instead of
+// floating in the transcript with no author. See
+// docs/features/transcript/contract.md.
+function RunQuestionHeadingMessage({
+  systemAvatar,
+  answered,
+  questionIndex,
+  questionCount,
+}: {
+  systemAvatar: AgentAvatar | null;
+  answered: boolean;
+  questionIndex?: number;
+  questionCount?: number;
+}) {
+  const hasPosition =
+    typeof questionIndex === "number" && typeof questionCount === "number";
+  const label =
+    !hasPosition && (questionCount ?? 0) > 1 ? "Questions" : "Question";
+  const counter = hasPosition ? `${questionIndex} of ${questionCount}` : null;
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="system"
+      data-role="system"
+      data-kind="question-heading"
+      data-answered={answered ? "true" : "false"}
+    >
+      <span
+        className="run-msg-system-avatar"
+        aria-hidden={systemAvatar ? undefined : "true"}
+      >
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+        ) : (
+          <BotIcon size={16} strokeWidth={2.1} />
+        )}
+      </span>
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <div className="run-transcript-message-text" data-slot="message-text">
+          <span className="run-question-heading">
+            <span className="run-question-heading-label">{label}</span>
+            {counter && (
+              <span className="run-question-heading-count">{counter}</span>
+            )}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function isBackgroundTaskRunning(entry: TranscriptEntry): boolean {
   return entry.taskStatus === "running" || entry.taskStatus === "unknown";
 }
@@ -12764,27 +12824,6 @@ function RunTurnActivityScreen({
               )}
             </div>
           )}
-          {selectedPageInfo?.kind === "question" && (
-            <div
-              className="run-turn-question-page-head"
-              data-answered={selectedPageInfo.answered ? "true" : "false"}
-            >
-              <span className="run-turn-question-page-title">
-                {selectedPageInfo.questionCount &&
-                selectedPageInfo.questionCount > 1
-                  ? "Questions"
-                  : "Question"}
-              </span>
-              <span className="run-turn-question-page-count">
-                {selectedPageInfo.questionIndex &&
-                selectedPageInfo.questionCount
-                  ? `Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}`
-                  : selectedPageInfo.questionCount
-                    ? plural(selectedPageInfo.questionCount, "question")
-                    : "Question"}
-              </span>
-            </div>
-          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             data-page-kind={selectedPageInfo?.kind ?? "activity"}
@@ -12792,6 +12831,14 @@ function RunTurnActivityScreen({
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
+            {selectedPageInfo?.kind === "question" && (
+              <RunQuestionHeadingMessage
+                systemAvatar={systemAvatar}
+                answered={selectedPageInfo.answered ?? false}
+                questionIndex={selectedPageInfo.questionIndex}
+                questionCount={selectedPageInfo.questionCount}
+              />
+            )}
             {selected && refreshProblem ? (
               <div className="run-turn-view-alert" role="alert">
                 <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />

@@ -760,6 +760,14 @@ Contract impact:
   per-question position so the page selector and question card can show
   "question 1 of N" and move to the adjacent question page. Answered/history
   state remains visible when revisiting any question page.
+- The question page heading ("Question N of M") renders as a system-user
+  message — the session's system identity in the avatar gutter, label + position
+  counter in the message column — inside the scrolling question body, not a
+  full-width banner pinned above the column with no author. It shares the
+  `data-variant="system"` message frame (`RunQuestionHeadingMessage`) used by
+  session.status banners, RunMetaBlock status lines, and the background-wake
+  prompt, satisfying the transcript contract's rule that headless status lines
+  speak through the system identity instead of floating in the column unauthored.
 - A pending `needs_input` turn defaults to the first unanswered `question_set`
   page; normal turns still default to the latest activity page.
 - `answered` is derived from a durable fact (a later `turn.input_answered` event
@@ -777,7 +785,13 @@ Evidence:
   proves an unanswered `needs_input` turn defaults to the question page.
 - Frontend: `frontend/src/migrationPolicy.test.ts` proves the main transcript
   uses the assistant question message affordance while `RunAwaitingInputCard`
-  is owned by Turns.
+  is owned by Turns, and pins the question heading as a `data-variant="system"`
+  `RunQuestionHeadingMessage` frame while retiring the orphaned
+  `run-turn-question-page-head` banner. `frontend/src/composerCss.test.ts`
+  keeps the retired pinned-head CSS rule from reappearing.
+- Frontend visual: `frontend/src/styleguide/question-heading.tsx`
+  (`/_styleguide/question-heading`) renders the system-user question heading
+  next to the assistant question message and the answer card for review.
 - Migration guard: `scripts/check-askuserquestion-migration.mjs` requires the
   semantic page path and same-turn `/answer` path.
 

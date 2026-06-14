@@ -283,9 +283,21 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("Next question")).toBe(true);
   expect(appSource.includes("Question set ${selectedPageInfo.questionSet}")).toBe(false);
   expect(appSource.includes("Answer every question before submit.")).toBe(true);
+  // The question page heading is a system-user message (system avatar + label),
+  // not an orphaned full-width banner. It speaks through the same system-avatar
+  // message frame as RunMetaBlock status lines and the background-wake prompt,
+  // so the old pinned page-head template is retired.
   expect(appSource.includes(
           "Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}",
-        )).toBe(true);
+        )).toBe(false);
+  expect(appSource.includes('className="run-turn-question-page-head"')).toBe(false);
+  expect(appSource.includes("function RunQuestionHeadingMessage")).toBe(true);
+  expect(appSource.includes("<RunQuestionHeadingMessage")).toBe(true);
+  expect(appSource.includes('data-kind="question-heading"')).toBe(true);
+  expect(appSource).toMatch(
+    /data-variant="system"\s+data-role="system"\s+data-kind="question-heading"/,
+  );
+  expect(appSource.includes("${questionIndex} of ${questionCount}")).toBe(true);
 });
 
 test("background wake prompts stay hidden from chat but visible in Turns activity", () => {
