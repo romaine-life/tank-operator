@@ -47,101 +47,58 @@ Runner hot-swap updates existing session pods only. If the classifier returns
 as proof for the target; use the listed artifact hot-swaps, a future-pod runner
 override, or a branch image plus a fresh-session smoke according to the result.
 
-If the MCP hot-swap tools do not cover the artifact, choose the fastest faithful
-slot update for the change:
+Use the MCP hot-swap tool for the changed artifact:
 
-- frontend/static change: build `frontend/dist` and copy it into every app
-  replica's static-override dir -- see "Frontend (static) hot-swap" below. The
-  `apply_test_slot_hot_swap` MCP tool does NOT cover `static`, so this is a raw
-  `kubectl` path, not an MCP call.
-- backend change: build/copy/restart according to the current contract
-- runner change: use the contract's runner hot-swap path or MCP tool
+- frontend/static change: `apply_test_slot_hot_swap` with
+  `artifact_kind: "static"` -- see "Frontend (static) hot-swap" below.
+- runner change: `apply_test_slot_hot_swap` with the runner `artifact_kind`
+  (`agent_runner` | `codex_runner`).
 - ConfigMap/chart/session-launcher change: patch or redeploy the slot resource
   that actually feeds newly created pods, then create a fresh pod/session to
-  verify the generated runtime state
+  verify the generated runtime state.
 
-For backend and runner artifacts, manual `kubectl` is a fallback -- prefer the
-MCP/CLI paths. For the **frontend**, manual `kubectl` is the default workflow
-(see below), because no MCP tool covers `static`.
+Raw `kubectl` writes/exec into slot pods are removed; the apply endpoint -- run
+by Glimmung under its own identity, gated on pushed + CI-green code -- is the
+path for artifact hot-swaps.
 
 ## Frontend (static) hot-swap
 
-This is the most common hot-swap and the one the MCP tools do **not** cover:
-`apply_test_slot_hot_swap` handles `backend`, `agent_runner`, and
-`codex_runner`. Static assets are served live from an override dir, so the verified
-workflow is a raw `kubectl` copy into every app replica -- no image build, no
-restart.
+Use `apply_test_slot_hot_swap` with `artifact_kind: "static"` -- the same MCP
+tool as the runner kinds. Glimmung builds the frontend from the pushed git ref
+in a Job (`npm ci && npm run build` in `node:20-alpine`), clears the app pod's
+static-override dir, and copies the built `frontend/dist` into every ready app
+replica. Static is served live, so there is no restart.
 
-Verified against tank-operator slots (sessions 330 / 334 / 338). The constants
-below (container name, target path, selector) are current as of this writing;
-still confirm them live per the "read the contract first" rule, and never
-hardcode the ephemeral slot/pod names.
+```
+apply_test_slot_hot_swap(
+  project: "tank-operator",
+  artifact_kind: "static",
+  git_ref: "<your pushed branch HEAD>",
+  validation_target: "existing_session",
+  slot_name: "tank-operator-slot-N",
+)
+```
 
-1. Build (install from the lockfile first if you just cloned):
+The registered static contract supplies the rest -- `source: frontend/dist`,
+`target: /var/run/tank-operator-static-override`,
+`pod_selector: app.kubernetes.io/name=tank-operator`, `container: tank-operator`,
+`builder_image: node:20-alpine`. Read it live with
+`get_test_slot_hot_swap_contract(project: "tank-operator")` instead of
+hardcoding, and never hardcode the ephemeral slot/pod names.
 
-   ```sh
-   cd frontend && npm ci && npm run build   # produces frontend/dist
-   ```
+The endpoint refuses a `git_ref` that isn't pushed and CI-green on an open PR --
+by design, a slot only ever runs reviewable, CI-passed code. Do **not** hand-copy
+assets with `kubectl cp`: raw write/exec into slot pods is removed, and copying
+local un-CI'd build output is exactly what this path replaces.
 
-2. Resolve the slot namespace, app pods, and app container. The namespace is the
-   slot name from `checkout_test_slot` (`tank-operator-slot-N`). Write through
-   the `tank-operator` container -- it mounts the target read-write
-   (`TANK_OPERATOR_STATIC_OVERRIDE_DIR`). App pods may *also* carry a
-   `static-writer` sidecar (slot 3 does, and some past sessions copied through
-   it), but per the README the sidecar is **not required** and current guidance
-   is to write through `tank-operator`. Confirm the container list before
-   copying:
+Verify (history is recorded automatically):
 
-   ```sh
-   NS=tank-operator-slot-N
-   kubectl -n "$NS" get pods -l app.kubernetes.io/name=tank-operator \
-     -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.containers[*].name}{"\n"}{end}'
-   ```
+- Confirm the served `index.html` references the hashed JS from the build:
+  `curl -sk https://tank-operator-slot-N.tank.dev.romaine.life/ | grep -oE 'index-[A-Za-z0-9_]+\.js'`, and `/healthz` returns 200.
+- For visual proof, `inspect_browser_url` against the slot URL (auth cookie per
+  [docs/testing.md](../../../../../../../docs/testing.md)) with
+  `save_screenshot_to_workspace=True` so a copy lands in `/workspace/screenshots/`.
+- The apply endpoint appends a hot-swap history entry to the lease on every outcome.
 
-3. Copy `frontend/dist` -> `/var/run/tank-operator-static-override` in **every**
-   ready app replica (the README requires swapping all ready app pods). Clears
-   stale assets first:
-
-   ```sh
-   cd /workspace/tank-operator
-   for POD in $(kubectl -n "$NS" get pods -l app.kubernetes.io/name=tank-operator -o name); do
-     POD=${POD#pod/}
-     echo "=== $POD ==="
-     kubectl -n "$NS" exec "$POD" -c tank-operator -- \
-       sh -c 'rm -rf /var/run/tank-operator-static-override/* 2>/dev/null; mkdir -p /var/run/tank-operator-static-override'
-     kubectl cp frontend/dist/. "$NS/$POD:/var/run/tank-operator-static-override/" -c tank-operator
-   done
-   ```
-
-   If `kubectl cp` fails because the container has no `tar`, stream it instead:
-
-   ```sh
-   tar -C frontend/dist -cf - . | \
-     kubectl -n "$NS" exec -i "$POD" -c tank-operator -- \
-       tar -C /var/run/tank-operator-static-override -xf -
-   ```
-
-   Static is served immediately -- no `SIGHUP`/restart. (Restart-on-`SIGHUP` is
-   the **backend** supervisor path, not this one.)
-
-4. Verify, then record:
-
-   - `kubectl -n "$NS" exec "$POD" -c tank-operator -- sh -c 'ls /var/run/tank-operator-static-override | head; wc -c /var/run/tank-operator-static-override/index.html'`
-   - Confirm the served `index.html` references the hashed JS from your local
-     `frontend/dist` (e.g. `index-XXXX.js`) and that `/healthz` returns 200.
-   - For visual proof, `inspect_browser_url` against the slot URL (auth cookie
-     per [docs/testing.md](../../../../../../../docs/testing.md)). When citing
-     the screenshot as evidence, also save a local workspace copy under
-     `/workspace/screenshots/`; prefer `save_screenshot_to_workspace=True`
-     when the Glimmung MCP tool exposes it.
-   - Log it: `record_test_slot_hot_swap(project: "tank-operator",
-     operation: "hot_swap", status: "persisted", slot_index: N, summary: ...)`.
-
-Backend (`/var/run/tank-operator-hot/tank-operator-go`, `SIGHUP` PID 1 in the
-`tank-operator` container) and the runners DO have supported paths -- use
-`apply_test_slot_hot_swap` (`artifact_kind` = `backend` | `agent_runner` |
-`codex_runner`) rather than hand-rolled kubectl for those.
-
-Gap worth closing: `static` is not a supported `apply_test_slot_hot_swap`
-`artifact_kind`, which is why the frontend stays manual. If that path is added
-to the Glimmung MCP surface, prefer it and update this guide.
+Runner artifacts use the same tool (`artifact_kind` = `agent_runner` |
+`codex_runner`).
