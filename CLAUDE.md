@@ -291,7 +291,7 @@ Inbound auth: claude-session SA token validated via TokenReview +
 SubjectAccessReview against the synthetic
 `mcp.tank-operator.io/servers/<name>` resource. Currently:
 
-- `romaine-life/mcp-azure-personal` â€” first-party personal Azure MCP server and chart; runtime naming is `mcp-azure-personal` / `azure-personal`
+- `romaine-life/mcp-azure-personal` â€” first-party personal Azure MCP server and chart; runtime naming is `mcp-azure-personal` / `azure-personal`. **Locked by default behind break-glass:** the server requires a valid auth.romaine.life JWT plus an active azure break-glass grant and otherwise serves no tools and refuses calls (enforced in the server, not the sidecar, so a direct in-cluster call is refused too). Normal feature work needs no Azure access; to obtain it, call the Tank MCP `request_azure_break_glass` tool for an approval URL, then have an admin approve. Grants are TTL-bounded `azure.break_glass.grant` control-action events. See `docs/features/session-lifecycle/capabilities.md` → "Locked-by-default Azure MCP".
 - `romaine-life/mcp-github` â€” custom GitHub-App-backed
 - `romaine-life/mcp-k8s` â€” read-only kubectl/helm
 - `romaine-life/mcp-argocd` â€” read-only ArgoCD via Dex SA-token exchange (no static API tokens)

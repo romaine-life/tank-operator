@@ -402,3 +402,60 @@ Open hardening:
   PR the agent opened (control-action git activity) and the PR explicitly linked
   via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
   positioning so the composer input-group's `overflow: hidden` cannot clip it.
+
+## Locked-by-default Azure MCP (break-glass)
+
+The `azure-personal` MCP (Postgres `pg_query`/`pg_execute`, Key Vault secrets,
+Cosmos, ARM/AKS, Entra/UAMI) is locked by default for every session. Normal
+feature development never needs Azure access; obtaining it requires an
+approved, time-bounded, audited break-glass grant.
+
+Affected contracts:
+- Session Lifecycle
+- Observability
+
+Enforcement is in the server we own, not the sidecar:
+- `mcp-azure-personal` requires a valid auth.romaine.life JWT identifying the
+  caller's session **and** an active azure break-glass grant. With no grant it
+  serves an empty `tools/list` and refuses `tools/call` — including on a direct
+  in-cluster call from the agent shell, not just the localhost MCP path.
+- A sidecar gate cannot be the boundary here: every session pod shares the
+  `claude-session` ServiceAccount (so RBAC cannot express per-session
+  break-glass), and the `mcp-auth-proxy` sidecar shares the pod (IP + SA) with
+  the agent container (so no NetworkPolicy can allow the sidecar but deny the
+  agent). Only the server requiring an unforgeable per-session grant both
+  revokes by default and grants per session. This is the canonical pattern:
+  *first-party MCP servers check the Tank grant.* Git break-glass's in-sidecar
+  `tank-git-break-glass` wrapper is the external-resource exception (github.com
+  cannot be taught our grants, so Tank must mint a real GitHub token); a named
+  follow-up folds git into this pattern.
+
+Contract impact:
+- The visible normal-mode surface is the narrow `request_azure_break_glass`
+  tool (proxy-injected into the mcp-tank-operator surface, independent of
+  restricted-git). It records an `azure.break_glass.request` control-action
+  event and returns an `auth.romaine.life/admin?intent=azure-break-glass`
+  approval URL without granting access or revealing a token.
+- Grants are stored as `azure.break_glass.grant` control-action events
+  (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
+  same `control_action_events` ledger as git break-glass. They are not
+  repo-scoped: a grant authorizes the whole azure-personal MCP for the session.
+- After an admin approves, the auth.romaine.life console POSTs the grant to
+  Tank's internal `POST /api/internal/sessions/{id}/azure-break-glass/grants`;
+  `mcp-azure-personal` reads it through
+  `GET /api/internal/sessions/{id}/azure-break-glass/grant` (short-cached) on
+  every list/call, so expiry re-locks automatically. Each privileged call is
+  recorded as `azure.break_glass.use`. All three actions increment
+  `tank_control_action_events_total`.
+- The proxy forwards the auth.romaine.life service JWT (`X-Auth-Romaine-Token`)
+  and the caller-session headers to port 9991 so the server can identify the
+  session and look up its grant.
+
+Open hardening:
+- `hermes` shares the `mcp.tank-operator.io/servers/azure-personal` RoleBinding
+  with `claude-session`; the cutover must exempt Hermes (a standing grant or a
+  caller-identity allowlist in `mcp-azure-personal`) so its unattended azure
+  use is not broken.
+- Until the auth.romaine.life `intent=azure-break-glass` approval card exists,
+  operators can create the grant by POSTing Tank's internal endpoint directly,
+  the same fallback git break-glass uses today.

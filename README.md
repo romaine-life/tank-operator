@@ -15,7 +15,7 @@ to point each session mode at the right image.
 
 The HTTP MCP servers it talks to live in standalone repos:
 
-- [`mcp-azure-personal`](https://github.com/romaine-life/mcp-azure-personal) â€” first-party personal Azure MCP server and chart.
+- [`mcp-azure-personal`](https://github.com/romaine-life/mcp-azure-personal) â€” first-party personal Azure MCP server and chart. Locked by default behind break-glass: the server requires an active Tank grant (call the `request_azure_break_glass` MCP tool for an approval URL). See `docs/features/session-lifecycle/capabilities.md` → "Locked-by-default Azure MCP".
 - [`mcp-github`](https://github.com/romaine-life/mcp-github) â€” custom GitHub App-backed MCP server.
 - [`mcp-k8s`](https://github.com/romaine-life/mcp-k8s) â€” read-only kubectl/helm MCP server.
 - [`mcp-argocd`](https://github.com/romaine-life/mcp-argocd) â€” read-only ArgoCD MCP server.

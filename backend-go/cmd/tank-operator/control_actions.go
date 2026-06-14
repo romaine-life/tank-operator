@@ -400,6 +400,140 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, map[string]any{"active": false, "repo": repo, "session_id": sessionID})
 }
 
+// handleInternalGrantAzureBreakGlass records an azure-personal MCP break-glass
+// grant. Mirrors handleInternalGrantGitBreakGlass, but azure access is not
+// repo-scoped: the grant authorizes the whole azure-personal MCP for the
+// session until it expires. The IdP (auth.romaine.life) calls this after an
+// admin approves an intent=azure-break-glass approval URL; the service JWT it
+// uses is minted server-side and never returned to the browser.
+func (s *appServer) handleInternalGrantAzureBreakGlass(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/azure-break-glass/grants")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		recordControlActionEvent("", "", "", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	var body struct {
+		TTLSeconds     int      `json:"ttl_seconds"`
+		Operations     []string `json:"operations"`
+		RequestEventID string   `json:"request_event_id"`
+		Reason         string   `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	ttl := body.TTLSeconds
+	if ttl <= 0 {
+		ttl = 3600
+	}
+	if ttl > 24*3600 {
+		ttl = 24 * 3600
+	}
+	operations := normalizeAzureBreakGlassOperations(body.Operations)
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(ttl) * time.Second)
+	payload, _ := json.Marshal(map[string]any{
+		"approved_by":      user.ActorEmail,
+		"expires_at":       expiresAt.Format(time.RFC3339),
+		"ttl_seconds":      ttl,
+		"operations":       operations,
+		"request_event_id": strings.TrimSpace(body.RequestEventID),
+		"reason":           strings.TrimSpace(body.Reason),
+	})
+	event := pgstore.ControlActionEvent{
+		EventID:       "tank-azure-break-glass-grant-" + sessionID + "-" + randomHex(12),
+		InvocationID:  "tank-azure-break-glass-grant-" + randomHex(12),
+		OwnerEmail:    user.ActorEmail,
+		SessionScope:  s.sessionScope,
+		SessionID:     sessionID,
+		SourceService: "tank-operator",
+		SourceTool:    "azure_break_glass_approval",
+		Action:        "azure.break_glass.grant",
+		Status:        "succeeded",
+		TargetKind:    "azure_mcp",
+		TargetRef:     "azure-personal",
+		Payload:       payload,
+	}
+	row, err := s.controlActions.Append(r.Context(), event)
+	if err != nil {
+		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"active":        true,
+		"event_id":      row.EventID,
+		"resource":      "azure-personal",
+		"expires_at":    expiresAt.Format(time.RFC3339),
+		"operations":    operations,
+		"session_id":    sessionID,
+		"session_scope": s.sessionScope,
+	})
+}
+
+// handleInternalGetAzureBreakGlassGrant returns the active azure-personal MCP
+// break-glass grant for a session, if any. mcp-azure-personal calls this on
+// every tool list/call (short-cached) to decide whether to serve azure tools.
+// Mirrors handleInternalGetGitBreakGlassGrant without the repo dimension.
+func (s *appServer) handleInternalGetAzureBreakGlassGrant(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/azure-break-glass/grant")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	for _, row := range rows {
+		if row.Action != "azure.break_glass.grant" || row.Status != "succeeded" {
+			continue
+		}
+		var payload struct {
+			ExpiresAt  string   `json:"expires_at"`
+			Operations []string `json:"operations"`
+			Reason     string   `json:"reason"`
+		}
+		_ = json.Unmarshal(row.Payload, &payload)
+		expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(payload.ExpiresAt))
+		if err != nil || !expiresAt.After(now) {
+			continue
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"active":        true,
+			"event_id":      row.EventID,
+			"resource":      "azure-personal",
+			"expires_at":    expiresAt.UTC().Format(time.RFC3339),
+			"operations":    normalizeAzureBreakGlassOperations(payload.Operations),
+			"reason":        payload.Reason,
+			"session_id":    sessionID,
+			"session_scope": s.sessionScope,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"active": false, "resource": "azure-personal", "session_id": sessionID})
+}
+
 func (s *appServer) handleApprovePRLaneRequest(w http.ResponseWriter, r *http.Request) {
 	s.handlePRLaneDecision(w, r, "approve")
 }
@@ -1165,6 +1299,28 @@ func normalizeBreakGlassOperations(in []string) []string {
 	return out
 }
 
+// normalizeAzureBreakGlassOperations bounds the azure grant operation set.
+// azure-personal break-glass is all-or-nothing (the whole MCP is gated), so the
+// only operation is use_azure_personal_mcp; the slice shape is kept parallel to
+// normalizeBreakGlassOperations so the grant model reads the same for both
+// resources.
+func normalizeAzureBreakGlassOperations(in []string) []string {
+	allowed := map[string]bool{"use_azure_personal_mcp": true}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range in {
+		op := strings.TrimSpace(raw)
+		if allowed[op] && !seen[op] {
+			out = append(out, op)
+			seen[op] = true
+		}
+	}
+	if len(out) == 0 {
+		out = []string{"use_azure_personal_mcp"}
+	}
+	return out
+}
+
 func normalizeRepoScope(scope repoScope, fallbackRepo string) (repoScope, error) {
 	kind := strings.TrimSpace(scope.Kind)
 	switch kind {
@@ -1375,7 +1531,10 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		"github.break_glass.request",
 		"github.break_glass.grant",
 		"github.break_glass.token",
-		"github.break_glass.push":
+		"github.break_glass.push",
+		"azure.break_glass.request",
+		"azure.break_glass.grant",
+		"azure.break_glass.use":
 	default:
 		return pgstore.ControlActionEvent{}, errors.New("unsupported control action")
 	}
