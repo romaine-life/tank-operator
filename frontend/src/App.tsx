@@ -258,9 +258,12 @@ import {
   PROVIDER_CONFIG_MODES,
   PROVIDER_INTERACTION_MODES,
   PROVIDERS,
+  RESTRICTED_GIT_CAPABILITY,
   ROLLOUT_MODES,
   SDK_CHAT_MODES,
   SESSION_MODE_LABELS,
+  hasRestrictedGit,
+  interactionIconKind,
   sessionModeLabel,
   isDefaultSessionMode,
   type DefaultSessionMode,
@@ -3166,27 +3169,50 @@ function sessionInteractionForSession(
     : null;
 }
 
+const INTERACTION_ICONS: Record<
+  ReturnType<typeof interactionIconKind>,
+  LucideIcon
+> = {
+  gui: MonitorIcon,
+  cli: TerminalIcon,
+  // Restricted-git GUI sessions swap the monitor glyph for a git glyph so the
+  // session row carries a standing reminder that the session uses governed Git.
+  "restricted-git": GitBranchIcon,
+};
+
 function InteractionIcon({
   interaction,
+  restrictedGit = false,
   className,
 }: {
   interaction: SessionInteraction;
+  restrictedGit?: boolean;
   className?: string;
 }) {
-  const Icon: LucideIcon = interaction === "gui" ? MonitorIcon : TerminalIcon;
+  const Icon: LucideIcon =
+    INTERACTION_ICONS[interactionIconKind(interaction, restrictedGit)];
   return <Icon className={className} aria-hidden="true" />;
 }
 
 function ModeChip({
   mode,
   interaction,
+  restrictedGit = false,
 }: {
   mode: SessionMode;
   interaction?: SessionInteraction | null;
+  restrictedGit?: boolean;
 }) {
   const icon = MODE_CHIP_ICONS[mode];
   const label = MODE_CHIP_LABELS[mode] ?? mode;
-  const interactionLabel = interaction ? INTERACTION_LABELS[interaction] : null;
+  // Restricted git only ever rides GUI modes; gate the affordance on `gui` so a
+  // stray capability on a non-gui row can never mislabel the interaction chip.
+  const showRestrictedGit = restrictedGit && interaction === "gui";
+  const interactionLabel = showRestrictedGit
+    ? "restricted git"
+    : interaction
+      ? INTERACTION_LABELS[interaction]
+      : null;
 
   if (icon) {
     return (
@@ -3201,12 +3227,15 @@ function ModeChip({
         </span>
         {interaction && (
           <span
-            className="mode mode-icon-only mode-interaction-chip"
+            className={`mode mode-icon-only mode-interaction-chip${
+              showRestrictedGit ? " is-restricted-git" : ""
+            }`}
             title={interactionLabel ?? undefined}
             aria-label={interactionLabel ?? undefined}
           >
             <InteractionIcon
               interaction={interaction}
+              restrictedGit={restrictedGit}
               className="mode-interaction-icon"
             />
           </span>
@@ -3851,6 +3880,7 @@ function DemoLanding() {
                     <ModeChip
                       mode={s.mode}
                       interaction={sessionInteractionForSession(s)}
+                      restrictedGit={hasRestrictedGit(s.capabilities)}
                     />
                     <SessionStats session={s} />
                     {s.mode === "claude_cli" && (
@@ -24395,7 +24425,7 @@ function AuthenticatedApp() {
         ? ["spirelens_mcp"]
         : []),
       ...(REPO_SUPPORTED_MODES.has(mode) && homeRestrictedGitEnabled
-        ? ["restricted_git"]
+        ? [RESTRICTED_GIT_CAPABILITY]
         : []),
     ];
     const requestedName = normalizedHomeTitleNameFrom(
@@ -25337,6 +25367,7 @@ function AuthenticatedApp() {
                     <ModeChip
                       mode={s.mode}
                       interaction={sessionInteractionForSession(s)}
+                      restrictedGit={hasRestrictedGit(s.capabilities)}
                     />
                     <SessionStats session={s} />
                     {isClosing && (
