@@ -12,6 +12,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   AnchorHTMLAttributes,
   ClipboardEvent as ReactClipboardEvent,
@@ -2422,12 +2423,46 @@ function PullRequestMenuButton({
   };
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  // The popover is portaled to <body> with fixed positioning so it escapes the
+  // composer input-group's `overflow: hidden` + `z-index` stacking context,
+  // which otherwise clips an in-flow absolutely-positioned popover (it opens in
+  // the DOM but renders behind/clipped by the composer). Anchor is the
+  // trigger's viewport rect, recomputed on open / scroll / resize.
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
 
   useEffect(() => {
     if (!open) return;
     const closeIfOutside = (event: MouseEvent | TouchEvent) => {
       const target = event.target;
-      if (target instanceof Node && ref.current?.contains(target)) return;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      )
+        return;
       setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -2460,6 +2495,7 @@ function PullRequestMenuButton({
   return (
     <span ref={ref} className="run-pr-menu">
       <button
+        ref={triggerRef}
         type="button"
         className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}${pendingCount > 0 ? " has-alert" : ""}`}
         aria-label={title}
@@ -2474,12 +2510,19 @@ function PullRequestMenuButton({
           <span className="run-pr-alert-dot" aria-hidden="true" />
         )}
       </button>
-      {open && hasMenu && (
-        <div
-          className="run-pr-menu-popover"
-          role="menu"
-          aria-label="Pull request actions"
-        >
+      {open && hasMenu &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover"
+            role="menu"
+            aria-label="Pull request actions"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
           <div className="run-slash-palette-label">Pull request</div>
           {latest ? (
             <a
@@ -2558,8 +2601,9 @@ function PullRequestMenuButton({
               );
             })
           )}
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </span>
   );
 }
