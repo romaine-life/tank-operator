@@ -80,11 +80,29 @@ func TestProviderUsageNamespaceTrimsSessionNamespace(t *testing.T) {
 }
 
 func TestDefaultProviderUsageURLIncludesClaudeSecondaryProxy(t *testing.T) {
+	t.Setenv("CLAUDE_SECONDARY_API_PROXY_HOST", "")
 	s := &appServer{namespace: "tank-operator-slot-7-sessions"}
 	got := s.defaultProviderUsageURL("claude_secondary")
 	want := "http://claude-secondary-api-proxy.tank-operator-slot-7.svc.cluster.local:9100/usage/claude"
 	if got != want {
 		t.Fatalf("defaultProviderUsageURL = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultProviderUsageURLUsesConfiguredProxyHosts(t *testing.T) {
+	t.Setenv("CLAUDE_API_PROXY_HOST", "claude-api-proxy.tank-operator.svc.cluster.local")
+	t.Setenv("CLAUDE_SECONDARY_API_PROXY_HOST", "claude-secondary-api-proxy.tank-operator.svc.cluster.local")
+	t.Setenv("CODEX_API_PROXY_HOST", "codex-api-proxy.tank-operator.svc.cluster.local")
+	s := &appServer{namespace: "tank-operator-slot-7-sessions"}
+	cases := map[string]string{
+		"claude":           "http://claude-api-proxy.tank-operator.svc.cluster.local:9100/usage/claude",
+		"claude_secondary": "http://claude-secondary-api-proxy.tank-operator.svc.cluster.local:9100/usage/claude",
+		"codex":            "http://codex-api-proxy.tank-operator.svc.cluster.local:9100/usage/codex",
+	}
+	for provider, want := range cases {
+		if got := s.defaultProviderUsageURL(provider); got != want {
+			t.Fatalf("defaultProviderUsageURL(%q) = %q, want %q", provider, got, want)
+		}
 	}
 }
 

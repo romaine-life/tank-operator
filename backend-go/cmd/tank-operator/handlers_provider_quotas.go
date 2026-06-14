@@ -90,6 +90,9 @@ func (s *appServer) handleProviderQuotas(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *appServer) defaultProviderUsageURL(provider string) string {
+	if host, path := providerUsageHostAndPath(provider); host != "" {
+		return fmt.Sprintf("http://%s:9100/usage/%s", host, path)
+	}
 	ns := strings.TrimSpace(os.Getenv("PROVIDER_USAGE_NAMESPACE"))
 	if ns == "" {
 		ns = providerUsageNamespace(s.namespace)
@@ -104,6 +107,34 @@ func (s *appServer) defaultProviderUsageURL(provider string) string {
 	default:
 		return ""
 	}
+}
+
+func providerUsageHostAndPath(provider string) (string, string) {
+	var host string
+	var path string
+	switch provider {
+	case "claude":
+		host = os.Getenv("CLAUDE_API_PROXY_HOST")
+		path = "claude"
+	case "claude_secondary":
+		host = os.Getenv("CLAUDE_SECONDARY_API_PROXY_HOST")
+		path = "claude"
+	case "codex":
+		host = os.Getenv("CODEX_API_PROXY_HOST")
+		path = "codex"
+	default:
+		return "", ""
+	}
+	host = strings.TrimSpace(host)
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimPrefix(host, "https://")
+	if before, _, ok := strings.Cut(host, "/"); ok {
+		host = before
+	}
+	if before, _, ok := strings.Cut(host, ":"); ok {
+		host = before
+	}
+	return host, path
 }
 
 func providerUsageNamespace(sessionsNamespace string) string {
