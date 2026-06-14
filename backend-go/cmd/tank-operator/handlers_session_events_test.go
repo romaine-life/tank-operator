@@ -377,6 +377,77 @@ func TestHandleSessionTurnActivityResolvesTurnNumberSelector(t *testing.T) {
 	}
 }
 
+func TestHandleSessionTurnActivityStampsAskUserQuestionTargetTurnNumber(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+	app.turns = fakeSessionTurnStore{byTurnID: map[string]int64{
+		"turn-1": 1,
+		"turn-2": 2,
+	}}
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: []map[string]any{
+			projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+				"text": "go", "display": map[string]any{"kind": "plain"},
+			}),
+			projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+			projectionTestEvent("invoke", "00000003", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+				"provider_item_id": "toolu_ask",
+				"timeline_id":      "turn-1:item:ask",
+				"questions": []any{
+					map[string]any{"question": "Which path?"},
+				},
+			}),
+			projectionTestEvent("msg", "00000004", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+				"text":    "1. Which path?",
+				"display": map[string]any{"kind": "ask_user_question"},
+				"awaiting_input": map[string]any{
+					"asking_turn_id":       "turn-1",
+					"question_turn_id":     "turn-2",
+					"provider_item_id":     "toolu_ask",
+					"timeline_id":          "turn-2:item:ask",
+					"provider_timeline_id": "turn-1:item:ask",
+					"questions": []any{
+						map[string]any{"question": "Which path?"},
+					},
+				},
+			}),
+		}, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/turn-1/activity?page=1", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	entries, _ := body["entries"].([]any)
+	if len(entries) < 1 {
+		t.Fatalf("entries empty: %#v", body["entries"])
+	}
+	tool, _ := entries[0].(map[string]any)
+	if tool["toolName"] != "AskUserQuestion" {
+		t.Fatalf("first entry = %#v, want AskUserQuestion marker", tool)
+	}
+	target, _ := tool["questionTarget"].(map[string]any)
+	if target == nil {
+		t.Fatalf("questionTarget missing: %#v", tool)
+	}
+	if target["turnNumber"] != float64(2) {
+		t.Fatalf("questionTarget.turnNumber = %#v, want 2", target["turnNumber"])
+	}
+	if target["turnId"] != "turn-2" || target["timelineId"] != "turn-2:item:ask" || target["page"] != float64(1) {
+		t.Fatalf("questionTarget = %#v, want turn-2 page 1", target)
+	}
+}
+
 func TestHandleListSessionBackgroundTasksProjectsShellTaskLedger(t *testing.T) {
 	app := adminTestServer(t)
 	app.sessionScope = "default"
