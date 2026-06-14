@@ -388,6 +388,19 @@ func TestProjectTurnPagesAskingTurnKeepsInvocationAndQuestionProseTogether(t *te
 	if marker["toolStatus"] != "completed" {
 		t.Fatalf("marker toolStatus = %v, want completed", marker["toolStatus"])
 	}
+	target, _ := marker["questionTarget"].(map[string]any)
+	if target == nil {
+		t.Fatalf("marker questionTarget missing: %#v", marker)
+	}
+	if target["turnId"] != "turn-2" {
+		t.Fatalf("marker questionTarget.turnId = %v, want turn-2", target["turnId"])
+	}
+	if target["timelineId"] != "turn-2:item:ask" {
+		t.Fatalf("marker questionTarget.timelineId = %v, want turn-2:item:ask", target["timelineId"])
+	}
+	if target["page"] != 1 {
+		t.Fatalf("marker questionTarget.page = %v, want 1", target["page"])
+	}
 	if activityPage.Entries[2]["kind"] != "message" || activityPage.Entries[2]["role"] != "assistant" {
 		t.Fatalf("last activity entry = %#v, want assistant question prose", activityPage.Entries[2])
 	}

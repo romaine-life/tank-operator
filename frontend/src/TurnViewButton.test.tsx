@@ -24,7 +24,7 @@ import { expect, test, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { TurnViewButton } from "./App.tsx";
+import { askUserQuestionTargetHref, TurnViewButton } from "./App.tsx";
 
 const HREF = "https://tank.example/sessions/42/turns/7";
 
@@ -104,4 +104,23 @@ test("without an href it renders a button that navigates in-app on click", async
   await user.click(screen.getByRole("button", { name: "Open turn in Turns" }));
 
   expect(onOpenTurn).toHaveBeenCalledWith("turn_xyz", { anchor: "bottom" });
+});
+
+test("AskUserQuestion tool target href points at the numbered question page", () => {
+  expect(
+    askUserQuestionTargetHref("https://tank.example/sessions/42", "42", {
+      turnId: "turn_question",
+      turnNumber: 8,
+      page: 1,
+    }),
+  ).toBe("https://tank.example/sessions/42/turns/8/pages/1");
+});
+
+test("AskUserQuestion tool target href waits for durable turn number", () => {
+  expect(
+    askUserQuestionTargetHref("https://tank.example/sessions/42", "42", {
+      turnId: "turn_question",
+      page: 1,
+    }),
+  ).toBeUndefined();
 });

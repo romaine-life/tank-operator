@@ -10738,11 +10738,21 @@ textarea.run-files-viewer-editor:focus {
   grid-column: 2;
 }
 
+.run-transcript-tool-header-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+}
+
 .run-transcript-tool-header {
   display: flex !important;
   align-items: center;
   gap: 0.5rem;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
   padding: 0.45rem 0.7rem;
   border-radius: 0.5rem;
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -10892,6 +10902,38 @@ textarea.run-files-viewer-editor:focus {
 
 .run-tool-section-title:not(:first-child) {
   margin-top: 0.6rem;
+}
+
+.run-tool-question-target {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  width: fit-content;
+  margin-top: 0.6rem;
+  border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 55%, transparent);
+  border-radius: 0.45rem;
+  background: color-mix(in oklch, var(--status-agent-needs-input) 12%, transparent);
+  color: var(--text-strong);
+  padding: 0.42rem 0.65rem;
+  font-family: var(--font-primary);
+  font-size: var(--run-chat-font-code-xs);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.run-tool-question-target-compact {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding-inline: 0.6rem;
+  min-height: 2.25rem;
+  white-space: nowrap;
+}
+
+.run-tool-question-target:hover {
+  border-color: color-mix(in oklch, var(--status-agent-needs-input) 75%, transparent);
+  background: color-mix(in oklch, var(--status-agent-needs-input) 18%, transparent);
 }
 
 /* Diff body — Edit/Write/MultiEdit/ApplyPatch. */
@@ -12218,6 +12260,20 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-xs);
   text-transform: lowercase;
+}
+
+.run-transcript-tool-header-row > .run-transcript-tool-header {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.run-transcript-tool-header-row[data-has-question-target="true"] > .run-transcript-tool-header {
+  flex: 0 1 auto;
+}
+
+.run-transcript-tool-header-row[data-has-question-target="true"] .run-transcript-tool-label {
+  flex: 0 1 auto !important;
 }
 
 .run-transcript-code,
