@@ -1180,10 +1180,16 @@ def _activate_break_glass_mcp_config(repo_slug: str, grant: dict) -> dict:
     }
 
 
-async def _mint_github_installation_token(http: ClientSession, service_token: str, repo_slug: str, *, workflows: bool = False) -> str:
+async def _mint_github_installation_token(http: ClientSession, service_token: str, repo_slug: str, *, workflows: bool = False, full: bool = False) -> str:
     arguments: dict[str, object] = {"repos": [repo_slug], "write": True}
     if workflows:
         arguments["workflows"] = True
+    if full:
+        # Break-glass mint_full_git_token: request the App's entire granted
+        # permission set (not just contents) so the approved token is a genuine
+        # escape hatch. The internal governed-publish callers deliberately omit
+        # this and stay contents-only.
+        arguments["full"] = True
     payload = {
         "jsonrpc": "2.0",
         "id": f"tank-publish-{uuid4().hex}",
@@ -2154,7 +2160,7 @@ async def _handle_break_glass_mint_token(http: ClientSession, auth_romaine_provi
         return _mcp_error_response(request_id, -32020, "no active break-glass grant allows mint_full_git_token", {"repo": repo_slug})
     workflows = bool(arguments.get("workflows"))
     try:
-        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows)
+        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows, full=True)
         await _record_break_glass_use(
             http,
             service_token,
