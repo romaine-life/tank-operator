@@ -108,6 +108,7 @@ class _UsageResponse:
 
 class _UsageClient:
     responses: list[object] = []
+    request_count: int = 0
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
@@ -119,6 +120,7 @@ class _UsageClient:
         return None
 
     async def get(self, url: str, headers: dict[str, str]) -> object:
+        self.__class__.request_count += 1
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -240,9 +242,9 @@ class ServerTests(unittest.TestCase):
     def test_usage_snapshot_serves_last_good_snapshot_on_rate_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.request_count = 0
             _UsageClient.responses = [
                 _UsageResponse(200, {"five_hour": {"utilization": 18}}),
-                _UsageResponse(429, {"error": "rate_limited"}),
                 _UsageResponse(429, {"error": "rate_limited"}),
             ]
 
@@ -260,6 +262,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(first["status"], "ok")
             self.assertNotIn("cached", first)
             self.assertEqual(second["status"], "ok")
+            self.assertEqual(_UsageClient.request_count, 2)
             self.assertTrue(second["cached"])
             self.assertTrue(second["stale"])
             self.assertEqual(second["source_status_code"], 429)
@@ -269,8 +272,8 @@ class ServerTests(unittest.TestCase):
     def test_usage_snapshot_without_cache_reports_rate_limit_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.request_count = 0
             _UsageClient.responses = [
-                _UsageResponse(429, {"error": "rate_limited"}),
                 _UsageResponse(429, {"error": "rate_limited"}),
             ]
 
@@ -286,6 +289,7 @@ class ServerTests(unittest.TestCase):
 
             self.assertEqual(payload["status"], "error")
             self.assertEqual(payload["status_code"], 429)
+            self.assertEqual(_UsageClient.request_count, 1)
 
     def test_usage_snapshot_does_not_hide_credential_failure_with_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

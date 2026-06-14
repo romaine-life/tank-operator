@@ -901,7 +901,9 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         headers = self._usage_headers(token)
         last_error = ""
         last_status = 0
-        for attempt in range(2):
+        refreshed_after_unauthorized = False
+        while True:
+            retry_after_refresh = False
             for url in urls:
                 try:
                     async with httpx.AsyncClient(timeout=15.0) as http:
@@ -912,18 +914,37 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                     last_status = 0
                     continue
                 last_status = resp.status_code
-                if resp.status_code == 401 and attempt == 0:
+                if resp.status_code == 401 and not refreshed_after_unauthorized:
                     self._access_invalidated = True
                     await self._refresh()
                     token = await self._get_access_token()
                     headers = self._usage_headers(token)
+                    refreshed_after_unauthorized = True
+                    retry_after_refresh = True
                     break
                 if resp.status_code == 404 and len(urls) > 1:
                     last_error = "usage endpoint not found"
                     continue
                 if resp.status_code < 200 or resp.status_code >= 300:
+                    resp_headers = getattr(resp, "headers", {})
+                    request_id = resp_headers.get("x-request-id") or resp_headers.get(
+                        "request-id"
+                    )
+                    retry_after = resp_headers.get("retry-after")
+                    log.warning(
+                        "%s usage request returned non-success: status=%s request_id=%s retry_after=%s",
+                        self._config.provider,
+                        resp.status_code,
+                        request_id or "-",
+                        retry_after or "-",
+                    )
                     last_error = resp.text[:500]
-                    continue
+                    cached = self._cached_usage_for_transient_failure(
+                        "error", resp.status_code, last_error
+                    )
+                    if cached is not None:
+                        return cached
+                    return self._usage_error("error", resp.status_code, last_error)
                 try:
                     body = resp.json()
                 except Exception as err:
@@ -943,6 +964,9 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 }
                 self._cached_usage_snapshot = dict(payload)
                 return payload
+            if retry_after_refresh:
+                continue
+            break
         cached = self._cached_usage_for_transient_failure("error", last_status, last_error)
         if cached is not None:
             return cached
