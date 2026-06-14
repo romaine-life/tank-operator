@@ -96,6 +96,7 @@ _TANK_PR_LANE_TOOL = "request_pr_lane"
 _TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
 _TANK_MERGE_TOOL = "merge_current_session_pr"
 _TANK_RENAME_PR_TOOL = "rename_current_session_pr"
+_TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
 _GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
@@ -265,16 +266,35 @@ def _github_tool_block_response(body: bytes, tool_name: str) -> web.Response | N
         return None
     method = _parse_mcp_method(body)
     request_id = method[2] if method else None
+    body_tool: str | None = None
     if tool_name == "merge_pull_request":
         replacement_tool = _TANK_MERGE_TOOL
     elif tool_name == "update_issue":
+        # update_issue edits both the PR title and body. Point at the
+        # governed title rename and, separately, the governed PR-body
+        # editor so an agent can fill the Feature Contracts section the
+        # check-pr-body workflow reads without break-glass.
         replacement_tool = _TANK_RENAME_PR_TOOL
+        body_tool = _TANK_UPDATE_PR_BODY_TOOL
     else:
         replacement_tool = _TANK_PUBLISH_TOOL
     replacement_text = (
         f"Use the Tank MCP {replacement_tool} tool; direct GitHub write "
         "tokens and file/PR writes are reserved for break-glass approval. "
     )
+    if body_tool is not None:
+        replacement_text += (
+            f"To edit the pull request body (for example to fill the Feature "
+            f"Contracts section the check-pr-body workflow validates), use the "
+            f"Tank MCP {body_tool} tool. "
+        )
+    data = {
+        "blocked_tool": tool_name,
+        "replacement_tool": replacement_tool,
+        "break_glass_tool": _TANK_BREAK_GLASS_TOOL,
+    }
+    if body_tool is not None:
+        data["body_tool"] = body_tool
     return _mcp_error_response(
         request_id,
         -32010,
@@ -284,7 +304,7 @@ def _github_tool_block_response(body: bytes, tool_name: str) -> web.Response | N
             "If governed publish is not sufficient, call the Tank MCP "
             "request_git_break_glass tool to get an approval URL."
         ),
-        {"blocked_tool": tool_name, "replacement_tool": replacement_tool, "break_glass_tool": _TANK_BREAK_GLASS_TOOL},
+        data,
     )
 
 
@@ -333,6 +353,76 @@ def _filter_github_write_tools(raw: bytes) -> bytes:
     except json.JSONDecodeError:
         return raw
     return json.dumps(filter_payload(payload), separators=(",", ":")).encode("utf-8")
+
+
+def _repo_scope_schema(description: str) -> dict:
+    return {
+        "type": "object",
+        "description": description,
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["current_repo"]},
+                    "repo": {"type": "string"},
+                },
+                "required": ["kind"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["repos"]},
+                    "repos": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                },
+                "required": ["kind", "repos"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["all_repos"]},
+                },
+                "required": ["kind"],
+                "additionalProperties": False,
+            },
+        ],
+    }
+
+
+def _branch_scope_schema(description: str) -> dict:
+    return {
+        "type": "object",
+        "description": description,
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["named"]},
+                    "branches": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                },
+                "required": ["kind", "branches"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["count"]},
+                    "count": {"type": "integer", "minimum": 1},
+                },
+                "required": ["kind", "count"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["unlimited"]},
+                },
+                "required": ["kind"],
+                "additionalProperties": False,
+            },
+        ],
+    }
 
 
 def _append_tank_publish_tool(raw: bytes) -> bytes:
@@ -385,6 +475,7 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     has_create_pr_lane = any(isinstance(tool, dict) and tool.get("name") == _TANK_CREATE_PR_LANE_TOOL for tool in tools)
     has_merge = any(isinstance(tool, dict) and tool.get("name") == _TANK_MERGE_TOOL for tool in tools)
     has_rename_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_RENAME_PR_TOOL for tool in tools)
+    has_update_pr_body = any(isinstance(tool, dict) and tool.get("name") == _TANK_UPDATE_PR_BODY_TOOL for tool in tools)
     changed = False
     for tool in tools:
         if isinstance(tool, dict) and tool.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
@@ -435,10 +526,11 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "repo": {
-                            "type": "string",
-                            "description": "Optional GitHub slug, for example romaine-life/tank-operator.",
-                        },
+                        "repo_scope": _repo_scope_schema(
+                            "Choose exactly one repo scope: {\"kind\":\"current_repo\"}, "
+                            "{\"kind\":\"repos\",\"repos\":[\"romaine-life/tank-operator\",\"romaine-life/auth\"]}, "
+                            "or {\"kind\":\"all_repos\"}."
+                        ),
                         "repo_path": {
                             "type": "string",
                             "description": "Optional absolute or /workspace-relative path to the repo.",
@@ -447,19 +539,11 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                             "type": "string",
                             "description": "Short proposed lane name, for example docs or mcp-proxy.",
                         },
-                        "lane_names": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional branch/lane names to request as a batch allocation when lane_name is not yet chosen.",
-                        },
-                        "requested_count": {
-                            "type": "integer",
-                            "description": "Optional number of additional PR lanes to request when exact branch names are not known.",
-                        },
-                        "unlimited": {
-                            "type": "boolean",
-                            "description": "Request unlimited governed PR lanes for this repo and session.",
-                        },
+                        "branch_scope": _branch_scope_schema(
+                            "Required for allocation requests when lane_name is omitted. Choose exactly one: "
+                            "{\"kind\":\"named\",\"branches\":[\"docs\",\"backend\"]}, "
+                            "{\"kind\":\"count\",\"count\":5}, or {\"kind\":\"unlimited\"}."
+                        ),
                         "relationship": {
                             "type": "string",
                             "description": "parallel, stacked, or followup.",
@@ -477,7 +561,7 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                             "description": "Why this must be a separate review boundary.",
                         },
                     },
-                    "required": ["reason"],
+                    "required": ["repo_scope", "reason"],
                     "additionalProperties": False,
                 },
             }
@@ -591,6 +675,44 @@ def _append_tank_publish_tool_to_json(value) -> bool:
             }
         )
         changed = True
+    if not has_update_pr_body:
+        tools.append(
+            {
+                "name": _TANK_UPDATE_PR_BODY_TOOL,
+                "description": (
+                    "Replace the body/description of the open pull request for the "
+                    "current Tank-governed session branch after verifying the repo, "
+                    "branch, and PR head belong to this session lane. Use this to "
+                    "fill the Feature Contracts section the check-pr-body workflow "
+                    "validates; a PR comment does not satisfy that check. Direct "
+                    "GitHub PR-body edits are disabled in restricted Git mode."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Optional GitHub slug, for example romaine-life/tank-operator.",
+                        },
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional absolute or /workspace-relative path to the repo.",
+                        },
+                        "pr_number": {
+                            "type": "integer",
+                            "description": "Optional PR number; if provided it must match the current governed branch's open PR.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "New pull request body in Markdown. Replaces the existing body in full.",
+                        },
+                    },
+                    "required": ["body"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
     if has_break_glass:
         return changed
     tools.append(
@@ -604,14 +726,19 @@ def _append_tank_publish_tool_to_json(value) -> bool:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Optional GitHub slug, for example romaine-life/tank-operator.",
-                    },
+                    "repo_scope": _repo_scope_schema(
+                        "Choose exactly one repo scope. Use {\"kind\":\"current_repo\"} for the checked-out repo, "
+                        "{\"kind\":\"repos\",\"repos\":[...]} for a specific repo list, or {\"kind\":\"all_repos\"} "
+                        "only when every repo is explicitly needed."
+                    ),
                     "repo_path": {
                         "type": "string",
-                        "description": "Optional absolute or /workspace-relative path to the repo.",
+                        "description": "Optional absolute or /workspace-relative path used to resolve current_repo.",
                     },
+                    "branch_scope": _branch_scope_schema(
+                        "Choose exactly one branch scope. Examples: {\"kind\":\"named\",\"branches\":[\"branch-a\",\"branch-b\"]}, "
+                        "{\"kind\":\"count\",\"count\":5}, or {\"kind\":\"unlimited\"}."
+                    ),
                     "reason": {
                         "type": "string",
                         "description": "Short reason the governed publish path is insufficient.",
@@ -621,6 +748,7 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         "description": "Caller source such as agent.",
                     },
                 },
+                "required": ["repo_scope", "branch_scope", "reason"],
                 "additionalProperties": False,
             },
         }
@@ -889,6 +1017,122 @@ def _repo_slug_from_remote(remote_url: str) -> tuple[str, str] | None:
     return owner, name.removesuffix(".git")
 
 
+def _normalize_repo_slug(value: object) -> str:
+    slug = str(value or "").strip()
+    if not slug:
+        return ""
+    parts = slug.split("/")
+    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        raise ValueError("repo values must be GitHub slugs like owner/name")
+    return f"{parts[0].strip()}/{parts[1].strip()}"
+
+
+def _string_list_argument(arguments: dict, key: str) -> list[str]:
+    raw = arguments.get(key) or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError(f"{key} must be an array of strings")
+    out: list[str] = []
+    for value in raw:
+        item = str(value or "").strip()
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def _normalize_repo_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        raise ValueError("repo_scope.repos must be an array of GitHub slugs")
+    repos = [_normalize_repo_slug(value) for value in values]
+    out: list[str] = []
+    for repo in repos:
+        if repo and repo not in out:
+            out.append(repo)
+    return out
+
+
+async def _current_repo_from_arguments(arguments: dict, explicit_repo: object = "") -> tuple[str, Path | None]:
+    repo = _normalize_repo_slug(explicit_repo)
+    if repo:
+        return repo, None
+    repo_path = _repo_path_from_arguments(arguments)
+    remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+    slug = _repo_slug_from_remote(remote_url)
+    if slug is None:
+        raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
+    return f"{slug[0]}/{slug[1]}", repo_path
+
+
+async def _repo_scope_from_arguments(arguments: dict) -> tuple[dict, str, list[str], Path | None]:
+    scope = arguments.get("repo_scope")
+    if not isinstance(scope, dict):
+        raise ValueError("repo_scope is required")
+    kind = str(scope.get("kind") or "").strip()
+    if kind == "current_repo":
+        if scope.get("repos"):
+            raise ValueError("repo_scope current_repo rejects repos")
+        repo, repo_path = await _current_repo_from_arguments(arguments, scope.get("repo"))
+        return {"kind": "current_repo", "repo": repo}, repo, [repo], repo_path
+    if kind == "repos":
+        if str(scope.get("repo") or "").strip():
+            raise ValueError("repo_scope repos rejects repo")
+        repos = _normalize_repo_list(scope.get("repos"))
+        if not repos:
+            raise ValueError("repo_scope repos requires at least one repo")
+        return {"kind": "repos", "repos": repos}, repos[0], repos, None
+    if kind == "all_repos":
+        if str(scope.get("repo") or "").strip() or scope.get("repos"):
+            raise ValueError("repo_scope all_repos rejects repo and repos")
+        return {"kind": "all_repos"}, "", [], None
+    raise ValueError("repo_scope.kind must be current_repo, repos, or all_repos")
+
+
+def _branch_scope_from_arguments(arguments: dict) -> dict:
+    scope = arguments.get("branch_scope")
+    if not isinstance(scope, dict):
+        raise ValueError("branch_scope is required")
+    kind = str(scope.get("kind") or "").strip()
+    branches_raw = scope.get("branches") or []
+    count_raw = scope.get("count")
+    if kind == "named":
+        if count_raw not in (None, 0, ""):
+            raise ValueError("branch_scope named rejects count")
+        branches = [_sanitize_pr_lane_name(value) for value in _normalize_string_list(branches_raw, "branch_scope.branches")]
+        branches = [branch for branch in branches if branch]
+        if not branches:
+            raise ValueError("branch_scope named requires branches")
+        return {"kind": "named", "branches": branches}
+    if kind == "count":
+        if branches_raw:
+            raise ValueError("branch_scope count rejects branches")
+        try:
+            count = int(count_raw or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("branch_scope count requires an integer count") from exc
+        if count <= 0:
+            raise ValueError("branch_scope count requires a positive count")
+        return {"kind": "count", "count": min(count, 50)}
+    if kind == "unlimited":
+        if branches_raw or count_raw not in (None, 0, ""):
+            raise ValueError("branch_scope unlimited rejects branches and count")
+        return {"kind": "unlimited"}
+    raise ValueError("branch_scope.kind must be named, count, or unlimited")
+
+
+def _normalize_string_list(value: object, label: str) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be an array of strings")
+    out: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
 def _repo_path_from_arguments(arguments: dict) -> Path:
     repo = str(arguments.get("repo") or "").strip()
     repo_path = str(arguments.get("repo_path") or "").strip()
@@ -1090,32 +1334,19 @@ async def _verify_github_hot_swap_head(
         if pr_number is None:
             reasons.append("open PR response did not include a PR number")
         else:
-            # GitHub computes `mergeable` asynchronously; it is null ("unknown")
-            # for a moment after a push/edit. Poll briefly rather than treating
-            # "still computing" as not-mergeable (a transient false block).
-            detail_ok = False
-            mergeable = None
-            mergeable_state = ""
-            for poll in range(6):
-                detail_status, detail_body = await _github_api_json(
-                    http,
-                    github_token,
-                    "GET",
-                    f"/repos/{owner}/{repo}/pulls/{pr_number}",
-                )
-                if detail_status >= 400 or not isinstance(detail_body, dict):
-                    break
-                detail_ok = True
+            detail_status, detail_body = await _github_api_json(
+                http,
+                github_token,
+                "GET",
+                f"/repos/{owner}/{repo}/pulls/{pr_number}",
+            )
+            if detail_status >= 400 or not isinstance(detail_body, dict):
+                reasons.append(f"could not read PR #{pr_number} mergeability")
+            else:
                 mergeable = detail_body.get("mergeable")
                 mergeable_state = str(detail_body.get("mergeable_state") or "")
-                if mergeable is not None and mergeable_state not in {"", "unknown"}:
-                    break
-                if poll < 5:
-                    await asyncio.sleep(2)
-            if not detail_ok:
-                reasons.append(f"could not read PR #{pr_number} mergeability")
-            elif mergeable is not True or mergeable_state == "dirty":
-                reasons.append(f"PR #{pr_number} is not confirmed mergeable: {mergeable_state or mergeable}")
+                if mergeable is not True or mergeable_state == "dirty":
+                    reasons.append(f"PR #{pr_number} is not confirmed mergeable: {mergeable_state or mergeable}")
 
     check_status, check_body = await _github_api_json(
         http,
@@ -1149,9 +1380,11 @@ async def _verify_github_hot_swap_head(
 
 def _break_glass_approval_url(
     session_id: str,
-    repo_slug: str,
+    repo_scope: dict,
+    branch_scope: dict,
     reason: str,
     source: str,
+    *,
     session_scope: str | None = None,
 ) -> str:
     scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
@@ -1159,7 +1392,8 @@ def _break_glass_approval_url(
         "intent": "git-break-glass",
         "session_id": session_id,
         "session_scope": scope,
-        "repo": repo_slug,
+        "repo_scope": json.dumps(repo_scope, separators=(",", ":")),
+        "branch_scope": json.dumps(branch_scope, separators=(",", ":")),
         "source": source,
     }
     if reason:
@@ -1172,15 +1406,13 @@ def _pr_lane_approval_url(session_id: str, request_event_id: str) -> str:
     return f"{TANK_UI_HOST}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
 
 
-async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_slug: str) -> dict | None:
+async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_slug: str = "") -> dict | None:
     if not ORIGIN_SESSION_ID:
         return None
     from urllib.parse import quote
 
-    url = (
-        f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/git-break-glass/grant"
-        f"?repo={quote(repo_slug, safe='')}"
-    )
+    params = f"?repo={quote(repo_slug, safe='')}" if repo_slug else ""
+    url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/git-break-glass/grant{params}"
     async with http.get(url, headers={"Authorization": f"Bearer {service_jwt}"}) as resp:
         body = await resp.text()
         if resp.status == 204 or not body.strip():
@@ -1249,6 +1481,91 @@ def _grant_allows(grant: dict | None, operation: str) -> bool:
     return operation in {str(item) for item in operations}
 
 
+def _grant_branch_allows(grant: dict | None, branch: str) -> bool:
+    if not grant:
+        return False
+    branch_scope = grant.get("branch_scope")
+    if not isinstance(branch_scope, dict):
+        return False
+    kind = str(branch_scope.get("kind") or "").strip()
+    if kind == "unlimited":
+        return True
+    if kind == "named":
+        branches = branch_scope.get("branches")
+        if not isinstance(branches, list) or not branches:
+            return False
+        allowed = {str(item).removeprefix("refs/heads/").strip() for item in branches}
+        return branch.removeprefix("refs/heads/").strip() in allowed
+    if kind == "count":
+        return True
+    return False
+
+
+def _grant_covers_branch_scope(grant: dict | None, requested_scope: dict) -> bool:
+    if not grant:
+        return False
+    grant_scope = grant.get("branch_scope")
+    if not isinstance(grant_scope, dict):
+        return False
+    grant_kind = str(grant_scope.get("kind") or "").strip()
+    requested_kind = str(requested_scope.get("kind") or "").strip()
+    if grant_kind == "unlimited":
+        return True
+    if requested_kind == "unlimited":
+        return False
+    if grant_kind == "named":
+        grant_branches = grant_scope.get("branches")
+        requested_branches = requested_scope.get("branches")
+        if not isinstance(grant_branches, list) or not isinstance(requested_branches, list) or requested_kind != "named":
+            return False
+        allowed = {str(item).removeprefix("refs/heads/").strip() for item in grant_branches if str(item).strip()}
+        return all(str(item).removeprefix("refs/heads/").strip() in allowed for item in requested_branches if str(item).strip())
+    if grant_kind == "count":
+        try:
+            remaining_count = int(grant.get("remaining_branches"))
+        except (TypeError, ValueError):
+            return False
+        if requested_kind == "count":
+            try:
+                requested_count = int(requested_scope.get("count") or 0)
+            except (TypeError, ValueError):
+                return False
+            return remaining_count >= requested_count
+        if requested_kind == "named":
+            requested_branches = requested_scope.get("branches")
+            if not isinstance(requested_branches, list):
+                return False
+            unique_requested = {str(item).removeprefix("refs/heads/").strip() for item in requested_branches if str(item).strip()}
+            return remaining_count >= len(unique_requested)
+    return False
+
+
+def _grant_is_branch_restricted(grant: dict | None) -> bool:
+    if not grant:
+        return False
+    branch_scope = grant.get("branch_scope")
+    return isinstance(branch_scope, dict) and str(branch_scope.get("kind") or "").strip() != "unlimited"
+
+
+def _activation_scope_allows_repo(activation: dict | None, repo_slug: str) -> bool:
+    if not activation:
+        return False
+    repo_scope = activation.get("repo_scope")
+    if not isinstance(repo_scope, dict):
+        return False
+    kind = str(repo_scope.get("kind") or "").strip()
+    if kind == "all_repos":
+        return True
+    if kind == "current_repo":
+        return str(repo_scope.get("repo") or "").strip() == repo_slug
+    if kind == "repos":
+        repos = repo_scope.get("repos")
+        if not isinstance(repos, list):
+            return False
+        return repo_slug in {str(item).strip() for item in repos}
+    return False
+
+
 def _break_glass_activation_path() -> Path:
     return WORKSPACE_ROOT / ".tank" / "git-break-glass-active.json"
 
@@ -1271,6 +1588,8 @@ def _activate_break_glass_mcp_config(repo_slug: str, grant: dict) -> dict:
         "repo": repo_slug,
         "grant_event_id": grant.get("event_id"),
         "expires_at": grant.get("expires_at"),
+        "repo_scope": grant.get("repo_scope") if isinstance(grant.get("repo_scope"), dict) else {},
+        "branch_scope": grant.get("branch_scope") if isinstance(grant.get("branch_scope"), dict) else {},
         "activated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     }
     marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1323,6 +1642,8 @@ def _activate_break_glass_mcp_config(repo_slug: str, grant: dict) -> dict:
         "repo": repo_slug,
         "grant_event_id": grant.get("event_id"),
         "expires_at": grant.get("expires_at"),
+        "repo_scope": grant.get("repo_scope") if isinstance(grant.get("repo_scope"), dict) else {},
+        "branch_scope": grant.get("branch_scope") if isinstance(grant.get("branch_scope"), dict) else {},
         "changed_files": changed,
         "reload_required": True,
     }
@@ -1457,31 +1778,45 @@ async def _github_graphql_json(http: ClientSession, token: str, query: str, vari
         return resp.status, body if isinstance(body, dict) else {"body": body}
 
 
-def _check_run_sort_key(run: dict) -> tuple:
-    # Newer run wins. started_at is ISO8601 (lexically sortable); id breaks ties.
-    return (str(run.get("started_at") or ""), int(run.get("id") or 0))
+def _check_run_recency(run: dict) -> tuple[str, int]:
+    """Sort key for picking the most recent run of a check.
+
+    started_at is ISO8601 (lexically sortable); the GitHub check-run id is a
+    monotonic tiebreaker for runs that share a timestamp.
+    """
+    started = str(run.get("started_at") or run.get("completed_at") or "")
+    try:
+        run_id = int(run.get("id") or 0)
+    except (TypeError, ValueError):
+        run_id = 0
+    return (started, run_id)
 
 
-def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, str, dict]:
-    conclusions_ok = {"success", "skipped", "neutral"}
-    # Dedup to the latest run per check name. GitHub returns every run for the
-    # sha, including superseded re-runs; the authoritative state (matching
-    # GitHub's own mergeable_state) is the latest run per name. Without this, a
-    # check that failed then passed — e.g. check-pr-body, which fails on every
-    # session PR until its body is filled — leaves a permanent superseded
-    # failure that false-blocks hot-swap and merge.
+def _latest_check_runs(check_runs: list) -> list:
+    """Reduce check runs to the most recent run per check name.
+
+    GitHub retains every run for a commit, including stale runs from an earlier
+    attempt. Branch protection evaluates the latest run per name; Tank must too,
+    or a check re-run from failure -> success still reads as failed and blocks
+    the governed merge/hot-swap gate forever.
+    """
     latest: dict[str, dict] = {}
     for run in check_runs:
         if not isinstance(run, dict):
             continue
         name = str(run.get("name") or run.get("app", {}).get("slug") or "check")
-        if name not in latest or _check_run_sort_key(run) >= _check_run_sort_key(latest[name]):
+        existing = latest.get(name)
+        if existing is None or _check_run_recency(run) >= _check_run_recency(existing):
             latest[name] = run
-    check_runs = list(latest.values())
+    return list(latest.values())
+
+
+def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, str, dict]:
+    conclusions_ok = {"success", "skipped", "neutral"}
     failed: list[str] = []
     pending: list[str] = []
     completed = 0
-    for run in check_runs:
+    for run in _latest_check_runs(check_runs):
         if not isinstance(run, dict):
             continue
         name = str(run.get("name") or run.get("app", {}).get("slug") or "check")
@@ -1584,6 +1919,21 @@ async def _watch_published_commit(
                     mergeable = pr.get("mergeable")
                     mergeable_state = str(pr.get("mergeable_state") or "")
                     pr_url = str(pr.get("html_url") or f"https://github.com/{owner}/{repo}/pull/{pr_number}")
+                    # The /pulls?head= list endpoint returns mergeable=null;
+                    # GitHub only computes mergeability on the single-PR GET, so
+                    # fetch it (otherwise the recorded observation is stuck
+                    # "unknown" forever and the governed merge gate never opens).
+                    if pr_number is not None:
+                        detail_status, detail_body = await _github_api_json(
+                            http,
+                            github_token,
+                            "GET",
+                            f"/repos/{owner}/{repo}/pulls/{pr_number}",
+                        )
+                        if detail_status < 400 and isinstance(detail_body, dict):
+                            mergeable = detail_body.get("mergeable")
+                            mergeable_state = str(detail_body.get("mergeable_state") or "")
+                            pr_url = str(detail_body.get("html_url") or pr_url)
                     merge_status = "started"
                     merge_error = "mergeability is still unknown"
                     if mergeable is True and mergeable_state not in {"dirty", "blocked"}:
@@ -2179,6 +2529,223 @@ async def _handle_tank_rename_pr_tool(
         )
 
 
+# GitHub caps issue/PR bodies at 65536 characters.
+_GITHUB_PR_BODY_MAX = 65536
+
+
+def _feature_contracts_body_status(body: str) -> tuple[bool, list[str]]:
+    """Advisory preview of the check-pr-body result for a PR body.
+
+    Mirrors `.github/workflows/pr-feature-contracts.yml` so
+    `update_current_session_pr_body` can tell the caller whether the body it
+    just set will satisfy the `check-pr-body` status check, without waiting for
+    a CI round-trip. This is advisory only; the GitHub workflow remains the
+    authoritative gate. Keep this in sync with that workflow.
+    """
+    text = body or ""
+    missing: list[str] = []
+    for marker in ("## Feature Contracts", "Affected contracts:", "Evidence:"):
+        if marker not in text:
+            missing.append(f"missing required marker {marker!r}")
+    affected_match = re.search(r"Affected contracts:\s*([\s\S]*?)\n\s*Evidence:", text, re.IGNORECASE)
+    affected = affected_match.group(1) if affected_match else ""
+    evidence_match = re.search(r"Evidence:\s*([\s\S]*)", text, re.IGNORECASE)
+    evidence = evidence_match.group(1) if evidence_match else ""
+    if not re.search(r"- \[[xX]\] ", affected):
+        missing.append("no affected contract is checked; use '- [x]', including None when no contract applies")
+    evidence_lines = [
+        line.strip()
+        for line in re.split(r"\r?\n", evidence)
+        if line.strip() and line.strip() != "-" and not line.strip().startswith("<!--")
+    ]
+    if not evidence_lines:
+        missing.append("Evidence section has no concrete text")
+    return (not missing, missing)
+
+
+async def _handle_tank_update_pr_body_tool(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    arguments: dict,
+) -> web.Response:
+    invocation_id = f"tank-update-pr-body-{uuid4().hex}"
+    service_token = ""
+    headers: dict[str, str] = {}
+    owner = ""
+    repo = ""
+    repo_slug = ""
+    branch = ""
+    sha = ""
+    pr_number: int | None = None
+    pr_url = ""
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for governed PR body update")
+        body_text = str(arguments.get("body") or "")
+        if not body_text.strip():
+            raise ValueError("body is required")
+        if len(body_text) > _GITHUB_PR_BODY_MAX:
+            raise ValueError(f"body must be {_GITHUB_PR_BODY_MAX} characters or fewer")
+        contracts_ready, contracts_missing = _feature_contracts_body_status(body_text)
+        repo_path = _repo_path_from_arguments(arguments)
+        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
+        if not git_dir:
+            raise ValueError(f"{repo_path} is not a git repository")
+        branch = await _git_output(repo_path, "branch", "--show-current")
+        if not branch:
+            raise ValueError("current repo is detached; checkout the Tank session branch before updating its PR body")
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
+        owner, repo = slug
+        repo_slug = f"{owner}/{repo}"
+        requested_repo = str(arguments.get("repo") or "").strip()
+        if requested_repo and requested_repo != repo_slug:
+            raise ValueError(f"repo argument {requested_repo!r} does not match origin {repo_slug}")
+        if not _is_tank_session_branch(branch, repo):
+            raise ValueError(f"current branch is {branch!r}; expected Tank session branch {_default_tank_session_branch(repo)!r} or one of its approved lanes")
+        sha = await _git_output(repo_path, "rev-parse", "HEAD")
+
+        raw_pr_number = arguments.get("pr_number")
+        requested_pr_number: int | None = None
+        if raw_pr_number not in (None, ""):
+            try:
+                requested_pr_number = int(raw_pr_number)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("pr_number must be an integer") from exc
+            if requested_pr_number <= 0:
+                raise ValueError("pr_number must be positive")
+
+        service_token = await auth_romaine_provider.token()
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        github_token = await _mint_github_installation_token(http, service_token, repo_slug, full=True)
+        head = quote(f"{owner}:{branch}", safe="")
+        pr_status, pr_body = await _github_api_json(
+            http,
+            github_token,
+            "GET",
+            f"/repos/{owner}/{repo}/pulls?head={head}&state=open",
+        )
+        if pr_status >= 400 or not isinstance(pr_body, list) or not pr_body:
+            raise ValueError(f"no open PR exists for {owner}:{branch}")
+        pr = pr_body[0] if isinstance(pr_body[0], dict) else {}
+        pr_number = int(pr.get("number") or 0) or None
+        pr_url = str(pr.get("html_url") or "")
+        if pr_number is None:
+            raise ValueError("open PR response did not include a PR number")
+        if requested_pr_number is not None and pr_number != requested_pr_number:
+            raise ValueError(f"requested PR #{requested_pr_number} does not match governed branch PR #{pr_number}")
+        pr_head = pr.get("head")
+        pr_head_ref = str(pr_head.get("ref") or "") if isinstance(pr_head, dict) else ""
+        if pr_head_ref and pr_head_ref != branch:
+            raise ValueError(f"PR #{pr_number} head branch is {pr_head_ref!r}, not local branch {branch!r}")
+
+        # The governed ledger payload must stay under the backend's 16 KiB
+        # control-action cap, so record body metadata (length + contract
+        # readiness) rather than the full body text.
+        started_payload = {
+            "event_id": f"tank-update-pr-body-start-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+            "invocation_id": invocation_id,
+            "source_service": "mcp-tank-operator",
+            "source_tool": _TANK_UPDATE_PR_BODY_TOOL,
+            "action": "github.pull_request.update_body",
+            "status": "started",
+            "target_kind": "github_pull_request",
+            "target_ref": pr_url or f"https://github.com/{repo_slug}/pull/{pr_number}",
+            "repo_owner": owner,
+            "repo_name": repo,
+            "pr_number": pr_number,
+            "result_sha": sha,
+            "payload": {
+                "branch": branch,
+                "body_length": len(body_text),
+                "feature_contracts_ready": contracts_ready,
+            },
+        }
+        await _post_tank_control_action(http, headers, started_payload)
+        update_status, update_body = await _github_api_json(
+            http,
+            github_token,
+            "PATCH",
+            f"/repos/{owner}/{repo}/issues/{pr_number}",
+            json_body={"body": body_text},
+        )
+        if update_status >= 400 or not isinstance(update_body, dict):
+            raise RuntimeError(f"GitHub PR body update failed with HTTP {update_status}: {update_body!r}")
+        pr_url = str(update_body.get("html_url") or pr_url or f"https://github.com/{repo_slug}/pull/{pr_number}")
+        await _post_tank_control_action(
+            http,
+            headers,
+            started_payload
+            | {
+                "event_id": f"tank-update-pr-body-succeeded-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "status": "succeeded",
+                "target_ref": pr_url,
+            },
+        )
+        if contracts_ready:
+            contracts_line = "Feature Contracts: ready for check-pr-body."
+        else:
+            contracts_line = "Feature Contracts: NOT ready for check-pr-body -> " + "; ".join(contracts_missing)
+        text = (
+            f"Updated governed PR #{pr_number} body for {repo_slug}.\n"
+            f"Branch: {branch}\n"
+            f"Body length: {len(body_text)} characters\n"
+            f"{contracts_line}\n"
+            f"PR: {pr_url}"
+        )
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": text}],
+                "structuredContent": {
+                    "repo": repo_slug,
+                    "branch": branch,
+                    "sha": sha,
+                    "pr_number": pr_number,
+                    "pr_url": pr_url,
+                    "body_length": len(body_text),
+                    "feature_contracts_ready": contracts_ready,
+                    "feature_contracts_missing": contracts_missing,
+                },
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank update_current_session_pr_body failed", exc_info=True)
+        if service_token and owner and repo:
+            try:
+                await _post_tank_control_action(
+                    http,
+                    headers or {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
+                    {
+                        "event_id": f"tank-update-pr-body-failed-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                        "invocation_id": invocation_id,
+                        "source_service": "mcp-tank-operator",
+                        "source_tool": _TANK_UPDATE_PR_BODY_TOOL,
+                        "action": "github.pull_request.update_body",
+                        "status": "failed",
+                        "target_kind": "github_pull_request" if pr_url else "github_repository",
+                        "target_ref": pr_url or f"https://github.com/{owner}/{repo}",
+                        "repo_owner": owner,
+                        "repo_name": repo,
+                        "pr_number": pr_number,
+                        "result_sha": sha,
+                        "error": str(exc),
+                        "payload": {"branch": branch, "repo_path": str(arguments.get("repo_path") or "")},
+                    },
+                )
+            except Exception:
+                log.warning("failed to record governed PR body update failure", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32017,
+            str(exc),
+            {"tool": _TANK_UPDATE_PR_BODY_TOOL, "invocation_id": invocation_id},
+        )
+
+
 async def _prepare_glimmung_hot_swap_call(
     http: ClientSession,
     auth_romaine_provider,
@@ -2285,28 +2852,32 @@ async def _handle_tank_break_glass_tool(
     try:
         if not ORIGIN_SESSION_ID:
             raise ValueError("SESSION_ID is required for Tank break-glass requests")
-        repo_slug = str(arguments.get("repo") or "").strip()
-        repo_path = None
-        if repo_slug:
-            if "/" not in repo_slug:
-                raise ValueError("repo must be a GitHub slug like owner/name")
-        else:
-            repo_path = _repo_path_from_arguments(arguments)
-            remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
-            slug = _repo_slug_from_remote(remote_url)
-            if slug is None:
-                raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
-            repo_slug = f"{slug[0]}/{slug[1]}"
-
+        repo_scope, repo_slug, requested_repos, repo_path = await _repo_scope_from_arguments(arguments)
+        branch_scope = _branch_scope_from_arguments(arguments)
         reason = str(arguments.get("reason") or "").strip()
+        if not reason:
+            raise ValueError("reason is required")
         if len(reason) > 400:
             reason = reason[:400]
         source = str(arguments.get("source") or "agent").strip() or "agent"
-        owner, repo = repo_slug.split("/", 1)
+        owner, repo = repo_slug.split("/", 1) if repo_slug else ("", "")
         service_token = await auth_romaine_provider.token()
         grant = await _active_break_glass_grant(http, service_token, repo_slug)
+        if grant and not _grant_covers_branch_scope(grant, branch_scope):
+            grant = None
         activation = _activate_break_glass_mcp_config(repo_slug, grant) if grant else None
-        approval_url = _break_glass_approval_url(ORIGIN_SESSION_ID, repo_slug, reason, source)
+        approval_url = _break_glass_approval_url(
+            ORIGIN_SESSION_ID,
+            repo_scope,
+            branch_scope,
+            reason,
+            source,
+        )
+        target_ref = f"https://github.com/{repo_slug}"
+        if repo_scope.get("kind") == "all_repos":
+            target_ref = f"tank://session/{ORIGIN_SESSION_ID}/git-break-glass/all-repos"
+        elif repo_scope.get("kind") == "repos":
+            target_ref = f"tank://session/{ORIGIN_SESSION_ID}/git-break-glass/repos"
         await _post_tank_control_action(
             http,
             {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
@@ -2318,13 +2889,15 @@ async def _handle_tank_break_glass_tool(
                 "action": "github.break_glass.request",
                 "status": "started",
                 "target_kind": "github_repository",
-                "target_ref": f"https://github.com/{repo_slug}",
+                "target_ref": target_ref,
                 "repo_owner": owner,
                 "repo_name": repo,
                 "payload": {
                     "approval_url": approval_url,
                     "reason": reason,
                     "source": source,
+                    "repo_scope": repo_scope,
+                    "branch_scope": branch_scope,
                     "repo_path": str(repo_path) if repo_path is not None else "",
                 },
             },
@@ -2337,7 +2910,8 @@ async def _handle_tank_break_glass_tool(
                 "Reload or restart the agent MCP registry before using the new server if it does not appear automatically."
             )
             structured = {
-                "repo": repo_slug,
+                "repo_scope": repo_scope,
+                "branch_scope": branch_scope,
                 "status": "approved",
                 "approval_url": approval_url,
                 "privileged_tools_visible": True,
@@ -2352,7 +2926,8 @@ async def _handle_tank_break_glass_tool(
                 "GitHub writes."
             )
             structured = {
-                "repo": repo_slug,
+                "repo_scope": repo_scope,
+                "branch_scope": branch_scope,
                 "approval_url": approval_url,
                 "status": "approval_required",
                 "privileged_tools_visible": False,
@@ -2384,45 +2959,16 @@ async def _handle_tank_pr_lane_tool(
     try:
         if not ORIGIN_SESSION_ID:
             raise ValueError("SESSION_ID is required for Tank PR lane requests")
-        repo_slug = str(arguments.get("repo") or "").strip()
-        repo_path = None
-        if repo_slug:
-            if "/" not in repo_slug:
-                raise ValueError("repo must be a GitHub slug like owner/name")
-        else:
-            repo_path = _repo_path_from_arguments(arguments)
-            remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
-            slug = _repo_slug_from_remote(remote_url)
-            if slug is None:
-                raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
-            repo_slug = f"{slug[0]}/{slug[1]}"
-
+        repo_scope, repo_slug, requested_repos, repo_path = await _repo_scope_from_arguments(arguments)
         lane_name = _sanitize_pr_lane_name(arguments.get("lane_name"))
-        raw_lane_names = arguments.get("lane_names") or []
-        if isinstance(raw_lane_names, str):
-            raw_lane_names = [raw_lane_names]
-        if not isinstance(raw_lane_names, list):
-            raise ValueError("lane_names must be an array of strings")
-        lane_names = []
-        for value in raw_lane_names:
-            sanitized = _sanitize_pr_lane_name(value)
-            if sanitized and sanitized not in lane_names:
-                lane_names.append(sanitized)
-        requested_count = 0
-        if arguments.get("requested_count") not in (None, ""):
-            try:
-                requested_count = int(arguments.get("requested_count") or 0)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("requested_count must be an integer") from exc
-            if requested_count < 0:
-                raise ValueError("requested_count must be non-negative")
-        unlimited = bool(arguments.get("unlimited"))
-        allocation_request = not lane_name and (bool(lane_names) or requested_count > 0 or unlimited)
+        branch_scope = _branch_scope_from_arguments(arguments) if not lane_name else None
+        allocation_request = not lane_name
         if not lane_name and not allocation_request:
-            raise ValueError("lane_name is required unless lane_names, requested_count, or unlimited requests an allocation")
+            raise ValueError("lane_name or branch_scope is required")
+        if not allocation_request and repo_scope.get("kind") != "current_repo":
+            raise ValueError("multi-repo PR lane requests must be allocation requests")
         if len(lane_name) > 64:
             lane_name = lane_name[:64].strip("-._")
-        lane_names = [name[:64].strip("-._") for name in lane_names if name[:64].strip("-._")]
         relationship = str(arguments.get("relationship") or ("parallel" if allocation_request else "")).strip().lower()
         if not allocation_request and relationship not in {"parallel", "stacked", "followup"}:
             raise ValueError("relationship must be one of parallel, stacked, or followup")
@@ -2440,11 +2986,23 @@ async def _handle_tank_pr_lane_tool(
         if len(base) > 200:
             base = base[:200]
 
-        owner, repo = repo_slug.split("/", 1)
+        owner, repo = repo_slug.split("/", 1) if repo_slug and repo_scope.get("kind") == "current_repo" else ("", "")
         service_token = await auth_romaine_provider.token()
         if allocation_request:
-            proposed_branches = [f"tank/session/{ORIGIN_SESSION_ID}/{repo}/{name}" for name in lane_names]
+            lane_names = branch_scope.get("branches", []) if branch_scope and branch_scope.get("kind") == "named" else []
+            requested_count = branch_scope.get("count", 0) if branch_scope and branch_scope.get("kind") == "count" else 0
+            unlimited = bool(branch_scope and branch_scope.get("kind") == "unlimited")
+            proposed_branches = (
+                [f"tank/session/{ORIGIN_SESSION_ID}/{repo}/{name}" for name in lane_names]
+                if repo
+                else []
+            )
             event_id = f"tank-pr-lane-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
+            target_ref = f"https://github.com/{repo_slug}"
+            if repo_scope.get("kind") == "all_repos":
+                target_ref = f"tank://session/{ORIGIN_SESSION_ID}/pr-lanes/all-repos"
+            elif repo_scope.get("kind") == "repos":
+                target_ref = f"tank://session/{ORIGIN_SESSION_ID}/pr-lanes/repos"
             await _post_tank_control_action(
                 http,
                 {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
@@ -2456,15 +3014,13 @@ async def _handle_tank_pr_lane_tool(
                     "action": "github.pr_lane.request",
                     "status": "started",
                     "target_kind": "github_repository",
-                    "target_ref": f"https://github.com/{repo_slug}",
+                    "target_ref": target_ref,
                     "repo_owner": owner,
                     "repo_name": repo,
                     "payload": {
                         "allocation_request": True,
-                        "lane_names": lane_names,
-                        "proposed_branches": proposed_branches,
-                        "requested_count": requested_count,
-                        "unlimited": unlimited,
+                        "repo_scope": repo_scope,
+                        "branch_scope": branch_scope,
                         "relationship": relationship,
                         "base": base,
                         "scope": scope,
@@ -2480,8 +3036,9 @@ async def _handle_tank_pr_lane_tool(
                 allocation_text = f"{len(lane_names)} named governed PR lane{'s' if len(lane_names) != 1 else ''}"
             else:
                 allocation_text = f"{requested_count} governed PR lane{'s' if requested_count != 1 else ''}"
+            repo_text = "all repos" if repo_scope.get("kind") == "all_repos" else ", ".join(requested_repos)
             text = (
-                f"PR lane allocation request recorded for {repo_slug}: {allocation_text}.\n"
+                f"PR lane allocation request recorded for {repo_text}: {allocation_text}.\n"
                 f"Approval URL: {approval_url}"
             )
             return _mcp_result_response(
@@ -2490,12 +3047,9 @@ async def _handle_tank_pr_lane_tool(
                     "content": [{"type": "text", "text": text}],
                     "structuredContent": {
                         "request_event_id": event_id,
-                        "repo": repo_slug,
+                        "repo_scope": repo_scope,
+                        "branch_scope": branch_scope,
                         "allocation_request": True,
-                        "lane_names": lane_names,
-                        "proposed_branches": proposed_branches,
-                        "requested_count": requested_count,
-                        "unlimited": unlimited,
                         "relationship": relationship,
                         "base": base,
                         "scope": scope,
@@ -2895,6 +3449,13 @@ async def _handle_break_glass_mint_token(http: ClientSession, auth_romaine_provi
     grant = await _active_break_glass_grant(http, service_token, repo_slug)
     if not _grant_allows(grant, _BREAK_GLASS_MINT_TOKEN_TOOL):
         return _mcp_error_response(request_id, -32020, "no active break-glass grant allows mint_full_git_token", {"repo": repo_slug})
+    if _grant_is_branch_restricted(grant):
+        return _mcp_error_response(
+            request_id,
+            -32020,
+            "active break-glass grant is branch-scoped; use push_current_head so Tank can enforce the branch scope",
+            {"repo": repo_slug, "grant_event_id": grant.get("event_id")},
+        )
     workflows = bool(arguments.get("workflows"))
     try:
         token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows, full=True)
@@ -2971,6 +3532,13 @@ async def _handle_break_glass_push_head(http: ClientSession, auth_romaine_provid
     grant = await _active_break_glass_grant(http, service_token, repo_slug)
     if not _grant_allows(grant, _BREAK_GLASS_PUSH_HEAD_TOOL):
         return _mcp_error_response(request_id, -32020, "no active break-glass grant allows push_current_head", {"repo": repo_slug})
+    if not _grant_branch_allows(grant, branch):
+        return _mcp_error_response(
+            request_id,
+            -32020,
+            f"active break-glass grant does not allow branch {branch}",
+            {"repo": repo_slug, "branch": branch},
+        )
     try:
         token = await _mint_github_installation_token(http, service_token, repo_slug)
         await _push_head_with_token(repo_path, branch, token)
@@ -3052,9 +3620,9 @@ async def _handle_break_glass_mcp(
         method, params, request_id = parsed
         if method == "tools/list":
             activation = _read_break_glass_activation()
-            repo_slug = str((activation or {}).get("repo") or "")
-            if not repo_slug:
+            if not activation:
                 return _mcp_result_response(request_id, {"tools": []})
+            repo_slug = str(activation.get("repo") or "")
             service_token = await auth_romaine_provider.token()
             grant = await _active_break_glass_grant(http, service_token, repo_slug)
             if not grant:
@@ -3063,26 +3631,36 @@ async def _handle_break_glass_mcp(
         if method != "tools/call":
             return _mcp_error_response(request_id, -32601, f"unsupported method {method}")
         activation = _read_break_glass_activation()
-        activated_repo = str((activation or {}).get("repo") or "")
-        if not activated_repo:
+        if not activation:
             return _mcp_error_response(
                 request_id,
                 -32022,
                 "break-glass MCP is not activated; call request_git_break_glass after approval",
             )
+        activated_repo = str(activation.get("repo") or "")
         name = params.get("name")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
             return _mcp_error_response(request_id, -32602, "arguments must be an object")
         if name == _BREAK_GLASS_MINT_TOKEN_TOOL:
-            if str(arguments.get("repo") or "").strip() != activated_repo:
-                return _mcp_error_response(request_id, -32602, f"repo must match activated break-glass repo {activated_repo}")
+            requested_repo = str(arguments.get("repo") or "").strip()
+            if not requested_repo:
+                if not activated_repo:
+                    return _mcp_error_response(request_id, -32602, "repo is required for this all-repos break-glass activation")
+                arguments = {**arguments, "repo": activated_repo}
+                requested_repo = activated_repo
+            if not _activation_scope_allows_repo(activation, requested_repo):
+                return _mcp_error_response(request_id, -32602, f"repo is outside activated break-glass scope")
             return await _handle_break_glass_mint_token(http, auth_romaine_provider, request_id, arguments)
         if name == _BREAK_GLASS_PUSH_HEAD_TOOL:
-            if not arguments.get("repo"):
+            requested_repo = str(arguments.get("repo") or "").strip()
+            if not requested_repo and not arguments.get("repo_path"):
+                if not activated_repo:
+                    return _mcp_error_response(request_id, -32602, "repo or repo_path is required for this all-repos break-glass activation")
                 arguments = {**arguments, "repo": activated_repo}
-            elif str(arguments.get("repo") or "").strip() != activated_repo:
-                return _mcp_error_response(request_id, -32602, f"repo must match activated break-glass repo {activated_repo}")
+                requested_repo = activated_repo
+            if requested_repo and not _activation_scope_allows_repo(activation, requested_repo):
+                return _mcp_error_response(request_id, -32602, f"repo is outside activated break-glass scope")
             return await _handle_break_glass_push_head(http, auth_romaine_provider, request_id, arguments)
         return _mcp_error_response(request_id, -32601, f"unknown break-glass tool {name}")
     except Exception as exc:
@@ -3460,6 +4038,7 @@ def _make_handler(
                 _TANK_CREATE_PR_LANE_TOOL,
                 _TANK_MERGE_TOOL,
                 _TANK_RENAME_PR_TOOL,
+                _TANK_UPDATE_PR_BODY_TOOL,
             }:
                 arguments = params.get("arguments") or {}
                 if not isinstance(arguments, dict):
@@ -3475,6 +4054,8 @@ def _make_handler(
                     return await _handle_tank_merge_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_RENAME_PR_TOOL:
                     return await _handle_tank_rename_pr_tool(http, tank_publish_provider, request_id, arguments)
+                if params.get("name") == _TANK_UPDATE_PR_BODY_TOOL:
+                    return await _handle_tank_update_pr_body_tool(http, tank_publish_provider, request_id, arguments)
                 return await _handle_tank_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
 
         if glimmung_hot_swap_provider is not None and parsed_method is not None:

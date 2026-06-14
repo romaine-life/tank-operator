@@ -12,6 +12,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   AnchorHTMLAttributes,
   ClipboardEvent as ReactClipboardEvent,
@@ -154,6 +155,7 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SettingsIcon,
+  ShieldAlertIcon,
   SquareTerminalIcon,
   SquareIcon,
   SquarePenIcon,
@@ -230,7 +232,9 @@ import {
 import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
+  pendingBreakGlassRequests,
   pendingPRLaneRequests,
+  type BreakGlassRequest,
   type ControlActionRow,
   type ControlActionStatus,
   type PRLaneRequest,
@@ -2368,11 +2372,16 @@ interface ComposerToolButtonsProps {
     disabled?: boolean;
     readyUrl?: string;
     title: string;
-    onClick?: () => void;
-    onReadyClick?: () => void;
+    onCreateHold?: () => void;
+    onCreateAndDrive?: () => void;
+    onOpenReady?: () => void;
   };
   pullRequest: {
-    url?: string;
+    latestUrl?: string;
+    linkedUrl?: string;
+    breakGlass?: {
+      pending: BreakGlassRequest[];
+    };
   };
   slash: {
     disabled?: boolean;
@@ -2390,6 +2399,212 @@ interface ComposerToolButtonsProps {
   modelChip?: ReactNode;
 }
 
+// PullRequestMenuButton turns the composer pull-request icon into a small popup
+// menu instead of a single hard-coded link. It exposes the latest PR the agent
+// opened, the PR explicitly linked to the session (test/rollout), and an
+// in-app "Approve break glass" action. The break-glass entry lights up (amber
+// dot) whenever a `request_git_break_glass` call is awaiting a grant, which
+// replaces the brittle auth.romaine.life approval URL the agent used to hand
+// out (its console callback into Tank does not exist yet, so the URL was a dead
+// end). Self-contained open/outside-click/escape handling mirrors
+// BugLabelPicker so it composes cleanly inside the composer toolbar.
+function PullRequestMenuButton({
+  latestUrl,
+  linkedUrl,
+  breakGlass: breakGlassProp,
+}: ComposerToolButtonsProps["pullRequest"]) {
+  const breakGlass = breakGlassProp ?? {
+    pending: [] as BreakGlassRequest[],
+  };
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  // The popover is portaled to <body> with fixed positioning so it escapes the
+  // composer input-group's `overflow: hidden` + `z-index` stacking context,
+  // which otherwise clips an in-flow absolutely-positioned popover (it opens in
+  // the DOM but renders behind/clipped by the composer). Anchor is the
+  // trigger's viewport rect, recomputed on open / scroll / resize.
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      )
+        return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const latest = latestUrl?.trim() ?? "";
+  const linked = linkedUrl?.trim() ?? "";
+  const showLinkedDistinct = Boolean(linked) && linked !== latest;
+  const pending = breakGlass.pending;
+  const pendingCount = pending.length;
+  const hasLinks = Boolean(latest || linked);
+  const hasMenu = hasLinks || pendingCount > 0;
+  const title =
+    pendingCount > 0
+      ? `Break-glass request awaiting approval (${pendingCount})`
+      : hasLinks
+        ? "Pull request"
+        : "No pull request linked yet";
+
+  return (
+    <span ref={ref} className="run-pr-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}${pendingCount > 0 ? " has-alert" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={!hasMenu}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+        {pendingCount > 0 && (
+          <span className="run-pr-alert-dot" aria-hidden="true" />
+        )}
+      </button>
+      {open && hasMenu &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover"
+            role="menu"
+            aria-label="Pull request actions"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+          <div className="run-slash-palette-label">Pull request</div>
+          {latest ? (
+            <a
+              role="menuitem"
+              className="run-pr-menu-item"
+              href={latest}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setOpen(false)}
+            >
+              <span className="run-pr-menu-name">Latest PR</span>
+              <ExternalLinkIcon className="run-pr-menu-icon" aria-hidden="true" />
+            </a>
+          ) : null}
+          {showLinkedDistinct ? (
+            <a
+              role="menuitem"
+              className="run-pr-menu-item"
+              href={linked}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setOpen(false)}
+            >
+              <span className="run-pr-menu-name">Pull request page</span>
+              <ExternalLinkIcon className="run-pr-menu-icon" aria-hidden="true" />
+            </a>
+          ) : null}
+          {!hasLinks && (
+            <div className="run-slash-empty">No pull request linked yet</div>
+          )}
+          <div className="run-pr-menu-sep" aria-hidden="true" />
+          {pendingCount === 0 ? (
+            <div className="run-slash-empty">No break-glass request pending</div>
+          ) : (
+            pending.map((request) => (
+              // "Approve break glass" is a link to the auth.romaine.life
+              // approval page (payload.approval_url) so the operator can
+              // inspect exactly what the agent requested — repo, session,
+              // reason — and grant there. The grant happens on that page, not
+              // in-app; the chip only surfaces the pending request.
+              <a
+                key={request.eventId}
+                role="menuitem"
+                className="run-pr-menu-item run-pr-menu-breakglass"
+                href={request.approvalUrl || "#"}
+                target="_blank"
+                rel="noreferrer"
+                aria-disabled={request.approvalUrl ? undefined : true}
+                title={
+                  request.reason
+                    ? `${request.repo} — ${request.reason}`
+                    : `Open break-glass approval for ${request.repo}`
+                }
+                onClick={(event) => {
+                  if (!request.approvalUrl) {
+                    event.preventDefault();
+                    return;
+                  }
+                  setOpen(false);
+                }}
+              >
+                <span className="run-pr-menu-name">
+                  <ShieldAlertIcon
+                    className="run-pr-menu-glyph"
+                    size={14}
+                    aria-hidden="true"
+                  />
+                  Approve break glass
+                  <ExternalLinkIcon
+                    className="run-pr-menu-icon"
+                    aria-hidden="true"
+                  />
+                </span>
+                <span className="run-slash-desc">
+                  {request.repo}
+                  {request.reason ? ` — ${request.reason}` : ""}
+                </span>
+              </a>
+            ))
+          )}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 function ComposerToolButtons({
   attach,
   cost,
@@ -2401,7 +2616,6 @@ function ComposerToolButtons({
   bugLabelControl,
   modelChip,
 }: ComposerToolButtonsProps) {
-  const pullRequestURL = pullRequest.url?.trim() || "";
   const testReadyURL = test.readyUrl?.trim() || "";
 
   return (
@@ -2429,66 +2643,69 @@ function ComposerToolButtons({
           <TankIcon className="run-composer-icon" />
         </button>
       )}
-      {testReadyURL ? (
-        <a
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${test.active ? " is-active" : ""}`}
-          href={testReadyURL}
-          target="_blank"
-          rel="noreferrer"
-          onClick={test.onReadyClick}
-          aria-label="Open test environment in new tab"
-          title="Open test environment in new tab"
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
+            disabled={test.disabled}
+            aria-label="Test actions"
+            title={test.title}
+            aria-haspopup="menu"
+          >
+            <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+            {testReadyURL && (
+              <ExternalLinkIcon
+                className="run-test-ready-icon"
+                aria-hidden="true"
+              />
+            )}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          side="top"
+          className="run-test-action-menu"
         >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-          <ExternalLinkIcon
-            className="run-test-ready-icon"
-            aria-hidden="true"
-          />
-        </a>
-      ) : (
-        <button
-          type="button"
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${test.active ? " is-active" : ""}`}
-          onClick={test.onClick}
-          disabled={test.disabled}
-          aria-label="Start test skill"
-          title={test.title}
-        >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-        </button>
-      )}
-      {pullRequestURL ? (
-        <a
-          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
-          href={pullRequestURL}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Open pull request in new tab"
-          title="Open pull request in new tab"
-        >
-          <GitPullRequestIcon
-            className="run-composer-icon"
-            aria-hidden="true"
-          />
-          <ExternalLinkIcon
-            className="run-test-ready-icon"
-            aria-hidden="true"
-          />
-        </a>
-      ) : (
-        <button
-          type="button"
-          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn"
-          disabled
-          aria-label="Pull request link unavailable"
-          title="No pull request linked yet"
-        >
-          <GitPullRequestIcon
-            className="run-composer-icon"
-            aria-hidden="true"
-          />
-        </button>
-      )}
+          <DropdownMenuItem
+            className="run-test-action-menu-item"
+            onSelect={test.onCreateHold}
+          >
+            <FlaskConicalIcon aria-hidden="true" />
+            <span>Create slot and hold</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="run-test-action-menu-item"
+            onSelect={test.onCreateAndDrive}
+          >
+            <PlayIcon aria-hidden="true" />
+            <span>Create slot and run test</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="run-test-action-menu-separator" />
+          {testReadyURL ? (
+            <DropdownMenuItem className="run-test-action-menu-item" asChild>
+              <a
+                href={testReadyURL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={test.onOpenReady}
+              >
+                <ExternalLinkIcon aria-hidden="true" />
+                <span>Open test slot</span>
+              </a>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              className="run-test-action-menu-item"
+              disabled
+            >
+              <ExternalLinkIcon aria-hidden="true" />
+              <span>Open test slot</span>
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <PullRequestMenuButton {...pullRequest} />
       {bugLabelControl}
       <button
         type="button"
@@ -7503,7 +7720,7 @@ function RunMessageBubble({
       ? ((entry as Record<string, unknown>).skillSupplementalText as string)
       : (durableSkillDisplay?.supplemental_text ?? "");
   const skillActionIcon =
-    skillName === "test"
+    skillName === "test" || skillName === "test-drive"
       ? FlaskConicalIcon
       : skillName === "rollout"
         ? TankIcon
@@ -7935,6 +8152,66 @@ function RunMetaBlock({
               <pre className="run-meta-detail">{prettyDetail ?? detail}</pre>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// RunQuestionHeadingMessage renders the Turns-view question page's
+// "Question N of M" heading as a system-user message rather than an orphaned
+// banner pinned above the column. AskUserQuestion is the session's system
+// identity asking the user to choose; like session.status banners, RunMetaBlock
+// status lines, and the background-wake prompt that lands "when the timer goes
+// off", it speaks through the shared system-avatar message frame instead of
+// floating in the transcript with no author. See
+// docs/features/transcript/contract.md.
+function RunQuestionHeadingMessage({
+  systemAvatar,
+  answered,
+  questionIndex,
+  questionCount,
+}: {
+  systemAvatar: AgentAvatar | null;
+  answered: boolean;
+  questionIndex?: number;
+  questionCount?: number;
+}) {
+  const hasPosition =
+    typeof questionIndex === "number" && typeof questionCount === "number";
+  const label =
+    !hasPosition && (questionCount ?? 0) > 1 ? "Questions" : "Question";
+  const counter = hasPosition ? `${questionIndex} of ${questionCount}` : null;
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="system"
+      data-role="system"
+      data-kind="question-heading"
+      data-answered={answered ? "true" : "false"}
+    >
+      <span
+        className="run-msg-system-avatar"
+        aria-hidden={systemAvatar ? undefined : "true"}
+      >
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+        ) : (
+          <BotIcon size={16} strokeWidth={2.1} />
+        )}
+      </span>
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <div className="run-transcript-message-text" data-slot="message-text">
+          <span className="run-question-heading">
+            <span className="run-question-heading-label">{label}</span>
+            {counter && (
+              <span className="run-question-heading-count">{counter}</span>
+            )}
+          </span>
         </div>
       </div>
     </div>
@@ -9245,6 +9522,11 @@ function PRLaneApprovalIndicator({
           <div className="pr-lane-approval-list">
             {requests.map((request) => {
               const busy = busyEventId === request.eventId;
+              const repoScope = request.allRepos
+                ? "all repos"
+                : request.repos && request.repos.length > 1
+                  ? request.repos.join(", ")
+                  : request.repo;
               return (
                 <div className="pr-lane-approval-item" key={request.eventId}>
                   <div className="pr-lane-approval-main">
@@ -9262,7 +9544,7 @@ function PRLaneApprovalIndicator({
                               : `${request.laneNames?.length || request.proposedBranches?.length || 0} named branches`
                           : request.relationship,
                         request.base ? `from ${request.base}` : "",
-                        request.repo,
+                        repoScope,
                       ]
                         .filter(Boolean)
                         .join(" · ")}
@@ -12764,27 +13046,6 @@ function RunTurnActivityScreen({
               )}
             </div>
           )}
-          {selectedPageInfo?.kind === "question" && (
-            <div
-              className="run-turn-question-page-head"
-              data-answered={selectedPageInfo.answered ? "true" : "false"}
-            >
-              <span className="run-turn-question-page-title">
-                {selectedPageInfo.questionCount &&
-                selectedPageInfo.questionCount > 1
-                  ? "Questions"
-                  : "Question"}
-              </span>
-              <span className="run-turn-question-page-count">
-                {selectedPageInfo.questionIndex &&
-                selectedPageInfo.questionCount
-                  ? `Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}`
-                  : selectedPageInfo.questionCount
-                    ? plural(selectedPageInfo.questionCount, "question")
-                    : "Question"}
-              </span>
-            </div>
-          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             data-page-kind={selectedPageInfo?.kind ?? "activity"}
@@ -12792,6 +13053,14 @@ function RunTurnActivityScreen({
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
+            {selectedPageInfo?.kind === "question" && (
+              <RunQuestionHeadingMessage
+                systemAvatar={systemAvatar}
+                answered={selectedPageInfo.answered ?? false}
+                questionIndex={selectedPageInfo.questionIndex}
+                questionCount={selectedPageInfo.questionCount}
+              />
+            )}
             {selected && refreshProblem ? (
               <div className="run-turn-view-alert" role="alert">
                 <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />
@@ -15459,6 +15728,10 @@ function ChatPane({
     () => pendingPRLaneRequests(controlActionRows),
     [controlActionRows],
   );
+  const breakGlassRequests = useMemo(
+    () => pendingBreakGlassRequests(controlActionRows),
+    [controlActionRows],
+  );
   const postPRLaneDecision = useCallback(
     async (
       request: PRLaneRequest,
@@ -15478,14 +15751,14 @@ function ChatPane({
                 note: override
                   ? `agent-requested allocation approved with ${override} override`
                   : "agent-requested allocation approved",
-                branch_names: override === "count" || override === "unlimited" ? [] : requestedBranches,
-                limit:
-                  override === "count"
-                    ? 10
-                    : override === "listed"
-                      ? requestedBranches.length
-                      : request.requestedCount ?? 0,
-                unlimited: override === "unlimited" || (override === undefined && request.unlimited === true),
+                branch_scope:
+                  override === "unlimited" || (override === undefined && request.unlimited === true)
+                    ? { kind: "unlimited" }
+                    : override === "count"
+                      ? { kind: "count", count: 10 }
+                      : requestedBranches.length > 0
+                        ? { kind: "named", branches: requestedBranches }
+                        : { kind: "count", count: request.requestedCount ?? 10 },
               }
             : {};
         await authedFetch(
@@ -18957,7 +19230,7 @@ function ChatPane({
     });
   }
 
-  function startTestSkill() {
+  function startTestSkill(skillName = "test") {
     if (session.status !== "Active") return;
     const promptText = getComposerValue().trim();
     const composed = composePromptWithAttachments(promptText);
@@ -18974,7 +19247,7 @@ function ChatPane({
         ),
       );
     });
-    submitSkillInvocation("test", composed.prompt);
+    submitSkillInvocation(skillName, composed.prompt);
   }
 
   function startGuiRollout() {
@@ -20159,10 +20432,11 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const pullRequestURL =
-    agentGitActivity.pullRequests[0]?.href ||
-    testState?.pull_request_url?.trim() ||
-    "";
+  // The composer pull-request menu surfaces two links separately: the latest PR
+  // the agent opened (derived from control-action git activity) and the PR
+  // explicitly linked to the session via set_pull_request_link (test/rollout).
+  const latestPullRequestURL = agentGitActivity.pullRequests[0]?.href ?? "";
+  const linkedPullRequestURL = testState?.pull_request_url?.trim() ?? "";
   const sessionDataRows = useMemo(
     () =>
       buildSessionDataStatusRows({
@@ -21739,17 +22013,24 @@ function ChatPane({
                 test={{
                   active: testActionActive,
                   readyUrl: testState?.active ? testState.url?.trim() : "",
-                  onReadyClick: () => {
+                  onOpenReady: () => {
                     if (testState)
                       void markTestState({ ...testState, active: true });
                   },
-                  onClick: startTestSkill,
+                  onCreateHold: () => startTestSkill("test"),
+                  onCreateAndDrive: () => startTestSkill("test-drive"),
                   disabled: !ready,
                   title: testState?.active
-                    ? "Test skill is active"
-                    : "Use the test skill",
+                    ? "Choose a test action"
+                    : "Start a test workflow",
                 }}
-                pullRequest={{ url: pullRequestURL }}
+                pullRequest={{
+                  latestUrl: latestPullRequestURL,
+                  linkedUrl: linkedPullRequestURL,
+                  breakGlass: {
+                    pending: breakGlassRequests,
+                  },
+                }}
                 slash={{
                   title: "Show slash commands",
                   count: slashCommands.length,
@@ -26316,7 +26597,7 @@ function AuthenticatedApp() {
                       title: "Use /rollout once your session starts",
                     }}
                     test={{
-                      onClick: () => {
+                      onCreateHold: () => {
                         void createSession(
                           defaultSessionMode,
                           homeComposerText.trim() || undefined,

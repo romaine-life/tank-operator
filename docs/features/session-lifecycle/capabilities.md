@@ -358,6 +358,16 @@ Contract impact:
   reminder-only guidance.
 - Commit publication, CI state, PR creation, and mergeability are durable
   `control_action_events`, so the UI can show PR/commit evidence after reload.
+- The governed PR's title, body, and merge are mutated only through Tank MCP
+  tools — `rename_current_session_pr`, `update_current_session_pr_body`, and
+  `merge_current_session_pr` — each recorded as a `github.pull_request.*`
+  control-action event (`tank_control_action_events_total`).
+  `update_current_session_pr_body` exists because the `check-pr-body` workflow
+  validates the Feature Contracts section in `pull_request.body`, which a
+  restricted-git agent otherwise cannot edit without break-glass (a PR comment
+  does not satisfy the check). The tool writes the full body via the sidecar's
+  governed GitHub token and previews the `check-pr-body` result so the body can
+  be corrected before CI runs.
 
 Open hardening:
 - Network/RBAC policy still needs a dedicated pass if the threat model includes
@@ -376,5 +386,19 @@ Open hardening:
   grant on every list/call, and records token/push use as
   `github.break_glass.token` or `github.break_glass.push`. The auth.romaine.life
   console is expected to approve by calling Tank's internal grant endpoint;
-  until that callback exists in the auth app, operators can exercise the Tank
-  side by creating the same internal grant directly.
+  that callback does not exist in the auth app yet, so the agent-facing approval
+  URL is a dead end in practice.
+- Break-glass approval chip + link (added 2026-06-14). A started
+  `github.break_glass.request` with no unexpired grant for its repo is surfaced
+  as a "chip": the composer pull-request button turns amber with an alert dot,
+  and its popup menu exposes an "Approve break glass" entry. That entry is a
+  link to the request's `payload.approval_url` (the auth.romaine.life admin page
+  carrying the repo / session / reason), opened in a new tab, so the operator
+  inspects exactly what the agent requested and grants there. The grant itself
+  happens on the approval page via the existing internal grant endpoint — the UI
+  never POSTs a grant. The chip surfaces the pending request via
+  `pendingBreakGlassRequests` (frontend, reading `payload.approval_url`). The
+  same popup also separates the two PR links the UI already tracked: the latest
+  PR the agent opened (control-action git activity) and the PR explicitly linked
+  via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
+  positioning so the composer input-group's `overflow: hidden` cannot clip it.

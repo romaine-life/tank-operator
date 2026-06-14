@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Drive"
+  short_description: "Drive a live feature test with evidence"
+  default_prompt: "Use $test-drive to reserve a test slot and validate this feature with Playwright evidence."

@@ -376,6 +376,9 @@ test("question page card stays scrollable when taller than the Turn view", () =>
   // can shrink below content height and actually engage overflow-y:auto.
   expect(cssRule(".run-turn-view-body")).toMatch(/min-height:\s*0;/);
 
-  // The "Question N of M" head is pinned so it stays visible while scrolling.
-  expect(cssRule(".run-turn-question-page-head")).toMatch(/flex:\s*0\s+0\s+auto;/);
+  // The "Question N of M" heading is no longer a pinned orphan banner: it
+  // renders as an in-flow system-user message (data-kind="question-heading")
+  // that scrolls with the question body, so the old pinned-head rule is retired
+  // and must stay retired.
+  expect(indexCssSource.includes(".run-turn-question-page-head")).toBe(false);
 });

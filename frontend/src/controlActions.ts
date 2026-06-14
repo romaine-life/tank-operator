@@ -48,6 +48,8 @@ export type PRLaneRequest = {
   invocationId: string;
   createdAt?: string;
   repo?: string;
+  repos?: string[];
+  allRepos?: boolean;
   laneName: string;
   allocationRequest?: boolean;
   laneNames?: string[];
@@ -59,6 +61,18 @@ export type PRLaneRequest = {
   scope?: string;
   reason?: string;
   proposedBranch?: string;
+};
+
+export type BreakGlassRequest = {
+  eventId: string;
+  invocationId: string;
+  createdAt?: string;
+  repo: string;
+  repoOwner?: string;
+  repoName?: string;
+  reason?: string;
+  source?: string;
+  approvalUrl?: string;
 };
 
 function nonempty(value: unknown): string | undefined {
@@ -206,8 +220,10 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
     }
     const payload = payloadObject(row.payload);
     const allocationRequest = payload.allocation_request === true;
-    const laneNames = Array.isArray(payload.lane_names)
-      ? payload.lane_names.flatMap((value) => {
+    const branchScope = payloadObject(payload.branch_scope);
+    const repoScope = payloadObject(payload.repo_scope);
+    const laneNames = Array.isArray(branchScope.branches)
+      ? branchScope.branches.flatMap((value) => {
           const name = nonempty(value);
           return name ? [name] : [];
         })
@@ -218,11 +234,17 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
           return branch ? [branch] : [];
         })
       : [];
+    const repos = Array.isArray(repoScope.repos)
+      ? repoScope.repos.flatMap((value) => {
+          const repo = nonempty(value);
+          return repo ? [repo] : [];
+        })
+      : [];
     const laneName = nonempty(payload.lane_name) ?? (allocationRequest ? "branch allocation" : undefined);
     if (!laneName) return [];
     const requestedCount =
-      typeof payload.requested_count === "number" && Number.isFinite(payload.requested_count)
-        ? payload.requested_count
+      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
+        ? branchScope.count
         : undefined;
     const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
       .filter(Boolean)
@@ -242,8 +264,68 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
     if (allocationRequest) request.allocationRequest = true;
     if (laneNames.length > 0) request.laneNames = laneNames;
     if (proposedBranches.length > 0) request.proposedBranches = proposedBranches;
-    if (requestedCount !== undefined) request.requestedCount = requestedCount;
-    if (payload.unlimited === true) request.unlimited = true;
+    if (nonempty(repoScope.repo)) request.repo = nonempty(repoScope.repo);
+    if (repos.length > 0) request.repos = repos;
+    if (repoScope.kind === "all_repos") request.allRepos = true;
+    if (branchScope.kind === "count" && requestedCount !== undefined) request.requestedCount = requestedCount;
+    if (branchScope.kind === "unlimited") request.unlimited = true;
     return [request];
   });
+}
+
+// pendingBreakGlassRequests surfaces git break-glass requests that are still
+// awaiting a human grant: a started `github.break_glass.request` whose repo has
+// no unexpired `github.break_glass.grant`. Deduped to the newest request per
+// repo. This is what lights the "approve break glass" chip on the pull-request
+// composer button so an operator can grant from the Tank UI instead of the
+// auth.romaine.life approval URL (whose console callback does not yet exist).
+export function pendingBreakGlassRequests(
+  rows: ControlActionRow[],
+  now: number = Date.now(),
+): BreakGlassRequest[] {
+  const grantedRepos = new Set<string>();
+  for (const row of rows) {
+    if (nonempty(row.action) !== "github.break_glass.grant") continue;
+    if (nonempty(row.status) !== "succeeded") continue;
+    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
+      .filter(Boolean)
+      .join("/");
+    if (!repo) continue;
+    const expiresAt = nonempty(payloadObject(row.payload).expires_at);
+    if (!expiresAt) continue;
+    const expiry = Date.parse(expiresAt);
+    if (Number.isNaN(expiry) || expiry <= now) continue;
+    grantedRepos.add(repo);
+  }
+  const byRepo = new Map<string, BreakGlassRequest>();
+  for (const row of rows) {
+    if (nonempty(row.action) !== "github.break_glass.request") continue;
+    if (nonempty(row.status) !== "started") continue;
+    const eventId = nonempty(row.event_id);
+    const invocationId = nonempty(row.invocation_id);
+    if (!eventId || !invocationId) continue;
+    const repoOwner = nonempty(row.repo_owner);
+    const repoName = nonempty(row.repo_name);
+    const repo = [repoOwner, repoName].filter(Boolean).join("/");
+    if (!repo || grantedRepos.has(repo)) continue;
+    const payload = payloadObject(row.payload);
+    const request: BreakGlassRequest = {
+      eventId,
+      invocationId,
+      createdAt: nonempty(row.created_at),
+      repo,
+      repoOwner,
+      repoName,
+      reason: nonempty(payload.reason),
+      source: nonempty(payload.source),
+      approvalUrl: nonempty(payload.approval_url),
+    };
+    const existing = byRepo.get(repo);
+    if (!existing || (request.createdAt ?? "") > (existing.createdAt ?? "")) {
+      byRepo.set(repo, request);
+    }
+  }
+  return Array.from(byRepo.values()).sort((a, b) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
 }
