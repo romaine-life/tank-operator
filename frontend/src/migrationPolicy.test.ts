@@ -192,11 +192,14 @@ test("stop control waits for durable turn interruption", () => {
 test("AskUserQuestion answers submit a continuation turn via POST /answer", () => {
   // The answer is durably recorded by POST /turns/{askingTurnId}/answer,
   // surfaced as a normal user submission, and delivered to the paused provider
-  // callback as input_reply. There is still no terminal socket path or retired
+  // callback as input_reply. The open Turns question page refreshes its cached
+  // server projection after accept, since turn.input_answered is not itself a
+  // visible transcript row. There is still no terminal socket path or retired
   // /input-reply browser route.
   expect(appSource.includes("sendStdin")).toBe(false);
   expect(appSource.includes("/input-reply")).toBe(false);
   expect(appSource.includes("/answer")).toBe(true);
+  expect(appSource.includes("silentlyRefreshCachedTurnActivity(turnID)")).toBe(true);
 });
 
 // The AskUserQuestion cutover (durable canUseTool resolution) deletes
