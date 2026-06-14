@@ -16,7 +16,9 @@ from mcp_auth_proxy.server import (
     SPIRELENS_MCP_PORT,
     _append_ci_reminder,
     _append_tank_publish_tool,
+    _append_azure_break_glass_tool,
     _break_glass_approval_url,
+    _azure_break_glass_approval_url,
     _activate_break_glass_mcp_config,
     _checks_state,
     _effective_listeners,
@@ -26,6 +28,7 @@ from mcp_auth_proxy.server import (
     _github_tool_block_response,
     _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
+    _handle_tank_azure_break_glass_tool,
     _handle_tank_create_pr_lane_tool,
     _handle_tank_merge_tool,
     _handle_tank_rename_pr_tool,
@@ -939,6 +942,94 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     assert recorded["target_ref"] == "https://github.com/romaine-life/tank-operator"
     assert recorded["payload"]["reason"] == "need branch repair"
     assert recorded_call["headers"]["Authorization"] == "Bearer service-token"
+
+
+def test_azure_break_glass_approval_url_carries_intent_without_repo() -> None:
+    url = _azure_break_glass_approval_url(
+        "95",
+        "inspect the session_events ledger",
+        "agent",
+    )
+
+    assert url.startswith("https://auth.romaine.life/admin?")
+    assert "intent=azure-break-glass" in url
+    assert "session_id=95" in url
+    assert "session_scope=default" in url
+    assert "repo=" not in url
+    assert "reason=inspect+the+session_events+ledger" in url
+
+
+def test_append_azure_break_glass_tool_adds_request_tool() -> None:
+    raw = b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"read_transcript"}]}}'
+
+    augmented = json.loads(_append_azure_break_glass_tool(raw))
+
+    names = [tool["name"] for tool in augmented["result"]["tools"]]
+    assert names == ["read_transcript", "request_azure_break_glass"]
+    tool = augmented["result"]["tools"][1]
+    assert "locked by default" in tool["description"]
+    assert "token" not in tool["inputSchema"]["properties"]
+    # Idempotent: a second pass must not duplicate the tool.
+    again = json.loads(_append_azure_break_glass_tool(json.dumps(augmented).encode()))
+    assert [t["name"] for t in again["result"]["tools"]] == names
+
+
+def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatch) -> None:
+    # GET (grant lookup) returns no active grant; POST (control-action) is the
+    # recorded request. The tool must not grant access or reveal a token.
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":false}'),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_azure_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            9,
+            {"reason": "inspect ledger"},
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    assert structured["resource"] == "azure-personal"
+    assert structured["status"] == "approval_required"
+    assert structured["privileged_tools_visible"] is False
+    assert structured["approval_url"].startswith("https://auth.romaine.life/admin?")
+    assert "intent=azure-break-glass" in structured["approval_url"]
+    assert "token" not in structured
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
+    recorded = recorded_call["json"]
+    assert recorded["action"] == "azure.break_glass.request"
+    assert recorded["source_tool"] == "request_azure_break_glass"
+    assert recorded["target_kind"] == "azure_mcp"
+    assert recorded["target_ref"] == "azure-personal"
+    assert recorded["payload"]["reason"] == "inspect ledger"
+
+
+def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
+    # When a grant is already active, the tool reports approved + visible tools.
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":true,"expires_at":"2999-01-01T00:00:00Z"}'),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_azure_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            9,
+            {"reason": "inspect ledger"},
+        )
+    )
+
+    structured = json.loads(response.text)["result"]["structuredContent"]
+    assert structured["status"] == "approved"
+    assert structured["privileged_tools_visible"] is True
+    assert structured["expires_at"] == "2999-01-01T00:00:00Z"
 
 
 def test_tank_pr_lane_tool_records_approval_request(monkeypatch) -> None:

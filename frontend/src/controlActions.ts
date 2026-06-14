@@ -130,6 +130,12 @@ function actionTitle(action: string | undefined): string {
       return "GitHub break-glass token";
     case "github.break_glass.push":
       return "GitHub break-glass push";
+    case "azure.break_glass.request":
+      return "Azure break-glass request";
+    case "azure.break_glass.grant":
+      return "Azure break-glass grant";
+    case "azure.break_glass.use":
+      return "Azure break-glass use";
     case "github.pr_lane.request":
       return "PR lane request";
     case "github.pr_lane.approve":
