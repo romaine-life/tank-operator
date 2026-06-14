@@ -252,6 +252,7 @@ type backgroundTaskWakeStore interface {
 type controlActionStore interface {
 	Append(context.Context, pgstore.ControlActionEvent) (pgstore.ControlActionEvent, error)
 	ListBySession(context.Context, string, string, string, int) ([]pgstore.ControlActionEvent, error)
+	ListBreakGlassRequests(context.Context, string, int) ([]pgstore.ControlActionEvent, error)
 	GetBySessionEvent(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 	BreakGlassDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 }
@@ -315,6 +316,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/admin/test-slot-session-defaults", s.handleAdminSetTestSlotSessionDefaults)
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
+	mux.HandleFunc("GET /api/admin/break-glass-requests", s.handleAdminBreakGlassRequests)
 	// Admin-only durable support surface for avatar upload failures. The
 	// form error returns attempt_id; this endpoint turns that reference into
 	// a curl-able diagnosis without browser devtools.

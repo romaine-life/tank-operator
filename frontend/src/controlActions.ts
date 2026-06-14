@@ -6,6 +6,9 @@ export type ControlActionRow = {
   event_id?: string;
   invocation_id?: string;
   created_at?: string;
+  owner_email?: string;
+  session_scope?: string;
+  session_id?: string;
   source_service?: string;
   source_tool?: string;
   action?: string;

@@ -3,6 +3,7 @@ export type AdminView =
   | "controls"
   | "avatars"
   | "report"
+  | "break-glass"
   | "hidden-transcripts"
   | "observability"
   | "version";
@@ -93,6 +94,7 @@ function parseAdminView(value: string | undefined): AdminView {
       return "controls";
     case "avatars":
     case "report":
+    case "break-glass":
     case "hidden-transcripts":
     case "observability":
     case "version":

@@ -272,6 +272,11 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
         settingsTab: "admin",
         adminView: "report",
       });
+  expect(readAppRouteFromPathname("/settings/admin/break-glass")).toEqual({
+        tab: "settings",
+        settingsTab: "admin",
+        adminView: "break-glass",
+      });
   expect(readAppRouteFromPathname("/settings/admin/version")).toEqual({
         tab: "settings",
         settingsTab: "admin",
@@ -293,6 +298,7 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
         adminView: "controls",
       });
   expect(buildAppRouteUrl(current, "settings", "admin", "observability")).toBe("https://tank.example.test/settings/admin/observability");
+  expect(buildAppRouteUrl(current, "settings", "admin", "break-glass")).toBe("https://tank.example.test/settings/admin/break-glass");
   expect(buildAppRouteUrl(current, "settings", "admin", "version")).toBe("https://tank.example.test/settings/admin/version");
   expect(buildAppRouteUrl(current, "settings", "admin", "hidden-transcripts")).toBe("https://tank.example.test/settings/admin/hidden-transcripts");
   expect(buildAppRouteUrl(current, "help")).toBe("https://tank.example.test/help");

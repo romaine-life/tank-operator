@@ -1752,6 +1752,20 @@ interface AdminHiddenSessionsBody {
   sessions?: AdminHiddenSession[];
 }
 
+type AdminBreakGlassFilter = "pending" | "recent" | "all";
+
+interface AdminBreakGlassListItem {
+  pending?: boolean;
+  request: ControlActionRow;
+  decision?: ControlActionRow;
+}
+
+interface AdminBreakGlassListBody {
+  session_scope?: string;
+  status?: AdminBreakGlassFilter;
+  requests?: AdminBreakGlassListItem[];
+}
+
 interface TestSlotSessionDefaults {
   mode: DefaultSessionMode;
   model: string;
@@ -14223,6 +14237,334 @@ export function RunMessages({
   );
 }
 
+function AdminBreakGlassPanel() {
+  const [filter, setFilter] = useState<AdminBreakGlassFilter>("pending");
+  const [items, setItems] = useState<AdminBreakGlassListItem[]>([]);
+  const [sessionScope, setSessionScope] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState("");
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ status: filter, limit: "100" });
+      const res = await authedFetch(`/api/admin/break-glass-requests?${params}`);
+      if (!res.ok) {
+        throw new Error(`break-glass requests returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminBreakGlassListBody;
+      setItems(Array.isArray(body.requests) ? body.requests : []);
+      setSessionScope(body.session_scope ?? "");
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const decide = useCallback(
+    async (item: AdminBreakGlassListItem, decision: "approve" | "deny") => {
+      const sessionID = nonemptyAdminValue(item.request.session_id);
+      const eventID = nonemptyAdminValue(item.request.event_id);
+      if (!sessionID || !eventID || !item.pending) return;
+      const note =
+        decision === "deny"
+          ? window.prompt("Deny note", "")?.trim()
+          : "";
+      if (decision === "deny" && note === undefined) return;
+      setBusyId(`${decision}:${eventID}`);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(sessionID)}/break-glass-requests/${encodeURIComponent(eventID)}/${decision}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note: note ?? "" }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`break-glass ${decision} returned ${res.status}`);
+        }
+        await refresh();
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusyId("");
+      }
+    },
+    [refresh],
+  );
+
+  return (
+    <div className="run-settings-diagnostics admin-break-glass">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <ShieldAlertIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Break glass</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={() => void refresh()}
+          disabled={loading}
+          aria-label="Refresh break-glass requests"
+          title="Refresh"
+        >
+          <RotateCcwIcon
+            aria-hidden="true"
+            className={loading ? "cluster-health-spin" : undefined}
+          />
+        </button>
+      </div>
+      <div className="admin-break-glass-toolbar">
+        {(["pending", "recent", "all"] as AdminBreakGlassFilter[]).map((nextFilter) => (
+          <button
+            key={nextFilter}
+            type="button"
+            className={`admin-break-glass-filter${filter === nextFilter ? " is-active" : ""}`}
+            onClick={() => setFilter(nextFilter)}
+            disabled={loading && filter === nextFilter}
+          >
+            {adminBreakGlassFilterLabel(nextFilter)}
+          </button>
+        ))}
+        {sessionScope && (
+          <span className="admin-break-glass-scope">{sessionScope}</span>
+        )}
+      </div>
+      {error && (
+        <div className="run-settings-observability-note" role="status">
+          {error}
+        </div>
+      )}
+      <div className="admin-break-glass-list">
+        {items.length > 0 ? (
+          items.map((item) => (
+            <AdminBreakGlassRow
+              key={adminBreakGlassItemKey(item)}
+              item={item}
+              busyId={busyId}
+              onDecision={decide}
+            />
+          ))
+        ) : (
+          <div className="admin-break-glass-empty">
+            {loading ? "Loading requests..." : "No break-glass requests"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminBreakGlassRow({
+  item,
+  busyId,
+  onDecision,
+}: {
+  item: AdminBreakGlassListItem;
+  busyId: string;
+  onDecision: (item: AdminBreakGlassListItem, decision: "approve" | "deny") => void;
+}) {
+  const request = item.request;
+  const decision = item.decision;
+  const sessionID = nonemptyAdminValue(request.session_id);
+  const eventID = nonemptyAdminValue(request.event_id);
+  const pending = item.pending === true;
+  const status = adminBreakGlassStatus(item);
+  const target = adminBreakGlassTarget(request);
+  const scope = adminBreakGlassScope(request);
+  const detail = [
+    nonemptyAdminValue(request.owner_email),
+    sessionID ? `session ${sessionID}` : "",
+    nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service),
+    formatToolFullTime(request.created_at),
+  ].filter(Boolean);
+  const sessionHref = sessionID ? `/sessions/${encodeURIComponent(sessionID)}` : "";
+  const focusedHref =
+    sessionID && eventID
+      ? `/sessions/${encodeURIComponent(sessionID)}?break_glass_request=${encodeURIComponent(eventID)}`
+      : "";
+
+  return (
+    <article className={`admin-break-glass-row is-${status}`}>
+      <div className="admin-break-glass-row-head">
+        <div className="admin-break-glass-title">
+          <span className="admin-break-glass-kind">
+            {adminBreakGlassKind(request)}
+          </span>
+          <span className="admin-break-glass-target" title={target}>
+            {target}
+          </span>
+        </div>
+        <span className={`admin-break-glass-status is-${status}`}>
+          {adminBreakGlassStatusLabel(status)}
+        </span>
+      </div>
+      <div className="admin-break-glass-reason">
+        {adminBreakGlassReason(request)}
+      </div>
+      <div className="admin-break-glass-meta">
+        {detail.map((part) => (
+          <span key={part}>{part}</span>
+        ))}
+      </div>
+      {scope && <div className="admin-break-glass-scope-line">{scope}</div>}
+      {decision && (
+        <div className="admin-break-glass-decision">
+          <span>{adminBreakGlassDecisionSummary(decision)}</span>
+          <span>{formatToolFullTime(decision.created_at)}</span>
+        </div>
+      )}
+      <div className="admin-break-glass-actions">
+        {sessionHref && (
+          <a className="run-settings-test-btn" href={sessionHref}>
+            Open session
+          </a>
+        )}
+        {focusedHref && (
+          <a className="run-settings-test-btn" href={focusedHref}>
+            Focus request
+          </a>
+        )}
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `approve:${eventID}`}
+          onClick={() => onDecision(item, "approve")}
+        >
+          <CheckIcon aria-hidden="true" />
+          <span>Approve</span>
+        </button>
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `deny:${eventID}`}
+          onClick={() => onDecision(item, "deny")}
+        >
+          <XIcon aria-hidden="true" />
+          <span>Deny</span>
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function adminBreakGlassFilterLabel(filter: AdminBreakGlassFilter): string {
+  switch (filter) {
+    case "pending":
+      return "Pending";
+    case "recent":
+      return "Recent";
+    case "all":
+      return "All";
+  }
+}
+
+function adminBreakGlassItemKey(item: AdminBreakGlassListItem): string {
+  return [
+    nonemptyAdminValue(item.request.session_id),
+    nonemptyAdminValue(item.request.event_id),
+    nonemptyAdminValue(item.decision?.event_id),
+  ].filter(Boolean).join(":");
+}
+
+function adminBreakGlassStatus(
+  item: AdminBreakGlassListItem,
+): "pending" | "approved" | "denied" {
+  if (item.pending) return "pending";
+  const action = nonemptyAdminValue(item.decision?.action);
+  return action?.endsWith(".deny") ? "denied" : "approved";
+}
+
+function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): string {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "approved":
+      return "approved";
+    case "denied":
+      return "denied";
+  }
+}
+
+function adminBreakGlassKind(row: ControlActionRow): string {
+  return row.action === "azure.break_glass.request" ? "Azure" : "GitHub";
+}
+
+function adminBreakGlassTarget(row: ControlActionRow): string {
+  if (row.action === "azure.break_glass.request") return "azure-personal";
+  const repo = [nonemptyAdminValue(row.repo_owner), nonemptyAdminValue(row.repo_name)]
+    .filter(Boolean)
+    .join("/");
+  return repo || nonemptyAdminValue(row.target_ref) || "GitHub";
+}
+
+function adminBreakGlassReason(row: ControlActionRow): string {
+  return nonemptyAdminValue(adminBreakGlassPayload(row).reason) || "No reason provided";
+}
+
+function adminBreakGlassScope(row: ControlActionRow): string {
+  const payload = adminBreakGlassPayload(row);
+  const repoScope = adminBreakGlassPayloadObject(payload.repo_scope);
+  const branchScope = adminBreakGlassPayloadObject(payload.branch_scope);
+  const repos = adminBreakGlassStringList(repoScope.repos);
+  const branches = adminBreakGlassStringList(branchScope.branches);
+  const parts = [
+    adminScopeLabel("repos", nonemptyAdminValue(repoScope.kind), repos),
+    adminScopeLabel("branches", nonemptyAdminValue(branchScope.kind), branches),
+  ].filter(Boolean);
+  return parts.join(" / ");
+}
+
+function adminScopeLabel(
+  label: string,
+  kind: string | undefined,
+  values: string[],
+): string {
+  if (kind === "all_repos") return "all repos";
+  if (kind === "unlimited") return "all branches";
+  if (kind === "count") return `${label}: count`;
+  if (values.length > 0) return `${label}: ${values.join(", ")}`;
+  return "";
+}
+
+function adminBreakGlassDecisionSummary(row: ControlActionRow): string {
+  const payload = adminBreakGlassPayload(row);
+  const actor = nonemptyAdminValue(payload.approved_by) ?? nonemptyAdminValue(payload.denied_by);
+  const label = row.action?.endsWith(".deny") ? "Denied" : "Approved";
+  return actor ? `${label} by ${actor}` : label;
+}
+
+function adminBreakGlassPayload(row: ControlActionRow): Record<string, unknown> {
+  return adminBreakGlassPayloadObject(row.payload);
+}
+
+function adminBreakGlassPayloadObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function adminBreakGlassStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.flatMap((item) => {
+        const text = nonemptyAdminValue(item);
+        return text ? [text] : [];
+      })
+    : [];
+}
+
+function nonemptyAdminValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function AdminObservabilityPanel({
   state,
   onRefresh,
@@ -15219,6 +15561,7 @@ function RunSettingsPanel({
     showAdminTab &&
     (adminView === "avatars" ||
       adminView === "report" ||
+      adminView === "break-glass" ||
       adminView === "hidden-transcripts" ||
       adminView === "observability")
       ? "run-settings-screen run-settings-screen-wide"
@@ -15324,6 +15667,23 @@ function RunSettingsPanel({
               state={adminControls.observability}
               onRefresh={adminControls.onRefreshObservability}
             />
+          </>
+        ) : adminView === "break-glass" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Break glass</h2>
+              </div>
+            </section>
+            <AdminBreakGlassPanel />
           </>
         ) : adminView === "hidden-transcripts" ? (
           <>
@@ -15432,6 +15792,20 @@ function RunSettingsPanel({
                   <span>Session repo report</span>
                 </span>
                 <span className="run-settings-scope-value">Draft</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "break-glass")}
+              >
+                <span className="run-settings-link-label">
+                  <ShieldAlertIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Break glass</span>
+                </span>
+                <span className="run-settings-scope-value">Review</span>
               </button>
               <button
                 type="button"

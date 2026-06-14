@@ -214,6 +214,82 @@ func (s *appServer) handleGetBreakGlassRequest(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *appServer) handleAdminBreakGlassRequests(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin only")
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+	switch statusFilter {
+	case "", "pending":
+		statusFilter = "pending"
+	case "recent", "all":
+	default:
+		writeError(w, http.StatusBadRequest, "status must be pending, recent, or all")
+		return
+	}
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	queryLimit := limit
+	if statusFilter == "pending" {
+		queryLimit = 500
+	}
+	rows, err := s.controlActions.ListBreakGlassRequests(r.Context(), s.sessionScope, queryLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]map[string]any, 0, len(rows))
+	for _, request := range rows {
+		if !isBreakGlassRequestAction(request.Action) {
+			continue
+		}
+		decision, err := s.controlActions.BreakGlassDecisionForRequest(r.Context(), s.sessionScope, request.SessionID, request.EventID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		pending := decision.EventID == ""
+		if statusFilter == "pending" && !pending {
+			continue
+		}
+		item := map[string]any{
+			"request": controlActionToJSON(request, true),
+			"pending": pending,
+		}
+		if decision.EventID != "" {
+			item["decision"] = controlActionToJSON(decision, true)
+		}
+		items = append(items, item)
+		if len(items) >= limit {
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"requests":      items,
+		"status":        statusFilter,
+		"session_scope": s.sessionScope,
+	})
+}
+
 func (s *appServer) handleApproveBreakGlassRequest(w http.ResponseWriter, r *http.Request) {
 	s.handleBreakGlassDecision(w, r, "approve")
 }
