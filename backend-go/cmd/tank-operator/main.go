@@ -1112,6 +1112,7 @@ func (r *stubSessionRegistry) Upsert(_ context.Context, _ sessionmodel.SessionRe
 }
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
 func (r *stubSessionRegistry) SetOpenTarget(_ context.Context, _, _, _ string) error   { return nil }
+func (r *stubSessionRegistry) SetRunConfig(_ context.Context, _, _, _, _ string) error { return nil }
 func (r *stubSessionRegistry) SetBugLabel(_ context.Context, _, _ string, _ *sessionmodel.SessionBugLabel) error {
 	return nil
 }

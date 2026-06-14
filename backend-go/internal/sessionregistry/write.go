@@ -159,9 +159,11 @@ func validateSessionRecordForWrite(record sessionmodel.SessionRecord) error {
 }
 
 // SetRuntimeConfig records the model/effort options the pod-side runner
-// actually handed to the provider executable or SDK. The intended session
-// config is immutable after create; this applied surface is allowed to
-// update on runner restart so the UI reflects the current process.
+// actually handed to the provider executable or SDK (the RUNTIME/applied
+// surface). The user-chosen config (the model/effort columns) is mutable
+// post-create via SetRunConfig; this applied surface tracks what the runner
+// last pinned, updating on runner restart and on a mid-session re-pin so the
+// UI reflects the current process.
 func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	sessionID = strings.TrimSpace(sessionID)
@@ -181,10 +183,12 @@ func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, e
 	return err
 }
 
-// SetRuntimeContextWindow records the first provider-observed model context
-// window for a session. The requested session model is immutable after create,
-// so later differing values are treated as provider/runtime anomalies and do
-// not silently change the durable UI denominator.
+// SetRuntimeContextWindow records the provider-observed model context window
+// for a session. It is latest-observed-wins: the runner reports the window
+// once per pinned model and resets its latch on a mid-session model re-pin, so
+// a model switch legitimately updates the durable UI denominator (a switch to
+// a model with a different window must not leave the old denominator stale).
+// Unchanged values are skipped so the row_version cursor does not churn.
 func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	sessionID = strings.TrimSpace(sessionID)
@@ -196,13 +200,13 @@ func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID st
 		UPDATE sessions
 		SET runtime_context_window_tokens      = $4,
 			runtime_context_window_source      = $5,
-			runtime_context_window_observed_at = COALESCE(runtime_context_window_observed_at, now()),
+			runtime_context_window_observed_at = now(),
 			updated_at                         = now(),
 			row_version                        = nextval('sessions_row_version_seq')
 		WHERE email = $1
 			AND session_scope = $2
 			AND session_id = $3
-			AND runtime_context_window_tokens = 0
+			AND runtime_context_window_tokens IS DISTINCT FROM $4
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, tokens, source)
 	return err
@@ -296,6 +300,31 @@ func (s *Store) SetOpenTarget(ctx context.Context, email, sessionID, target stri
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, target)
+	return err
+}
+
+// SetRunConfig updates the user-chosen run config (model/effort) for an SDK
+// chat session after create. Tank's model/effort are no longer immutable after
+// create: a user may change them mid-session from the composer, the next
+// submit_turn carries the new values (the turn handler reads these columns),
+// and the runner re-pins on the next turn at an idle boundary. Like SetName,
+// missing-session is a no-op and the row_version bump keeps the row-update
+// cursor advancing so open tabs converge. Validation (provider allowlist,
+// default-alias rejection, Antigravity exclusion) lives in the handler.
+func (s *Store) SetRunConfig(ctx context.Context, email, sessionID, model, effort string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET model       = $4,
+			effort      = $5,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, strings.TrimSpace(model), strings.TrimSpace(effort))
 	return err
 }
 

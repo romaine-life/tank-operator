@@ -958,6 +958,16 @@ func (r *managerTestRegistry) SetOpenTarget(_ context.Context, email, sessionID,
 	}
 	return nil
 }
+func (r *managerTestRegistry) SetRunConfig(_ context.Context, email, sessionID, model, effort string) error {
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			r.records[i].Model = model
+			r.records[i].Effort = effort
+			return nil
+		}
+	}
+	return nil
+}
 func (r *managerTestRegistry) SetBugLabel(_ context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error {
 	if label == nil {
 		return r.SetBugLabels(context.Background(), email, sessionID, nil)
@@ -1007,11 +1017,11 @@ func (r *managerTestRegistry) SetRuntimeConfig(_ context.Context, email, session
 func (r *managerTestRegistry) SetRuntimeContextWindow(_ context.Context, email, sessionID string, tokens int64, source string) error {
 	for i, record := range r.records {
 		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
-			if r.records[i].RuntimeContextWindowTokens == 0 {
-				r.records[i].RuntimeContextWindowTokens = tokens
-				r.records[i].RuntimeContextWindowSource = source
-				r.records[i].RuntimeContextWindowObservedAt = "2026-05-21T00:00:00Z"
-			}
+			// Latest-observed-wins, mirroring the store (a mid-session model
+			// re-pin legitimately updates the window).
+			r.records[i].RuntimeContextWindowTokens = tokens
+			r.records[i].RuntimeContextWindowSource = source
+			r.records[i].RuntimeContextWindowObservedAt = "2026-05-21T00:00:00Z"
 			return nil
 		}
 	}
@@ -1068,6 +1078,9 @@ func (upsertFailingRegistry) Upsert(context.Context, sessionmodel.SessionRecord)
 }
 func (upsertFailingRegistry) SetName(context.Context, string, string, *string) error { return nil }
 func (upsertFailingRegistry) SetOpenTarget(context.Context, string, string, string) error {
+	return nil
+}
+func (upsertFailingRegistry) SetRunConfig(context.Context, string, string, string, string) error {
 	return nil
 }
 func (upsertFailingRegistry) SetBugLabel(context.Context, string, string, *sessionmodel.SessionBugLabel) error {

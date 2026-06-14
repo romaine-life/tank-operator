@@ -404,6 +404,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}", s.handlePatchSession)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/open-target", s.handleSetOpenTarget)
+	mux.HandleFunc("PUT /api/sessions/{session_id}/run-config", s.handleSetSessionRunConfig)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-state", s.handleSetTestState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/return", s.handleReturnTestSlot)

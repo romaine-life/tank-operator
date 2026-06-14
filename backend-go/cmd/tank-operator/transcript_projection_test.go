@@ -257,6 +257,88 @@ func TestProjectTranscriptEventsCarriesUserAttachments(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsSurfacesPerTurnModel(t *testing.T) {
+	// The per-turn run config stamped on user_message.created (the model/effort
+	// the turn ran on) survives the projection onto the user-message entry, so
+	// the Turns surface can show which model answered each turn even after a
+	// mid-session re-pin — the composer chip only reflects the next turn.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do work",
+			"display": map[string]any{"kind": "plain"},
+			"model":   "claude-opus-4-8",
+			"effort":  "high",
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 1; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	msg := projection.Entries[0]
+	if msg["kind"] != "message" || msg["role"] != "user" {
+		t.Fatalf("entry[0] = %#v, want user message", msg)
+	}
+	if got, _ := msg["model"].(string); got != "claude-opus-4-8" {
+		t.Fatalf("user message model = %q, want claude-opus-4-8", got)
+	}
+	if got, _ := msg["effort"].(string); got != "high" {
+		t.Fatalf("user message effort = %q, want high", got)
+	}
+}
+
+func TestTurnActivityShellCarriesPerTurnModel(t *testing.T) {
+	// The per-turn model/effort is also copied onto the turn-activity shell —
+	// the reliable per-turn carrier the frontend reads when a turn-page
+	// deep-link loads the shell but not the full transcript.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do work",
+			"display": map[string]any{"kind": "plain"},
+			"model":   "claude-opus-4-8",
+			"effort":  "high",
+		}),
+		projectionTestEvent("tool-start", "002", "item.started", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":    "command_execution",
+			"command": "go test ./...",
+		}),
+		projectionTestEvent("tool-done", "003", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":   "command_execution",
+			"output": "ok",
+		}),
+		projectionTestEvent("final", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:msg-1", map[string]any{
+			"kind": "message",
+			"text": "done",
+		}),
+		projectionTestEvent("terminal", "005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:msg-1")),
+	}
+	projection := projectTranscriptEvents(events)
+	var shell map[string]any
+	for _, e := range projection.Entries {
+		if e["kind"] == "turn_activity" {
+			shell = e
+			break
+		}
+	}
+	if shell == nil {
+		t.Fatalf("no turn_activity shell projected: %#v", projection.Entries)
+	}
+	if got, _ := shell["model"].(string); got != "claude-opus-4-8" {
+		t.Fatalf("shell model = %q, want claude-opus-4-8", got)
+	}
+	if got, _ := shell["effort"].(string); got != "high" {
+		t.Fatalf("shell effort = %q, want high", got)
+	}
+	// The model also rides the activity summary — the carrier the frontend
+	// turn-summary normalizer preserves through the row-merge path.
+	activity, _ := shell["activity"].(map[string]any)
+	if activity == nil {
+		t.Fatalf("shell missing activity summary: %#v", shell)
+	}
+	if got, _ := activity["model"].(string); got != "claude-opus-4-8" {
+		t.Fatalf("shell activity model = %q, want claude-opus-4-8", got)
+	}
+}
+
 func TestProjectTranscriptEventsUsesExplicitFinalAnswerMarker(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

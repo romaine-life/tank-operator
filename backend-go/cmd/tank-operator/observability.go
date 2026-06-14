@@ -2307,7 +2307,7 @@ func recordSessionEventPersistTransientFailure() {
 
 func recordSessionRunConfigRejected(surface, provider, reason string) {
 	switch surface {
-	case "create", "turn", "runtime_config":
+	case "create", "turn", "runtime_config", "run_config_update":
 	default:
 		surface = "other"
 	}
@@ -2317,7 +2317,7 @@ func recordSessionRunConfigRejected(surface, provider, reason string) {
 		provider = "other"
 	}
 	switch reason {
-	case "invalid_mode", "retired_mode", "unsupported_model", "unsupported_effort", "missing_model", "default_model":
+	case "invalid_mode", "retired_mode", "unsupported_model", "unsupported_effort", "missing_model", "default_model", "unsupported_provider":
 	default:
 		reason = "other"
 	}

@@ -813,6 +813,99 @@ func (s *appServer) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleSetSessionRunConfig changes the user-chosen model/effort of a running
+// SDK chat session (the mid-session model switch). It writes the durable
+// desired model/effort columns; the next submit_turn carries them (the turn
+// handler overrides from the registered config) and the runner re-pins on the
+// next turn at an idle boundary. Validation reuses the exact create/turn
+// choke-point helpers. Antigravity is excluded — its model is an agy
+// process-start arg, so it cannot change without a restart. Registry-only
+// state, no pod annotation patch (mirrors handleSetOpenTarget).
+func (s *appServer) handleSetSessionRunConfig(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	var body struct {
+		Model  *string `json:"model"`
+		Effort *string `json:"effort"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetRegisteredByOwner(r.Context(), owner, sessionID)
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotFound) || errors.Is(err, sessions.ErrNotOwned) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok {
+		recordSessionRunConfigRejected("run_config_update", "unknown", "invalid_mode")
+		writeError(w, http.StatusBadRequest, "session mode does not support SDK run config")
+		return
+	}
+	if provider == "antigravity" {
+		recordSessionRunConfigRejected("run_config_update", provider, "unsupported_provider")
+		writeError(w, http.StatusBadRequest, "mid-session model change is not supported for Antigravity")
+		return
+	}
+	// Omitted fields default to the current desired value, so a model-only
+	// change preserves effort (and vice versa).
+	model := strings.TrimSpace(info.Model)
+	if body.Model != nil {
+		model = strings.TrimSpace(*body.Model)
+	}
+	effort := strings.TrimSpace(info.Effort)
+	if body.Effort != nil {
+		effort = strings.TrimSpace(*body.Effort)
+	}
+	// Same validation choke point as the create/turn paths (handlers_turns.go).
+	if isDefaultModelAlias(model) {
+		recordSessionRunConfigRejected("run_config_update", provider, "default_model")
+		writeError(w, http.StatusBadRequest, "model must be explicit; default is not accepted")
+		return
+	}
+	if providerRequiresExplicitModel(provider) && model == "" {
+		recordSessionRunConfigRejected("run_config_update", provider, "missing_model")
+		writeError(w, http.StatusBadRequest, explicitModelRequiredMessage(provider, "sessions"))
+		return
+	}
+	if model != "" && validateModelArg(provider, model) == "" {
+		recordSessionRunConfigRejected("run_config_update", provider, "unsupported_model")
+		writeError(w, http.StatusBadRequest, modelUnsupportedMessage(provider))
+		return
+	}
+	if effort != "" && validateEffort(provider, effort) == "" {
+		recordSessionRunConfigRejected("run_config_update", provider, "unsupported_effort")
+		if provider == "codex" {
+			writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max")
+		return
+	}
+	updated, err := s.mgr.SetRunConfig(r.Context(), owner, sessionID, model, effort)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, updated)
+	case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+		writeError(w, http.StatusNotFound, "session not found")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
 // handleSetOpenTarget persists the legacy durable per-session sidebar
 // open-target preference (” / 'chat' / 'turns'). Current frontend builds no
 // longer use it for session-open defaults, but keeping the endpoint preserves

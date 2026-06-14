@@ -313,6 +313,72 @@ func TestUserSubmissionEventMapsStampsAuthorKind(t *testing.T) {
 	}
 }
 
+func TestUserSubmissionEventMapsStampsModelEffort(t *testing.T) {
+	// Per-turn run config: the model/effort resolved for a turn at submit time
+	// is stamped onto BOTH boundary events' payloads, so the transcript can
+	// show which model each turn ran on after a mid-session model/effort
+	// re-pin. Empty values are omitted (a turn carrying no explicit model —
+	// provider account default — leaves the fields off, and the renderer then
+	// shows nothing rather than a misleading session-current label).
+	tests := []struct {
+		name          string
+		model         string
+		effort        string
+		wantModel     string
+		wantEffort    string
+		wantModelSet  bool
+		wantEffortSet bool
+	}{
+		{name: "model and effort", model: "claude-opus-4-8", effort: "high", wantModel: "claude-opus-4-8", wantEffort: "high", wantModelSet: true, wantEffortSet: true},
+		{name: "model only", model: "claude-haiku-4-5", wantModel: "claude-haiku-4-5", wantModelSet: true},
+		{name: "absent", wantModelSet: false, wantEffortSet: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, events, err := UserSubmissionEventMaps(UserSubmissionArgs{
+				SessionID:   "63",
+				Email:       "human@example.com",
+				ClientNonce: "nonce-1",
+				Text:        "hello",
+				Runtime:     "claude",
+				Model:       tt.model,
+				Effort:      tt.effort,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 2 {
+				t.Fatalf("want 2 events, got %d", len(events))
+			}
+			// Both user_message.created and turn.submitted carry the same
+			// per-turn run config on their payloads.
+			for _, event := range events {
+				payload, _ := event["payload"].(map[string]any)
+				if payload == nil {
+					t.Fatalf("event %q missing payload", event["type"])
+				}
+				gotModel, modelSet := payload["model"].(string)
+				if modelSet != tt.wantModelSet || gotModel != tt.wantModel {
+					t.Fatalf("event %q payload.model = (%q,%v), want (%q,%v)", event["type"], gotModel, modelSet, tt.wantModel, tt.wantModelSet)
+				}
+				gotEffort, effortSet := payload["effort"].(string)
+				if effortSet != tt.wantEffortSet || gotEffort != tt.wantEffort {
+					t.Fatalf("event %q payload.effort = (%q,%v), want (%q,%v)", event["type"], gotEffort, effortSet, tt.wantEffort, tt.wantEffortSet)
+				}
+			}
+			// The stamped user_message.created still validates (model/effort
+			// ride payload, which is additionalProperties:true).
+			for _, event := range events {
+				if event["type"] == string(EventUserMessageCreated) {
+					if err := ValidateEventMap(event); err != nil {
+						t.Fatalf("validate user_message.created: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestValidateUserMessageRejectsUnknownAuthorKind(t *testing.T) {
 	// Backend is the sole producer of these events and only ever stamps the
 	// known value; an unknown author_kind signals a producer regression and

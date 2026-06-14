@@ -428,6 +428,11 @@ type TurnActivitySummary = {
   sourceEventId?: string;
   turnUsage?: unknown;
   usageObservation?: unknown;
+  // The model/effort this turn ran on (carried on the shell's activity summary
+  // by the backend projection). Lets the Turns surface show each turn's model
+  // independent of the composer chip's next-turn selection.
+  model?: string;
+  effort?: string;
 };
 type TurnActivityCollapseSummary = {
   collapsible?: boolean;
@@ -473,6 +478,13 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // session's system identity for these instead of the human owner's
   // Gravatar. originSessionId takes precedence when both are present.
   authorKind?: string;
+  // For user-role message entries: the model/effort this turn was submitted
+  // with (the run config the runner pinned for the turn), stamped by the
+  // backend submission projection. Lets the Turns surface show which model
+  // each turn ran on even after a mid-session model/effort re-pin — the
+  // composer chip only reflects the next turn's selected model.
+  model?: string;
+  effort?: string;
   // Server-projected rows that belong only to the Turns activity surface.
   // Background wake prompts intentionally use role=user + authorKind=system so
   // the renderer shows the existing system-user identity without surfacing the
@@ -5682,6 +5694,8 @@ function normalizeTurnActivitySummary(
     sourceEventId: stringRecordValue(record, "sourceEventId"),
     turnUsage: record.turnUsage,
     usageObservation: record.usageObservation,
+    model: stringRecordValue(record, "model") || undefined,
+    effort: stringRecordValue(record, "effort") || undefined,
   };
 }
 
@@ -10706,6 +10720,10 @@ type TurnViewItem = {
   loaded: boolean;
   costEstimate: SessionCostEstimate | null;
   contextTokens: number | null;
+  // The model/effort this turn actually ran on (from its user-message entry),
+  // distinct from the session's next-turn selection in the composer chip.
+  model: string | null;
+  effort: string | null;
   startedAt?: string;
   completedAt?: string;
   lastActivityAt?: string;
@@ -11169,6 +11187,14 @@ function buildTurnViewItems(
   // shape) must still resolve "Turn N" instead of the "Current turn"
   // fallback label.
   const numbers = new Map<string, number>();
+  // The model/effort each turn ran on, harvested from its user-message entry
+  // (the backend stamps the resolved run config there). First user message per
+  // turn wins; surfaced on the TurnViewItem so the Turns surface can show the
+  // historical model even after a mid-session re-pin.
+  const runConfigByTurn = new Map<
+    string,
+    { model: string | null; effort: string | null }
+  >();
   const costRowsByTurn = new Map<string, Map<string, TranscriptEntry>>();
   const addCostRow = (entry: TranscriptEntry) => {
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
@@ -11184,6 +11210,11 @@ function buildTurnViewItems(
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
     if (!turnId) return;
     addCostRow(entry);
+    if (isUserMessageEntry(entry) && !runConfigByTurn.has(turnId)) {
+      const m = typeof entry.model === "string" ? entry.model.trim() : "";
+      const e = typeof entry.effort === "string" ? entry.effort.trim() : "";
+      if (m || e) runConfigByTurn.set(turnId, { model: m || null, effort: e || null });
+    }
     if (!order.has(turnId)) order.set(turnId, index);
     if (!numbers.has(turnId) && typeof entry.turnNumber === "number")
       numbers.set(turnId, entry.turnNumber);
@@ -11277,6 +11308,19 @@ function buildTurnViewItems(
           contextWindow,
           turnId,
         ),
+        // Prefer the shell's per-turn run config (always loaded for the viewed
+        // turn, including turn-page deep-links); fall back to the user-message
+        // capture for any path where only the message entry is present.
+        model:
+          shellSummary?.model ||
+          (typeof shell?.model === "string" ? shell.model.trim() : "") ||
+          runConfigByTurn.get(turnId)?.model ||
+          null,
+        effort:
+          shellSummary?.effort ||
+          (typeof shell?.effort === "string" ? shell.effort.trim() : "") ||
+          runConfigByTurn.get(turnId)?.effort ||
+          null,
         startedAt,
         completedAt,
         lastActivityAt,
@@ -15382,12 +15426,11 @@ function ChatPane({
     adminControls?.observability.summary ?? null,
     adminControls?.observability.error ?? null,
   );
-  // Seed model + effort from RunPrefs (browser-persisted). State is local
-  // because the runners seal model + effort from the first submit_turn —
-  // the splash screen is where the user adjusts the defaults before a
-  // session is created.
-  // Existing sessions prefer the durable session-owned run config; browser
-  // prefs are only the fallback for older rows that do not have it.
+  // Seed model + effort from the durable session run config (browser prefs are
+  // the fallback for older rows). State is local and MUTABLE: the composer
+  // model dropdown updates it optimistically and PUTs /run-config, and the
+  // runner re-pins on the next turn. Existing sessions prefer the durable
+  // session-owned run config.
   const configuredModelId = (session.model ?? "").trim();
   const configuredEffortId = (session.effort ?? "").trim();
   const hasConfiguredSessionRunConfig = Boolean(
@@ -15425,8 +15468,9 @@ function ChatPane({
     : effortOptions.some((opt) => opt.id === preferredEffortId)
       ? preferredEffortId
       : fallbackEffortId;
-  const [selectedModelId] = useState<string>(initialModelId);
-  const [selectedEffortId] = useState<string>(initialEffortId);
+  const [selectedModelId, setSelectedModelId] = useState<string>(initialModelId);
+  const [selectedEffortId, setSelectedEffortId] =
+    useState<string>(initialEffortId);
   const runtimeContextWindowTokens =
     typeof session.runtime_context_window_tokens === "number" &&
     Number.isFinite(session.runtime_context_window_tokens) &&
@@ -15453,6 +15497,59 @@ function ChatPane({
   const [slashCommands, setSlashCommands] =
     useState<SlashCommand[]>(SLASH_COMMANDS);
   const [mcpOpen, setMcpOpen] = useState(false);
+  // In-session model/effort dropdown — the mid-session model switch. Mirrors
+  // the splash picker; option (a): a pick applies to the NEXT turn silently
+  // (the runner re-pins at an idle boundary), never interrupting a live turn.
+  const [runModelMenuOpen, setRunModelMenuOpen] = useState(false);
+  const applyRunConfig = useCallback(
+    async (model: string, effort: string) => {
+      const prevModel = selectedModelId;
+      const prevEffort = selectedEffortId;
+      if (model === prevModel && effort === prevEffort) return;
+      // Optimistic: the trigger reflects the pick immediately. SSE converges
+      // session.model/effort, and the runner reports runtime_model once it
+      // re-pins on the next turn.
+      setSelectedModelId(model);
+      setSelectedEffortId(effort);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${session.id}/run-config`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model, effort }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`run-config update failed: ${res.status}`);
+        }
+        const updated = normalizeSession(await res.json());
+        onSessionPatch(session.id, {
+          model: updated.model,
+          effort: updated.effort,
+        });
+      } catch (err) {
+        // Revert the optimistic selection so the trigger doesn't lie.
+        setSelectedModelId(prevModel);
+        setSelectedEffortId(prevEffort);
+        console.error("run-config update failed:", err);
+      }
+    },
+    [session.id, selectedModelId, selectedEffortId, onSessionPatch],
+  );
+  // Close the in-session model dropdown on an outside click (same data-menu
+  // routing as the splash picker).
+  useEffect(() => {
+    if (!runModelMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const root = target?.closest("[data-menu]") as HTMLElement | null;
+      if (root?.dataset.menu === "run-model") return;
+      setRunModelMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [runModelMenuOpen]);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -19965,6 +20062,28 @@ function ChatPane({
     selectedEffortId,
     sessionRunOptions,
   );
+  // When paging back through the Turns view to a turn that isn't the latest,
+  // the composer model chip shows THAT turn's model read-only — a past turn's
+  // model is immutable, so it is unselectable — instead of the interactive
+  // next-turn selector. It reverts to the live selector on the latest turn (and
+  // in the chat view). The session re-pinning to a different model is rare, so
+  // this read-only-when-historical view is the intended, low-friction behavior.
+  const viewedTurn =
+    activeTab === "turns"
+      ? turnViewItems.find((turn) => turn.turnId === effectiveSelectedTurnId)
+      : undefined;
+  const viewingPreviousTurn =
+    activeTab === "turns" &&
+    effectiveSelectedTurnId != null &&
+    latestTurnId != null &&
+    effectiveSelectedTurnId !== latestTurnId &&
+    Boolean(viewedTurn?.model);
+  const viewedTurnModelLabel = viewedTurn?.model
+    ? modelDisplayLabel(session.mode, viewedTurn.model, sessionRunOptions)
+    : "";
+  const viewedTurnEffortLabel = viewedTurn?.effort
+    ? effortDisplayLabel(session.mode, viewedTurn.effort, sessionRunOptions)
+    : "";
   const modelChipLabel = hasAppliedRuntimeConfig
     ? modelDisplayLabel(session.mode, appliedModelId, sessionRunOptions) ||
       configuredModelLabel
@@ -21512,24 +21631,147 @@ function ChatPane({
                 }}
                 modelChip={
                   usesModel ? (
-                    <span
-                      className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
-                      title={modelChipTitle}
-                      aria-label={modelChipTitle}
-                    >
-                      <BrainIcon
-                        className="run-model-chip-icon"
-                        aria-hidden="true"
-                      />
-                      <span className="run-model-chip-label">
-                        {modelChipLabel}
-                      </span>
-                      {effortChipLabel && (
-                        <span className="run-model-chip-effort">
-                          {effortChipLabel}
+                    viewingPreviousTurn ? (
+                      <span
+                        className="run-model-chip run-model-chip-historical"
+                        title={`Model used for this turn: ${viewedTurnModelLabel}${viewedTurnEffortLabel ? ` / ${viewedTurnEffortLabel}` : ""}`}
+                        aria-label={`Model used for this turn: ${viewedTurnModelLabel}`}
+                      >
+                        <BrainIcon
+                          className="run-model-chip-icon"
+                          aria-hidden="true"
+                        />
+                        <span className="run-model-chip-label">
+                          {viewedTurnModelLabel}
                         </span>
-                      )}
-                    </span>
+                        {viewedTurnEffortLabel && (
+                          <span className="run-model-chip-effort">
+                            {viewedTurnEffortLabel}
+                          </span>
+                        )}
+                      </span>
+                    ) : isClaude || isCodex ? (
+                      <span className="run-model-select" data-menu="run-model">
+                        <button
+                          type="button"
+                          className={`run-model-chip run-model-trigger${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                          title={`Model: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""} — applies to your next turn`}
+                          aria-haspopup="listbox"
+                          aria-expanded={runModelMenuOpen}
+                          disabled={readOnly}
+                          onClick={() => setRunModelMenuOpen((v) => !v)}
+                        >
+                          <BrainIcon
+                            className="run-model-chip-icon"
+                            aria-hidden="true"
+                          />
+                          <span className="run-model-chip-label">
+                            {configuredModelLabel}
+                          </span>
+                          {configuredEffortLabel && (
+                            <span className="run-model-chip-effort">
+                              {configuredEffortLabel}
+                            </span>
+                          )}
+                          <IconChevronDown
+                            className="run-model-chip-caret"
+                            aria-hidden="true"
+                          />
+                        </button>
+                        {runModelMenuOpen && (
+                          <ul
+                            className="dropdown run-model-menu"
+                            role="listbox"
+                            aria-label="model"
+                          >
+                            {modelOptions.map((model) => {
+                              const selected = model.id === selectedModelId;
+                              return (
+                                <li
+                                  key={model.id}
+                                  role="option"
+                                  aria-selected={selected}
+                                >
+                                  <button
+                                    type="button"
+                                    className={
+                                      selected ? "is-selected" : undefined
+                                    }
+                                    onClick={() => {
+                                      setRunModelMenuOpen(false);
+                                      void applyRunConfig(
+                                        model.id,
+                                        selectedEffortId,
+                                      );
+                                    }}
+                                  >
+                                    <span className="run-model-chip-label">
+                                      {model.label}
+                                    </span>
+                                  </button>
+                                </li>
+                              );
+                            })}
+                            {usesEffort && effortOptions.length > 0 && (
+                              <li
+                                role="separator"
+                                aria-hidden="true"
+                                className="run-model-menu-sep"
+                              />
+                            )}
+                            {usesEffort &&
+                              effortOptions.map((effort) => {
+                                const selected =
+                                  effort.id === selectedEffortId;
+                                return (
+                                  <li
+                                    key={`effort-${effort.id}`}
+                                    role="option"
+                                    aria-selected={selected}
+                                  >
+                                    <button
+                                      type="button"
+                                      className={
+                                        selected ? "is-selected" : undefined
+                                      }
+                                      onClick={() => {
+                                        setRunModelMenuOpen(false);
+                                        void applyRunConfig(
+                                          selectedModelId,
+                                          effort.id,
+                                        );
+                                      }}
+                                    >
+                                      <span className="run-model-chip-effort">
+                                        {effort.label}
+                                      </span>
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                          </ul>
+                        )}
+                      </span>
+                    ) : (
+                      <span
+                        className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                        title={modelChipTitle}
+                        aria-label={modelChipTitle}
+                      >
+                        <BrainIcon
+                          className="run-model-chip-icon"
+                          aria-hidden="true"
+                        />
+                        <span className="run-model-chip-label">
+                          {modelChipLabel}
+                        </span>
+                        {effortChipLabel && (
+                          <span className="run-model-chip-effort">
+                            {effortChipLabel}
+                          </span>
+                        )}
+                      </span>
+                    )
                   ) : null
                 }
               />

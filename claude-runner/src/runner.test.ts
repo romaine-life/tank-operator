@@ -962,14 +962,12 @@ test("acceptInputReply parks under heartbeat when the provider callback is not r
 //   2. First submit_turn with empty values falls back to DEFAULT_MODEL /
 //      DEFAULT_EFFORT — the wire shape is additive so empty must keep
 //      working for legacy clients.
-//   3. Subsequent submit_turns are a no-op (the SDK Options are sealed
-//      by the running query iterator). The override is silently honored
-//      for telemetry only.
-// If a future change wires per-turn setModel/applyFlagSettings to make
-// the dropdown switchable mid-session, these tests will need to flip from
-// "ignore overrides" to "apply overrides" — the regression that test #3
-// catches today is the silent divergence between dropdown pick and pod
-// behavior, which would be the user-trust failure.
+//   3. A subsequent submit_turn whose model/effort differ does NOT relaunch
+//      from ensureSdkQuery (Options is sealed on the running query); it
+//      SCHEDULES a re-pin (pendingRepin) that performRebuild applies at the
+//      next idle turn boundary by rebuilding query() with provider-session
+//      resume. model/effort are sealed within a turn, re-pinnable between
+//      turns — the mid-session model switch the SPA dropdown drives.
 test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     launchSdkQuery: (opts: {
@@ -1144,13 +1142,14 @@ test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first
   assert.equal(opts.resume, undefined);
 });
 
-test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => {
+test("ensureSdkQuery schedules a re-pin on a differing subsequent turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
     pinnedModel: string | null;
     pinnedEffort: string | null;
     sdkQuery: unknown;
     ensureSdkQuery: (record: unknown) => void;
+    pendingRepin: { model: string; effort: string } | null;
   };
   let launchCalls = 0;
   runner.launchSdkQuery = (_opts) => {
@@ -1164,13 +1163,12 @@ test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => 
     model: "claude-opus-4-7",
     effort: "high",
   });
-  // Second turn requests a different model + effort. The runner MUST
-  // keep the pinned values because the SDK's Options is sealed; an
-  // override here would be a no-op at the pod, and silently appearing
-  // to honor it would lie to the user. The metric path catches the
-  // divergence (optionsOverrideIgnoredTotal) — we don't assert the
-  // metric here because it's a prom-client global, but the no-launch +
-  // pinned-values assertions cover the observable behavior.
+  // Second turn requests a different model + effort. ensureSdkQuery must NOT
+  // relaunch here (Options is sealed on the running query) and keeps the
+  // pinned values for now — but it schedules the change as pendingRepin, which
+  // performRebuild applies at the next idle boundary by rebuilding the query.
+  // This is the mid-session model switch; the old "silently ignore" behavior
+  // is gone.
   runner.ensureSdkQuery({
     id: "cmd-2",
     type: "submit_turn",
@@ -1178,9 +1176,99 @@ test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => 
     effort: "low",
   });
 
-  assert.equal(launchCalls, 1, "second turn must not relaunch the SDK query");
-  assert.equal(runner.pinnedModel, "claude-opus-4-7");
+  assert.equal(
+    launchCalls,
+    1,
+    "ensureSdkQuery must not relaunch; rebuild is deferred to performRebuild",
+  );
+  assert.equal(
+    runner.pinnedModel,
+    "claude-opus-4-7",
+    "pinned values stay until the re-pin is applied",
+  );
   assert.equal(runner.pinnedEffort, "high");
+  assert.deepEqual(
+    runner.pendingRepin,
+    { model: "claude-haiku-4-5", effort: "low" },
+    "the differing turn schedules a re-pin",
+  );
+});
+
+test("performRebuild rebuilds with resume + new model and tears down the old query", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: {
+      model?: string;
+      effort?: string;
+      resume?: string;
+      continue?: boolean;
+    }) => unknown;
+    ensureSdkQuery: (record: unknown) => void;
+    performRebuild: () => Promise<void>;
+    reportedProviderSessionID: string;
+    reportedContextWindowTokens: number | null;
+    pendingRepin: { model: string; effort: string } | null;
+    pinnedModel: string | null;
+  };
+  const launches: {
+    model?: string;
+    effort?: string;
+    resume?: string;
+    continue?: boolean;
+  }[] = [];
+  let interrupts = 0;
+  runner.launchSdkQuery = (opts) => {
+    launches.push(opts);
+    return {
+      interrupt: () => {
+        interrupts += 1;
+      },
+    } as unknown;
+  };
+
+  // First turn pins Haiku and builds the query.
+  runner.ensureSdkQuery({
+    id: "cmd-1",
+    type: "submit_turn",
+    model: "claude-haiku-4-5",
+    effort: "low",
+  });
+  // The runner has since latched the live conversation id + a context window.
+  runner.reportedProviderSessionID = "sess-live-123";
+  runner.reportedContextWindowTokens = 200000;
+  // A differing turn schedules the re-pin; performRebuild applies it.
+  runner.ensureSdkQuery({
+    id: "cmd-2",
+    type: "submit_turn",
+    model: "claude-opus-4-8",
+    effort: "high",
+  });
+  await runner.performRebuild();
+
+  assert.equal(launches.length, 2, "performRebuild constructs a second query");
+  assert.equal(launches[1].model, "claude-opus-4-8", "rebuild uses the new model");
+  assert.equal(launches[1].effort, "high");
+  assert.equal(
+    launches[1].resume,
+    "sess-live-123",
+    "rebuild resumes the live conversation id",
+  );
+  assert.equal(
+    launches[1].continue,
+    undefined,
+    "resume, not continue, when a session id is known",
+  );
+  assert.equal(interrupts, 1, "the old query is interrupted");
+  assert.equal(
+    runner.pinnedModel,
+    "claude-opus-4-8",
+    "pinned model updated after rebuild",
+  );
+  assert.equal(
+    runner.reportedContextWindowTokens,
+    null,
+    "context-window latch reset for the new model",
+  );
+  assert.equal(runner.pendingRepin, null, "pending re-pin cleared");
 });
 
 test("terminal turn failures ack the durable submit command", async () => {

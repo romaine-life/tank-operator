@@ -334,18 +334,19 @@ export const optionsPinnedTotal = new Counter({
   registers: [registry],
 });
 
-// optionsOverrideIgnoredTotal increments when a submit_turn after the
-// first one carries a different model or effort than what's already
-// pinned. The runner ignores the override (Options is sealed once
-// query() runs), but the counter exposes the silent-divergence so a
-// future bug or product change ("let me switch model mid-session") is
-// visible in metrics before it surfaces as a user-reported "why didn't
-// my pick take effect?" ticket. Labels intentionally name the *field*
-// that diverged, not the values, to keep cardinality low.
-export const optionsOverrideIgnoredTotal = new Counter({
-  name: "tank_runner_options_override_ignored_total",
-  help: "Submit_turn commands whose model/effort differed from the pinned options (override is silently ignored — model/effort are pod-lifetime).",
-  labelNames: ["field"],
+// optionsRepinnedTotal increments when the runner re-pins model/effort
+// mid-session: at an idle turn boundary it tears down the current SDK query
+// and rebuilds it with provider-session resume + the new options, so a user's
+// mid-session model/effort change takes effect on the next turn. Labels are
+// the *applied* values (like optionsPinnedTotal) so a re-pin is comparable
+// against the original pin. model/effort are no longer pod-lifetime — they are
+// sealed within a turn and re-pinnable between turns. Correlate a spike here
+// with tank_runner_provider_failure_signature_total{...thinking_block_modified}
+// to catch a cross-model resume the provider rejects.
+export const optionsRepinnedTotal = new Counter({
+  name: "tank_runner_options_repinned_total",
+  help: "Mid-session model/effort re-pins applied by rebuilding the SDK query with provider-session resume.",
+  labelNames: ["model", "effort"],
   registers: [registry],
 });
 

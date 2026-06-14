@@ -414,6 +414,16 @@ func projectUserMessageEvent(event map[string]any) map[string]any {
 	if authorKind := transcriptString(event, "author_kind"); authorKind != "" {
 		entry["authorKind"] = authorKind
 	}
+	// Per-turn run config: the model/effort this turn ran on, stamped by
+	// UserSubmissionEventMaps. Surfaced on the user-message entry so the
+	// renderer can show which model answered each turn even after a
+	// mid-session re-pin (the composer chip only shows the next turn's model).
+	if model := transcriptPayloadString(event, "model"); model != "" {
+		entry["model"] = model
+	}
+	if effort := transcriptPayloadString(event, "effort"); effort != "" {
+		entry["effort"] = effort
+	}
 	return entry
 }
 
@@ -1680,6 +1690,29 @@ func buildTurnActivityShellRow(activity turnActivityBody, turnEntries []map[stri
 	}
 	if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
 		shell["usageObservation"] = usageObservation
+	}
+	// Carry the per-turn run config on the shell too. The turn's user-message
+	// entry carries the model/effort the turn ran on, but a turn-page
+	// deep-link loads the shell (the turn row), not the full transcript, so the
+	// frontend can't always reach that message entry. The shell is always
+	// loaded for the viewed turn, so it is the reliable per-turn carrier.
+	for _, entry := range turnEntries {
+		if transcriptMapString(entry, "turnId") != activity.TurnID || !isProjectedUserMessage(entry) {
+			continue
+		}
+		if m := transcriptMapString(entry, "model"); m != "" {
+			shell["model"] = m
+			// Also carry it inside the activity summary: that is the field the
+			// frontend's turn-summary normalizer preserves (top-level shell
+			// fields are reconstructed away in the row-merge path), and it is
+			// the same carrier startedAt/completedAt ride.
+			activity.Summary["model"] = m
+		}
+		if e := transcriptMapString(entry, "effort"); e != "" {
+			shell["effort"] = e
+			activity.Summary["effort"] = e
+		}
+		break
 	}
 	return shell
 }
