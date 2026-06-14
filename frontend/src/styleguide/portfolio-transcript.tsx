@@ -72,7 +72,10 @@ function TranscriptMessage({
   children: ReactNode;
 }) {
   const avatar = getSessionAvatarByID("jp1-malcolm");
-  const inlineFooter = variant === "user" && !compact;
+  // Mirrors RunMessageBubble: a no-attachment user message keeps its footer
+  // inside the message text in both states, so collapse is a CSS-only restyle
+  // of one stable tree (no remount). data-compact drives the one-line clamp.
+  const inlineFooter = variant === "user";
   const footer = (
     <div className="run-msg-footer" data-always-visible>
       {variant !== "system" && (
@@ -124,19 +127,8 @@ function TranscriptMessage({
       )}
       <div className="run-transcript-message-content" data-slot="message-content">
         <div className="run-transcript-message-text" data-slot="message-text">
-          {compact ? (
-            <span
-              className="run-msg-compact-text"
-              title="Please inspect the completed turn with a long initiating prompt. The divider owns the section controls while the prompt preview stays readable."
-            >
-              Please inspect the completed turn with a long initiating prompt. The divider owns the section controls while the prompt preview stays readable.
-            </span>
-          ) : (
-            <>
-              {children}
-              {inlineFooter && footer}
-            </>
-          )}
+          {children}
+          {inlineFooter && footer}
         </div>
         {!inlineFooter && footer}
       </div>
@@ -409,11 +401,11 @@ function TurnPromptStateSpecimens() {
         data-inspectable
       >
         <TranscriptMessage variant="user" ownedByActivity compact>
-          <p style={{ margin: 0 }}>
+          <span className="run-plain-message-text">
             Please inspect the completed turn with a long initiating prompt.
             The collapsed preview stays visible while section controls live on
             the divider.
-          </p>
+          </span>
         </TranscriptMessage>
       </div>
       <div

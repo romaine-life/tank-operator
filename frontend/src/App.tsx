@@ -7440,9 +7440,10 @@ function RunMessageBubble({
   // Minimal one-line variant: keep the avatar at full size and collapse the
   // body to a single ellipsis-truncated line. Used by the Turns view when the
   // prompt context is collapsed so the entry stays recognizable (avatar +
-  // first line) instead of disappearing entirely. Compact mode only changes
-  // text rendering; attachments, inline actions, and footer controls keep
-  // their normal layout.
+  // first line) instead of disappearing entirely. Collapse is a pure CSS
+  // restyle of the SAME DOM the expanded prompt renders (keyed on
+  // data-compact): the prompt text and its inline footer are never remounted,
+  // so toggling collapsed/expanded never flickers.
   compact?: boolean;
 }) {
   const variant =
@@ -7521,17 +7522,23 @@ function RunMessageBubble({
     | number
     | undefined;
   const alwaysVisible = showTimestamps || showDuration;
-  // One-line preview for compact mode: flatten whitespace/newlines so the
-  // multi-paragraph prompt collapses into a single line the CSS can truncate
-  // with an ellipsis. Falls back to the skill-action text when there is no
-  // message body.
-  const compactPreviewText = (
+  // Collapsed-prompt tooltip. Under data-compact the CSS truncates the prompt
+  // to one line (white-space:nowrap collapses newlines), so there is no
+  // separate preview element to render — we only keep the flattened full text
+  // as a title so the whole prompt is still reachable on hover. Falls back to
+  // the skill-action text when there is no message body.
+  const collapsedTitle = (
     (visibleText && visibleText.trim().length > 0 ? visibleText : text) ?? ""
   )
     .replace(/\s+/g, " ")
     .trim();
+  // A no-attachment user prompt renders its footer INSIDE the message text in
+  // both collapsed and expanded states, so collapsing is a CSS-only restyle
+  // that never remounts the footer. Skill-action chips stay footerless in both
+  // states; everything else renders the footer as a content sibling.
   const inlineFooter =
-    variant === "user" && !compact && visibleAttachments.length === 0;
+    variant === "user" && !isSkillAction && visibleAttachments.length === 0;
+  const showFooter = !isSkillAction;
   const messageFooter = (
     <div
       className="run-msg-footer"
@@ -7637,12 +7644,12 @@ function RunMessageBubble({
         className="run-transcript-message-content"
         data-slot="message-content"
       >
-        <div className="run-transcript-message-text" data-slot="message-text">
-          {compact ? (
-            <span className="run-msg-compact-text" title={compactPreviewText}>
-              {compactPreviewText}
-            </span>
-          ) : isSkillAction ? (
+        <div
+          className="run-transcript-message-text"
+          data-slot="message-text"
+          title={compact ? collapsedTitle : undefined}
+        >
+          {isSkillAction ? (
             <span className="run-skill-action">
               <span className="run-skill-action-text">
                 <SkillActionIcon
@@ -7659,13 +7666,11 @@ function RunMessageBubble({
               )}
             </span>
           ) : variant === "user" ? (
-            <>
-              <RunPlainText>{visibleText}</RunPlainText>
-              {inlineFooter && messageFooter}
-            </>
+            <RunPlainText>{visibleText}</RunPlainText>
           ) : (
             <RunMarkdown>{visibleText}</RunMarkdown>
           )}
+          {inlineFooter && messageFooter}
           {variant === "system" &&
             messageActionLabel &&
             messageActionHref && (
@@ -7699,7 +7704,7 @@ function RunMessageBubble({
             sessionId={sessionId}
           />
         )}
-        {!inlineFooter && messageFooter}
+        {!inlineFooter && showFooter && messageFooter}
       </div>
       {variant === "user" &&
         !isAvatarContinuation &&

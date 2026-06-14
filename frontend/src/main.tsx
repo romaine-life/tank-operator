@@ -20,6 +20,7 @@ import { StyleguideNewSessionRow } from "./styleguide/new-session-row";
 import { StyleguidePortfolioOnboarding } from "./styleguide/portfolio-onboarding";
 import { StyleguidePortfolioTranscript } from "./styleguide/portfolio-transcript";
 import { StyleguidePortfolioWorkspace } from "./styleguide/portfolio-workspace";
+import { StyleguidePromptCollapseParity } from "./styleguide/prompt-collapse-parity";
 import { StyleguideRunHeaderTabs } from "./styleguide/run-header-tabs";
 import { StyleguideMobileShell } from "./styleguide/mobile-shell";
 import { StyleguideSessionRow } from "./styleguide/session-row";
@@ -104,6 +105,7 @@ const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
   "/_styleguide/portfolio-onboarding": () => <StyleguidePortfolioOnboarding />,
   "/_styleguide/portfolio-transcript": () => <StyleguidePortfolioTranscript />,
   "/_styleguide/collapsed-turn-activity": () => <StyleguideCollapsedTurnActivity />,
+  "/_styleguide/prompt-collapse-parity": () => <StyleguidePromptCollapseParity />,
   "/_styleguide/boot-state": () => <StyleguideBootState />,
   "/_styleguide/avatars": () => <StyleguideAvatars />,
 };

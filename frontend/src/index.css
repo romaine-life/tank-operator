@@ -4784,46 +4784,73 @@ button:disabled {
   max-width: 100%;
 }
 
-/* Compact one-line message. The Turns view renders the prompt context this way
-   while it is collapsed: the avatar stays at full size and the body collapses
-   to a single line that ellipsis-truncates to whatever width is left beside
-   the avatar, instead of the prompt disappearing entirely. Expanding restores
-   the full RunMessageBubble. */
+/* Collapsed prompt (Turns view). Collapsing is a pure CSS restyle of the SAME
+   DOM the expanded prompt renders: the prompt text and its inline footer are
+   never remounted, so toggling collapsed/expanded never flickers. The message
+   text becomes a single-row flex line — the prompt ellipsis-truncates and the
+   footer sits at the end, top-anchored to match the expanded inline footer so
+   the arrow/copy/timestamp cluster does not move. The avatar stays at full size
+   beside it. Expanding restores the full bubble via the [data-inline-footer]
+   rules further down. */
 .run-transcript-message[data-compact="true"] {
   align-items: start;
   row-gap: 0;
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-content {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  column-gap: 0.65rem;
-  row-gap: 0.35rem;
-  width: 100%;
+  display: block;
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-text {
-  display: block;
+  display: flex;
+  align-items: flex-end;
+  column-gap: 0.65rem;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Truncate whatever the expanded prompt would render to a single line. The
+   browser collapses newlines under white-space:nowrap, so no separate flattened
+   preview element is needed; the full prompt rides the title attribute for
+   hover. */
+.run-transcript-message[data-compact="true"] .run-plain-message-text {
   flex: 1 1 0;
   min-width: 0;
-  max-width: none;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Collapsed skill-action chip: keep the icon + label on one line and drop the
+   multi-line supplemental body. */
+.run-transcript-message[data-compact="true"] .run-skill-action {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.run-transcript-message[data-compact="true"] .run-skill-action-text {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.run-transcript-message[data-compact="true"] .run-skill-action-detail {
+  display: none;
 }
 
 .run-transcript-message[data-compact="true"] .run-msg-footer {
   flex: 0 0 auto;
-  margin-top: 0;
+  /* Top-anchor with the same nudge as the expanded inline footer (float: right;
+     margin-top: 0.08rem) so toggling does not move the arrow/copy/timestamp
+     cluster. The footer is shorter than the prompt line, so align it to the top
+     of the flex row rather than the flex-end baseline. */
+  align-self: flex-start;
+  margin-top: 0.08rem;
   white-space: nowrap;
-}
-
-.run-msg-compact-text {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .run-turn-question-page-head {
@@ -11665,6 +11692,30 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-message-text a:hover {
   color: #bfdbfe;
   text-decoration-color: currentColor;
+}
+
+/* When a user message footer is inlined (expanded one-line prompts in the
+   Turns view, and every non-attachment user message in the transcript), its
+   action buttons live inside .run-transcript-message-text. Those are UI
+   affordances, not prose links, so they must keep the muted action palette
+   instead of inheriting the blue, underlined markdown-link styling above.
+   Without this reset the left "open in transcript" arrow turns blue and gains
+   an underline the moment the message is expanded. */
+.run-transcript-message-text .run-msg-footer a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.run-transcript-message-text .run-msg-footer a:hover {
+  color: var(--text-primary);
+}
+
+.run-transcript-message-text .run-msg-footer a.run-msg-turn {
+  color: #93c5fd;
+}
+
+.run-transcript-message-text .run-msg-footer a.run-msg-link {
+  color: var(--cyan);
 }
 
 .run-markdown-inline-code {

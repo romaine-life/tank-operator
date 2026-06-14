@@ -249,10 +249,14 @@ test("question page answer card aligns with assistant bubble content gutter", ()
 
 test("non-compact user message footer floats into the final prose line", () => {
   expect(appSource).toMatch(
-    /const inlineFooter =\s*variant === "user" && !compact && visibleAttachments\.length === 0;/,
+    /const inlineFooter =\s*variant === "user" && !isSkillAction && visibleAttachments\.length === 0;/,
   );
   expect(appSource).toMatch(/data-inline-footer=\{inlineFooter \? "true" : undefined\}/);
-  expect(appSource).toMatch(/<RunPlainText>\{visibleText\}<\/RunPlainText>\s*\{inlineFooter && messageFooter\}/);
+  // The prompt text and its inline footer render once, in a stable position
+  // inside the message text, for both collapsed and expanded states — so the
+  // collapse toggle is a pure CSS restyle and never remounts them.
+  expect(appSource).toMatch(/<RunPlainText>\{visibleText\}<\/RunPlainText>/);
+  expect(appSource).toMatch(/\{inlineFooter && messageFooter\}/);
   expect(portfolioTranscriptSource).toMatch(/data-inline-footer=\{inlineFooter \? "true" : undefined\}/);
 
   const inlineContentRule = cssRuleFlexible(
@@ -278,23 +282,80 @@ test("non-compact user message footer floats into the final prose line", () => {
 });
 
 test("compact user message preview keeps controls on the same row", () => {
+  // Collapse is a CSS restyle of the SAME nodes the expanded prompt renders:
+  // the message text becomes a single flex row holding the prompt text and the
+  // footer, so toggling never swaps elements (no remount, no flicker). The old
+  // dedicated .run-msg-compact-text preview element is deleted end to end.
+  expect(appSource.includes("run-msg-compact-text")).toBe(false);
+  expect(indexCssSource.includes("run-msg-compact-text")).toBe(false);
+
   const compactTextRule = cssRule(
     '.run-transcript-message[data-compact="true"] .run-transcript-message-text',
   );
-  expect(compactTextRule).toMatch(/flex:\s*1\s+1\s+0;/);
+  expect(compactTextRule).toMatch(/display:\s*flex;/);
+  expect(compactTextRule).toMatch(/align-items:\s*flex-end;/);
   expect(compactTextRule).toMatch(/min-width:\s*0;/);
-  expect(compactTextRule).toMatch(/max-width:\s*none;/);
 
-  const compactPreviewRule = cssRule(".run-msg-compact-text");
-  expect(compactPreviewRule).toMatch(/width:\s*100%;/);
-  expect(compactPreviewRule).toMatch(/white-space:\s*nowrap;/);
-  expect(compactPreviewRule).toMatch(/text-overflow:\s*ellipsis;/);
+  // The prompt text element itself (not a separate preview) truncates to one
+  // line; nowrap collapses newlines so no flattened string is rendered.
+  const compactPromptRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-plain-message-text',
+  );
+  expect(compactPromptRule).toMatch(/flex:\s*1\s+1\s+0;/);
+  expect(compactPromptRule).toMatch(/white-space:\s*nowrap;/);
+  expect(compactPromptRule).toMatch(/text-overflow:\s*ellipsis;/);
 
   const compactFooterRule = cssRule(
     '.run-transcript-message[data-compact="true"] .run-msg-footer',
   );
   expect(compactFooterRule).toMatch(/flex:\s*0\s+0\s+auto;/);
   expect(compactFooterRule).not.toMatch(/margin-left:\s*auto;/);
+});
+
+test("collapsed prompt footer anchors like the expanded inline footer so a one-line toggle does not jolt", () => {
+  // A one-line user prompt looks identical collapsed vs expanded, so toggling
+  // it must not nudge the arrow/copy/timestamp cluster. The expanded inline
+  // footer floats with a small top nudge; the collapsed (compact) footer has
+  // to top-align (it is shorter than the text line) and use the same nudge
+  // instead of the flex container's flex-end baseline.
+  const inlineFooterRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-msg-footer',
+  );
+  expect(inlineFooterRule).toMatch(/margin-top:\s*0\.08rem;/);
+
+  const compactFooterRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-msg-footer',
+  );
+  expect(compactFooterRule).toMatch(/align-self:\s*flex-start;/);
+  expect(compactFooterRule).toMatch(/margin-top:\s*0\.08rem;/);
+});
+
+test("inlined user-message footer links keep the action palette, not markdown-link blue", () => {
+  // When a user message footer is inlined (expanded one-line prompts, and every
+  // non-attachment user message in the transcript) it lives inside
+  // .run-transcript-message-text, where `.run-transcript-message-text a` paints
+  // anchors blue + underlined. Footer affordance links must opt out: the
+  // "open in transcript" arrow stays muted, the turn arrow keeps its own blue,
+  // the link button stays cyan, and none of them gain an underline.
+  const proseLinkRule = cssRuleFlexible(".run-transcript-message-text a");
+  expect(proseLinkRule).toMatch(/color:\s*#93c5fd;/);
+  expect(proseLinkRule).toMatch(/text-decoration:\s*underline;/);
+
+  const footerLinkRule = cssRuleFlexible(
+    ".run-transcript-message-text .run-msg-footer a",
+  );
+  expect(footerLinkRule).toMatch(/color:\s*var\(--text-muted\);/);
+  expect(footerLinkRule).toMatch(/text-decoration:\s*none;/);
+
+  const footerTurnRule = cssRuleFlexible(
+    ".run-transcript-message-text .run-msg-footer a.run-msg-turn",
+  );
+  expect(footerTurnRule).toMatch(/color:\s*#93c5fd;/);
+
+  const footerLinkButtonRule = cssRuleFlexible(
+    ".run-transcript-message-text .run-msg-footer a.run-msg-link",
+  );
+  expect(footerLinkButtonRule).toMatch(/color:\s*var\(--cyan\);/);
 });
 
 test("question page card stays scrollable when taller than the Turn view", () => {
