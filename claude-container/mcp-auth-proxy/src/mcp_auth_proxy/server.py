@@ -1090,19 +1090,32 @@ async def _verify_github_hot_swap_head(
         if pr_number is None:
             reasons.append("open PR response did not include a PR number")
         else:
-            detail_status, detail_body = await _github_api_json(
-                http,
-                github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/pulls/{pr_number}",
-            )
-            if detail_status >= 400 or not isinstance(detail_body, dict):
-                reasons.append(f"could not read PR #{pr_number} mergeability")
-            else:
+            # GitHub computes `mergeable` asynchronously; it is null ("unknown")
+            # for a moment after a push/edit. Poll briefly rather than treating
+            # "still computing" as not-mergeable (a transient false block).
+            detail_ok = False
+            mergeable = None
+            mergeable_state = ""
+            for poll in range(6):
+                detail_status, detail_body = await _github_api_json(
+                    http,
+                    github_token,
+                    "GET",
+                    f"/repos/{owner}/{repo}/pulls/{pr_number}",
+                )
+                if detail_status >= 400 or not isinstance(detail_body, dict):
+                    break
+                detail_ok = True
                 mergeable = detail_body.get("mergeable")
                 mergeable_state = str(detail_body.get("mergeable_state") or "")
-                if mergeable is not True or mergeable_state == "dirty":
-                    reasons.append(f"PR #{pr_number} is not confirmed mergeable: {mergeable_state or mergeable}")
+                if mergeable is not None and mergeable_state not in {"", "unknown"}:
+                    break
+                if poll < 5:
+                    await asyncio.sleep(2)
+            if not detail_ok:
+                reasons.append(f"could not read PR #{pr_number} mergeability")
+            elif mergeable is not True or mergeable_state == "dirty":
+                reasons.append(f"PR #{pr_number} is not confirmed mergeable: {mergeable_state or mergeable}")
 
     check_status, check_body = await _github_api_json(
         http,
@@ -1444,8 +1457,27 @@ async def _github_graphql_json(http: ClientSession, token: str, query: str, vari
         return resp.status, body if isinstance(body, dict) else {"body": body}
 
 
+def _check_run_sort_key(run: dict) -> tuple:
+    # Newer run wins. started_at is ISO8601 (lexically sortable); id breaks ties.
+    return (str(run.get("started_at") or ""), int(run.get("id") or 0))
+
+
 def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, str, dict]:
     conclusions_ok = {"success", "skipped", "neutral"}
+    # Dedup to the latest run per check name. GitHub returns every run for the
+    # sha, including superseded re-runs; the authoritative state (matching
+    # GitHub's own mergeable_state) is the latest run per name. Without this, a
+    # check that failed then passed — e.g. check-pr-body, which fails on every
+    # session PR until its body is filled — leaves a permanent superseded
+    # failure that false-blocks hot-swap and merge.
+    latest: dict[str, dict] = {}
+    for run in check_runs:
+        if not isinstance(run, dict):
+            continue
+        name = str(run.get("name") or run.get("app", {}).get("slug") or "check")
+        if name not in latest or _check_run_sort_key(run) >= _check_run_sort_key(latest[name]):
+            latest[name] = run
+    check_runs = list(latest.values())
     failed: list[str] = []
     pending: list[str] = []
     completed = 0

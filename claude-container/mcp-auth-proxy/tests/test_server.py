@@ -1147,6 +1147,36 @@ def test_checks_state_classifies_pending_failure_and_success() -> None:
     assert success_payload["completed"] == 1
 
 
+def test_checks_state_dedups_superseded_runs_to_latest() -> None:
+    # check-pr-body fails on the first run (before the PR body is filled), then a
+    # re-run succeeds. The latest run per name wins; the superseded failure must
+    # not block — mirrors GitHub's own mergeable_state. This is the bug that
+    # false-blocked hot-swap + merge for every session PR.
+    runs = [
+        {"name": "check-pr-body", "status": "completed", "conclusion": "success",
+         "started_at": "2026-06-14T17:21:00Z", "id": 2},
+        {"name": "check-pr-body", "status": "completed", "conclusion": "failure",
+         "started_at": "2026-06-14T17:04:00Z", "id": 1},
+        {"name": "backend", "status": "completed", "conclusion": "success",
+         "started_at": "2026-06-14T17:05:00Z", "id": 3},
+    ]
+    state, _, payload = _checks_state(runs, {"state": "success", "statuses": []})
+    assert state == "succeeded"
+    assert payload["failed"] == []
+    assert payload["completed"] == 2  # two distinct checks, latest run of each
+
+    # A genuinely-latest failure still blocks (dedup keeps the newest run).
+    runs_fail = [
+        {"name": "backend", "status": "completed", "conclusion": "failure",
+         "started_at": "2026-06-14T18:00:00Z", "id": 5},
+        {"name": "backend", "status": "completed", "conclusion": "success",
+         "started_at": "2026-06-14T17:00:00Z", "id": 4},
+    ]
+    state2, error2, _ = _checks_state(runs_fail, {"state": "success", "statuses": []})
+    assert state2 == "failed"
+    assert "backend: failure" in error2
+
+
 # --- retry-loop tests ----------------------------------------------
 #
 # The handler exists to prevent an unrecoverable "MCP server not
