@@ -396,24 +396,33 @@ test("Turns collapse uses server-projected final answers instead of page-local a
 });
 
 test("collapsed Turns prompt context stays a minimal one-line entry, not hidden", () => {
-  // Collapsing the prompt must NOT remove the body outright. Instead the
-  // RunMessageBubble renders in compact mode: the avatar stays at full size
-  // and the text collapses to a single ellipsis-truncated line. This pins the
-  // wiring (compact follows the collapsed flag) and the compact renderer so a
-  // future refactor can't silently revert to hiding the prompt. Compact mode
-  // is text-only: controls remain full-size and are laid out beside the
-  // preview line, never stacked under a one-line prompt.
+  // Collapsing the prompt must NOT remove the body outright. The
+  // RunMessageBubble renders in compact mode: the avatar stays at full size and
+  // the text collapses to a single ellipsis-truncated line. Collapse is a pure
+  // CSS restyle of the SAME DOM the expanded prompt renders — the prompt text
+  // and its inline footer are never remounted — so toggling collapsed/expanded
+  // never flickers. This pins the wiring (compact follows the collapsed flag)
+  // and the stable-DOM renderer so a future refactor can't revert to hiding the
+  // prompt OR to the old dual-DOM that swapped a .run-msg-compact-text preview
+  // (and the footer's parent) in and out on every toggle.
   expect(appSource.includes("compact?: boolean;")).toBe(true);
   expect(appSource.includes("compact={selectedTurnContextCollapsed}")).toBe(true);
-  expect(appSource.includes("run-msg-compact-text")).toBe(true);
-  expect(appSource.includes("Compact mode only changes")).toBe(true);
+  // The retired dual-DOM preview element is deleted end to end (App + CSS).
+  expect(appSource.includes("run-msg-compact-text")).toBe(false);
+  expect(indexCssSource.includes("run-msg-compact-text")).toBe(false);
+  // Collapse is CSS-only over a stable tree: the full prompt rides the title
+  // attribute instead of a separate preview element.
+  expect(appSource.includes("const collapsedTitle =")).toBe(true);
+  expect(appSource).toMatch(/title=\{compact \? collapsedTitle : undefined\}/);
   expect(appSource.includes("{!compact && variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(false);
   expect(appSource.includes("{!compact && (\n          <div\n            className=\"run-msg-footer\"")).toBe(false);
   expect(appSource.includes("{variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(true);
   expect(appSource.includes("const messageFooter = (")).toBe(true);
   expect(appSource.includes("className=\"run-msg-footer\"")).toBe(true);
+  // Footer renders in exactly one position for a no-attachment user prompt
+  // (inline, inside the message text) in both collapsed and expanded states.
   expect(appSource.includes("{inlineFooter && messageFooter}")).toBe(true);
-  expect(appSource.includes("{!inlineFooter && messageFooter}")).toBe(true);
+  expect(appSource.includes("{!inlineFooter && showFooter && messageFooter}")).toBe(true);
   expect(appSource.includes("data-has-attachments=")).toBe(false);
   expect(indexCssSource).toMatch(
     /\.run-transcript-message-content\s*\{[^}]*width:\s*100%/,
@@ -426,11 +435,13 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   );
   expect(indexCssSource).not.toMatch(/--run-msg-footer-reserve/);
   expect(indexCssSource).not.toMatch(/\.run-msg-footer\s*\{[^}]*position:\s*absolute/);
+  // Compact is a CSS restyle of the stable tree: the content stays a block while
+  // the message text becomes the single flex row that holds the prompt + footer.
   expect(indexCssSource).toMatch(
-    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*display:\s*flex;[\s\S]*flex-wrap:\s*wrap/,
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*display:\s*block/,
   );
   expect(indexCssSource).toMatch(
-    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-text\s*\{[^}]*flex:\s*1\s+1\s+0;[\s\S]*min-width:\s*0/,
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-text\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*flex-end/,
   );
   expect(indexCssSource).toMatch(
     /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*flex:\s*0\s+0\s+auto;[\s\S]*white-space:\s*nowrap/,
@@ -441,9 +452,11 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   expect(styleguidePortfolioTranscriptSource.includes("collapsed-text-preview-controls-inline")).toBe(true);
   // The old "hide the whole bubble when collapsed" gate must be gone.
   expect(appSource.includes("{!selectedTurnContextCollapsed && (")).toBe(false);
-  // CSS: the compact line truncates with an ellipsis without changing the
-  // avatar's top anchor from the expanded row.
-  expect(indexCssSource).toMatch(/\.run-msg-compact-text\s*\{[^}]*text-overflow:\s*ellipsis/);
+  // CSS: the prompt text element itself (not a separate preview) truncates with
+  // an ellipsis under data-compact, and the avatar's top anchor is unchanged.
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-plain-message-text\s*\{[^}]*text-overflow:\s*ellipsis/,
+  );
   expect(indexCssSource).toMatch(
     /\.run-transcript-message\[data-compact="true"\]\s*\{[^}]*align-items:\s*start/,
   );
