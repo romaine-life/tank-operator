@@ -165,6 +165,12 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			targetRef:  "https://github.com/romaine-life/tank-operator/pull/857",
 		},
 		{
+			name:       "pull request body updated",
+			action:     "github.pull_request.update_body",
+			targetKind: "github_pull_request",
+			targetRef:  "https://github.com/romaine-life/tank-operator/pull/857",
+		},
+		{
 			name:       "break glass requested",
 			action:     "github.break_glass.request",
 			targetKind: "github_repository",
