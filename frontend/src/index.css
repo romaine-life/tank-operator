@@ -113,6 +113,12 @@
   --skill-rollout-fg: #d6a16b;
   --skill-rollout-bg: rgba(126, 83, 43, 0.18);
   --skill-rollout-border: rgba(214, 161, 107, 0.28);
+  /* Restricted-git marker — tints the session-row interaction chip when a
+     session uses Tank-governed Git. Git-amber, distinct from the neutral chip
+     so the swapped glyph reads as a deliberate standing reminder. */
+  --restricted-git-fg: #e0a458;
+  --restricted-git-bg: rgba(224, 164, 88, 0.14);
+  --restricted-git-border: rgba(224, 164, 88, 0.30);
 
   /* Mode chips (auth modes). subscription rides the unified accent; api-key
      uses muted lavender; config-sub uses warm clay — distinct without the
@@ -2118,6 +2124,15 @@ button:disabled {
   width: 12px;
   height: 12px;
   display: block;
+}
+
+/* Restricted-git sessions: tint the interaction chip (which renders the git
+   glyph in place of the GUI monitor glyph) so the row reads as governed Git at
+   a glance. Uses an inset ring instead of a border to keep the 18px box. */
+.mode-interaction-chip.is-restricted-git {
+  background: var(--restricted-git-bg);
+  color: var(--restricted-git-fg);
+  box-shadow: inset 0 0 0 1px var(--restricted-git-border);
 }
 
 .session-avatar {
@@ -4909,6 +4924,9 @@ button:disabled {
 
 .run-turn-question-page-head {
   display: flex;
+  /* Pinned above the scrolling question body so "Question N of M" stays put
+     while the card scrolls. */
+  flex: 0 0 auto;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
@@ -4997,17 +5015,34 @@ button:disabled {
 }
 
 .run-turn-view-body[data-page-kind="question"] {
+  /* The question body is the card's scroll region, exactly like the activity
+     page kind. It must NOT be overflow:visible: the Turn-view .run-main is
+     overflow-y:hidden (the inner body owns scrolling), so a visible-overflow
+     body leaves a tall question card with no scroll container anywhere in the
+     chain — the card overflows this shrink-to-fit flex item and is clipped by
+     .run-main, putting lower options and the set-level Submit button below an
+     unreachable fold. min-height:0 (from the base .run-turn-view-body rule)
+     lets this flex child shrink so overflow-y engages instead of overflowing
+     .run-main. Regression guard: composerCss.test.ts. */
   flex: 0 1 auto;
-  overflow: visible;
+  overflow-y: auto;
   padding-top: 0;
 }
 
 .run-turn-view-body[data-page-kind="question"] .run-tool-ask {
-  width: 100%;
+  width: calc(100% - (2.625rem + 0.55rem));
+  margin-left: calc(2.625rem + 0.55rem);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.035);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+}
+
+@media (max-width: 640px) {
+  .run-turn-view-body[data-page-kind="question"] .run-tool-ask {
+    width: 100%;
+    margin-left: 0;
+  }
 }
 
 .run-turn-view-loading {

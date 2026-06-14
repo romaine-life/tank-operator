@@ -214,3 +214,31 @@ Named behaviors in the session-bar surface. See
   unchanged.
 - **Evidence:** `frontend/src/mobileShell.test.ts` ("drawer session rows are
   touch-sized on compact").
+
+## restricted-git-row-indicator
+
+- **Status:** shipped
+- **Intent:** Give every session row a standing, glanceable marker of whether
+  the session uses Tank-governed (restricted) Git, so a user working across
+  many sessions can tell restricted-git sessions apart without opening each one.
+- **Durable source:** `sessions.capabilities text[]` (the
+  `restricted_git` member), echoed to the SPA on every session-list row. The
+  indicator reads durable session state only — it adds no browser-local flag
+  and cannot contradict the registry.
+- **Runtime behavior:** the session-row interaction chip renders a git glyph
+  (lucide `GitBranchIcon`) in place of the GUI monitor glyph and tints itself
+  with the `--restricted-git-*` accent. The swap is gated on the `gui`
+  interaction because `restricted_git` is only ever granted to repo-backed GUI
+  modes (`REPO_SUPPORTED_MODES`); a non-gui row keeps its normal glyph even if
+  the capability is somehow present. The chip's `title`/`aria-label` read
+  "restricted git" so hover and assistive tech carry the same signal.
+- **Single source of truth:** the capability string, membership test, and the
+  glyph-swap decision live in `frontend/src/sessionModes.ts`
+  (`RESTRICTED_GIT_CAPABILITY`, `hasRestrictedGit`, `interactionIconKind`) and
+  are unit-tested in `sessionModes.test.ts`. The string mirrors the backend
+  constant `SessionCapabilityRestrictedGit`
+  (`backend-go/internal/sessionmodel`); a test pins the literal so backend
+  drift surfaces.
+- **Non-goal:** the indicator does not change Git enforcement, gate any
+  control, or imply the GUI/CLI surface of the session beyond what the
+  capability already encodes. It is a read-only display affordance.

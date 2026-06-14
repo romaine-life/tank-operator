@@ -2552,6 +2552,7 @@ export class Runner {
       providerItemID,
       providerTimelineID: timelineID,
       questions: questions as unknown[],
+      finalAnswer: turn.finalAnswer,
       ...(plan && plan.trim() ? { plan } : {}),
     });
     const replyKey = inputReplyKey(turn.turnID, timelineID, providerItemID);

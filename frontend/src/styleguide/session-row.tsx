@@ -1,4 +1,4 @@
-import { MonitorIcon, TerminalIcon, XIcon } from "lucide-react";
+import { GitBranchIcon, MonitorIcon, TerminalIcon, XIcon } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
 import { AgentAvatarIcon, requireSessionAvatar } from "../sessionAvatars";
 import {
@@ -13,19 +13,33 @@ function ModePair({
   provider,
   interaction,
   label,
+  restrictedGit = false,
 }: {
   provider: "anthropic" | "codex";
   interaction: "gui" | "cli";
   label: string;
+  restrictedGit?: boolean;
 }) {
-  const Interaction = interaction === "gui" ? MonitorIcon : TerminalIcon;
+  // Mirrors App.tsx InteractionIcon: restricted-git GUI sessions swap the
+  // monitor glyph for a git glyph and tint the chip.
+  const showRestrictedGit = restrictedGit && interaction === "gui";
+  const Interaction = showRestrictedGit
+    ? GitBranchIcon
+    : interaction === "gui"
+      ? MonitorIcon
+      : TerminalIcon;
+  const interactionLabel = showRestrictedGit ? "restricted git" : interaction;
   return (
     <>
       <span className="mode mode-icon-only mode-provider-chip" title={label} aria-label={label}>
         <ProviderIcon provider={provider} className="mode-provider-icon" />
         <span className="sr-only">{label}</span>
       </span>
-      <span className="mode mode-icon-only mode-interaction-chip" title={interaction} aria-label={interaction}>
+      <span
+        className={`mode mode-icon-only mode-interaction-chip${showRestrictedGit ? " is-restricted-git" : ""}`}
+        title={interactionLabel}
+        aria-label={interactionLabel}
+      >
         <Interaction className="mode-interaction-icon" aria-hidden="true" />
       </span>
     </>
@@ -41,7 +55,9 @@ export function StyleguideSessionRow() {
         <p style={captionStyle}>
           Current sidebar rows: agent avatar, read-only name label, status dot,
           provider and interaction chips, boot/runtime stats, activity chips,
-          and inline actions such as save for config sessions.
+          and inline actions such as save for config sessions. Restricted-git
+          sessions swap the GUI monitor glyph for a tinted git glyph as a
+          standing reminder that the session uses Tank-governed Git.
         </p>
         <section style={sectionStyle}>
           <ul className="sessions" style={{ maxWidth: 420, listStyle: "none", padding: 0, margin: 0 }}>
@@ -83,6 +99,21 @@ export function StyleguideSessionRow() {
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-needs-input" title="Needs input" aria-label="status: Needs input" />
                 <ModePair provider="anthropic" interaction="gui" label="Claude GUI" />
+              </div>
+            </li>
+            <li>
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
+              <div className="session-row-top">
+                <span className="session-open" title="restricted-git-feature">
+                  <span className="session-id">restricted-git-feature</span>
+                </span>
+                <button className="session-delete" aria-label="delete session" type="button">
+                  <XIcon size={14} aria-hidden="true" />
+                </button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="status-dot status-agent-running" title="Agent working" aria-label="status: Agent working" />
+                <ModePair provider="anthropic" interaction="gui" label="Claude GUI" restrictedGit />
               </div>
             </li>
             <li>

@@ -349,6 +349,29 @@ def test_mint_github_installation_token_requests_write_scope() -> None:
     }
 
 
+def test_mint_github_installation_token_full_requests_full_scope() -> None:
+    body = (
+        b"event: message\n"
+        b'data: {"jsonrpc":"2.0","result":{"structuredContent":{"token":"full-token"}}}\n\n'
+    )
+    http = _FakeRawHTTP(_FakeRawResponse(200, body))
+
+    token = asyncio.run(
+        _mint_github_installation_token(
+            http, "auth-token", "romaine-life/tank-operator", full=True
+        )
+    )
+
+    # Break-glass mint_full_git_token must ask mcp-github for the App's full
+    # permission set (full=True), not the contents-only clone scope.
+    assert token == "full-token"
+    assert http.calls[0]["json"]["params"]["arguments"] == {
+        "repos": ["romaine-life/tank-operator"],
+        "write": True,
+        "full": True,
+    }
+
+
 def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path) -> None:
     calls: list[tuple[tuple[str, ...], dict | None]] = []
 

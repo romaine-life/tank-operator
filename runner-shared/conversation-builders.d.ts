@@ -83,6 +83,7 @@ export interface AskUserQuestionHandoffEventArgs {
   // ExitPlanMode plan-approval pauses pass the plan markdown so the Turns
   // question page renders it above the Approve/Request-changes question.
   plan?: string;
+  finalAnswer?: TankFinalAnswer;
 }
 
 export interface AskUserQuestionHandoffEvents {
