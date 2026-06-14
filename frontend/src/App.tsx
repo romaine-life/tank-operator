@@ -296,6 +296,7 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import { nextAskUserQuestionSelections } from "./askUserQuestionSelection";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -9215,13 +9216,11 @@ function PRLaneApprovalIndicator({
   busyEventId,
   onApprove,
   onDeny,
-  onAutoApprove,
 }: {
   requests: PRLaneRequest[];
   busyEventId: string | null;
-  onApprove: (request: PRLaneRequest) => void;
+  onApprove: (request: PRLaneRequest, override?: "listed" | "count" | "unlimited") => void;
   onDeny: (request: PRLaneRequest) => void;
-  onAutoApprove: () => void;
 }) {
   const [open, setOpen] = useState(false);
   if (requests.length === 0) return null;
@@ -9241,9 +9240,6 @@ function PRLaneApprovalIndicator({
         <div className="pr-lane-approval-panel">
           <div className="pr-lane-approval-head">
             <span>branch requests</span>
-            <button type="button" onClick={onAutoApprove}>
-              approve all for session
-            </button>
           </div>
           <div className="pr-lane-approval-list">
             {requests.map((request) => {
@@ -9256,10 +9252,25 @@ function PRLaneApprovalIndicator({
                       <span>{request.laneName}</span>
                     </div>
                     <div className="pr-lane-approval-meta">
-                      {[request.relationship, request.base ? `from ${request.base}` : "", request.repo]
+                      {[
+                        request.allocationRequest
+                          ? request.unlimited
+                            ? "unlimited"
+                            : request.requestedCount
+                              ? `${request.requestedCount} branches`
+                              : `${request.laneNames?.length || request.proposedBranches?.length || 0} named branches`
+                          : request.relationship,
+                        request.base ? `from ${request.base}` : "",
+                        request.repo,
+                      ]
                         .filter(Boolean)
                         .join(" · ")}
                     </div>
+                    {request.laneNames && request.laneNames.length > 0 && (
+                      <div className="pr-lane-approval-branches">
+                        {request.laneNames.join(", ")}
+                      </div>
+                    )}
                     {request.scope && (
                       <div className="pr-lane-approval-scope">{request.scope}</div>
                     )}
@@ -9269,8 +9280,23 @@ function PRLaneApprovalIndicator({
                   </div>
                   <div className="pr-lane-approval-actions">
                     <button type="button" disabled={busy} onClick={() => onApprove(request)}>
-                      approve
+                      {request.allocationRequest ? "approve request" : "approve"}
                     </button>
+                    {request.allocationRequest && (
+                      <>
+                        {(request.laneNames?.length || request.proposedBranches?.length) ? (
+                          <button type="button" disabled={busy} onClick={() => onApprove(request, "listed")}>
+                            listed only
+                          </button>
+                        ) : null}
+                        <button type="button" disabled={busy} onClick={() => onApprove(request, "count")}>
+                          10
+                        </button>
+                        <button type="button" disabled={busy} onClick={() => onApprove(request, "unlimited")}>
+                          unlimited
+                        </button>
+                      </>
+                    )}
                     <button type="button" disabled={busy} onClick={() => onDeny(request)}>
                       deny
                     </button>
@@ -9892,19 +9918,12 @@ function RunAwaitingInputCard({
   function toggleSelection(q: AskUserQuestion, label: string): void {
     if (resolved || submitting) return;
     updateDraft((draft) => {
-      const prev = draft.selections;
-      const current = prev[q.question] ?? [];
-      let nextSelections: Record<string, string[]>;
-      if (q.multiSelect) {
-        const next = current.includes(label)
-          ? current.filter((l) => l !== label)
-          : [...current, label];
-        nextSelections = { ...prev, [q.question]: next };
-      } else {
-        // Single-select: clicking always selects exactly that label
-        // (re-clicking selected option is a no-op submit affordance).
-        nextSelections = { ...prev, [q.question]: [label] };
-      }
+      const nextSelections = nextAskUserQuestionSelections({
+        previousSelections: draft.selections,
+        question: q.question,
+        label,
+        multiSelect: q.multiSelect,
+      });
       return { ...draft, selections: nextSelections };
     });
   }
@@ -15440,10 +15459,34 @@ function ChatPane({
     [controlActionRows],
   );
   const postPRLaneDecision = useCallback(
-    async (request: PRLaneRequest, decision: "approve" | "deny") => {
+    async (
+      request: PRLaneRequest,
+      decision: "approve" | "deny",
+      override?: "listed" | "count" | "unlimited",
+    ) => {
       if (publicView || readOnly) return;
       setPRLaneApprovalBusyId(request.eventId);
       try {
+        const requestedBranches = [
+          ...(request.laneNames ?? []),
+          ...(request.proposedBranches ?? []),
+        ];
+        const body =
+          decision === "approve" && request.allocationRequest
+            ? {
+                note: override
+                  ? `agent-requested allocation approved with ${override} override`
+                  : "agent-requested allocation approved",
+                branch_names: override === "count" || override === "unlimited" ? [] : requestedBranches,
+                limit:
+                  override === "count"
+                    ? 10
+                    : override === "listed"
+                      ? requestedBranches.length
+                      : request.requestedCount ?? 0,
+                unlimited: override === "unlimited" || (override === undefined && request.unlimited === true),
+              }
+            : {};
         await authedFetch(
           scopedSessionPathForPane(
             `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/${decision}`,
@@ -15451,7 +15494,7 @@ function ChatPane({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify(body),
           },
         );
         await fetchControlActionEntries();
@@ -15467,50 +15510,6 @@ function ChatPane({
       session.id,
     ],
   );
-  const autoApprovePRLanes = useCallback(async () => {
-    if (publicView || readOnly) return;
-    setPRLaneApprovalBusyId("__auto__");
-    try {
-      const repo = prLaneRequests[0]?.repo ?? "";
-      await authedFetch(
-        scopedSessionPathForPane(
-          `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/auto-approve`,
-        ),
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            repo,
-            limit: 10,
-            reason: "approved from session composer",
-          }),
-        },
-      );
-      const pending = [...prLaneRequests];
-      for (const request of pending) {
-        await authedFetch(
-          scopedSessionPathForPane(
-            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/approve`,
-          ),
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ note: "session auto-approval enabled" }),
-          },
-        );
-      }
-      await fetchControlActionEntries();
-    } finally {
-      setPRLaneApprovalBusyId(null);
-    }
-  }, [
-    fetchControlActionEntries,
-    prLaneRequests,
-    publicView,
-    readOnly,
-    scopedSessionPathForPane,
-    session.id,
-  ]);
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
       setBackgroundTaskLedgerEntries([]);
@@ -21454,14 +21453,11 @@ function ChatPane({
             <PRLaneApprovalIndicator
               requests={prLaneRequests}
               busyEventId={prLaneApprovalBusyId}
-              onApprove={(request) => {
-                void postPRLaneDecision(request, "approve");
+              onApprove={(request, override) => {
+                void postPRLaneDecision(request, "approve", override);
               }}
               onDeny={(request) => {
                 void postPRLaneDecision(request, "deny");
-              }}
-              onAutoApprove={() => {
-                void autoApprovePRLanes();
               }}
             />
             {attachments.length > 0 && (

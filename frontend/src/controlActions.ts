@@ -49,6 +49,11 @@ export type PRLaneRequest = {
   createdAt?: string;
   repo?: string;
   laneName: string;
+  allocationRequest?: boolean;
+  laneNames?: string[];
+  proposedBranches?: string[];
+  requestedCount?: number;
+  unlimited?: boolean;
   relationship?: string;
   base?: string;
   scope?: string;
@@ -103,6 +108,8 @@ function actionTitle(action: string | undefined): string {
   switch (action) {
     case "github.pull_request.merge":
       return "GitHub PR merge";
+    case "github.pull_request.rename":
+      return "GitHub PR renamed";
     case "github.pull_request.ready_for_review":
       return "GitHub PR ready";
     case "github.pull_request.open":
@@ -179,7 +186,11 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
   const resolvedInvocations = new Set<string>();
   for (const row of rows) {
     const action = nonempty(row.action);
-    if (action !== "github.pr_lane.approve" && action !== "github.pr_lane.deny") {
+    if (
+      action !== "github.pr_lane.approve" &&
+      action !== "github.pr_lane.deny" &&
+      action !== "github.pr_lane.auto_approve"
+    ) {
       continue;
     }
     const invocationID = nonempty(row.invocation_id);
@@ -194,12 +205,29 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
       return [];
     }
     const payload = payloadObject(row.payload);
-    const laneName = nonempty(payload.lane_name);
+    const allocationRequest = payload.allocation_request === true;
+    const laneNames = Array.isArray(payload.lane_names)
+      ? payload.lane_names.flatMap((value) => {
+          const name = nonempty(value);
+          return name ? [name] : [];
+        })
+      : [];
+    const proposedBranches = Array.isArray(payload.proposed_branches)
+      ? payload.proposed_branches.flatMap((value) => {
+          const branch = nonempty(value);
+          return branch ? [branch] : [];
+        })
+      : [];
+    const laneName = nonempty(payload.lane_name) ?? (allocationRequest ? "branch allocation" : undefined);
     if (!laneName) return [];
+    const requestedCount =
+      typeof payload.requested_count === "number" && Number.isFinite(payload.requested_count)
+        ? payload.requested_count
+        : undefined;
     const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
       .filter(Boolean)
       .join("/");
-    return [{
+    const request: PRLaneRequest = {
       eventId,
       invocationId,
       createdAt: nonempty(row.created_at),
@@ -210,6 +238,12 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
       scope: nonempty(payload.scope),
       reason: nonempty(payload.reason),
       proposedBranch: nonempty(payload.proposed_branch),
-    }];
+    };
+    if (allocationRequest) request.allocationRequest = true;
+    if (laneNames.length > 0) request.laneNames = laneNames;
+    if (proposedBranches.length > 0) request.proposedBranches = proposedBranches;
+    if (requestedCount !== undefined) request.requestedCount = requestedCount;
+    if (payload.unlimited === true) request.unlimited = true;
+    return [request];
   });
 }

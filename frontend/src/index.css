@@ -3137,6 +3137,7 @@ button:disabled {
 }
 
 .pr-lane-approval-meta,
+.pr-lane-approval-branches,
 .pr-lane-approval-scope,
 .pr-lane-approval-reason {
   margin-top: 0.15rem;

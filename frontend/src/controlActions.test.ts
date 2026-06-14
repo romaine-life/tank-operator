@@ -57,6 +57,61 @@ describe("pendingPRLaneRequests", () => {
       },
     ]);
   });
+
+  test("returns allocation requests and resolves them after auto-approval", () => {
+    const rows: ControlActionRow[] = [
+      {
+        event_id: "allocation-1",
+        invocation_id: "alloc-inv-1",
+        action: "github.pr_lane.request",
+        status: "started",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: {
+          allocation_request: true,
+          lane_names: ["docs", "backend"],
+          requested_count: 2,
+          reason: "split review",
+        },
+      },
+      {
+        event_id: "allocation-2",
+        invocation_id: "alloc-inv-2",
+        action: "github.pr_lane.request",
+        status: "started",
+        repo_owner: "romaine-life",
+        repo_name: "tank-operator",
+        payload: {
+          allocation_request: true,
+          unlimited: true,
+          reason: "large migration",
+        },
+      },
+      {
+        event_id: "auto-2",
+        invocation_id: "alloc-inv-2",
+        action: "github.pr_lane.auto_approve",
+        status: "succeeded",
+      },
+    ];
+
+    expect(pendingPRLaneRequests(rows)).toEqual([
+      {
+        eventId: "allocation-1",
+        invocationId: "alloc-inv-1",
+        repo: "romaine-life/tank-operator",
+        laneName: "branch allocation",
+        allocationRequest: true,
+        laneNames: ["docs", "backend"],
+        requestedCount: 2,
+        relationship: undefined,
+        base: undefined,
+        scope: undefined,
+        reason: "split review",
+        proposedBranch: undefined,
+      },
+    ]);
+  });
 });
 
 describe("controlActionRowsToEntries", () => {
@@ -75,5 +130,20 @@ describe("controlActionRowsToEntries", () => {
 
     expect(entries[0]?.taskSummary).toBe("PR lane request");
     expect(entries[0]?.taskStatus).toBe("running");
+  });
+
+  test("labels governed PR rename events", () => {
+    const entries = controlActionRowsToEntries([
+      {
+        event_id: "rename-1",
+        invocation_id: "rename-inv-1",
+        action: "github.pull_request.rename",
+        status: "succeeded",
+        target_ref: "https://github.com/romaine-life/tank-operator/pull/1176",
+      },
+    ]);
+
+    expect(entries[0]?.taskSummary).toBe("GitHub PR renamed");
+    expect(entries[0]?.taskStatus).toBe("completed");
   });
 });
