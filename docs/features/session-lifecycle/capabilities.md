@@ -418,8 +418,11 @@ Affected contracts:
 Enforcement is in the server we own, not the sidecar:
 - `mcp-azure-personal` requires a valid auth.romaine.life JWT identifying the
   caller's session **and** an active azure break-glass grant. With no grant it
-  serves an empty `tools/list` and refuses `tools/call` — including on a direct
-  in-cluster call from the agent shell, not just the localhost MCP path.
+  returns an MCP-shaped JSON-RPC refusal — **not** a bare HTTP 403, which the
+  Claude MCP SDK treats as an OAuth challenge (it falls into an
+  `authenticate`/`complete_authentication` flow instead of failing cleanly) —
+  including on a direct in-cluster call from the agent shell, not just the
+  localhost MCP path.
 - A sidecar gate cannot be the boundary here: every session pod shares the
   `claude-session` ServiceAccount (so RBAC cannot express per-session
   break-glass), and the `mcp-auth-proxy` sidecar shares the pod (IP + SA) with
@@ -451,12 +454,22 @@ Contract impact:
 - The proxy forwards the auth.romaine.life service JWT (`X-Auth-Romaine-Token`)
   and the caller-session headers to port 9991 so the server can identify the
   session and look up its grant.
+- **Client surfacing (mirrors git break-glass).** `azure-personal` is absent
+  from the default session `.mcp.json` while locked, so the harness never
+  connects to a locked server (no 403/OAuth noise). On an approved grant,
+  `request_azure_break_glass` activates it back into `.mcp.json` / Codex / Claude
+  settings (`_activate_azure_break_glass_mcp_config`) — the reconnect trigger
+  that surfaces its tools, exactly how git break-glass surfaces
+  `mint_full_git_token`. Enforcement (server-side grant check) and surfacing
+  (`.mcp.json` activation) are separate concerns and the design needs both: a
+  server-side gate alone is invisible to the harness, with no event to reconnect
+  on after a grant.
 
 Open hardening:
-- `hermes` shares the `mcp.tank-operator.io/servers/azure-personal` RoleBinding
-  with `claude-session`; the cutover must exempt Hermes (a standing grant or a
-  caller-identity allowlist in `mcp-azure-personal`) so its unattended azure
-  use is not broken.
+- Hermes (the only other subject on `mcp-azure-personal`'s RoleBinding) was
+  retired, so its subject was dropped from the RoleBinding and no exemption is
+  configured. `breakGlass.exemptSubjects` remains for any future unattended
+  automation that legitimately needs Azure without a per-session grant.
 - Until the auth.romaine.life `intent=azure-break-glass` approval card exists,
   operators can create the grant by POSTing Tank's internal endpoint directly,
   the same fallback git break-glass uses today.
