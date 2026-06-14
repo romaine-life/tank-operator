@@ -9305,6 +9305,11 @@ function PRLaneApprovalIndicator({
           <div className="pr-lane-approval-list">
             {requests.map((request) => {
               const busy = busyEventId === request.eventId;
+              const repoScope = request.allRepos
+                ? "all repos"
+                : request.repos && request.repos.length > 1
+                  ? request.repos.join(", ")
+                  : request.repo;
               return (
                 <div className="pr-lane-approval-item" key={request.eventId}>
                   <div className="pr-lane-approval-main">
@@ -9322,7 +9327,7 @@ function PRLaneApprovalIndicator({
                               : `${request.laneNames?.length || request.proposedBranches?.length || 0} named branches`
                           : request.relationship,
                         request.base ? `from ${request.base}` : "",
-                        request.repo,
+                        repoScope,
                       ]
                         .filter(Boolean)
                         .join(" · ")}
@@ -15525,14 +15530,14 @@ function ChatPane({
                 note: override
                   ? `agent-requested allocation approved with ${override} override`
                   : "agent-requested allocation approved",
-                branch_names: override === "count" || override === "unlimited" ? [] : requestedBranches,
-                limit:
-                  override === "count"
-                    ? 10
-                    : override === "listed"
-                      ? requestedBranches.length
-                      : request.requestedCount ?? 0,
-                unlimited: override === "unlimited" || (override === undefined && request.unlimited === true),
+                branch_scope:
+                  override === "unlimited" || (override === undefined && request.unlimited === true)
+                    ? { kind: "unlimited" }
+                    : override === "count"
+                      ? { kind: "count", count: 10 }
+                      : requestedBranches.length > 0
+                        ? { kind: "named", branches: requestedBranches }
+                        : { kind: "count", count: request.requestedCount ?? 10 },
               }
             : {};
         await authedFetch(
