@@ -1706,6 +1706,27 @@ export class Runner {
     return rateLimitInfo;
   }
 
+  private reportProviderRateLimitRetryStallInfo(message: ClaudeProviderEvent): void {
+    const rateLimitInfo =
+      claudeRateLimitInfo(message) ??
+      ({
+        provider: "claude",
+        status: "rejected",
+        rateLimitType: "api_retry",
+        ...(typeof message.uuid === "string" && message.uuid.trim()
+          ? { uuid: message.uuid.trim().slice(0, 512) }
+          : {}),
+        ...(typeof message.session_id === "string" && message.session_id.trim()
+          ? { session_id: message.session_id.trim().slice(0, 512) }
+          : {}),
+      } satisfies Record<string, unknown>);
+    void reportRuntimeConfig(this.cfg, {
+      providerRateLimitInfo: rateLimitInfo,
+    }).catch((err) => {
+      console.warn("provider retry-stall rate-limit info report failed:", err);
+    });
+  }
+
   private scheduleProviderUsageReport(delayMs: number): void {
     const timer = setTimeout(() => {
       void this.reportProviderUsageSnapshot();
@@ -1822,6 +1843,7 @@ export class Runner {
     retryCount: number,
   ): Promise<void> {
     providerRateLimitDecisionTotal.labels("retry_stall_failed").inc();
+    this.reportProviderRateLimitRetryStallInfo(message);
     if (turn.terminalEmitted) return;
     providerFailureClassTotal.labels("rate_limit").inc();
     const error =
