@@ -283,6 +283,7 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import { nextAskUserQuestionSelections } from "./askUserQuestionSelection";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -9846,19 +9847,12 @@ function RunAwaitingInputCard({
   function toggleSelection(q: AskUserQuestion, label: string): void {
     if (resolved || submitting) return;
     updateDraft((draft) => {
-      const prev = draft.selections;
-      const current = prev[q.question] ?? [];
-      let nextSelections: Record<string, string[]>;
-      if (q.multiSelect) {
-        const next = current.includes(label)
-          ? current.filter((l) => l !== label)
-          : [...current, label];
-        nextSelections = { ...prev, [q.question]: next };
-      } else {
-        // Single-select: clicking always selects exactly that label
-        // (re-clicking selected option is a no-op submit affordance).
-        nextSelections = { ...prev, [q.question]: [label] };
-      }
+      const nextSelections = nextAskUserQuestionSelections({
+        previousSelections: draft.selections,
+        question: q.question,
+        label,
+        multiSelect: q.multiSelect,
+      });
       return { ...draft, selections: nextSelections };
     });
   }
