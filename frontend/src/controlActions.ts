@@ -61,6 +61,18 @@ export type PRLaneRequest = {
   proposedBranch?: string;
 };
 
+export type BreakGlassRequest = {
+  eventId: string;
+  invocationId: string;
+  createdAt?: string;
+  repo: string;
+  repoOwner?: string;
+  repoName?: string;
+  reason?: string;
+  source?: string;
+  approvalUrl?: string;
+};
+
 function nonempty(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -252,4 +264,61 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
     if (payload.unlimited === true) request.unlimited = true;
     return [request];
   });
+}
+
+// pendingBreakGlassRequests surfaces git break-glass requests that are still
+// awaiting a human grant: a started `github.break_glass.request` whose repo has
+// no unexpired `github.break_glass.grant`. Deduped to the newest request per
+// repo. This is what lights the "approve break glass" chip on the pull-request
+// composer button so an operator can grant from the Tank UI instead of the
+// auth.romaine.life approval URL (whose console callback does not yet exist).
+export function pendingBreakGlassRequests(
+  rows: ControlActionRow[],
+  now: number = Date.now(),
+): BreakGlassRequest[] {
+  const grantedRepos = new Set<string>();
+  for (const row of rows) {
+    if (nonempty(row.action) !== "github.break_glass.grant") continue;
+    if (nonempty(row.status) !== "succeeded") continue;
+    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
+      .filter(Boolean)
+      .join("/");
+    if (!repo) continue;
+    const expiresAt = nonempty(payloadObject(row.payload).expires_at);
+    if (!expiresAt) continue;
+    const expiry = Date.parse(expiresAt);
+    if (Number.isNaN(expiry) || expiry <= now) continue;
+    grantedRepos.add(repo);
+  }
+  const byRepo = new Map<string, BreakGlassRequest>();
+  for (const row of rows) {
+    if (nonempty(row.action) !== "github.break_glass.request") continue;
+    if (nonempty(row.status) !== "started") continue;
+    const eventId = nonempty(row.event_id);
+    const invocationId = nonempty(row.invocation_id);
+    if (!eventId || !invocationId) continue;
+    const repoOwner = nonempty(row.repo_owner);
+    const repoName = nonempty(row.repo_name);
+    const repo = [repoOwner, repoName].filter(Boolean).join("/");
+    if (!repo || grantedRepos.has(repo)) continue;
+    const payload = payloadObject(row.payload);
+    const request: BreakGlassRequest = {
+      eventId,
+      invocationId,
+      createdAt: nonempty(row.created_at),
+      repo,
+      repoOwner,
+      repoName,
+      reason: nonempty(payload.reason),
+      source: nonempty(payload.source),
+      approvalUrl: nonempty(payload.approval_url),
+    };
+    const existing = byRepo.get(repo);
+    if (!existing || (request.createdAt ?? "") > (existing.createdAt ?? "")) {
+      byRepo.set(repo, request);
+    }
+  }
+  return Array.from(byRepo.values()).sort((a, b) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
 }
