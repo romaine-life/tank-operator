@@ -123,6 +123,14 @@ yanking the viewport away from a user reading history.
   nothing to navigate to. (The Turns view reads the page-defaulted `/activity`
   endpoint, so without this control a long turn would show only its last page
   there with no way back.)
+- On a compact viewport (`useViewport().isCompact`, <= BP_COMPACT = 768px) the
+  desktop stepper and the combined turn/page picker collapse into a single
+  always-present position button (`.run-turn-pager-compact-trigger`, showing
+  "Turn N · Page P") that opens the identical controls in a bottom `Sheet`. This
+  is the sanctioned compact rendering of the never-hidden invariant: the button
+  is never omitted while a turn is selected and renders disabled ("No turns")
+  when there is no turn, navigating closes the sheet, and the desktop control is
+  unchanged.
 - The Turns view shows the selected turn's server-projected initiating message
   above the activity page body when that turn has a human `user_message.created`
   event. It must not rediscover that message from the loaded transcript window

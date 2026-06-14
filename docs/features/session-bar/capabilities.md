@@ -200,6 +200,21 @@ Named behaviors in the session-bar surface. See
   the whole batch by design because every class recomputes from durable
   state; restoring per-event emits restores the unbounded derivation cost.
 
+## drawer-touch-targets
+
+- **Status:** shipped
+- **Intent:** Make the session list usable by touch when it renders inside the
+  compact navigation drawer, where the desktop row density and the hover-revealed
+  delete control are too small for a finger.
+- **Render model:** same `sidebarBody` fragment as desktop — this is
+  density/touch-target tuning only, scoped to the drawer (`.sidebar-in-drawer`,
+  `App.tsx`) at <= BP_PHONE. The per-session delete/close control becomes a
+  ~40px (2.5rem) target and the `.session-open` rows get `var(--space-2)` of
+  vertical padding. No source-of-truth, gesture, or behavior change; desktop is
+  unchanged.
+- **Evidence:** `frontend/src/mobileShell.test.ts` ("drawer session rows are
+  touch-sized on compact").
+
 ## restricted-git-row-indicator
 
 - **Status:** shipped

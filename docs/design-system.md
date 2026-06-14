@@ -160,4 +160,7 @@ Rules:
   top bar below the notch and the composer above the on-screen keyboard; the
   shell height tracks `100dvh`.
 - Canonical breakpoints are 768 (shell -> drawer) and 640 (densest tuning). New
-  compact styling keys off these; do not sprinkle new ad-hoc widths.
+  compact styling keys off these; do not sprinkle new ad-hoc widths. This is
+  CI-enforced by the `frontend/src/mobileShell.test.ts` breakpoint scanner, which
+  fails on a new ad-hoc `@media` width; 1100px remains a documented exception for
+  the debug session-list grid.

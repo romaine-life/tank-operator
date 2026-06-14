@@ -375,6 +375,18 @@ Contract impact:
 - Genuinely desktop-only surfaces (terminal attach, the drag/crop avatar editor)
   render an honest `DesktopOnly` "open on a larger screen" card on compact rather
   than a broken surface. This is a stated product boundary, not a fallback path.
+- Overlay menus are viewport-clamped so none overflows a phone width: `.dropdown`,
+  `.session-tab-menu`, `.run-tab-more-menu`, `.run-turn-view-select-menu`, and the
+  hover-card carry `max-width: min(<rem>, calc(100vw - 2rem))` in `index.css`.
+- The run-pane chrome reflows on compact, not just the shell: the turn/page
+  navigation collapses into a single always-present position button that opens a
+  bottom sheet (Transcript Navigation `Compact transcript pager`), and the files
+  panel becomes a single-column master-detail at <= BP_PHONE (Artifacts And Files
+  `mobile-files-master-detail`).
+- The canonical-breakpoint rule is CI-enforced: ad-hoc `@media` widths were
+  consolidated to 768 (shell/layout) and 640 (densest), with 1100 kept as a
+  documented exception (debug-only session-list grid). A new ad-hoc width fails the
+  `frontend/src/mobileShell.test.ts` breakpoint scanner.
 
 Evidence:
 - `frontend/src/breakpoints.test.ts` pins the canonical breakpoints and the
@@ -385,6 +397,11 @@ Evidence:
   top-bar row), the BP_COMPACT/CSS alignment, the drawer/top-bar/desktop-only
   wiring, the non-draggable-on-compact invariant, and the visible delete
   affordance.
+- `frontend/src/mobileShell.test.ts` also pins the reflow/clamp pass: the
+  viewport-clamped overlay menus and hover-card, the compact turn/page pager
+  (sheet-backed, including the empty disabled state), the single-column files
+  master-detail, and the breakpoint scanner that fails on a new ad-hoc `@media`
+  width.
 - Owed before "done" by docs/quality-timeframes.md: real-device validation (iOS
   Safari + Android Chrome) of the sign-in bounce, drawer focus/scroll-lock
   behavior, and the keyboard-aware composer at 390/768px. This is named scope,

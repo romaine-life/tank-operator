@@ -408,7 +408,7 @@ button:disabled {
   align-items: start;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 768px) {
   .admin-avatar-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1047,7 +1047,7 @@ button:disabled {
   color: #fecaca;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .avatar-lightbox-content,
   .avatar-lightbox-content[data-has-backing="false"] {
     grid-template-columns: minmax(0, 1fr);
@@ -1589,6 +1589,9 @@ button:disabled {
   border: 1px solid var(--gray-800);
   border-radius: var(--radius-xl);
   min-width: 14rem;
+  /* Never let the account menu overflow a phone-width viewport. Mirrors the
+     .run-turn-view-page-select clamp. */
+  max-width: min(16rem, calc(100vw - 2rem));
   box-shadow: var(--shadow-dropdown);
   font-size: var(--text-sm);
   color: var(--text-body);
@@ -3644,7 +3647,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 768px) {
   .home-grid {
     grid-template-columns: 1fr;
   }
@@ -4066,6 +4069,7 @@ button:disabled {
 .run-tab-more-menu {
   width: 11rem;
   min-width: 11rem;
+  max-width: min(11rem, calc(100vw - 2rem));
   padding: 0.35rem;
   border-radius: 0.5rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -4077,6 +4081,7 @@ button:disabled {
 .session-tab-menu {
   width: 12.5rem;
   min-width: 12.5rem;
+  max-width: min(12.5rem, calc(100vw - 2rem));
 }
 
 .run-tab-more-item {
@@ -4187,8 +4192,11 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  min-width: max-content;
-  flex-wrap: nowrap;
+  /* Wrap gracefully when cramped (e.g. the 769-900px range) instead of leaning
+     on an ad-hoc breakpoint; the compact pager owns <= BP_COMPACT. The nav
+     group itself stays on one line (see the rule below). */
+  min-width: 0;
+  flex-wrap: wrap;
   justify-content: flex-end;
   flex: 0 0 auto;
 }
@@ -4198,34 +4206,121 @@ button:disabled {
   min-width: max-content;
 }
 
-@media (max-width: 900px) {
-  .run-tabs.run-tabs-turn-view {
-    flex-wrap: wrap;
-    overflow-x: visible;
-  }
-
-  .run-tabs-turn-view .run-turn-titlebar-controls {
-    flex: 1 1 0;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    min-width: 0;
-  }
-
-  .run-tabs-turn-view .run-turn-view-page-select {
-    width: 12rem;
-    min-width: 12rem;
-  }
+/* Compact turn/page pager (<= BP_COMPACT) — a single position button that opens
+   the identical navigation in a bottom sheet. See RunTurnViewControls. */
+.run-turn-pager-compact {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
-@media (max-width: 420px) {
-  .run-tabs-turn-view .run-turn-view-page-select {
-    width: 10.25rem;
-    min-width: 10.25rem;
-  }
+.run-turn-pager-compact-trigger {
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(16rem, calc(100vw - 2rem));
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
 
-  .run-tabs-turn-view .run-turn-view-select {
-    min-width: 6.75rem;
-  }
+.run-turn-pager-compact-trigger:hover:not(:disabled),
+.run-turn-pager-compact-trigger[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.run-turn-pager-compact-trigger:focus-visible {
+  outline: none;
+  border-color: rgba(147, 197, 253, 0.8);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.16);
+}
+
+.run-turn-pager-compact-trigger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.run-turn-pager-compact-trigger > svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.run-turn-pager-compact-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-turn-pager-compact-sep {
+  color: var(--text-muted);
+}
+
+.run-turn-pager-sheet {
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 80vh;
+  padding: var(--space-4) var(--space-4)
+    calc(var(--space-4) + env(safe-area-inset-bottom));
+  background: var(--bg-sidebar-menu, var(--bg-elevated));
+  border-top: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: var(--shadow-dropdown);
+  overflow-y: auto;
+}
+
+.run-turn-pager-sheet-title {
+  margin: 0;
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.run-turn-pager-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Inside the sheet the shared nav group reflows: combined picker spans the full
+   width on top, stepper buttons center below, stats toggle fills the last row. */
+.run-turn-pager-sheet .run-turn-view-combined-nav {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.run-turn-pager-sheet .run-turn-view-combined-select {
+  order: -1;
+  flex: 1 1 100%;
+  max-width: none;
+}
+
+.run-turn-pager-sheet .run-turn-view-stats-toggle {
+  width: 100%;
+  justify-content: center;
+}
+
+/* The compact turn/page pager (<= BP_COMPACT) replaced the old narrow-width
+   stepper-wrapping rules and the 420px page-select shrink. The desktop controls
+   now wrap on their own (see .run-turn-titlebar-controls), so no ad-hoc 900/420
+   breakpoint is needed here. The turn-view tab row still wraps rather than
+   becoming a horizontal scroll strip (the generic .run-tabs scrolls at
+   <= BP_COMPACT); this is now unconditional, not a 900px override. */
+.run-tabs.run-tabs-turn-view {
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 
 .run-turn-view-page-select {
@@ -4270,6 +4365,7 @@ button:disabled {
 
 .run-turn-view-select-menu {
   min-width: 9rem;
+  max-width: min(16rem, calc(100vw - 2rem));
   border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
   border-radius: var(--radius-sm);
   background: var(--bg-sidebar-menu);
@@ -5306,7 +5402,7 @@ button:disabled {
   margin-left: 0.2rem;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .run-header {
     align-items: flex-start;
     flex-direction: column;
@@ -5705,7 +5801,7 @@ button:disabled {
   border-right: 0;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .cluster-screen {
     padding: var(--space-5) var(--space-3);
   }
@@ -6211,7 +6307,7 @@ button:disabled {
   color: var(--text-muted);
 }
 
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   .run-session-data-screen {
     padding: var(--space-4) var(--space-3);
   }
@@ -6437,7 +6533,7 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
-@media (max-width: 780px) {
+@media (max-width: 768px) {
   .run-settings-admin-form {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -6670,7 +6766,7 @@ button:disabled {
   text-decoration: underline;
 }
 
-@media (max-width: 680px) {
+@media (max-width: 768px) {
   .run-settings-observability-grid {
     grid-template-columns: 1fr;
   }
@@ -7264,7 +7360,7 @@ button:disabled {
   font-weight: 700;
 }
 
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   .run-help-status-row {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
@@ -8744,7 +8840,7 @@ button:disabled {
   margin-top: 0.55rem;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .run-composer-wrap {
     padding-inline: var(--space-3);
   }
@@ -9125,6 +9221,59 @@ button:disabled {
 
 .run-files-error {
   color: #f87171;
+}
+
+/* --- Compact files: single-column master-detail (<= BP_PHONE) ------------- */
+/* The phone-only "back to list" affordance in the viewer header. */
+.run-files-viewer-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  padding: 0.3rem 0.5rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.run-files-viewer-back:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.07));
+  color: var(--text-primary);
+}
+
+@media (max-width: 640px) {
+  /* One column: the file list and the viewer no longer sit side by side. */
+  .run-files-body {
+    grid-template-columns: 1fr;
+  }
+
+  /* List mode (default): the list fills the pane; the viewer is hidden. */
+  .run-files-body:not(.run-files-body-detail) .run-files-viewer {
+    display: none;
+  }
+
+  /* Detail mode: a file is open — hide the list so the viewer (its default
+     flex) fills the pane. The viewer stays mounted, so this is a cheap
+     show/hide, not a remount of the editor. */
+  .run-files-body-detail .run-files-list {
+    display: none;
+  }
+
+  /* No adjacent list to divide from on phone. Drop the divider — it stays the
+     rgba form elsewhere, never the retired var(--border-subtle) side-pane
+     form that migrationPolicy.test.ts bans. */
+  .run-files-list {
+    border-right: none;
+  }
+
+  .run-files-viewer-header .run-files-viewer-path {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 }
 
 .run-spin {
@@ -12533,12 +12682,21 @@ textarea.run-files-viewer-editor:focus {
    information." Keep it visible with a real tap target inside the drawer. */
 .sidebar-in-drawer .session-delete {
   color: var(--text-muted);
-  width: 2rem;
-  height: 2rem;
+  /* ~40px touch target on phone — the desktop control is 2rem, too small for a
+     reliable tap (design-system.md: delete is visible on touch, real target). */
+  width: 2.5rem;
+  height: 2.5rem;
 }
 
 .sidebar-in-drawer .session-delete:disabled {
   color: var(--text-faint);
+}
+
+/* Taller, touch-friendly rows in the drawer. The desktop rows are 1px-padded
+   for density; touch wants a larger hit area. */
+.sidebar-in-drawer .session-open {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
 }
 
 /* --- Desktop-only boundary card ----------------------------------------- */
