@@ -953,10 +953,30 @@ test("home splash test action stays disabled on the splash page", () => {
         )).toBe(false);
 });
 
-test("pull request composer action persists before a PR URL exists", () => {
+test("pull request composer action is a popup menu with a break-glass approval link", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
-  expect(appSource).toMatch(/const pullRequestURL =\s*agentGitActivity\.pullRequests\[0\]\?\.href \|\|\s*testState\?\.pull_request_url\?\.trim\(\) \|\|\s*"";/);
-  expect(appSource).toMatch(/pullRequestURL \? \([\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?disabled[\s\S]*?aria-label="Pull request link unavailable"/);
+  // The PR control is a self-contained popup menu, not a single hard-coded link.
+  expect(appSource).toMatch(/function PullRequestMenuButton\(/);
+  expect(appSource).toMatch(/<PullRequestMenuButton \{\.\.\.pullRequest\} \/>/);
+  // Latest PR and the linked PR are computed as distinct menu entries.
+  expect(appSource).toMatch(
+    /const latestPullRequestURL = agentGitActivity\.pullRequests\[0\]\?\.href \?\? "";/,
+  );
+  expect(appSource).toMatch(
+    /const linkedPullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \?\? "";/,
+  );
+  // The retired single-URL link shape must not come back.
+  expect(appSource.includes("aria-label=\"Pull request link unavailable\"")).toBe(false);
+  expect(appSource.includes("aria-label=\"Open pull request in new tab\"")).toBe(false);
+  // Break-glass approval is a LINK to the auth.romaine.life approval page
+  // (payload.approval_url) so the operator can inspect the request and grant
+  // there — NOT an in-app grant POST.
+  expect(appSource).toMatch(/href=\{request\.approvalUrl \|\| "#"\}/);
+  expect(appSource).toMatch(/pendingBreakGlassRequests\(controlActionRows\)/);
+  // The retired in-app approval POST must not return.
+  expect(appSource.includes("git-break-glass/approve")).toBe(false);
+  expect(appSource.includes("postBreakGlassApproval")).toBe(false);
+  // Disabled placeholder composers still omit a live PR menu.
   expect((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length).toBe(2);
   expect(appSource.includes("testState?.active && testState.pull_request_url")).toBe(false);
 });

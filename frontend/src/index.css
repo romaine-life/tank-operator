@@ -8944,6 +8944,114 @@ button:disabled {
   color: white;
 }
 
+/* Pull-request popup menu (composer toolbar). Self-contained relative wrapper
+   with an absolutely-positioned popover, mirroring the bug-label picker. */
+.run-pr-menu {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* Break-glass "chip" — amber state + alert dot when a request awaits approval. */
+.run-pr-action-btn.has-alert {
+  color: #f0b429;
+}
+
+.run-pr-action-btn.has-alert:hover {
+  color: #fbd457;
+  background: rgba(240, 180, 41, 0.16);
+}
+
+.run-pr-alert-dot {
+  position: absolute;
+  top: 0.18rem;
+  right: 0.18rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #f0b429;
+  box-shadow: 0 0 0 2px var(--bg-composer, rgba(15, 17, 21, 1));
+}
+
+.run-pr-menu-popover {
+  position: fixed;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 0.4rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.6rem;
+  background: rgba(16, 18, 24, 0.98);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.45);
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.run-pr-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: none;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-pr-menu-item:hover:not(:disabled),
+.run-pr-menu-item:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-pr-menu-item:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.run-pr-menu-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  color: #93c5fd;
+}
+
+.run-pr-menu-breakglass .run-pr-menu-name {
+  color: #f0b429;
+}
+
+.run-pr-menu-glyph {
+  flex: 0 0 auto;
+}
+
+.run-pr-menu-icon {
+  flex: 0 0 auto;
+  width: 0.85rem;
+  height: 0.85rem;
+  color: var(--text-muted);
+}
+
+.run-pr-menu-breakglass .run-slash-desc {
+  flex: 1 1 auto;
+  text-align: right;
+}
+
+.run-pr-menu-sep {
+  height: 1px;
+  margin: 0.25rem 0.25rem;
+  background: rgba(148, 163, 184, 0.18);
+}
+
 .run-command-menu-count {
   position: absolute;
   top: -0.15rem;
