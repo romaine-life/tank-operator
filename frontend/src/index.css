@@ -8895,6 +8895,28 @@ button:disabled {
   color: #d9f99d;
 }
 
+.run-test-action-menu {
+  width: 15.5rem;
+  max-width: calc(100vw - 1.5rem);
+}
+
+.run-test-action-menu-item {
+  min-height: 2.1rem;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.run-test-action-menu-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-test-action-menu-separator {
+  margin-block: 0.25rem;
+  background: rgba(148, 163, 184, 0.2);
+}
+
 .run-test-ready-icon {
   position: absolute;
   right: 0.18rem;

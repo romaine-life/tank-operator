@@ -2368,8 +2368,9 @@ interface ComposerToolButtonsProps {
     disabled?: boolean;
     readyUrl?: string;
     title: string;
-    onClick?: () => void;
-    onReadyClick?: () => void;
+    onCreateHold?: () => void;
+    onCreateAndDrive?: () => void;
+    onOpenReady?: () => void;
   };
   pullRequest: {
     url?: string;
@@ -2429,34 +2430,68 @@ function ComposerToolButtons({
           <TankIcon className="run-composer-icon" />
         </button>
       )}
-      {testReadyURL ? (
-        <a
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${test.active ? " is-active" : ""}`}
-          href={testReadyURL}
-          target="_blank"
-          rel="noreferrer"
-          onClick={test.onReadyClick}
-          aria-label="Open test environment in new tab"
-          title="Open test environment in new tab"
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
+            disabled={test.disabled}
+            aria-label="Test actions"
+            title={test.title}
+            aria-haspopup="menu"
+          >
+            <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+            {testReadyURL && (
+              <ExternalLinkIcon
+                className="run-test-ready-icon"
+                aria-hidden="true"
+              />
+            )}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          side="top"
+          className="run-test-action-menu"
         >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-          <ExternalLinkIcon
-            className="run-test-ready-icon"
-            aria-hidden="true"
-          />
-        </a>
-      ) : (
-        <button
-          type="button"
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${test.active ? " is-active" : ""}`}
-          onClick={test.onClick}
-          disabled={test.disabled}
-          aria-label="Start test skill"
-          title={test.title}
-        >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-        </button>
-      )}
+          <DropdownMenuItem
+            className="run-test-action-menu-item"
+            onSelect={test.onCreateHold}
+          >
+            <FlaskConicalIcon aria-hidden="true" />
+            <span>Create slot and hold</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="run-test-action-menu-item"
+            onSelect={test.onCreateAndDrive}
+          >
+            <PlayIcon aria-hidden="true" />
+            <span>Create slot and run test</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="run-test-action-menu-separator" />
+          {testReadyURL ? (
+            <DropdownMenuItem className="run-test-action-menu-item" asChild>
+              <a
+                href={testReadyURL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={test.onOpenReady}
+              >
+                <ExternalLinkIcon aria-hidden="true" />
+                <span>Open test slot</span>
+              </a>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              className="run-test-action-menu-item"
+              disabled
+            >
+              <ExternalLinkIcon aria-hidden="true" />
+              <span>Open test slot</span>
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       {pullRequestURL ? (
         <a
           className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
@@ -7503,7 +7538,7 @@ function RunMessageBubble({
       ? ((entry as Record<string, unknown>).skillSupplementalText as string)
       : (durableSkillDisplay?.supplemental_text ?? "");
   const skillActionIcon =
-    skillName === "test"
+    skillName === "test" || skillName === "test-drive"
       ? FlaskConicalIcon
       : skillName === "rollout"
         ? TankIcon
@@ -19004,7 +19039,7 @@ function ChatPane({
     });
   }
 
-  function startTestSkill() {
+  function startTestSkill(skillName = "test") {
     if (session.status !== "Active") return;
     const promptText = getComposerValue().trim();
     const composed = composePromptWithAttachments(promptText);
@@ -19021,7 +19056,7 @@ function ChatPane({
         ),
       );
     });
-    submitSkillInvocation("test", composed.prompt);
+    submitSkillInvocation(skillName, composed.prompt);
   }
 
   function startGuiRollout() {
@@ -21786,15 +21821,16 @@ function ChatPane({
                 test={{
                   active: testActionActive,
                   readyUrl: testState?.active ? testState.url?.trim() : "",
-                  onReadyClick: () => {
+                  onOpenReady: () => {
                     if (testState)
                       void markTestState({ ...testState, active: true });
                   },
-                  onClick: startTestSkill,
+                  onCreateHold: () => startTestSkill("test"),
+                  onCreateAndDrive: () => startTestSkill("test-drive"),
                   disabled: !ready,
                   title: testState?.active
-                    ? "Test skill is active"
-                    : "Use the test skill",
+                    ? "Choose a test action"
+                    : "Start a test workflow",
                 }}
                 pullRequest={{ url: pullRequestURL }}
                 slash={{
@@ -26363,7 +26399,7 @@ function AuthenticatedApp() {
                       title: "Use /rollout once your session starts",
                     }}
                     test={{
-                      onClick: () => {
+                      onCreateHold: () => {
                         void createSession(
                           defaultSessionMode,
                           homeComposerText.trim() || undefined,
