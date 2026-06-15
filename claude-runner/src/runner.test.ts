@@ -735,47 +735,37 @@ test("acceptCommandTurn emits turn.claimed before provider output", async () => 
   );
 });
 
-// Break-glass auto-activation (B-auto): an approval turn carries
-// mcp_activate_{name,url}; registerBreakGlassMcpFromRecord adds the http server
-// so buildSdkQuery merges it on the rebuild the caller forces at the idle
-// boundary. Surfacing without the agent re-requesting; the server still
-// re-checks the grant per call.
-test("registerBreakGlassMcpFromRecord adds an http MCP server and is idempotent", () => {
-  const runner = new Runner(runnerConfig()) as unknown as {
-    registerBreakGlassMcpFromRecord: (record: unknown) => boolean;
-    breakGlassActiveMcpServers: Record<string, { type?: string; url?: string }>;
+// Break-glass surfacing: an approval turn carries mcp_activate_name; the runner
+// reconnects that (boot-configured) MCP server in place so its now-granted tools
+// surface live. Adding a server to a resumed query doesn't register its tools;
+// reconnecting an existing one does (SDK Query.reconnectMcpServer).
+test("acceptCommandTurn reconnects the break-glass MCP server named on the approval turn", async () => {
+  const { runner } = makeInterruptHarness();
+  const reconnected: string[] = [];
+  const r = runner as unknown as {
+    sink: { findTurnTerminal: () => Promise<null> };
+    ensureSdkQuery: () => void;
+    sdkQuery: { reconnectMcpServer: (n: string) => Promise<void> } | null;
+    acceptCommandTurn: (record: unknown) => Promise<void>;
+  };
+  r.sink.findTurnTerminal = async () => null;
+  r.ensureSdkQuery = () => undefined;
+  r.sdkQuery = {
+    reconnectMcpServer: async (n: string) => {
+      reconnected.push(n);
+    },
   };
 
-  // No payload → no registration, no rebuild.
-  assert.equal(
-    runner.registerBreakGlassMcpFromRecord({ type: "submit_turn" }),
-    false,
-  );
-  assert.deepEqual(runner.breakGlassActiveMcpServers, {});
-
-  // First activation registers the server and asks for a rebuild.
-  assert.equal(
-    runner.registerBreakGlassMcpFromRecord({
-      type: "submit_turn",
-      mcp_activate_name: "azure-personal",
-      mcp_activate_url: "http://127.0.0.1:9991/",
-    }),
-    true,
-  );
-  assert.deepEqual(runner.breakGlassActiveMcpServers["azure-personal"], {
-    type: "http",
-    url: "http://127.0.0.1:9991/",
+  await r.acceptCommandTurn({
+    type: "submit_turn",
+    id: "submit-bg",
+    client_nonce: "client-bg",
+    prompt: "Azure break-glass approved",
+    mcp_activate_name: "azure-personal",
+    created_at: new Date(Date.now() - 250).toISOString(),
   });
 
-  // Re-activating the same server is a no-op (no redundant rebuild).
-  assert.equal(
-    runner.registerBreakGlassMcpFromRecord({
-      type: "submit_turn",
-      mcp_activate_name: "azure-personal",
-      mcp_activate_url: "http://127.0.0.1:9991/",
-    }),
-    false,
-  );
+  assert.deepEqual(reconnected, ["azure-personal"]);
 });
 
 // The Tank-owned AskUserQuestion MCP tool publishes durable turn.awaiting_input,
