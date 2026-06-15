@@ -839,6 +839,8 @@ func (s *appServer) handleInternalSendMessage(w http.ResponseWriter, r *http.Req
 // — changing it requires a coordinated cross-repo deploy.
 const originSessionHeader = "X-Tank-Origin-Session-Id"
 const originSessionAvatarHeader = "X-Tank-Origin-Session-Avatar-Id"
+const callerSessionIDHeader = "X-Tank-Caller-Session-Id"
+const callerSessionScopeHeader = "X-Tank-Caller-Session-Scope"
 
 // requireServicePrincipal validates an inbound auth.romaine.life JWT and
 // returns the verified User iff the role claim is `service`. The

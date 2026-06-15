@@ -121,6 +121,11 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
+	if !s.internalCallerMatchesSession(r, sessionID) {
+		recordControlActionEvent("", "", "", "", "forbidden")
+		writeError(w, http.StatusForbidden, "control action writes require caller session identity to match the target session")
+		return
+	}
 	var body controlActionEventJSON
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
 	if err := dec.Decode(&body); err != nil {
@@ -142,6 +147,15 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 	}
 	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
 	writeJSON(w, http.StatusCreated, controlActionToJSON(row, true))
+}
+
+func (s *appServer) internalCallerMatchesSession(r *http.Request, sessionID string) bool {
+	callerID := strings.TrimSpace(r.Header.Get(callerSessionIDHeader))
+	if callerID == "" || callerID != strings.TrimSpace(sessionID) {
+		return false
+	}
+	callerScope := normalizeSessionScope(r.Header.Get(callerSessionScopeHeader))
+	return callerScope == s.localSessionScope()
 }
 
 func (s *appServer) handleListControlActions(w http.ResponseWriter, r *http.Request) {

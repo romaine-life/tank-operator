@@ -985,7 +985,9 @@ async def _record_github_tool_activity(
 
 async def _post_tank_control_action(http: ClientSession, headers: dict[str, str], payload: dict) -> None:
     url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/control-actions"
-    async with http.post(url, headers=headers, json=payload) as resp:
+    request_headers = dict(headers)
+    request_headers.update(_tank_caller_session_headers())
+    async with http.post(url, headers=request_headers, json=payload) as resp:
         if resp.status >= 400:
             text = await resp.text()
             log.warning("failed to record GitHub MCP activity in Tank: status=%d body=%s", resp.status, text[:500])
@@ -993,10 +995,25 @@ async def _post_tank_control_action(http: ClientSession, headers: dict[str, str]
 
 async def _post_tank_pull_request_link(http: ClientSession, headers: dict[str, str], pr_url: str) -> None:
     url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pull-request-link"
-    async with http.post(url, headers=headers, json={"url": pr_url}) as resp:
+    request_headers = dict(headers)
+    request_headers.update(_tank_caller_session_headers())
+    async with http.post(url, headers=request_headers, json={"url": pr_url}) as resp:
         if resp.status >= 400:
             text = await resp.text()
             log.warning("failed to update Tank pull request link: status=%d body=%s", resp.status, text[:500])
+
+
+def _tank_caller_session_headers() -> dict[str, str]:
+    if not ORIGIN_SESSION_ID:
+        return {}
+    headers = {
+        CALLER_SYSTEM_FORWARD_HEADER: "tank-operator",
+        CALLER_KIND_FORWARD_HEADER: "session",
+        CALLER_SESSION_ID_FORWARD_HEADER: ORIGIN_SESSION_ID,
+    }
+    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
+    headers[CALLER_SESSION_SCOPE_FORWARD_HEADER] = scope
+    return headers
 
 
 async def _post_tank_hot_swap_verify(http: ClientSession, service_token: str, payload: dict) -> dict:

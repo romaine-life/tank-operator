@@ -40,6 +40,7 @@ from mcp_auth_proxy.server import (
     _make_handler,
     _mint_github_installation_token,
     _parse_mcp_tool_call,
+    _post_tank_control_action,
     _push_head_with_token,
     _repo_slug_from_remote,
     _watch_published_commit,
@@ -1668,6 +1669,38 @@ def test_handler_forwards_static_caller_context_headers() -> None:
     assert headers["X-Tank-Caller-Session-Id"] == "709"
     assert headers["X-Tank-Caller-Session-Scope"] == "default"
     assert headers["X-Tank-Origin-Session-Avatar-Id"] == "jp1-grant"
+
+
+def test_post_tank_control_action_adds_caller_session_headers(monkeypatch) -> None:
+    async def run() -> list[dict]:
+        http = _FakeHTTP(_FakeResponse(201, {"ok": True}))
+        await _post_tank_control_action(
+            http,
+            {"Authorization": "Bearer service-token", "Content-Type": "application/json"},
+            {
+                "event_id": "ctrl-1",
+                "invocation_id": "inv-1",
+                "source_service": "mcp-github",
+                "source_tool": "request_git_break_glass",
+                "action": "github.break_glass.request",
+                "status": "started",
+                "target_kind": "github_repository",
+                "target_ref": "https://github.com/romaine-life/auth",
+            },
+        )
+        return http.calls
+
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "954")
+    monkeypatch.setattr("mcp_auth_proxy.server.SESSION_SCOPE", "tank-operator-slot-2")
+
+    calls = asyncio.run(run())
+    assert len(calls) == 1
+    headers = calls[0]["headers"]
+    assert headers["Authorization"] == "Bearer service-token"
+    assert headers["X-Tank-Caller-System"] == "tank-operator"
+    assert headers["X-Tank-Caller-Kind"] == "session"
+    assert headers["X-Tank-Caller-Session-Id"] == "954"
+    assert headers["X-Tank-Caller-Session-Scope"] == "tank-operator-slot-2"
 
 
 async def _run_proxy_against_upstream(status_sequence: list[int], success_body: bytes = b'{"ok":true}') -> tuple[int, str, int]:
