@@ -862,19 +862,29 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
   );
 });
 
-test("Tank AskUserQuestion MCP tool rejects the retired top-level question shorthand", async () => {
+test("Tank AskUserQuestion MCP tool accepts the top-level single-question shorthand", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     handleTankAskUserQuestion: (input: unknown) => Promise<{
       isError?: boolean;
       content: Array<{ type: string; text?: string }>;
+      structuredContent?: { answers?: Record<string, string> };
     }>;
+    acceptInputReply: (record: unknown) => Promise<void>;
     activeTurn: unknown;
     publishTerminalWithRetry: (
       event: TankConversationEvent,
     ) => Promise<boolean>;
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
+    commandBus: {
+      markCompleted: (record: unknown) => Promise<void>;
+      markFailed: (record: unknown) => Promise<void>;
+    };
     sink: { upsert: (event: TankConversationEvent) => Promise<void> };
   };
 
+  const dispatched: TankConversationEvent[] = [];
+  let awaiting: TankConversationEvent | null = null;
+  let completedRecord: unknown;
   runner.activeTurn = {
     turnID: "turn-active",
     clientNonce: "turn-active",
@@ -882,25 +892,70 @@ test("Tank AskUserQuestion MCP tool rejects the retired top-level question short
     commandRecord: {},
   };
   runner.sink = {
-    async upsert() {
-      assert.fail("invalid AskUserQuestion input must not publish events");
+    async upsert(event) {
+      dispatched.push(event);
     },
   };
-  runner.publishTerminalWithRetry = async () => {
-    assert.fail("invalid AskUserQuestion input must not publish a pause");
-    return false;
+  runner.publishTerminalWithRetry = async (event) => {
+    awaiting = event;
+    return true;
+  };
+  runner.rotateTurnForInputReply = async () => {};
+  runner.commandBus = {
+    async markCompleted(record) {
+      completedRecord = record;
+    },
+    async markFailed() {
+      assert.fail("input_reply should resolve the shorthand AskUserQuestion");
+    },
   };
 
-  const result = await runner.handleTankAskUserQuestion({
+  const resultPromise = runner.handleTankAskUserQuestion({
     question: "Proceed?",
     options: [{ label: "Yes" }],
   });
+  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(result.isError, true);
-  assert.match(
-    result.content[0]?.text ?? "",
-    /requires questions: a non-empty array/,
+  assert.deepEqual(
+    dispatched.map((e) => e.type),
+    [
+      "turn.awaiting_input.invocation",
+      "assistant_message.created",
+      "turn.submitted",
+    ],
   );
+  assert.ok(awaiting, "expected shorthand to publish turn.awaiting_input");
+  assert.deepEqual(
+    (awaiting as { payload?: { questions?: unknown } }).payload?.questions,
+    [
+      {
+        question: "Proceed?",
+        multiSelect: false,
+        options: [{ label: "Yes" }],
+        allowFreeForm: true,
+        secret: false,
+      },
+    ],
+  );
+
+  const payload = awaiting as {
+    payload?: {
+      provider_timeline_id?: string;
+      provider_item_id?: string;
+    };
+  };
+  await runner.acceptInputReply({
+    type: "input_reply",
+    client_nonce: "answer-continuation",
+    target_turn_id: "turn-active",
+    target_timeline_id: payload.payload?.provider_timeline_id,
+    target_provider_item_id: payload.payload?.provider_item_id,
+    answers: { "Proceed?": ["Yes"] },
+  });
+  const result = await resultPromise;
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.structuredContent?.answers, { "Proceed?": "Yes" });
+  assert.ok(completedRecord);
 });
 
 test("Tank AskUserQuestion MCP tool delivers free-form Other text instead of synthetic label", async () => {

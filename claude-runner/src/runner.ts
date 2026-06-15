@@ -699,8 +699,26 @@ const askUserQuestionInputSchema = {
     )
     .min(1)
     .describe(
-      "One or more questions to ask the user. For a single question, pass a one-element array.",
+      "One or more questions to ask the user. For a single question, either pass a one-element array or use the top-level question fields.",
     ),
+  question: z
+    .string()
+    .optional()
+    .describe(
+      "Single-question shorthand. Equivalent to questions: [{ question, options, allowFreeForm }].",
+    ),
+  options: z
+    .array(
+      z
+        .object({
+          label: z.string().describe("Selectable answer label."),
+          description: z.string().optional(),
+          preview: z.string().optional(),
+        })
+        .passthrough(),
+    )
+    .optional(),
+  allowFreeForm: z.boolean().optional(),
 };
 
 const exitPlanModeInputSchema = {
@@ -1429,7 +1447,7 @@ export class Runner {
         content: [
           {
             type: "text",
-            text: "AskUserQuestion requires questions: a non-empty array of question objects.",
+            text: "AskUserQuestion requires questions: a non-empty array of question objects, or a top-level question string.",
           },
         ],
       });

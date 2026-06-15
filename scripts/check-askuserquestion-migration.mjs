@@ -147,14 +147,6 @@ const forbidden = [
     name: "removed AskUserQuestion permission-callback parking",
     pattern: /permission callback[\s\S]{0,500}(pending|parked)|pending[\s\S]{0,500}permission callback/,
   },
-  {
-    name: "removed Claude AskUserQuestion top-level question shorthand",
-    pattern: /Single question text when not using the questions array/,
-  },
-  {
-    name: "removed Claude AskUserQuestion top-level option shorthand",
-    pattern: /single-question shorthand/,
-  },
 ];
 
 const required = [
@@ -295,13 +287,18 @@ const required = [
   },
   {
     file: "claude-runner/src/runner.ts",
-    name: "Claude AskUserQuestion schema requires a non-empty questions array",
-    pattern: /questions:\s*z[\s\S]{0,900}\.array\([\s\S]{0,900}\.min\(1\)[\s\S]{0,200}one-element array/,
+    name: "Claude AskUserQuestion schema accepts array and single-question shorthand",
+    pattern: /questions:\s*z[\s\S]{0,900}\.array\([\s\S]{0,900}\.min\(1\)[\s\S]{0,400}top-level question fields[\s\S]{0,500}question:\s*z[\s\S]{0,120}\.string\(\)[\s\S]{0,120}\.optional\(\)/,
+  },
+  {
+    file: "claude-runner/src/adapters/claude.ts",
+    name: "Claude adapter wraps top-level question shorthand",
+    pattern: /Array\.isArray\(rawQuestions\)[\s\S]{0,200}typeof inputRecord\?\.question === "string"[\s\S]{0,120}\[inputRecord\]/,
   },
   {
     file: "claude-runner/src/runner.ts",
     name: "Claude AskUserQuestion rejects empty normalized question sets before pausing",
-    pattern: /questions\.length\s*===\s*0[\s\S]{0,300}non-empty array of question objects/,
+    pattern: /questions\.length\s*===\s*0[\s\S]{0,300}top-level question string/,
   },
   {
     file: "codex-runner/src/runner.ts",
