@@ -990,13 +990,16 @@ def test_append_azure_break_glass_tool_adds_request_tool() -> None:
 
 
 def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatch) -> None:
-    # GET (grant lookup) returns no active grant; POST (control-action) is the
-    # recorded request. The tool must not grant access or reveal a token.
+    # RESTRICTED session: GET (grant lookup) returns no active grant; POST
+    # (control-action) is the recorded request; the tool returns an approval URL
+    # and must not grant access or reveal a token. (Non-restricted sessions
+    # self-approve instead — see the auto-grant test below.)
     http = _FakeRawHTTPByMethod(
         get_response=_FakeRawResponse(200, b'{"active":false}'),
         post_response=_FakeRawResponse(201, b'{"ok":true}'),
     )
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", True)
 
     response = asyncio.run(
         _handle_tank_azure_break_glass_tool(
@@ -1049,6 +1052,40 @@ def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
     assert structured["privileged_tools_visible"] is True
     assert structured["expires_at"] == "2999-01-01T00:00:00Z"
     assert "activation" not in structured
+
+
+def test_tank_azure_break_glass_tool_auto_grants_for_non_restricted(monkeypatch) -> None:
+    # NON-restricted (trusted) session: no human approval. With no active grant,
+    # the tool self-approves by POSTing the azure grant endpoint; the returned
+    # grant flips status to approved and the server-side B-auto activation turn
+    # surfaces the tools. Restricted sessions never take this path.
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":false}'),
+        post_response=_FakeRawResponse(
+            201, b'{"active":true,"event_id":"azg-auto","expires_at":"2999-01-01T00:00:00Z"}'
+        ),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", False)
+
+    response = asyncio.run(
+        _handle_tank_azure_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            9,
+            {"reason": "inspect ledger"},
+        )
+    )
+
+    structured = json.loads(response.text)["result"]["structuredContent"]
+    assert structured["status"] == "approved"
+    assert structured["privileged_tools_visible"] is True
+    # Self-approval POSTed the azure grant endpoint (not just the request ledger).
+    grant_posts = [
+        c for c in http.calls
+        if c.get("method") == "POST" and "azure-break-glass/grants" in c.get("url", "")
+    ]
+    assert grant_posts, f"expected a POST to the azure grant endpoint; calls={http.calls}"
 
 
 def test_tank_break_glass_tool_records_request_when_active_grant_misses_branch_scope(monkeypatch) -> None:
