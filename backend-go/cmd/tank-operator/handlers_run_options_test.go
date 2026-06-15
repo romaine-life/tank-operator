@@ -59,8 +59,10 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if opts.DefaultModels["codex"] != "gpt-5.5" || opts.DefaultEfforts["codex"] != "xhigh" {
 		t.Fatalf("codex defaults = model %q effort %q", opts.DefaultModels["codex"], opts.DefaultEfforts["codex"])
 	}
-	if opts.TestSlotDefaults.Mode != sessionmodel.ClaudeGUIMode || opts.TestSlotDefaults.Model != "" || opts.TestSlotDefaults.Effort != "" {
-		t.Fatalf("test slot defaults = %#v, want bare claude_gui", opts.TestSlotDefaults)
+	if opts.TestSlotDefaults.Mode != sessionmodel.ClaudeGUIMode ||
+		opts.TestSlotDefaults.Model != "claude-haiku-4-5" ||
+		opts.TestSlotDefaults.Effort != "low" {
+		t.Fatalf("test slot defaults = %#v, want low-cost claude_gui", opts.TestSlotDefaults)
 	}
 }
 
