@@ -66,9 +66,11 @@ yanking the viewport away from a user reading history.
   active/terminal status is never a function of which page rendered — it is
   folded from the complete turn so a finished long turn can never render as
   perpetually active. The same response carries a separate `turn_context`
-  projection for the initiating durable user message when one exists; the
-  context is outside the page body so numbered turn routes remain oriented on
-  every selected page.
+  projection for the initiating instruction: human turns use the durable
+  `user_message.created` row, and backend-owned background-task wake turns use
+  durable `turn.submitted.payload.prompt` with system authorship. The context
+  is outside the page body so numbered turn routes remain oriented on every
+  selected page.
 - Copied message links may name rendered timeline IDs, but the server must
   translate them to durable cursors.
 - `sessions.visible` owns sidebar/list membership only. Soft-deleting a session
@@ -223,6 +225,8 @@ yanking the viewport away from a user reading history.
   `frontend/src/turnActivityPager.ts` (tested in `turnActivityPager.test.ts`)
   owns the clamped current page, total page count, and disabled state, blocking
   a regression to a threshold-hidden control.
-- Opening any available numbered turn route shows the initiating user message
-  above the activity page body when the turn has one, and page changes keep that
-  context visible without duplicating it in `entries`.
+- Opening any available numbered turn route shows the initiating instruction
+  above the activity page body. Human turns source it from `user_message.created`;
+  backend-owned background-task wake turns source it from
+  `turn.submitted.payload.prompt`. Page changes keep that context visible
+  without duplicating it in `entries`.
