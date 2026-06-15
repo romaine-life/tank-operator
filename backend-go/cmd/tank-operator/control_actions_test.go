@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
@@ -136,6 +137,24 @@ func controlActionTestServer(t *testing.T, store controlActionStore) *appServer 
 	return app
 }
 
+func signedControlActionServiceToken(t *testing.T, sub string) string {
+	t.Helper()
+	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         sub,
+		"email":       "pod-47@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"name":        "Service: tank pod-47",
+		"role":        auth.RoleService,
+		"actor_email": "owner@example.test",
+		"iat":         time.Now().Unix(),
+		"exp":         time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
 func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
@@ -154,7 +173,9 @@ func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T
 		"payload": {"head_sha": "abc123"}
 	}`))
 	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	req.Header.Set(callerSessionIDHeader, "47")
+	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -180,6 +201,91 @@ func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T
 	}
 }
 
+func TestHandleInternalAppendControlActionRejectsMissingCallerSession(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_1_started",
+		"invocation_id": "ctrl_1",
+		"source_service": "mcp-github",
+		"source_tool": "merge_pull_request",
+		"action": "github.pull_request.merge",
+		"status": "started",
+		"target_kind": "github_pull_request",
+		"target_ref": "https://github.com/romaine-life/tank-operator/pull/857"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank-operator:orchestrator-slot-3"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsMismatchedCallerSession(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_1_started",
+		"invocation_id": "ctrl_1",
+		"source_service": "mcp-github",
+		"source_tool": "merge_pull_request",
+		"action": "github.pull_request.merge",
+		"status": "started",
+		"target_kind": "github_pull_request",
+		"target_ref": "https://github.com/romaine-life/tank-operator/pull/857"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:95"))
+	req.Header.Set(callerSessionIDHeader, "95")
+	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsSpoofedCallerHeaders(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_1_started",
+		"invocation_id": "ctrl_1",
+		"source_service": "mcp-github",
+		"source_tool": "merge_pull_request",
+		"action": "github.pull_request.merge",
+		"status": "started",
+		"target_kind": "github_pull_request",
+		"target_ref": "https://github.com/romaine-life/tank-operator/pull/857"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank-operator:orchestrator-slot-3"))
+	req.Header.Set(callerSessionIDHeader, "47")
+	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
 func TestHandleInternalAppendControlActionRejectsUnsupportedActionBeforeStore(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
@@ -194,7 +300,9 @@ func TestHandleInternalAppendControlActionRejectsUnsupportedActionBeforeStore(t 
 		"target_ref": "https://github.com/romaine-life/tank-operator/tree/main"
 	}`))
 	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	req.Header.Set(callerSessionIDHeader, "47")
+	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -310,7 +418,9 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			}`
 			req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
 			req.SetPathValue("session_id", "47")
-			req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+			req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+			req.Header.Set(callerSessionIDHeader, "47")
+			req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 			rec := httptest.NewRecorder()
 
 			app.handleInternalAppendControlAction(rec, req)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
@@ -121,6 +122,11 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
+	if !s.internalCallerMatchesSession(r, user, sessionID) {
+		recordControlActionEvent("", "", "", "", "forbidden")
+		writeError(w, http.StatusForbidden, "control action writes require caller session identity to match the target session")
+		return
+	}
 	var body controlActionEventJSON
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
 	if err := dec.Decode(&body); err != nil {
@@ -142,6 +148,51 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 	}
 	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
 	writeJSON(w, http.StatusCreated, controlActionToJSON(row, true))
+}
+
+func (s *appServer) internalCallerMatchesSession(r *http.Request, user *auth.User, sessionID string) bool {
+	if user == nil || !s.serviceSubjectMatchesSession(user.Sub, sessionID) {
+		return false
+	}
+	callerID := strings.TrimSpace(r.Header.Get(callerSessionIDHeader))
+	if callerID == "" || callerID != strings.TrimSpace(sessionID) {
+		return false
+	}
+	callerScope := normalizeSessionScope(r.Header.Get(callerSessionScopeHeader))
+	return callerScope == s.localSessionScope()
+}
+
+func (s *appServer) serviceSubjectMatchesSession(sub, sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	sub = strings.TrimSpace(sub)
+	for _, prefix := range []string{"svc:tank:", "tank:"} {
+		if strings.HasPrefix(sub, prefix) {
+			value := strings.TrimSpace(strings.TrimPrefix(sub, prefix))
+			if value == sessionID {
+				return true
+			}
+			if slotValue := slotServiceSubjectValue(s.localSessionScope(), sessionID); slotValue != "" && value == slotValue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func slotServiceSubjectValue(scope, sessionID string) string {
+	const slotScopePrefix = "tank-operator-slot-"
+	scope = normalizeSessionScope(scope)
+	if !strings.HasPrefix(scope, slotScopePrefix) {
+		return ""
+	}
+	slot := strings.TrimSpace(strings.TrimPrefix(scope, slotScopePrefix))
+	if slot == "" {
+		return ""
+	}
+	return "slot-" + slot + "-session-" + strings.TrimSpace(sessionID)
 }
 
 func (s *appServer) handleListControlActions(w http.ResponseWriter, r *http.Request) {
