@@ -1048,6 +1048,44 @@ func TestHandleInternalGrantAzureBreakGlassPersistsGrant(t *testing.T) {
 	}
 }
 
+func TestHandleInternalGrantTestSlotModelApprovalPersistsGrant(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/test-slot-model-approvals/grants", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"gpt-5.5",
+		"effort":"xhigh",
+		"request_event_id":"request-1",
+		"reason":"need frontier model for this validation",
+		"ttl_seconds":1800
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantTestSlotModelApproval(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls=%d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != testSlotModelGrantAction || got.SourceTool != "test_slot_model_approval" || got.SessionID != "47" {
+		t.Fatalf("grant event = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "gpt-5.5" || payload["effort"] != "xhigh" ||
+		payload["low_model"] != "gpt-5.3-codex-spark" || payload["low_effort"] != "low" ||
+		payload["request_event_id"] != "request-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
 func TestHandleInternalGrantAzureBreakGlassActivatesMcpViaApprovalTurn(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)

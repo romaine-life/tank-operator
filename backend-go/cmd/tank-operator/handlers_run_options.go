@@ -36,7 +36,11 @@ type testSlotDefaults struct {
 }
 
 func defaultTestSlotSessionDefaults() testSlotDefaults {
-	return testSlotDefaults{Mode: sessionmodel.DefaultSessionMode}
+	return testSlotDefaults{
+		Mode:   sessionmodel.DefaultSessionMode,
+		Model:  lowCostModelForProvider("claude"),
+		Effort: lowCostEffortForProvider("claude"),
+	}
 }
 
 func sessionRunOptions(defaults ...testSlotDefaults) sessionRunOptionsResponse {

@@ -709,7 +709,7 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 		platformSettings: &fakePlatformSettingsStore{
 			defaults: pgstore.TestSlotSessionDefaults{
 				Mode:   sessionmodel.CodexGUIMode,
-				Model:  "gpt-5.4-mini",
+				Model:  "gpt-5.3-codex-spark",
 				Effort: "low",
 			},
 		},
@@ -744,18 +744,164 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode != sessionmodel.CodexGUIMode || info.Model != "gpt-5.4-mini" || info.Effort != "low" {
+	if info.Mode != sessionmodel.CodexGUIMode || info.Model != "gpt-5.3-codex-spark" || info.Effort != "low" {
 		t.Fatalf("created info = mode %q model %q effort %q", info.Mode, info.Model, info.Effort)
 	}
 	rec2, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
 	}
-	if rec2.Mode != sessionmodel.CodexGUIMode || rec2.Model != "gpt-5.4-mini" || rec2.Effort != "low" {
+	if rec2.Mode != sessionmodel.CodexGUIMode || rec2.Model != "gpt-5.3-codex-spark" || rec2.Effort != "low" {
 		t.Fatalf("registry record = mode %q model %q effort %q", rec2.Mode, rec2.Model, rec2.Effort)
 	}
 	if got := len(server.sessionEvents.(*recordingSessionEventStore).upserts); got != 2 {
 		t.Fatalf("session-event upserts = %d, want 2", got)
+	}
+	if got := len(server.sessionBus.(*recordingSessionBus).commands); got != 1 {
+		t.Fatalf("published commands = %d, want 1", got)
+	}
+}
+
+func TestHandleInternalCreateSessionInTestSlotBlocksExpensiveModelWithApprovalURL(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeControlActionStore{}
+	server := &appServer{
+		verifier:       auth.NewVerifier(jwtKey),
+		sessionScope:   "tank-operator-slot-2",
+		controlActions: store,
+	}
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:origin-77",
+		"email":       "pod-origin-77@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"model":"claude-opus-4-8",
+		"effort":"high",
+		"initial_turn":{"client_nonce":"turn-expensive","prompt":"validate the slot"}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "origin-77")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "approval_required" {
+		t.Fatalf("body = %#v", body)
+	}
+	approvalURL, _ := body["approval_url"].(string)
+	if !strings.HasPrefix(approvalURL, "https://auth.romaine.life/admin?") ||
+		!strings.Contains(approvalURL, "intent=test-slot-model") ||
+		!strings.Contains(approvalURL, "model=claude-opus-4-8") {
+		t.Fatalf("approval_url = %q", approvalURL)
+	}
+	if body["low_model"] != "claude-haiku-4-5" || body["low_effort"] != "low" {
+		t.Fatalf("low guidance = model %v effort %v", body["low_model"], body["low_effort"])
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != testSlotModelRequestAction || got.SessionID != "origin-77" || got.OwnerEmail != "owner@example.test" {
+		t.Fatalf("recorded request = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["approval_url"] != approvalURL {
+		t.Fatalf("payload approval_url = %v, want %q", payload["approval_url"], approvalURL)
+	}
+}
+
+func TestHandleInternalCreateSessionInTestSlotAllowsExpensiveModelAfterApproval(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	grantPayload, _ := json.Marshal(map[string]any{
+		"mode":       sessionmodel.ClaudeGUIMode,
+		"provider":   "claude",
+		"model":      "claude-opus-4-8",
+		"effort":     "high",
+		"expires_at": "2999-01-01T00:00:00Z",
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:      "grant-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-2",
+			SessionID:    "origin-77",
+			Action:       testSlotModelGrantAction,
+			Status:       "succeeded",
+			Payload:      grantPayload,
+		}},
+	}
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-slot-2-sessions",
+		sessionScope:          "tank-operator-slot-2",
+		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
+		controlActions:        store,
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:origin-77",
+		"email":       "pod-origin-77@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"model":"claude-opus-4-8",
+		"effort":"high",
+		"initial_turn":{"client_nonce":"turn-approved","prompt":"validate the slot"}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "origin-77")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Model != "claude-opus-4-8" || info.Effort != "high" {
+		t.Fatalf("created info model=%q effort=%q", info.Model, info.Effort)
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want no new approval request", len(store.appendCalls))
 	}
 	if got := len(server.sessionBus.(*recordingSessionBus).commands); got != 1 {
 		t.Fatalf("published commands = %d, want 1", got)

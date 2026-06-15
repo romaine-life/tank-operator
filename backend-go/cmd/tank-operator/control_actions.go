@@ -1691,7 +1691,9 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		"github.break_glass.push",
 		"azure.break_glass.request",
 		"azure.break_glass.grant",
-		"azure.break_glass.use":
+		"azure.break_glass.use",
+		testSlotModelRequestAction,
+		testSlotModelGrantAction:
 	default:
 		return pgstore.ControlActionEvent{}, errors.New("unsupported control action")
 	}
