@@ -12187,19 +12187,28 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript:not(.run-turn-view-body) .run-transcript-tool-single[data-slot="tool-group-single"],
-.run-transcript:not(.run-turn-view-body) .run-transcript-tools[data-slot="tool-group"] {
+.run-transcript:not(.run-turn-view-body) .run-transcript-tools[data-slot="tool-group"],
+.run-transcript:not(.run-turn-view-body) .run-background-task,
+.run-transcript:not(.run-turn-view-body) .run-reasoning,
+.run-transcript:not(.run-turn-view-body) > .run-tool-ask {
   margin-left: var(--run-transcript-content-column-left);
   max-width: calc(100% - var(--run-transcript-content-column-left));
 }
 
 .run-turn-view-body > .run-transcript-tool-single[data-slot="tool-group-single"],
-.run-turn-view-body > .run-transcript-tools[data-slot="tool-group"] {
+.run-turn-view-body > .run-transcript-tools[data-slot="tool-group"],
+.run-turn-view-body > .run-background-task,
+.run-turn-view-body > .run-reasoning,
+.run-turn-view-body > .run-tool-ask {
   margin-left: var(--run-transcript-avatar-column-left);
   max-width: calc(100% - var(--run-transcript-avatar-column-left));
 }
 
 .run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tool-single[data-slot="tool-group-single"],
-.run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tools[data-slot="tool-group"] {
+.run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tools[data-slot="tool-group"],
+.run-transcript .run-turn-activity-body .run-background-task,
+.run-transcript .run-turn-activity-body .run-reasoning,
+.run-transcript .run-turn-activity-body .run-tool-ask {
   margin-left: 0;
   max-width: 100%;
 }

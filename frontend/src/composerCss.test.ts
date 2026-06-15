@@ -233,7 +233,7 @@ test("turn view transcript rows share the same avatar gutter", () => {
   expect(inlineActivityContentRule).toMatch(/max-width:\s*100%;/);
 });
 
-test("top-level transcript tool cards align to the message content column", () => {
+test("standalone transcript artifacts align to the message content column", () => {
   const transcriptRule = cssRule(".run-transcript");
   expect(transcriptRule).toMatch(
     /--run-transcript-avatar-column-left:\s*calc\(2\.625rem\s*\+\s*0\.55rem\);/,
@@ -243,13 +243,13 @@ test("top-level transcript tool cards align to the message content column", () =
   );
 
   expect(indexCssSource).toMatch(
-    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tools\[data-slot="tool-group"\]\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-content-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-content-column-left\)\);/,
+    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-background-task,[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-reasoning,[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s*>\s*\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-content-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-content-column-left\)\);/,
   );
   expect(indexCssSource).toMatch(
-    /\.run-turn-view-body\s*>\s*\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-turn-view-body\s*>\s*\.run-transcript-tools\[data-slot="tool-group"\]\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-avatar-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-avatar-column-left\)\);/,
+    /\.run-turn-view-body\s*>\s*\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-turn-view-body\s*>\s*\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-turn-view-body\s*>\s*\.run-background-task,[\s\S]*?\.run-turn-view-body\s*>\s*\.run-reasoning,[\s\S]*?\.run-turn-view-body\s*>\s*\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-avatar-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-avatar-column-left\)\);/,
   );
   expect(indexCssSource).toMatch(
-    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tools\[data-slot="tool-group"\]\s*\{[\s\S]*?margin-left:\s*0;[\s\S]*?max-width:\s*100%;/,
+    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-background-task,[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-reasoning,[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*0;[\s\S]*?max-width:\s*100%;/,
   );
 });
 
