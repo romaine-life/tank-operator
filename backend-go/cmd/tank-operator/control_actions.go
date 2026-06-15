@@ -393,6 +393,69 @@ func gitBreakGlassApprovalPrompt(grant pgstore.ControlActionEvent, expiresAt tim
 	return strings.Join(lines, "\n")
 }
 
+// azureMCPBreakGlassServerName / URL identify the azure-personal MCP listener
+// the mcp-auth-proxy always runs on 127.0.0.1:9991. On grant the runner
+// auto-surfaces this server (the activation half of break-glass); the entry
+// alone grants nothing — mcp-azure-personal re-checks the grant on every call.
+const (
+	azureMCPBreakGlassServerName = "azure-personal"
+	azureMCPBreakGlassServerURL  = "http://127.0.0.1:9991/"
+)
+
+// enqueueAzureBreakGlassApprovalTurn enqueues the approval submit_turn carrying
+// the azure-personal MCP-activation payload. The runner registers the server
+// and rebuilds at the next idle boundary so the tools surface for this turn —
+// the B-auto path that removes the agent's need to re-request. Mirrors
+// enqueueGitBreakGlassApprovalTurn (no repo dimension; adds MCP activation).
+func (s *appServer) enqueueAzureBreakGlassApprovalTurn(ctx context.Context, grant pgstore.ControlActionEvent, expiresAt time.Time) (map[string]any, int, string) {
+	if s == nil || s.sessionBus == nil || s.mgr == nil {
+		return nil, http.StatusServiceUnavailable, "session turn enqueue unavailable"
+	}
+	sessionID := strings.TrimSpace(grant.SessionID)
+	ownerEmail := strings.TrimSpace(grant.OwnerEmail)
+	if sessionID == "" || ownerEmail == "" {
+		return nil, http.StatusBadRequest, "grant missing session or owner"
+	}
+	seed := controlActionPayloadString(grant.Payload, "request_event_id")
+	if seed == "" {
+		seed = grant.EventID
+	}
+	// Distinct seed namespace from git so the deterministic nonce never collides
+	// with a git approval turn for the same session.
+	seed = sessionID + ":azure:" + seed
+	return s.enqueueSDKTurn(ctx, ownerEmail, sessionID, sdkTurnRequest{
+		ClientNonce:     gitBreakGlassApprovalTurnNonce(seed),
+		RequireNonce:    true,
+		Prompt:          azureBreakGlassApprovalPrompt(grant, expiresAt),
+		DisplayText:     azureBreakGlassApprovalDisplayText(grant, expiresAt),
+		Source:          string(conversation.TurnSubmittedSourceBreakGlassApproval),
+		CreatedAt:       time.Now().UTC(),
+		AuthorKind:      string(conversation.AuthorKindSystem),
+		MCPActivateName: azureMCPBreakGlassServerName,
+		MCPActivateURL:  azureMCPBreakGlassServerURL,
+	})
+}
+
+func azureBreakGlassApprovalDisplayText(_ pgstore.ControlActionEvent, expiresAt time.Time) string {
+	expiry := ""
+	if !expiresAt.IsZero() {
+		expiry = " The grant expires at " + expiresAt.UTC().Format(time.RFC3339) + "."
+	}
+	return "Azure break-glass approved: the azure-personal MCP tools are now available for this session." + expiry
+}
+
+func azureBreakGlassApprovalPrompt(grant pgstore.ControlActionEvent, expiresAt time.Time) string {
+	lines := []string{
+		"System message: Your Azure break-glass request was approved by the user.",
+		azureBreakGlassApprovalDisplayText(grant, expiresAt),
+		"The azure-personal tools (pg_query, keyvault_get_secret, etc.) are now active in your MCP registry — call them directly; no further request is needed. They re-lock automatically when the grant expires.",
+	}
+	if reason := controlActionPayloadString(grant.Payload, "reason"); reason != "" {
+		lines = append(lines, "Approval reason: "+reason)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // splitRepoSlug parses a trimmed "owner/name" GitHub slug.
 func splitRepoSlug(repo string) (string, string, bool) {
 	owner, name, ok := strings.Cut(strings.TrimSpace(repo), "/")
@@ -546,14 +609,32 @@ func (s *appServer) handleInternalGrantAzureBreakGlass(w http.ResponseWriter, r 
 		return
 	}
 	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	// Auto-activation (B-auto): enqueue the approval turn carrying the
+	// azure-personal MCP-activation payload so the runner surfaces the tools at
+	// the next idle boundary — the agent need not call request_azure_break_glass
+	// again. Best-effort: the grant row is durable and the server-side per-call
+	// check is the boundary, so a notification miss (e.g. NATS down) does not
+	// fail the grant; the response flags delivery for the caller.
+	agentNotification := map[string]any{"delivered": false}
+	if notifyResp, status, detail := s.enqueueAzureBreakGlassApprovalTurn(r.Context(), row, expiresAt); status != 0 {
+		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "notify_error")
+		slog.Warn("azure break-glass grant persisted but agent activation turn failed",
+			"session_id", sessionID, "grant_event_id", row.EventID, "status", status, "detail", detail)
+	} else {
+		agentNotification["delivered"] = true
+		if turnID := turnIDFromEnqueueResponse(notifyResp); turnID != "" {
+			agentNotification["turn_id"] = turnID
+		}
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"active":        true,
-		"event_id":      row.EventID,
-		"resource":      "azure-personal",
-		"expires_at":    expiresAt.Format(time.RFC3339),
-		"operations":    operations,
-		"session_id":    sessionID,
-		"session_scope": s.sessionScope,
+		"active":             true,
+		"event_id":           row.EventID,
+		"resource":           "azure-personal",
+		"expires_at":         expiresAt.Format(time.RFC3339),
+		"operations":         operations,
+		"session_id":         sessionID,
+		"session_scope":      s.sessionScope,
+		"agent_notification": agentNotification,
 	})
 }
 

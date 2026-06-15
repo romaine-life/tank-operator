@@ -1025,9 +1025,12 @@ def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatc
 
 
 def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
-    # When a grant is already active, the tool reports approved + visible tools.
+    # When a grant is already active, the tool reports approved + expiry but does
+    # NOT write any MCP config. Surfacing is now automatic (B-auto): the
+    # orchestrator enqueues an approval turn and the pod-side runner adds the
+    # server + rebuilds. The proxy never touches the (read-only) .mcp.json.
     http = _FakeRawHTTPByMethod(
-        get_response=_FakeRawResponse(200, b'{"active":true,"expires_at":"2999-01-01T00:00:00Z"}'),
+        get_response=_FakeRawResponse(200, b'{"active":true,"event_id":"azg-1","expires_at":"2999-01-01T00:00:00Z"}'),
         post_response=_FakeRawResponse(201, b'{"ok":true}'),
     )
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
@@ -1045,6 +1048,7 @@ def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
     assert structured["status"] == "approved"
     assert structured["privileged_tools_visible"] is True
     assert structured["expires_at"] == "2999-01-01T00:00:00Z"
+    assert "activation" not in structured
 
 
 def test_tank_break_glass_tool_records_request_when_active_grant_misses_branch_scope(monkeypatch) -> None:

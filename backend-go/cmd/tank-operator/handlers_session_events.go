@@ -197,9 +197,17 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 	}
 	if selected >= 1 && selected <= len(pages.Pages) {
 		current := pages.Pages[selected-1]
-		entries := current.Entries
+		entries := cloneProjectedEntries(current.Entries)
 		if entries == nil {
 			entries = []map[string]any{}
+		}
+		if entriesNeedQuestionTargetTurnNumbers(entries) {
+			numbers, err := s.sessionTurnStoreForScope(sessionScope).TurnNumbersForSession(r.Context(), sessionID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			stampTurnNumbers(sessionID, numbers, entries)
 		}
 		body["entries"] = entries
 		body["sealed"] = current.Sealed
@@ -215,6 +223,22 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		body["has_more"] = selected < len(pages.Pages)
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+func entriesNeedQuestionTargetTurnNumbers(entries []map[string]any) bool {
+	for _, entry := range entries {
+		questionTarget, _ := entry["questionTarget"].(map[string]any)
+		if questionTarget == nil {
+			continue
+		}
+		if transcriptMapString(questionTarget, "turnId") == "" {
+			continue
+		}
+		if _, ok := questionTarget["turnNumber"]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *appServer) resolveSessionTurnActivityID(ctx context.Context, sessionScope, sessionID, selector string) (string, int, error) {

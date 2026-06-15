@@ -1086,6 +1086,56 @@ func TestHandleInternalGrantTestSlotModelApprovalPersistsGrant(t *testing.T) {
 	}
 }
 
+func TestHandleInternalGrantAzureBreakGlassActivatesMcpViaApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/azure-break-glass/grants", strings.NewReader(`{
+		"ttl_seconds": 900,
+		"request_event_id": "request-1",
+		"reason": "inspect session_events ledger"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantAzureBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.Type != "submit_turn" || command.Source != "break-glass-approval" {
+		t.Fatalf("command type/source = %s/%s", command.Type, command.Source)
+	}
+	if command.SessionID != "47" || command.Email != "owner@example.test" {
+		t.Fatalf("command target = %s/%s", command.SessionID, command.Email)
+	}
+	// B-auto: the approval turn carries the azure-personal MCP-activation payload
+	// so the runner surfaces the tools — no second request_azure_break_glass call.
+	if command.MCPActivateName != "azure-personal" || command.MCPActivateURL != "http://127.0.0.1:9991/" {
+		t.Fatalf("mcp activation = %q/%q", command.MCPActivateName, command.MCPActivateURL)
+	}
+	if !strings.Contains(command.Prompt, "Your Azure break-glass request was approved") {
+		t.Fatalf("prompt missing azure approval notice: %q", command.Prompt)
+	}
+	var body struct {
+		AgentNotification struct {
+			Delivered bool   `json:"delivered"`
+			TurnID    string `json:"turn_id"`
+		} `json:"agent_notification"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.AgentNotification.Delivered || body.AgentNotification.TurnID == "" {
+		t.Fatalf("agent notification = %#v", body.AgentNotification)
+	}
+}
+
 func TestHandleInternalGetAzureBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	payload, _ := json.Marshal(map[string]any{

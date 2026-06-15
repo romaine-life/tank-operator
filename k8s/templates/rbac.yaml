@@ -109,15 +109,29 @@ roleRef:
   kind: ClusterRole
   name: system:auth-delegator
 ---
-# Session SA gets cluster-admin so an in-cluster Claude session can act on
-# the cluster directly (patch finalizers, delete wedged releases, edit
-# shared infra) instead of asking the user to run every kubectl by hand.
-# This is a single-user personal AKS cluster; no multi-tenant safety
-# concern. If this cluster ever turns multi-tenant, scope this down.
+# Session SA is READ-ONLY on the cluster. An in-cluster agent can `kubectl get`
+# anything transparently, but cannot write or exec — in particular it cannot
+# `kubectl cp`/exec into a test slot to bypass the CI-gated hot-swap path. Slot
+# mutation goes through the gated `apply_test_slot_hot_swap` MCP tool; serious
+# ad-hoc cluster writes go through a gated MCP path / break-glass, never the
+# session's own credential. (Was cluster-admin — removing it is the enforcement
+# half of routing every slot hot-swap through CI. RBAC is allow-only, so
+# read-only is expressed as a grant, not a carve-out from cluster-admin.)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tank-session-readonly
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["*"]
+    verbs: ["get"]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "tank-operator.sessionServiceAccount" . }}-cluster-admin
+  name: {{ include "tank-operator.sessionServiceAccount" . }}-readonly
 subjects:
   - kind: ServiceAccount
     name: {{ include "tank-operator.sessionServiceAccount" . }}
@@ -125,7 +139,7 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cluster-admin
+  name: tank-session-readonly
 {{- end }}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" }}
 ---

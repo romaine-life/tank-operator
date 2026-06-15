@@ -3,16 +3,16 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-f2a495b1f5eff0c06ad085f3204d53ad9ca80f14ffb57fafbe7363543a565e4d"
+  tag: "app-51d4c0fe4e5a9a1edb14031de2ea0706e8f0b692322ba111a65d6375dab7c85c"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-14T20:50:56Z"
-    git_sha: "7686416e70c40d77aa14d605d8098570cd495580"
+    built_at: "2026-06-15T05:40:13Z"
+    git_sha: "61fcc2015296d11aa4aa6caad1e9834b11bd78c3"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/7686416e70c40d77aa14d605d8098570cd495580"
-    pr_number: ""
-    pr_url: ""
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27511640677"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/61fcc2015296d11aa4aa6caad1e9834b11bd78c3"
+    pr_number: "1214"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1214"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27518644314"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
@@ -72,27 +72,27 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-0b5d944250c2527ec0ced275ea4b26f86ba785fd20bfbb73ca5c193acb0e12b7"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-e9bef03c37d5f47b783386cad3024f303886c7a9cecce8ee0f15189d8b632851"
+  image: "romainecr.azurecr.io/claude-container:claude-d64fcb272499995d0d5541a39d092ca24a977a4e3713d8c584893303ab79ca84"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-865eb7ce7d52dc36620be69d28645a8c6dc4c6676420aa2cf66d12da7bbde9fc"
   imageMetadata:
     claude:
-      built_at: "2026-06-14T20:18:45Z"
-      git_sha: "48012efb955385b647aa6fa66158d44087df7fcd"
+      built_at: "2026-06-15T05:39:40Z"
+      git_sha: "61fcc2015296d11aa4aa6caad1e9834b11bd78c3"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/48012efb955385b647aa6fa66158d44087df7fcd"
-      pr_number: "1190"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1190"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27510788654"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/61fcc2015296d11aa4aa6caad1e9834b11bd78c3"
+      pr_number: "1214"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1214"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27518644336"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
     codex:
-      built_at: "2026-06-14T20:18:45Z"
-      git_sha: "48012efb955385b647aa6fa66158d44087df7fcd"
+      built_at: "2026-06-15T05:39:40Z"
+      git_sha: "61fcc2015296d11aa4aa6caad1e9834b11bd78c3"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/48012efb955385b647aa6fa66158d44087df7fcd"
-      pr_number: "1190"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1190"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27510788654"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/61fcc2015296d11aa4aa6caad1e9834b11bd78c3"
+      pr_number: "1214"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1214"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27518644336"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
   configMap: tank-session-config
@@ -198,7 +198,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-a43c007240c6f401994b0dc2aa0c067a559013339c6c26e2ff0c33fa02f63398"
+    tag: "api-proxy-062f136533b4a8d7568c9d786140670dc0fffe47fcc6c2eb9c8655b7c0acd2b7"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   # Replica count shared by all provider proxy Deployments. HOLD AT 1 until the refresh

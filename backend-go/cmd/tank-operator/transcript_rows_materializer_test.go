@@ -9,6 +9,34 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
+func TestStampTurnNumbersAddsAskUserQuestionInvocationTargetNumber(t *testing.T) {
+	entries := []map[string]any{
+		{
+			"id":       "turn-1:item:ask:ask_user_question_invocation",
+			"kind":     "tool",
+			"toolName": "AskUserQuestion",
+			"turnId":   "turn-1",
+			"questionTarget": map[string]any{
+				"turnId": "turn-2",
+				"page":   1,
+			},
+		},
+	}
+
+	stampTurnNumbers("session-1", map[string]int64{"turn-1": 8, "turn-2": 9}, entries)
+
+	if entries[0]["turnNumber"] != int64(8) {
+		t.Fatalf("entry turnNumber = %#v, want 8", entries[0]["turnNumber"])
+	}
+	target, _ := entries[0]["questionTarget"].(map[string]any)
+	if target == nil {
+		t.Fatalf("questionTarget missing after stamp: %#v", entries[0])
+	}
+	if target["turnNumber"] != int64(9) {
+		t.Fatalf("questionTarget.turnNumber = %#v, want 9", target["turnNumber"])
+	}
+}
+
 type recordingTranscriptRowsStore struct {
 	turnID          string
 	entries         []map[string]any

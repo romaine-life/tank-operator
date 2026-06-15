@@ -101,6 +101,12 @@ _TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
 _GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
+# azure-personal is absent from the default session .mcp.json (locked by
+# default). On an approved azure break-glass grant the orchestrator enqueues an
+# approval turn whose mcp_activate payload the pod-side runner uses to add the
+# server + rebuild (claude-runner registerBreakGlassMcpFromRecord); the
+# always-running 9991 listener below is the upstream that becomes reachable then.
+# mcp-azure-personal still re-checks the grant on every call.
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
 _AUTH_ROMAINE_BREAK_GLASS_URL = os.environ.get("AUTH_ROMAINE_BREAK_GLASS_URL") or "https://auth.romaine.life/admin"
@@ -3084,11 +3090,13 @@ async def _handle_tank_azure_break_glass_tool(
     request_id: object,
     arguments: dict,
 ) -> web.Response:
-    # Mirrors _handle_tank_break_glass_tool. Records the request and returns an
-    # auth.romaine.life approval URL; it never mints or reveals a token. Unlike
-    # git break-glass there is no activation step: azure-personal is already in
-    # .mcp.json and the server (mcp-azure-personal) is the enforcement point, so
-    # once a grant exists the server simply starts serving its tools.
+    # Records the request and returns an auth.romaine.life approval URL; it never
+    # mints or reveals a token, and it no longer writes any MCP config. Surfacing
+    # is now automatic (B-auto): on approval the orchestrator enqueues an approval
+    # turn carrying the azure-personal MCP-activation payload, and the pod-side
+    # runner adds the server + rebuilds at the next idle boundary — so the tools
+    # appear without a second call to this tool. mcp-azure-personal re-checks the
+    # grant on every call, so it stays the real boundary.
     invocation_id = f"tank-azure-break-glass-{uuid4().hex}"
     try:
         if not ORIGIN_SESSION_ID:
@@ -3121,9 +3129,11 @@ async def _handle_tank_azure_break_glass_tool(
         )
         if grant:
             text = (
-                "Break-glass azure-personal access is approved and active.\n"
-                f"Grant expires: {grant.get('expires_at')}\n"
-                "If the azure-personal tools do not appear, reload or restart the agent MCP registry."
+                "Azure break-glass access is already approved and active; the "
+                "azure-personal tools surface automatically for this session "
+                "(Tank sends an approval turn that activates them — no re-request "
+                "needed).\n"
+                f"Grant expires: {grant.get('expires_at')}"
             )
             structured = {
                 "resource": "azure-personal",
@@ -3136,9 +3146,10 @@ async def _handle_tank_azure_break_glass_tool(
             text = (
                 "Break-glass azure-personal access request recorded.\n"
                 f"Approval URL: {approval_url}\n"
-                "This tool did not grant access or reveal a token. Until an admin "
-                "approves, the azure-personal MCP stays locked and its tools are "
-                "unavailable. Normal feature work does not need azure access."
+                "This tool did not grant access or reveal a token. Once an admin "
+                "approves, Tank surfaces the azure-personal tools into this session "
+                "automatically — you do not need to call this tool again. Normal "
+                "feature work does not need azure access."
             )
             structured = {
                 "resource": "azure-personal",
@@ -3991,6 +4002,11 @@ SESSION_SCOPE = (os.environ.get("SESSION_SCOPE") or "").strip()
 #   9997 â€” optional SpireLens MCP, only when SPIRELENS_MCP_UPSTREAM is set
 #   9998 â€” mcp-grafana
 LISTENERS: list[tuple[int, str]] = [
+    # azure-personal: the listener always runs, but azure-personal is NOT in the
+    # default session .mcp.json (k8s/session-config/mcp.json) — it is locked by
+    # default. On an approved azure break-glass grant the orchestrator enqueues an
+    # approval turn whose mcp_activate payload the pod-side runner uses to add the
+    # server + rebuild, so this 9991 listener becomes reachable only then.
     (9991, "http://mcp-azure-personal.mcp-azure-personal.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
     (9993, "http://mcp-k8s.mcp-k8s.svc:80"),

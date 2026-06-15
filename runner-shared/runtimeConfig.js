@@ -30,6 +30,10 @@ export async function reportRuntimeConfig(cfg, payload) {
                 payload?.providerRateLimitInfo && typeof payload.providerRateLimitInfo === "object"
                     ? payload.providerRateLimitInfo
                     : undefined,
+            provider_usage_snapshot:
+                payload?.providerUsageSnapshot && typeof payload.providerUsageSnapshot === "object"
+                    ? payload.providerUsageSnapshot
+                    : undefined,
         }),
     });
     if (!response.ok) {
