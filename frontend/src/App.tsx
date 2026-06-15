@@ -10977,7 +10977,6 @@ function RunToolItem({
             >
               {entry.toolName ?? "tool"}
             </span>
-            <TokenUsageBadge usage={entry.turnUsage} tone="tool" />
             {showTimestamps && (
               <ToolTiming
                 startedAt={entry.startedAt ?? entry.time}

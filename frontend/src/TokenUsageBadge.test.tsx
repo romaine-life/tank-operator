@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 
 import { TokenUsageBadge } from "./App.tsx";
 
@@ -38,4 +39,14 @@ test("tool token usage badge labels usage as turn scoped", () => {
   expect(screen.getByLabelText(
     "Current turn token usage; tools do not directly spend model tokens: 150 total tokens · 120 input · 30 output",
   )).toBeInTheDocument();
+});
+
+test("tool transcript rows do not render turn usage totals", () => {
+  const source = readFileSync("src/App.tsx", "utf8");
+  const runToolItem = source.match(
+    /function RunToolItem\([\s\S]*?\nfunction toolItemDefaultExpanded/,
+  )?.[0];
+
+  expect(runToolItem).toBeTruthy();
+  expect(runToolItem).not.toContain("<TokenUsageBadge");
 });
