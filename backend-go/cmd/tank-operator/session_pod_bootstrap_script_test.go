@@ -1,6 +1,9 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -221,7 +224,10 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	}
 }
 
-func TestInstallAgentGitTemplateScriptNoopsOutsideRestrictedGit(t *testing.T) {
+// Outside restricted git, the script must NOT install governed hooks; instead
+// it wires the auto-minting credential helper so non-restricted sessions get
+// full, automatic git access.
+func TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedGit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("git template install script test runs on POSIX only")
 	}
@@ -234,20 +240,105 @@ func TestInstallAgentGitTemplateScriptNoopsOutsideRestrictedGit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve credential helper path: %v", err)
+	}
 
 	home := t.TempDir()
 	templateDir := filepath.Join(t.TempDir(), "template")
+	helperDst := filepath.Join(t.TempDir(), "bin", "git-credential-tank")
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Env = append(isolatedGitEnv(home),
 		"AGENT_POST_COMMIT_HOOK="+hookPath,
 		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
+		"AGENT_GIT_CREDENTIAL_HELPER_SRC="+helperSrc,
+		"AGENT_GIT_CREDENTIAL_HELPER_DST="+helperDst,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
 	}
+
+	helper := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "credential.helper")))
+	if helper != helperDst {
+		t.Fatalf("credential.helper = %q, want %q", helper, helperDst)
+	}
+	useHTTPPath := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "credential.useHttpPath")))
+	if useHTTPPath != "true" {
+		t.Fatalf("credential.useHttpPath = %q, want \"true\"", useHTTPPath)
+	}
+	info, err := os.Stat(helperDst)
+	if err != nil {
+		t.Fatalf("credential helper not installed at %s: %v", helperDst, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("credential helper %s is not executable (mode %v)", helperDst, info.Mode())
+	}
+
+	// Governed hook templates are restricted-mode only.
 	if _, err := os.Stat(filepath.Join(templateDir, "hooks", "post-commit")); !os.IsNotExist(err) {
 		t.Fatalf("post-commit hook installed without restricted git opt-in, stat err: %v", err)
+	}
+}
+
+// The credential helper mints a repo-scoped token through the in-pod MCP and
+// hands git the x-access-token credential. It must request the full/write
+// scope, scope to the requested repo, parse the SSE-framed MCP reply, and
+// bail on non-github hosts.
+func TestGitCredentialTankHelperMintsToken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("credential helper script test runs on POSIX only")
+	}
+
+	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve credential helper path: %v", err)
+	}
+
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		// MCP streamable-HTTP frames the JSON-RPC result as an SSE event.
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_testtoken\",\"expires_at\":\"2099-01-01T00:00:00Z\"}}}\n\n"))
+	}))
+	defer srv.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	run := func(reqPath, host string) string {
+		cmd := exec.Command("sh", helperSrc, "get")
+		cmd.Env = []string{
+			"TANK_GIT_CRED_MCP_URL=" + srv.URL,
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"PATH=" + os.Getenv("PATH"),
+		}
+		cmd.Stdin = strings.NewReader("protocol=https\nhost=" + host + "\npath=" + reqPath + "\n\n")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("helper failed: %v\noutput:\n%s", err, string(out))
+		}
+		return string(out)
+	}
+
+	out := run("romaine-life/tank-operator.git", "github.com")
+	if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_testtoken") {
+		t.Fatalf("helper output missing credential, got:\n%s", out)
+	}
+	if !strings.Contains(gotBody, "\"mint_clone_token\"") ||
+		!strings.Contains(gotBody, "romaine-life/tank-operator") ||
+		!strings.Contains(gotBody, "\"full\":true") {
+		t.Fatalf("mint request body unexpected: %s", gotBody)
+	}
+
+	// Non-github host: the helper must produce no credential.
+	if out := run("romaine-life/tank-operator.git", "example.com"); strings.TrimSpace(out) != "" {
+		t.Fatalf("helper emitted credential for non-github host: %q", out)
 	}
 }
 
