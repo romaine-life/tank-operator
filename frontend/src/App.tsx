@@ -8494,13 +8494,13 @@ function backgroundTaskStatusLabel(
 }
 
 function backgroundTaskTitle(entry: TranscriptEntry): string {
-  return (
-    entry.taskCommand ??
-    entry.taskSummary ??
-    entry.taskDescription ??
-    entry.lastToolName ??
-    "Shell task"
-  );
+  const title = [
+    entry.taskCommand,
+    entry.taskSummary,
+    entry.taskDescription,
+    entry.lastToolName,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+  return title?.trim() ?? "Shell task";
 }
 
 function backgroundTaskSubtitle(entry: TranscriptEntry): string {
@@ -8693,10 +8693,13 @@ function RunBackgroundTaskBlock({
   const running = isBackgroundTaskRunning(entry);
   const label = backgroundTaskStatusLabel(entry.taskStatus);
   const summary = backgroundTaskTitle(entry);
+  const description = entry.taskDescription?.trim() ?? "";
   const detail =
-    entry.taskDescription && entry.taskDescription !== summary
-      ? entry.taskDescription
-      : "";
+    description && description !== summary ? description : "";
+  const taskProcessId = String(entry.taskProcessId ?? "").trim();
+  const taskId = entry.taskId?.trim() ?? "";
+  const processLabel =
+    taskProcessId ? `process ${taskProcessId}` : taskId ? `task ${taskId}` : "";
   const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
   return (
     <button
@@ -8726,16 +8729,10 @@ function RunBackgroundTaskBlock({
             />
           )}
         </div>
-        {(detail || entry.taskId || errorText) && (
+        {(detail || processLabel || errorText) && (
           <div className="run-background-task-detail">
             {detail && <span>{detail}</span>}
-            {(entry.taskProcessId ?? entry.taskId) && (
-              <span>
-                {entry.taskProcessId
-                  ? `process ${entry.taskProcessId}`
-                  : `task ${entry.taskId}`}
-              </span>
-            )}
+            {processLabel && <span>{processLabel}</span>}
             {errorText && (
               <span className="run-background-task-error">{errorText}</span>
             )}

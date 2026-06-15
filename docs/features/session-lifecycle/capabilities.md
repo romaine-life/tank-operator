@@ -437,9 +437,16 @@ Enforcement is in the server we own, not the sidecar:
 Contract impact:
 - The visible normal-mode surface is the narrow `request_azure_break_glass`
   tool (proxy-injected into the mcp-tank-operator surface, independent of
-  restricted-git). It records an `azure.break_glass.request` control-action
-  event and returns an `auth.romaine.life/admin?intent=azure-break-glass`
-  approval URL without granting access or revealing a token.
+  restricted-git). For **restricted** sessions it records an
+  `azure.break_glass.request` control-action event and returns an
+  `auth.romaine.life/admin?intent=azure-break-glass` approval URL without
+  granting access or revealing a token.
+- **Non-restricted (trusted) sessions are pre-approved for Azure.** When the
+  agent calls `request_azure_break_glass`, the proxy self-approves by POSTing the
+  grant endpoint directly (no human approval), so the existing B-auto activation
+  turn surfaces the tools. It only fires when the agent actually requests Azure
+  (no per-session noise), and restricted/test sessions keep the approval-URL
+  flow. See `_auto_grant_azure_break_glass` in mcp-auth-proxy.
 - Grants are stored as `azure.break_glass.grant` control-action events
   (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
   same `control_action_events` ledger as git break-glass. They are not
