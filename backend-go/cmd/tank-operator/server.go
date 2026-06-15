@@ -483,6 +483,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
+	// Pod-authenticated (SA-token) endpoint: mints a kubectl credential for the
+	// trusted cluster-admin SA, for non-restricted sessions only.
+	mux.HandleFunc("POST /api/internal/session-cluster-credential", s.handleInternalClusterCredential)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/timeline", s.handleInternalSessionTimeline)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
@@ -497,6 +500,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/git-break-glass/grants", s.handleInternalGrantGitBreakGlass)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/azure-break-glass/grants", s.handleInternalGrantAzureBreakGlass)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/azure-break-glass/grant", s.handleInternalGetAzureBreakGlassGrant)
+	// Read-only SQL for non-restricted sessions (backs the query_tank_db MCP tool).
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/db-read-query", s.handleInternalSessionDBReadQuery)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-slot-model-approvals/grants", s.handleInternalGrantTestSlotModelApproval)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

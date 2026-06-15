@@ -6,7 +6,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def install_proto_stubs() -> None:
@@ -92,6 +92,39 @@ def claude_config(credentials_file: str) -> ProxyConfig:
         fedramp_header="",
         patch_last_refresh=False,
     )
+
+
+class _UsageResponse:
+    def __init__(self, status_code: int, body: object) -> None:
+        self.status_code = status_code
+        self._body = body
+        self.text = json.dumps(body) if isinstance(body, dict) else str(body)
+
+    def json(self) -> object:
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
+
+
+class _UsageClient:
+    responses: list[object] = []
+    request_count: int = 0
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    async def __aenter__(self) -> "_UsageClient":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def get(self, url: str, headers: dict[str, str]) -> object:
+        self.__class__.request_count += 1
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class ServerTests(unittest.TestCase):
@@ -205,6 +238,84 @@ class ServerTests(unittest.TestCase):
 
             self.assertIn("anthropic.com/api/oauth/usage", claude._usage_urls()[0])
             self.assertTrue(any("chatgpt.com" in url for url in codex._usage_urls()))
+
+    def test_usage_snapshot_serves_last_good_snapshot_on_rate_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.request_count = 0
+            _UsageClient.responses = [
+                _UsageResponse(200, {"five_hour": {"utilization": 18}}),
+                _UsageResponse(429, {"error": "rate_limited"}),
+            ]
+
+            with (
+                patch("tank_api_proxy.server.httpx.AsyncClient", _UsageClient),
+                patch.object(
+                    injector,
+                    "_get_access_token",
+                    new=AsyncMock(return_value="access-token"),
+                ),
+            ):
+                first = asyncio.run(injector.usage_snapshot())
+                second = asyncio.run(injector.usage_snapshot())
+
+            self.assertEqual(first["status"], "ok")
+            self.assertNotIn("cached", first)
+            self.assertEqual(second["status"], "ok")
+            self.assertEqual(_UsageClient.request_count, 2)
+            self.assertTrue(second["cached"])
+            self.assertTrue(second["stale"])
+            self.assertEqual(second["source_status_code"], 429)
+            self.assertEqual(second["usage"], first["usage"])
+            self.assertEqual(second["observed_at"], first["observed_at"])
+
+    def test_usage_snapshot_without_cache_reports_rate_limit_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.request_count = 0
+            _UsageClient.responses = [
+                _UsageResponse(429, {"error": "rate_limited"}),
+            ]
+
+            with (
+                patch("tank_api_proxy.server.httpx.AsyncClient", _UsageClient),
+                patch.object(
+                    injector,
+                    "_get_access_token",
+                    new=AsyncMock(return_value="access-token"),
+                ),
+            ):
+                payload = asyncio.run(injector.usage_snapshot())
+
+            self.assertEqual(payload["status"], "error")
+            self.assertEqual(payload["status_code"], 429)
+            self.assertEqual(_UsageClient.request_count, 1)
+
+    def test_usage_snapshot_does_not_hide_credential_failure_with_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.responses = [
+                _UsageResponse(200, {"five_hour": {"utilization": 18}}),
+                _UsageResponse(401, {"error": "expired"}),
+                _UsageResponse(401, {"error": "expired"}),
+            ]
+
+            with (
+                patch("tank_api_proxy.server.httpx.AsyncClient", _UsageClient),
+                patch.object(
+                    injector,
+                    "_get_access_token",
+                    new=AsyncMock(return_value="access-token"),
+                ),
+                patch.object(injector, "_refresh", new=AsyncMock(return_value=None)),
+            ):
+                first = asyncio.run(injector.usage_snapshot())
+                second = asyncio.run(injector.usage_snapshot())
+
+            self.assertEqual(first["status"], "ok")
+            self.assertEqual(second["status"], "error")
+            self.assertEqual(second["status_code"], 401)
+            self.assertNotIn("cached", second)
 
 
 class ConfigFromEnvTests(unittest.TestCase):

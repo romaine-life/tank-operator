@@ -186,6 +186,27 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		writeError(w, status, detail)
 		return
 	}
+	if approval, status, detail := s.requireTestSlotLowCostRunConfig(r.Context(), r, *user, mode, runConfig); status != 0 {
+		if approval != nil && approval.ApprovalURL != "" {
+			writeJSON(w, status, map[string]any{
+				"detail":        detail,
+				"approval_url":  approval.ApprovalURL,
+				"status":        "approval_required",
+				"session_scope": s.localSessionScope(),
+				"session_id":    approval.SessionID,
+				"mode":          approval.Mode,
+				"provider":      approval.Provider,
+				"model":         approval.Model,
+				"effort":        approval.Effort,
+				"low_model":     approval.LowModel,
+				"low_effort":    approval.LowEffort,
+				"request_id":    approval.EventID,
+			})
+			return
+		}
+		writeError(w, status, detail)
+		return
+	}
 	initialTurn, status, detail := validateCreateSessionInitialTurn(mode, body.InitialTurn)
 	if status != 0 {
 		writeError(w, status, detail)

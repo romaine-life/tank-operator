@@ -113,12 +113,13 @@
   --skill-rollout-fg: #d6a16b;
   --skill-rollout-bg: rgba(126, 83, 43, 0.18);
   --skill-rollout-border: rgba(214, 161, 107, 0.28);
-  /* Restricted-git marker — tints the session-row interaction chip when a
-     session uses Tank-governed Git. Git-amber, distinct from the neutral chip
-     so the swapped glyph reads as a deliberate standing reminder. */
-  --restricted-git-fg: #e0a458;
-  --restricted-git-bg: rgba(224, 164, 88, 0.14);
-  --restricted-git-border: rgba(224, 164, 88, 0.30);
+  /* Unrestricted-git marker — tints the session-row interaction chip when a
+     GUI session opts OUT of Tank-governed Git (restricted Git is the default).
+     Red, distinct from the neutral chip so the swapped glyph reads as a
+     deliberate standing warning that the session has ungoverned Git access. */
+  --unrestricted-git-fg: #ef6f6f;
+  --unrestricted-git-bg: rgba(239, 111, 111, 0.14);
+  --unrestricted-git-border: rgba(239, 111, 111, 0.30);
 
   /* Mode chips (auth modes). subscription rides the unified accent; api-key
      uses muted lavender; config-sub uses warm clay — distinct without the
@@ -2126,13 +2127,13 @@ button:disabled {
   display: block;
 }
 
-/* Restricted-git sessions: tint the interaction chip (which renders the git
-   glyph in place of the GUI monitor glyph) so the row reads as governed Git at
+/* Unrestricted-git sessions: tint the interaction chip (which renders the git
+   glyph in place of the GUI monitor glyph) so the row flags ungoverned Git at
    a glance. Uses an inset ring instead of a border to keep the 18px box. */
-.mode-interaction-chip.is-restricted-git {
-  background: var(--restricted-git-bg);
-  color: var(--restricted-git-fg);
-  box-shadow: inset 0 0 0 1px var(--restricted-git-border);
+.mode-interaction-chip.is-unrestricted-git {
+  background: var(--unrestricted-git-bg);
+  color: var(--unrestricted-git-fg);
+  box-shadow: inset 0 0 0 1px var(--unrestricted-git-border);
 }
 
 .session-avatar {
@@ -5037,6 +5038,12 @@ button:disabled {
 .run-turn-view-body .run-transcript-message {
   width: 100%;
   padding-left: 0;
+}
+
+.run-turn-view-body > .run-transcript-tool-single .run-transcript-tool {
+  grid-template-columns: 2.625rem minmax(0, 1fr);
+  column-gap: 0.55rem;
+  padding-right: 0;
 }
 
 .run-turn-view-body[data-page-kind="question"] {
@@ -8931,6 +8938,73 @@ button:disabled {
   color: white;
 }
 
+.run-glimmung-menu {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.run-glimmung-action-btn.is-ready {
+  color: #67e8f9;
+}
+
+.run-glimmung-action-btn.is-ready:hover {
+  color: #cffafe;
+  background: rgba(6, 182, 212, 0.15);
+}
+
+.run-glimmung-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  font-family: var(--font-primary);
+  font-size: 0.95rem;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.run-glimmung-menu-popover {
+  width: min(28rem, calc(100vw - 2rem));
+}
+
+.run-glimmung-menu-item {
+  align-items: flex-start;
+}
+
+.run-glimmung-menu-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.run-glimmung-menu-name {
+  max-width: 100%;
+  color: #67e8f9;
+}
+
+.run-glimmung-menu-name,
+.run-glimmung-menu-main .run-slash-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-glimmung-menu-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
 .run-pr-action-btn.is-ready {
   color: #93c5fd;
 }
@@ -10458,11 +10532,11 @@ textarea.run-files-viewer-editor:focus {
 
 .run-background-task {
   display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr);
-  gap: var(--space-2);
-  align-items: flex-start;
+  grid-template-columns: 1.55rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
   width: 100%;
-  padding: 0.65rem 0.85rem;
+  padding: 0.55rem 0.75rem;
   border-radius: var(--radius-md);
   border: 1px solid rgba(96, 165, 250, 0.22);
   background: rgba(96, 165, 250, 0.07);
@@ -10505,20 +10579,23 @@ textarea.run-files-viewer-editor:focus {
 
 .run-background-task-body {
   min-width: 0;
-  display: grid;
-  gap: 0.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
 }
 
 .run-background-task-top {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 0.55rem;
   min-width: 0;
+  flex: 0 1 auto;
 }
 
 .run-background-task-title {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10537,7 +10614,10 @@ textarea.run-files-viewer-editor:focus {
 .run-background-task-detail {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
+  align-items: center;
+  gap: 0.25rem 0.65rem;
+  min-width: 0;
+  flex: 0 1 auto;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-code-xs);
@@ -10665,11 +10745,21 @@ textarea.run-files-viewer-editor:focus {
   grid-column: 2;
 }
 
+.run-transcript-tool-header-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+}
+
 .run-transcript-tool-header {
   display: flex !important;
   align-items: center;
   gap: 0.5rem;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
   padding: 0.45rem 0.7rem;
   border-radius: 0.5rem;
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -10821,6 +10911,38 @@ textarea.run-files-viewer-editor:focus {
   margin-top: 0.6rem;
 }
 
+.run-tool-question-target {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.38rem;
+  width: fit-content;
+  margin-top: 0.6rem;
+  border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 55%, transparent);
+  border-radius: 0.45rem;
+  background: color-mix(in oklch, var(--status-agent-needs-input) 12%, transparent);
+  color: var(--text-strong);
+  padding: 0.42rem 0.65rem;
+  font-family: var(--font-primary);
+  font-size: var(--run-chat-font-code-xs);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.run-tool-question-target-compact {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding-inline: 0.6rem;
+  min-height: 2.25rem;
+  white-space: nowrap;
+}
+
+.run-tool-question-target:hover {
+  border-color: color-mix(in oklch, var(--status-agent-needs-input) 75%, transparent);
+  background: color-mix(in oklch, var(--status-agent-needs-input) 18%, transparent);
+}
+
 /* Diff body — Edit/Write/MultiEdit/ApplyPatch. */
 .run-tool-diff {
   font-family: var(--font-mono);
@@ -10917,7 +11039,9 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 16rem;
   overflow: auto;
 }
@@ -10931,8 +11055,10 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-code-sm);
   color: #a7f3d0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  overflow-x: auto;
 }
 
 .run-tool-bash-out {
@@ -10942,8 +11068,9 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(0, 0, 0, 0.3);
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 16rem;
   overflow: auto;
   color: var(--text-body);
@@ -11010,8 +11137,9 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-meta);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   max-height: 18rem;
   overflow: auto;
 }
@@ -11407,6 +11535,8 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript {
   --run-transcript-active-rail-left: 0.2rem;
   --run-transcript-message-inset-left: 0.7rem;
+  --run-transcript-avatar-column-left: calc(2.625rem + 0.55rem);
+  --run-transcript-content-column-left: calc(var(--run-transcript-message-inset-left) + var(--run-transcript-avatar-column-left));
   --run-transcript-row-gap: var(--space-2);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -12063,6 +12193,33 @@ textarea.run-files-viewer-editor:focus {
   max-width: 100%;
 }
 
+.run-transcript:not(.run-turn-view-body) .run-transcript-tool-single[data-slot="tool-group-single"],
+.run-transcript:not(.run-turn-view-body) .run-transcript-tools[data-slot="tool-group"],
+.run-transcript:not(.run-turn-view-body) .run-background-task,
+.run-transcript:not(.run-turn-view-body) .run-reasoning,
+.run-transcript:not(.run-turn-view-body) > .run-tool-ask {
+  margin-left: var(--run-transcript-content-column-left);
+  max-width: calc(100% - var(--run-transcript-content-column-left));
+}
+
+.run-turn-view-body > .run-transcript-tool-single[data-slot="tool-group-single"],
+.run-turn-view-body > .run-transcript-tools[data-slot="tool-group"],
+.run-turn-view-body > .run-background-task,
+.run-turn-view-body > .run-reasoning,
+.run-turn-view-body > .run-tool-ask {
+  margin-left: var(--run-transcript-avatar-column-left);
+  max-width: calc(100% - var(--run-transcript-avatar-column-left));
+}
+
+.run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tool-single[data-slot="tool-group-single"],
+.run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tools[data-slot="tool-group"],
+.run-transcript .run-turn-activity-body .run-background-task,
+.run-transcript .run-turn-activity-body .run-reasoning,
+.run-transcript .run-turn-activity-body .run-tool-ask {
+  margin-left: 0;
+  max-width: 100%;
+}
+
 .run-transcript-claude .run-transcript-tools {
   border-color: rgba(216, 190, 140, 0.26);
   background: rgba(216, 190, 140, 0.045);
@@ -12139,6 +12296,20 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-xs);
   text-transform: lowercase;
+}
+
+.run-transcript-tool-header-row > .run-transcript-tool-header {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.run-transcript-tool-header-row[data-has-question-target="true"] > .run-transcript-tool-header {
+  flex: 0 1 auto;
+}
+
+.run-transcript-tool-header-row[data-has-question-target="true"] .run-transcript-tool-label {
+  flex: 0 1 auto !important;
 }
 
 .run-transcript-code,

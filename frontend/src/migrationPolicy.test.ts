@@ -8,6 +8,12 @@ function readSource(path: string): string {
   );
 }
 
+function cssRule(source: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(source);
+  return match?.[1] ?? "";
+}
+
 const appSource = readSource("./App.tsx");
 const appRoutesSource = readSource("./appRoutes.ts");
 const authSource = readSource("./auth.ts");
@@ -1181,6 +1187,33 @@ test("background tasks come from the durable session-level feed, not transcript 
 test("web search transcript tools use the web glyph", () => {
   expect(appSource).toMatch(/function isWebToolName\(name: string\): boolean \{[\s\S]*normalized === "websearch"[\s\S]*normalized === "webfetch"[\s\S]*\}/);
   expect(appSource).toMatch(/if \(isWebToolName\(name\)\) \{[\s\S]{0,160}return \{[\s\S]{0,80}Icon: GlobeIcon,[\s\S]{0,80}colorClass: "tool-color-search",[\s\S]{0,80}tooltip: "Web tool call"[\s\S]{0,80}\};[\s\S]{0,80}\}/);
+});
+
+test("expanded tool dumps preserve indentation instead of soft wrapping", () => {
+  for (const selector of [
+    ".run-tool-default-pre",
+    ".run-tool-bash-cmd",
+    ".run-tool-bash-out",
+    ".run-tool-output pre",
+  ]) {
+    const rule = cssRule(indexCssSource, selector);
+    expect(rule, selector).toContain("white-space: pre;");
+    expect(rule, selector).toContain("overflow-wrap: normal;");
+    expect(rule, selector).toContain("word-break: normal;");
+    expect(rule, selector).not.toContain("white-space: pre-wrap;");
+    expect(rule, selector).not.toContain("overflow-wrap: anywhere;");
+  }
+});
+
+test("turn-view tool rows align with the activity message content column", () => {
+  const rule = cssRule(
+    indexCssSource,
+    ".run-turn-view-body > .run-transcript-tool-single .run-transcript-tool",
+  );
+
+  expect(rule).toContain("grid-template-columns: 2.625rem minmax(0, 1fr);");
+  expect(rule).toContain("column-gap: 0.55rem;");
+  expect(rule).toContain("padding-right: 0;");
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {

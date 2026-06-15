@@ -214,6 +214,15 @@ import {
   type SessionCostEstimate,
 } from "./sessionCostEstimate";
 import {
+  buildProviderQuotaSnapshots,
+  formatProviderQuotaTimestamp,
+  providerQuotaEvidenceFromPayload,
+  providerQuotaResetLabel,
+  providerQuotaSummary,
+  type ProviderQuotaEvidence,
+  type ProviderQuotaSnapshot,
+} from "./providerQuota";
+import {
   buildSessionDataStatusRows,
   type StatusTone,
   type SessionDataStatusId,
@@ -398,6 +407,10 @@ import {
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
+import {
+  collectGlimmungRunsFromEntries,
+  type GlimmungRunLink,
+} from "./glimmungRuns";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -553,6 +566,12 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     dismissed?: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
+  };
+  questionTarget?: {
+    turnId?: string;
+    turnNumber?: number;
+    page?: number;
+    timelineId?: string;
   };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
@@ -933,53 +952,6 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   anthropic_secondary: "Claude secondary",
   codex: "Codex",
-};
-
-type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly";
-type ProviderQuotaStatus = "ok" | "low" | "exhausted" | "stale" | "unknown";
-
-interface ProviderQuotaWindow {
-  id: ProviderQuotaWindowId;
-  label: string;
-  shortLabel: string;
-  status: ProviderQuotaStatus;
-  percentRemaining: number | null;
-  resetAt: string | null;
-  observedAt: string | null;
-}
-
-interface ProviderQuotaSnapshot {
-  provider: Provider;
-  status: ProviderQuotaStatus;
-  observedAt: string | null;
-  windows: ProviderQuotaWindow[];
-}
-
-interface ProviderQuotaEvidence {
-  provider: Provider;
-  rateLimitType: string;
-  status?: string;
-  utilization?: number;
-  resetsAt?: string | number | null;
-  observedAt?: string | null;
-}
-
-const PROVIDER_QUOTA_WINDOW_DEFS: Record<
-  Provider,
-  Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>
-> = {
-  anthropic: [
-    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
-    { id: "weekly", label: "Weekly", shortLabel: "Week" },
-  ],
-  anthropic_secondary: [
-    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
-    { id: "weekly", label: "Weekly", shortLabel: "Week" },
-  ],
-  codex: [
-    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
-    { id: "weekly", label: "Weekly", shortLabel: "Week" },
-  ],
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -2376,6 +2348,9 @@ interface ComposerToolButtonsProps {
     onCreateAndDrive?: () => void;
     onOpenReady?: () => void;
   };
+  glimmungRuns: {
+    runs: GlimmungRunLink[];
+  };
   pullRequest: {
     latestUrl?: string;
     linkedUrl?: string;
@@ -2605,11 +2580,146 @@ function PullRequestMenuButton({
   );
 }
 
+function GlimmungMark({ className }: { className?: string }) {
+  return (
+    <span className={className} aria-hidden="true">
+      g
+    </span>
+  );
+}
+
+function GlimmungRunMenuButton({
+  runs,
+}: ComposerToolButtonsProps["glimmungRuns"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+  const hasRuns = runs.length > 0;
+  const title = hasRuns
+    ? `Glimmung runs (${runs.length})`
+    : "No Glimmung runs found yet";
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="run-glimmung-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-glimmung-action-btn${hasRuns ? " is-ready" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={!hasRuns}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GlimmungMark className="run-glimmung-mark" />
+        {runs.length > 1 && (
+          <span className="run-command-menu-count">{runs.length}</span>
+        )}
+      </button>
+      {open &&
+        hasRuns &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover run-glimmung-menu-popover"
+            role="menu"
+            aria-label="Glimmung runs"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Glimmung runs</div>
+            {runs.map((run) => (
+              <a
+                key={run.key}
+                role="menuitem"
+                className="run-pr-menu-item run-glimmung-menu-item"
+                href={run.href}
+                target="_blank"
+                rel="noreferrer"
+                title={run.href}
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-glimmung-menu-main">
+                  <span className="run-pr-menu-name run-glimmung-menu-name">
+                    <GlimmungMark className="run-glimmung-menu-glyph" />
+                    {run.label}
+                  </span>
+                  <span className="run-slash-desc">
+                    {[run.state, run.toolName].filter(Boolean).join(" · ")}
+                  </span>
+                </span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 function ComposerToolButtons({
   attach,
   cost,
   rollout,
   test,
+  glimmungRuns,
   pullRequest,
   slash,
   mcp,
@@ -2705,6 +2815,7 @@ function ComposerToolButtons({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      <GlimmungRunMenuButton {...glimmungRuns} />
       <PullRequestMenuButton {...pullRequest} />
       {bugLabelControl}
       <button
@@ -3405,9 +3516,9 @@ const INTERACTION_ICONS: Record<
 > = {
   gui: MonitorIcon,
   cli: TerminalIcon,
-  // Restricted-git GUI sessions swap the monitor glyph for a git glyph so the
-  // session row carries a standing reminder that the session uses governed Git.
-  "restricted-git": GitBranchIcon,
+  // Unrestricted (ungoverned) GUI sessions swap the monitor glyph for a red git
+  // glyph so the session row flags the opt-out; restricted Git is the default.
+  "unrestricted-git": GitBranchIcon,
 };
 
 function InteractionIcon({
@@ -3435,11 +3546,11 @@ function ModeChip({
 }) {
   const icon = MODE_CHIP_ICONS[mode];
   const label = MODE_CHIP_LABELS[mode] ?? mode;
-  // Restricted git only ever rides GUI modes; gate the affordance on `gui` so a
-  // stray capability on a non-gui row can never mislabel the interaction chip.
-  const showRestrictedGit = restrictedGit && interaction === "gui";
-  const interactionLabel = showRestrictedGit
-    ? "restricted git"
+  // Restricted Git is the default; the chip flags the *unrestricted* opt-out.
+  // Gate on `gui` so a non-gui row can never pick up the git affordance.
+  const showUnrestrictedGit = !restrictedGit && interaction === "gui";
+  const interactionLabel = showUnrestrictedGit
+    ? "unrestricted git"
     : interaction
       ? INTERACTION_LABELS[interaction]
       : null;
@@ -3458,7 +3569,7 @@ function ModeChip({
         {interaction && (
           <span
             className={`mode mode-icon-only mode-interaction-chip${
-              showRestrictedGit ? " is-restricted-git" : ""
+              showUnrestrictedGit ? " is-unrestricted-git" : ""
             }`}
             title={interactionLabel ?? undefined}
             aria-label={interactionLabel ?? undefined}
@@ -4337,6 +4448,7 @@ function DemoLanding() {
                         disabled: true,
                         title: "Sign in to start a session",
                       }}
+                      glimmungRuns={{ runs: [] }}
                       pullRequest={{}}
                       slash={{
                         disabled: true,
@@ -4887,6 +4999,7 @@ type TurnViewScrollAnchor = "bottom" | "top";
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
   resetPage?: boolean;
+  page?: number;
 };
 
 type TurnViewScrollRequest = {
@@ -5794,6 +5907,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
           usageObservation: entry.usageObservation,
+          questionTarget: entry.questionTarget,
         };
       }
       if (entry.kind === "reasoning") {
@@ -8384,13 +8498,13 @@ function backgroundTaskStatusLabel(
 }
 
 function backgroundTaskTitle(entry: TranscriptEntry): string {
-  return (
-    entry.taskCommand ??
-    entry.taskSummary ??
-    entry.taskDescription ??
-    entry.lastToolName ??
-    "Shell task"
-  );
+  const title = [
+    entry.taskCommand,
+    entry.taskSummary,
+    entry.taskDescription,
+    entry.lastToolName,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+  return title?.trim() ?? "Shell task";
 }
 
 function backgroundTaskSubtitle(entry: TranscriptEntry): string {
@@ -8583,10 +8697,13 @@ function RunBackgroundTaskBlock({
   const running = isBackgroundTaskRunning(entry);
   const label = backgroundTaskStatusLabel(entry.taskStatus);
   const summary = backgroundTaskTitle(entry);
+  const description = entry.taskDescription?.trim() ?? "";
   const detail =
-    entry.taskDescription && entry.taskDescription !== summary
-      ? entry.taskDescription
-      : "";
+    description && description !== summary ? description : "";
+  const taskProcessId = String(entry.taskProcessId ?? "").trim();
+  const taskId = entry.taskId?.trim() ?? "";
+  const processLabel =
+    taskProcessId ? `process ${taskProcessId}` : taskId ? `task ${taskId}` : "";
   const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
   return (
     <button
@@ -8616,16 +8733,10 @@ function RunBackgroundTaskBlock({
             />
           )}
         </div>
-        {(detail || entry.taskId || errorText) && (
+        {(detail || processLabel || errorText) && (
           <div className="run-background-task-detail">
             {detail && <span>{detail}</span>}
-            {(entry.taskProcessId ?? entry.taskId) && (
-              <span>
-                {entry.taskProcessId
-                  ? `process ${entry.taskProcessId}`
-                  : `task ${entry.taskId}`}
-              </span>
-            )}
+            {processLabel && <span>{processLabel}</span>}
             {errorText && (
               <span className="run-background-task-error">{errorText}</span>
             )}
@@ -10007,7 +10118,11 @@ function AgentGitActivityScreen({
   );
 }
 
-function ToolBody({ entry }: { entry: TranscriptEntry }) {
+function ToolBody({
+  entry,
+}: {
+  entry: TranscriptEntry;
+}) {
   const name = entry.toolName ?? "";
   const input = tryParseJson(entry.toolInput) as Record<string, unknown> | null;
   if (
@@ -10645,20 +10760,124 @@ function ToolDefaultBody({
   );
 }
 
+export type AskUserQuestionTarget = {
+  turnId: string;
+  turnNumber?: number;
+  page: number;
+};
+
+function askUserQuestionToolTarget(
+  entry: TranscriptEntry,
+): AskUserQuestionTarget | null {
+  if (!isAskUserQuestionTool(entry)) return null;
+  const raw = entry.questionTarget;
+  const turnId = raw?.turnId?.trim() ?? "";
+  if (!turnId) return null;
+  const page =
+    typeof raw?.page === "number" && Number.isSafeInteger(raw.page) && raw.page > 0
+      ? raw.page
+      : 1;
+  const turnNumber =
+    typeof raw?.turnNumber === "number" &&
+    Number.isSafeInteger(raw.turnNumber) &&
+    raw.turnNumber > 0
+      ? raw.turnNumber
+      : undefined;
+  return { turnId, turnNumber, page };
+}
+
+export function askUserQuestionTargetHref(
+  currentHref: string,
+  sessionId: string,
+  target: AskUserQuestionTarget,
+): string | undefined {
+  if (!target.turnNumber) return undefined;
+  return buildSessionRouteUrl(
+    currentHref,
+    sessionId,
+    "turns",
+    target.turnNumber,
+    null,
+    target.page,
+  );
+}
+
+function AskUserQuestionToolTargetButton({
+  sessionId,
+  target,
+  onOpenTurn,
+  compact = false,
+}: {
+  sessionId: string;
+  target: AskUserQuestionTarget;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  compact?: boolean;
+}) {
+  const label = "Open question page";
+  const href = askUserQuestionTargetHref(window.location.href, sessionId, target);
+  const className = `run-tool-question-target${compact ? " run-tool-question-target-compact" : ""}`;
+  const open = () =>
+    onOpenTurn?.(target.turnId, { anchor: "top", page: target.page });
+  if (href) {
+    return (
+      <a
+        className={className}
+        href={href}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (
+            e.button !== 0 ||
+            e.metaKey ||
+            e.ctrlKey ||
+            e.shiftKey ||
+            e.altKey ||
+            !onOpenTurn
+          )
+            return;
+          e.preventDefault();
+          open();
+        }}
+      >
+        <MessageSquareIcon size={13} aria-hidden="true" />
+        <span>{label}</span>
+      </a>
+    );
+  }
+  if (!onOpenTurn) return null;
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={(e) => {
+        e.stopPropagation();
+        open();
+      }}
+    >
+      <MessageSquareIcon size={13} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
 function RunToolItem({
   entry,
   showTimestamps,
   expanded,
   onExpandedChange,
+  sessionId,
+  onOpenTurn,
 }: {
   entry: TranscriptEntry;
   showTimestamps: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  sessionId: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
+  const questionTarget = askUserQuestionToolTarget(entry);
   return (
     <div
       className="run-transcript-tool"
@@ -10673,66 +10892,81 @@ function RunToolItem({
         <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
-        <button
-          type="button"
-          className="run-transcript-tool-header"
-          data-slot="tool-item-header"
-          onClick={() => onExpandedChange(!expanded)}
-          aria-expanded={expanded}
+        <div
+          className="run-transcript-tool-header-row"
+          data-has-question-target={questionTarget ? "true" : undefined}
         >
-          <span
-            className="run-transcript-tool-icon"
-            data-slot="tool-item-icon"
-            title={cfg.tooltip}
-            aria-label={cfg.tooltip}
+          <button
+            type="button"
+            className="run-transcript-tool-header"
+            data-slot="tool-item-header"
+            onClick={() => onExpandedChange(!expanded)}
+            aria-expanded={expanded}
           >
             <span
-              className={`run-tool-icon-glyph ${cfg.colorClass}`}
-              aria-hidden="true"
+              className="run-transcript-tool-icon"
+              data-slot="tool-item-icon"
+              title={cfg.tooltip}
+              aria-label={cfg.tooltip}
             >
-              <cfg.Icon size={14} strokeWidth={2} />
+              <span
+                className={`run-tool-icon-glyph ${cfg.colorClass}`}
+                aria-hidden="true"
+              >
+                <cfg.Icon size={14} strokeWidth={2} />
+              </span>
             </span>
-          </span>
-          <span
-            className="run-transcript-tool-label"
-            data-slot="tool-item-label"
-          >
-            {entry.toolName ?? "tool"}
-          </span>
-          {showTimestamps && (
-            <ToolTiming
-              startedAt={entry.startedAt ?? entry.time}
-              completedAt={entry.completedAt}
-              running={running}
-            />
-          )}
-          {running && !showTimestamps && (
-            <Loader2Icon
-              size={12}
-              className="run-spin run-tool-spinner"
-              aria-hidden="true"
-            />
-          )}
-          <span
-            className="run-transcript-tool-chevron"
-            data-slot="tool-item-chevron"
-          >
-            {expanded ? (
-              <ChevronUpIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
-              />
-            ) : (
-              <ChevronDownIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
+            <span
+              className="run-transcript-tool-label"
+              data-slot="tool-item-label"
+            >
+              {entry.toolName ?? "tool"}
+            </span>
+            {showTimestamps && (
+              <ToolTiming
+                startedAt={entry.startedAt ?? entry.time}
+                completedAt={entry.completedAt}
+                running={running}
               />
             )}
-          </span>
-        </button>
-        {expanded && <ToolBody entry={entry} />}
+            {running && !showTimestamps && (
+              <Loader2Icon
+                size={12}
+                className="run-spin run-tool-spinner"
+                aria-hidden="true"
+              />
+            )}
+            <span
+              className="run-transcript-tool-chevron"
+              data-slot="tool-item-chevron"
+            >
+              {expanded ? (
+                <ChevronUpIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              ) : (
+                <ChevronDownIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              )}
+            </span>
+          </button>
+          {questionTarget && (
+            <AskUserQuestionToolTargetButton
+              sessionId={sessionId}
+              target={questionTarget}
+              onOpenTurn={onOpenTurn}
+              compact
+            />
+          )}
+        </div>
+        {expanded && (
+          <ToolBody entry={entry} />
+        )}
       </div>
     </div>
   );
@@ -10746,6 +10980,8 @@ function RunToolGroup({
   onOpenChange,
   toolExpansionOverrides,
   onToolExpandedChange,
+  sessionId,
+  onOpenTurn,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
@@ -10754,6 +10990,8 @@ function RunToolGroup({
   onOpenChange: (open: boolean) => void;
   toolExpansionOverrides: Record<string, boolean>;
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
+  sessionId: string;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   if (entries.length === 0) return null;
   if (entries.length === 1) {
@@ -10767,6 +11005,8 @@ function RunToolGroup({
           onExpandedChange={(expanded) =>
             onToolExpandedChange(entry.id, expanded)
           }
+          sessionId={sessionId}
+          onOpenTurn={onOpenTurn}
         />
       </div>
     );
@@ -10849,6 +11089,8 @@ function RunToolGroup({
               onExpandedChange={(expanded) =>
                 onToolExpandedChange(e.id, expanded)
               }
+              sessionId={sessionId}
+              onOpenTurn={onOpenTurn}
             />
           ))}
         </div>
@@ -12279,6 +12521,8 @@ function RunTurnActivityGroup({
                           }
                           toolExpansionOverrides={toolExpansionOverrides}
                           onToolExpandedChange={onToolExpandedChange}
+                          sessionId={sessionId}
+                          onOpenTurn={onOpenTurn}
                         />
                       );
                     }
@@ -12396,6 +12640,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
+  onOpenTurn,
   transcriptHrefForEntry,
   onOpenTranscriptMessage,
   scrollRequest,
@@ -12420,6 +12665,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn: TurnActivityLoadStateByTurn;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
   onOpenTranscriptMessage?: (entryId: string) => void;
   scrollRequest?: TurnViewScrollRequest | null;
@@ -12689,6 +12935,8 @@ function RunTurnActivityScreen({
           onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
           toolExpansionOverrides={toolExpansionOverrides}
           onToolExpandedChange={setToolExpanded}
+          sessionId={sessionId}
+          onOpenTurn={onOpenTurn}
         />
       );
     }
@@ -13609,6 +13857,8 @@ export function RunMessages({
             onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
             toolExpansionOverrides={toolExpansionOverrides}
             onToolExpandedChange={setToolExpanded}
+            sessionId={sessionId}
+            onOpenTurn={onOpenTurn}
           />
         );
       }
@@ -14438,284 +14688,6 @@ function providerRateLimitRows(
       rows.push({ key, label: PROVIDER_RATE_LIMIT_LABELS[key] ?? key, value });
   }
   return rows;
-}
-
-function quotaProviderFromInfo(
-  info: Record<string, unknown>,
-  fallback: Provider,
-): Provider {
-  const raw =
-    typeof info.provider === "string" ? info.provider.toLowerCase() : "";
-  if (raw.includes("codex") || raw.includes("openai")) return "codex";
-  if (raw.includes("claude") || raw.includes("anthropic")) return "anthropic";
-  return fallback;
-}
-
-function quotaWindowIdFromInfo(
-  info: Record<string, unknown>,
-): ProviderQuotaWindowId {
-  const raw =
-    typeof info.rateLimitType === "string"
-      ? info.rateLimitType.toLowerCase()
-      : "";
-  const normalized = raw.replace(/[\s-]+/g, "_");
-  if (normalized.includes("opus")) return "opus_weekly";
-  if (
-    normalized.includes("other") ||
-    normalized.includes("sonnet") ||
-    normalized.includes("non_opus")
-  )
-    return "weekly";
-  if (
-    normalized.includes("week") ||
-    normalized.includes("seven_day") ||
-    normalized.includes("7_day")
-  ) {
-    return "weekly";
-  }
-  return "five_hour";
-}
-
-function quotaPercentRemaining(info: Record<string, unknown>): number | null {
-  const raw = info.utilization;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
-  const percentUsed = raw <= 1 ? raw * 100 : raw;
-  return Math.max(0, Math.min(100, 100 - percentUsed));
-}
-
-function quotaResetAt(info: Record<string, unknown>): string | null {
-  const raw = info.resetsAt ?? info.overageResetsAt;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
-    const date = new Date(ms);
-    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
-  }
-  if (typeof raw === "string" && raw.trim()) {
-    const ms = Date.parse(raw);
-    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-  }
-  return null;
-}
-
-function quotaWindowStatus(
-  info: Record<string, unknown> | null,
-  percentRemaining: number | null,
-  resetAt: string | null,
-  observedAt: string | null,
-): ProviderQuotaStatus {
-  if (!info || !observedAt) return "unknown";
-  const now = Date.now();
-  const resetMs = resetAt ? Date.parse(resetAt) : Number.NaN;
-  if (Number.isFinite(resetMs) && resetMs < now) return "stale";
-  const observedMs = Date.parse(observedAt);
-  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000)
-    return "stale";
-  const status =
-    typeof info.status === "string" ? info.status.toLowerCase() : "";
-  if (status.includes("reject") || status.includes("exhaust"))
-    return "exhausted";
-  if (percentRemaining !== null && percentRemaining <= 0) return "exhausted";
-  if (percentRemaining !== null && percentRemaining <= 20) return "low";
-  return "ok";
-}
-
-function quotaSnapshotStatus(
-  windows: ProviderQuotaWindow[],
-): ProviderQuotaStatus {
-  if (windows.some((window) => window.status === "exhausted"))
-    return "exhausted";
-  if (windows.some((window) => window.status === "low")) return "low";
-  if (windows.some((window) => window.status === "ok")) return "ok";
-  if (windows.some((window) => window.status === "stale")) return "stale";
-  return "unknown";
-}
-
-function providerQuotaEvidenceFromPayload(
-  value: unknown,
-): ProviderQuotaEvidence[] {
-  if (!value || typeof value !== "object") return [];
-  const raw = value as Record<string, unknown>;
-  const rows = Array.isArray(raw.rate_limits) ? raw.rate_limits : [];
-  const out: ProviderQuotaEvidence[] = [];
-  for (const row of rows) {
-    if (!row || typeof row !== "object") continue;
-    const item = row as Record<string, unknown>;
-    const provider =
-      typeof item.provider === "string"
-        ? quotaProviderFromInfo(item, "anthropic")
-        : null;
-    const rateLimitType =
-      typeof item.rateLimitType === "string" ? item.rateLimitType : "";
-    if (!provider || !rateLimitType) continue;
-    const utilization =
-      typeof item.utilization === "number" && Number.isFinite(item.utilization)
-        ? item.utilization
-        : undefined;
-    out.push({
-      provider,
-      rateLimitType,
-      ...(typeof item.status === "string" ? { status: item.status } : {}),
-      ...(utilization !== undefined ? { utilization } : {}),
-      ...(typeof item.resetsAt === "string" ||
-      typeof item.resetsAt === "number" ||
-      item.resetsAt === null
-        ? { resetsAt: item.resetsAt }
-        : {}),
-      ...(typeof item.observedAt === "string"
-        ? { observedAt: item.observedAt }
-        : {}),
-    });
-  }
-  return out;
-}
-
-function providerQuotaEvidenceFromSessions(
-  sessions: readonly Session[],
-): ProviderQuotaEvidence[] {
-  const out: ProviderQuotaEvidence[] = [];
-  for (const session of sessions) {
-    const info = session.provider_rate_limit_info;
-    const observedAt = session.provider_rate_limit_observed_at;
-    if (!info || !observedAt) continue;
-    const fallbackProvider = MODE_MENU_ICONS[session.mode];
-    const provider = quotaProviderFromInfo(info, fallbackProvider);
-    const rateLimitType =
-      typeof info.rateLimitType === "string"
-        ? info.rateLimitType
-        : quotaWindowIdFromInfo(info);
-    out.push({
-      provider,
-      rateLimitType,
-      ...(typeof info.status === "string" ? { status: info.status } : {}),
-      ...(typeof info.utilization === "number" &&
-      Number.isFinite(info.utilization)
-        ? { utilization: info.utilization }
-        : {}),
-      ...(typeof info.resetsAt === "string" || typeof info.resetsAt === "number"
-        ? { resetsAt: info.resetsAt }
-        : typeof info.overageResetsAt === "string" ||
-            typeof info.overageResetsAt === "number"
-          ? { resetsAt: info.overageResetsAt }
-          : {}),
-      observedAt,
-    });
-  }
-  return out;
-}
-
-function buildProviderQuotaSnapshots(
-  sessions: readonly Session[],
-  remoteEvidence: readonly ProviderQuotaEvidence[] = [],
-): Record<Provider, ProviderQuotaSnapshot> {
-  const latest: Partial<
-    Record<
-      Provider,
-      Partial<
-        Record<
-          ProviderQuotaWindowId,
-          {
-            info: Record<string, unknown>;
-            observedAt: string;
-          }
-        >
-      >
-    >
-  > = {};
-  const evidence = [
-    ...providerQuotaEvidenceFromSessions(sessions),
-    ...remoteEvidence,
-  ];
-  for (const row of evidence) {
-    const observedAt =
-      typeof row.observedAt === "string" && row.observedAt
-        ? row.observedAt
-        : new Date().toISOString();
-    const info: Record<string, unknown> = {
-      provider: row.provider,
-      rateLimitType: row.rateLimitType,
-      ...(row.status ? { status: row.status } : {}),
-      ...(typeof row.utilization === "number"
-        ? { utilization: row.utilization }
-        : {}),
-      ...(row.resetsAt !== undefined && row.resetsAt !== null
-        ? { resetsAt: row.resetsAt }
-        : {}),
-    };
-    const provider = row.provider;
-    const windowId = quotaWindowIdFromInfo(info);
-    const current = latest[provider]?.[windowId];
-    if (!current || Date.parse(observedAt) > Date.parse(current.observedAt)) {
-      latest[provider] = {
-        ...(latest[provider] ?? {}),
-        [windowId]: { info, observedAt },
-      };
-    }
-  }
-
-  const out = {} as Record<Provider, ProviderQuotaSnapshot>;
-  for (const provider of PROVIDERS) {
-    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map(
-      (def): ProviderQuotaWindow => {
-        const evidence = latest[provider]?.[def.id];
-        const percentRemaining = evidence
-          ? quotaPercentRemaining(evidence.info)
-          : null;
-        const resetAt = evidence ? quotaResetAt(evidence.info) : null;
-        return {
-          ...def,
-          status: quotaWindowStatus(
-            evidence?.info ?? null,
-            percentRemaining,
-            resetAt,
-            evidence?.observedAt ?? null,
-          ),
-          percentRemaining,
-          resetAt,
-          observedAt: evidence?.observedAt ?? null,
-        };
-      },
-    );
-    const observedAt =
-      windows
-        .map((window) => window.observedAt)
-        .filter((value): value is string => Boolean(value))
-        .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
-    out[provider] = {
-      provider,
-      status: quotaSnapshotStatus(windows),
-      observedAt,
-      windows,
-    };
-  }
-  return out;
-}
-
-function providerQuotaSummary(window: ProviderQuotaWindow | undefined): string {
-  if (!window || window.status === "unknown") return "unknown";
-  if (window.status === "stale") return "stale";
-  if (window.percentRemaining === null) {
-    return window.status === "exhausted" ? "exhausted" : "captured";
-  }
-  return `${Math.round(window.percentRemaining)}% left`;
-}
-
-function formatProviderQuotaTimestamp(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return "";
-  return new Intl.DateTimeFormat([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  }).format(new Date(ms));
-}
-
-function providerQuotaResetLabel(window: ProviderQuotaWindow): string {
-  const resetAt = formatProviderQuotaTimestamp(window.resetAt);
-  return resetAt ? `resets ${resetAt}` : "";
 }
 
 function ProviderCapacityStrip({
@@ -19641,6 +19613,13 @@ function ChatPane({
     () => entries.filter((entry) => !entry.backgroundOnly),
     [entries],
   );
+  const glimmungRunLinks = useMemo(() => {
+    const runEntries = [...renderedEntries];
+    for (const activityEntries of Object.values(activityEntriesByTurn)) {
+      if (activityEntries) runEntries.push(...activityEntries);
+    }
+    return collectGlimmungRunsFromEntries(runEntries);
+  }, [activityEntriesByTurn, renderedEntries]);
   useEffect(() => {
     if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
@@ -20095,17 +20074,36 @@ function ChatPane({
         effectiveSelectedTurnId ||
         latestTurnId;
       if (target) {
+        const targetPage =
+          typeof options?.page === "number" &&
+          Number.isSafeInteger(options.page) &&
+          options.page > 0
+            ? options.page
+            : null;
         setPendingRouteTurnNumber(null);
         setRouteTurnUnavailable(false);
         setPendingTurnViewRouteAnchor(null);
         setSelectedTurnNumberAnchor(null);
-        if (options?.resetPage) {
+        if (targetPage != null) {
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [target]: targetPage,
+          };
+        } else if (options?.resetPage) {
           const nextSelectedPages = { ...selectedTurnPageRef.current };
           delete nextSelectedPages[target];
           selectedTurnPageRef.current = nextSelectedPages;
         }
         setSelectedTurnId(target);
-        ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        if (targetPage != null) {
+          startTurnActivityLoad(target, {
+            force: true,
+            page: targetPage,
+            reason: "page",
+          });
+        } else {
+          ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        }
         if (options?.anchor) {
           turnViewScrollRequestSeqRef.current += 1;
           setTurnViewScrollRequest({
@@ -20122,6 +20120,7 @@ function ChatPane({
       effectiveSelectedTurnId,
       ensureTurnActivityLoaded,
       latestTurnId,
+      startTurnActivityLoad,
     ],
   );
 
@@ -21629,6 +21628,7 @@ function ChatPane({
                   onOpenBackgroundTask={
                     publicView ? undefined : openBackgroundPage
                   }
+                  onOpenTurn={publicView ? undefined : openTurnPage}
                   transcriptHrefForEntry={transcriptHrefForEntry}
                   onOpenTranscriptMessage={openTranscriptMessage}
                   scrollRequest={turnViewScrollRequest}
@@ -22270,6 +22270,9 @@ function ChatPane({
                   title: testState?.active
                     ? "Choose a test action"
                     : "Start a test workflow",
+                }}
+                glimmungRuns={{
+                  runs: glimmungRunLinks,
                 }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
@@ -26712,21 +26715,21 @@ function AuthenticatedApp() {
                         {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                           <button
                             type="button"
-                            className={`home-quick-action home-capability-action${homeRestrictedGitEnabled ? " is-selected" : ""}`}
+                            className={`home-quick-action home-capability-action${!homeRestrictedGitEnabled ? " is-selected" : ""}`}
                             onClick={() =>
                               setHomeRestrictedGitEnabled((value) => !value)
                             }
                             disabled={busy}
-                            aria-pressed={homeRestrictedGitEnabled}
-                            title="Use experimental Tank-governed Git permissions for this session"
+                            aria-pressed={!homeRestrictedGitEnabled}
+                            title="Disable Tank-governed Git for this session and use standard git access"
                           >
                             <GitBranchIcon className="home-quick-icon" />
                             <span className="home-quick-main">
                               <span className="home-quick-title">
-                                Restricted Git
+                                Unrestricted Git
                               </span>
                               <span className="home-quick-sub">
-                                Experimental
+                                Standard git access
                               </span>
                             </span>
                           </button>
@@ -26854,6 +26857,7 @@ function AuthenticatedApp() {
                       disabled: true,
                       title: "Available in an active chat session",
                     }}
+                    glimmungRuns={{ runs: [] }}
                     pullRequest={{}}
                     slash={{
                       disabled: true,

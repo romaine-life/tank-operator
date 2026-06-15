@@ -877,6 +877,12 @@ type sdkTurnRequest struct {
 	// system identity instead of the human owner's Gravatar. Empty for
 	// interactive human turns. Set via authorKindForUser at the HTTP edge.
 	AuthorKind string
+	// MCPActivateName / MCPActivateURL, when set, ride this submit_turn so the
+	// pod-side runner auto-surfaces the named MCP server at the next idle
+	// boundary (break-glass activation). Set by the break-glass approval turns;
+	// empty for ordinary turns.
+	MCPActivateName string
+	MCPActivateURL  string
 }
 
 // authorKindForUser maps an authenticated caller to the durable AuthorKind
@@ -1150,6 +1156,8 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		PermissionMode:    validateTurnArg(req.PermissionMode),
 		SkillName:         skillName,
 		FollowUp:          req.FollowUp,
+		MCPActivateName:   strings.TrimSpace(req.MCPActivateName),
+		MCPActivateURL:    strings.TrimSpace(req.MCPActivateURL),
 		CreatedAt:         createdAt.Format(time.RFC3339Nano),
 	}
 	// Boundary events are backend-owned: the orchestrator accepted the turn,
@@ -1229,6 +1237,8 @@ func sdkTurnSource(source string) string {
 		return string(conversation.TurnSubmittedSourceBackgroundTask)
 	case string(conversation.TurnSubmittedSourceLaunchDispatch):
 		return string(conversation.TurnSubmittedSourceLaunchDispatch)
+	case string(conversation.TurnSubmittedSourceBreakGlassApproval):
+		return string(conversation.TurnSubmittedSourceBreakGlassApproval)
 	default:
 		return "sdk"
 	}

@@ -385,9 +385,10 @@ Open hardening:
   Claude. That privileged server lists no tools before activation, rechecks the
   grant on every list/call, and records token/push use as
   `github.break_glass.token` or `github.break_glass.push`. The auth.romaine.life
-  console is expected to approve by calling Tank's internal grant endpoint;
-  that callback does not exist in the auth app yet, so the agent-facing approval
-  URL is a dead end in practice.
+  console approves by calling Tank's internal grant endpoint. When that grant is
+  persisted, Tank starts a system-authored follow-up turn telling the agent the
+  user approved the request and to call `request_git_break_glass` again to
+  activate the privileged MCP server.
 - Break-glass approval chip + link (added 2026-06-14). A started
   `github.break_glass.request` with no unexpired grant for its repo is surfaced
   as a "chip": the composer pull-request button turns amber with an alert dot,
@@ -402,3 +403,168 @@ Open hardening:
   PR the agent opened (control-action git activity) and the PR explicitly linked
   via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
   positioning so the composer input-group's `overflow: hidden` cannot clip it.
+
+## Locked-by-default Azure MCP (break-glass)
+
+The `azure-personal` MCP (Postgres `pg_query`/`pg_execute`, Key Vault secrets,
+Cosmos, ARM/AKS, Entra/UAMI) is locked by default for every session. Normal
+feature development never needs Azure access; obtaining it requires an
+approved, time-bounded, audited break-glass grant.
+
+Affected contracts:
+- Session Lifecycle
+- Observability
+
+Enforcement is in the server we own, not the sidecar:
+- `mcp-azure-personal` requires a valid auth.romaine.life JWT identifying the
+  caller's session **and** an active azure break-glass grant. With no grant it
+  returns an MCP-shaped JSON-RPC refusal — **not** a bare HTTP 403, which the
+  Claude MCP SDK treats as an OAuth challenge (it falls into an
+  `authenticate`/`complete_authentication` flow instead of failing cleanly) —
+  including on a direct in-cluster call from the agent shell, not just the
+  localhost MCP path.
+- A sidecar gate cannot be the boundary here: every session pod shares the
+  `claude-session` ServiceAccount (so RBAC cannot express per-session
+  break-glass), and the `mcp-auth-proxy` sidecar shares the pod (IP + SA) with
+  the agent container (so no NetworkPolicy can allow the sidecar but deny the
+  agent). Only the server requiring an unforgeable per-session grant both
+  revokes by default and grants per session. This is the canonical pattern:
+  *first-party MCP servers check the Tank grant.* Git break-glass's in-sidecar
+  `tank-git-break-glass` wrapper is the external-resource exception (github.com
+  cannot be taught our grants, so Tank must mint a real GitHub token); a named
+  follow-up folds git into this pattern.
+
+Contract impact:
+- The visible normal-mode surface is the narrow `request_azure_break_glass`
+  tool (proxy-injected into the mcp-tank-operator surface, independent of
+  restricted-git). For **restricted** sessions it records an
+  `azure.break_glass.request` control-action event and returns an
+  `auth.romaine.life/admin?intent=azure-break-glass` approval URL without
+  granting access or revealing a token.
+- **Non-restricted (trusted) sessions are pre-approved for Azure.** When the
+  agent calls `request_azure_break_glass`, the proxy self-approves by POSTing the
+  grant endpoint directly (no human approval), so the existing B-auto activation
+  turn surfaces the tools. It only fires when the agent actually requests Azure
+  (no per-session noise), and restricted/test sessions keep the approval-URL
+  flow. See `_auto_grant_azure_break_glass` in mcp-auth-proxy.
+- Grants are stored as `azure.break_glass.grant` control-action events
+  (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
+  same `control_action_events` ledger as git break-glass. They are not
+  repo-scoped: a grant authorizes the whole azure-personal MCP for the session.
+- After an admin approves, the auth.romaine.life console POSTs the grant to
+  Tank's internal `POST /api/internal/sessions/{id}/azure-break-glass/grants`;
+  `mcp-azure-personal` reads it through
+  `GET /api/internal/sessions/{id}/azure-break-glass/grant` (short-cached) on
+  every list/call, so expiry re-locks automatically. Each privileged call is
+  recorded as `azure.break_glass.use`. All three actions increment
+  `tank_control_action_events_total`.
+- The proxy forwards the auth.romaine.life service JWT (`X-Auth-Romaine-Token`)
+  and the caller-session headers to port 9991 so the server can identify the
+  session and look up its grant.
+- **Client surfacing (mirrors git break-glass).** `azure-personal` is absent
+  from the default session `.mcp.json` while locked, so the harness never
+  connects to a locked server (no 403/OAuth noise). On an approved grant,
+  `request_azure_break_glass` activates it back into `.mcp.json` / Codex / Claude
+  settings (`_activate_azure_break_glass_mcp_config`) — the reconnect trigger
+  that surfaces its tools, exactly how git break-glass surfaces
+  `mint_full_git_token`. Enforcement (server-side grant check) and surfacing
+  (`.mcp.json` activation) are separate concerns and the design needs both: a
+  server-side gate alone is invisible to the harness, with no event to reconnect
+  on after a grant.
+
+Open hardening:
+- Hermes (the only other subject on `mcp-azure-personal`'s RoleBinding) was
+  retired, so its subject was dropped from the RoleBinding and no exemption is
+  configured. `breakGlass.exemptSubjects` remains for any future unattended
+  automation that legitimately needs Azure without a per-session grant.
+- Until the auth.romaine.life `intent=azure-break-glass` approval card exists,
+  operators can create the grant by POSTing Tank's internal endpoint directly,
+  the same fallback git break-glass uses today.
+
+## Non-Restricted Session Full Git Access
+
+Status: complete
+
+Intent:
+A non-restricted session (`TANK_RESTRICTED_GIT` false/unset) is a trusted
+workspace and should have full, automatic git access — `git clone`/`fetch`/`pull`/
+`push` to any repo the session's installation can reach, with no manual token
+handling. Restricting git is an opt-in (`TANK_RESTRICTED_GIT=true`) governed
+mode, not the default posture.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- `install-agent-git-template.sh` is mode-aware. Restricted sessions install the
+  governed hook templates (post-commit auto-publish + pre-push block) exactly as
+  before. Non-restricted sessions install `git-credential-tank.sh` as the global
+  git credential helper (`credential.helper` + `credential.useHttpPath=true`).
+- `git-credential-tank.sh` mints a short-lived GitHub App token on each git op
+  via the in-pod `mcp-github` MCP (`127.0.0.1:9992`), authenticated with the
+  pod's projected `auth.romaine.life` service-account token, scoped per-repo via
+  the request path, requesting the App's full permission set. It grants nothing
+  the session cannot already mint through the MCP tool surface; it removes the
+  manual step.
+- `gh` is durable the same way: the session image bakes a `gh` wrapper at
+  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that, for
+  non-restricted sessions, mints a fresh token (scoped to the `/workspace` repos
+  plus any `--repo`/`-R` arg) and execs the real gh — so `gh` never needs a
+  manual re-auth. Restricted sessions pass straight through (gh stays
+  unauthenticated; the governed path owns credentials). See
+  `session-images/gh-tank-wrapper.sh`.
+- `repo-cloner` only scrubs the cloned repo's local `credential.helper` in
+  restricted mode. In non-restricted mode the clone keeps no local override, so
+  it inherits the global auto-minting helper. (An empty local `credential.helper`
+  clears the helper list and was the reason a non-restricted clone could not
+  push.)
+- The helper ships in the `tank-session-config` ConfigMap and is mounted into
+  every session pod under `/opt/tank/session-config/`; it is only wired up in
+  non-restricted mode.
+
+Evidence:
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedGit`)
+  covers non-restricted⇒helper-wired / no governed hooks, and
+  (`TestInstallAgentGitTemplateScriptRunsUnderSh`) keeps restricted⇒hooks.
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperMintsToken`) covers the helper's mint request
+  shape, SSE reply parsing, and non-github bail.
+
+## Non-Restricted Session Read-Only DB Access
+
+Status: complete
+
+Intent:
+Give non-restricted (trusted) sessions arbitrary READ-ONLY SQL against the
+tank-operator Postgres DB for diagnostics (the `session_events` ledger,
+`profiles`, `session_registry`, `control_action_events`, …) — the durable-ledger
+query path `docs/diagnostic-discipline.md` calls for — without putting DB
+credentials in the session pod.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- The mcp-auth-proxy injects a `query_tank_db` MCP tool into the
+  mcp-tank-operator surface **only for non-restricted sessions**
+  (`not RESTRICTED_GIT_ENABLED`). It calls Tank's internal
+  `POST /api/internal/sessions/{id}/db-read-query`.
+- The endpoint runs the SQL under the orchestrator pool in a **read-only
+  transaction** with a `statement_timeout` and a row cap, and refuses
+  restricted-git sessions (`podRestrictedGit`). Writes/DDL are rejected by the
+  read-only tx; the Flexible-Server admin is not a filesystem superuser, so the
+  blast radius is "read the app's own data" — acceptable for the trusted owner's
+  non-restricted sessions, and unavailable to restricted/test sessions.
+- No DB credential ever lands in a session pod; the orchestrator (the DB's AAD
+  admin) proxies the read. (Full `psql` CLI with a dedicated read-only role +
+  KV password is a heavier optional follow-up.)
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_query_tank_db_tool_injected_only_for_non_restricted`,
+  `test_handle_query_tank_db_tool_runs_read_query`).
+- `backend-go/cmd/tank-operator/handlers_db_read_query_test.go`
+  (`TestDBReadQuery_RestrictedRefused`, `TestDBReadQuery_NonRestrictedRequiresPool`).

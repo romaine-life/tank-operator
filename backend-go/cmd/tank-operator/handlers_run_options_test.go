@@ -59,15 +59,17 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if opts.DefaultModels["codex"] != "gpt-5.5" || opts.DefaultEfforts["codex"] != "xhigh" {
 		t.Fatalf("codex defaults = model %q effort %q", opts.DefaultModels["codex"], opts.DefaultEfforts["codex"])
 	}
-	if opts.TestSlotDefaults.Mode != sessionmodel.ClaudeGUIMode || opts.TestSlotDefaults.Model != "" || opts.TestSlotDefaults.Effort != "" {
-		t.Fatalf("test slot defaults = %#v, want bare claude_gui", opts.TestSlotDefaults)
+	if opts.TestSlotDefaults.Mode != sessionmodel.ClaudeGUIMode ||
+		opts.TestSlotDefaults.Model != "claude-haiku-4-5" ||
+		opts.TestSlotDefaults.Effort != "low" {
+		t.Fatalf("test slot defaults = %#v, want low-cost claude_gui", opts.TestSlotDefaults)
 	}
 }
 
 func TestSessionRunOptionsExposeConfiguredTestSlotDefaults(t *testing.T) {
 	opts := sessionRunOptions(testSlotDefaults{Mode: sessionmodel.CodexGUIMode, Model: "gpt-5.4-mini", Effort: "low"})
 	if opts.TestSlotDefaults.Mode != sessionmodel.CodexGUIMode ||
-		opts.TestSlotDefaults.Model != "gpt-5.4-mini" ||
+		opts.TestSlotDefaults.Model != "gpt-5.3-codex-spark" ||
 		opts.TestSlotDefaults.Effort != "low" {
 		t.Fatalf("test slot defaults = %#v", opts.TestSlotDefaults)
 	}
@@ -149,7 +151,7 @@ func TestHandleSessionRunOptionsRequiresUserAuth(t *testing.T) {
 	if !slices.Contains(body.CreateModes, sessionmodel.CodexGUIMode) {
 		t.Fatalf("body = %#v, want codex_gui create mode", body)
 	}
-	if body.TestSlotDefaults.Mode != sessionmodel.CodexGUIMode || body.TestSlotDefaults.Model != "gpt-5.4-mini" || body.TestSlotDefaults.Effort != "low" {
+	if body.TestSlotDefaults.Mode != sessionmodel.CodexGUIMode || body.TestSlotDefaults.Model != "gpt-5.3-codex-spark" || body.TestSlotDefaults.Effort != "low" {
 		t.Fatalf("test slot defaults = %#v", body.TestSlotDefaults)
 	}
 }
@@ -171,7 +173,7 @@ func TestHandleAdminSetTestSlotSessionDefaults(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
 	}
-	if store.defaults.Mode != sessionmodel.CodexGUIMode || store.defaults.Model != "gpt-5.4-mini" || store.defaults.Effort != "low" {
+	if store.defaults.Mode != sessionmodel.CodexGUIMode || store.defaults.Model != "gpt-5.3-codex-spark" || store.defaults.Effort != "low" {
 		t.Fatalf("stored defaults = %#v", store.defaults)
 	}
 }

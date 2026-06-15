@@ -699,8 +699,11 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 		}),
 		projectionTestEvent("submitted", "001a", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
 		projectionTestEvent("invoke", "002", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
-			"provider_item_id": "toolu_ask",
-			"timeline_id":      "turn-1:item:tool-ask",
+			"provider_item_id":     "toolu_ask",
+			"timeline_id":          "turn-1:item:tool-ask",
+			"question_turn_id":     "turn-2",
+			"question_timeline_id": "turn-2:item:tool-ask",
+			"question_page":        1,
 			"questions": []any{
 				map[string]any{
 					"question":      "Which auth method?",
@@ -757,6 +760,34 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	}
 	if card == nil {
 		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
+	}
+	var invocation map[string]any
+	for _, body := range projection.ActivityBodies {
+		if body.TurnID != "turn-1" {
+			continue
+		}
+		for _, entry := range body.Entries {
+			if entry["toolName"] == "AskUserQuestion" {
+				invocation = entry
+				break
+			}
+		}
+	}
+	if invocation == nil {
+		t.Fatalf("expected AskUserQuestion invocation marker in asking turn body, got bodies: %#v", projection.ActivityBodies)
+	}
+	target, _ := invocation["questionTarget"].(map[string]any)
+	if target == nil {
+		t.Fatalf("invocation questionTarget missing: %#v", invocation)
+	}
+	if target["turnId"] != "turn-2" {
+		t.Errorf("questionTarget.turnId = %v, want turn-2", target["turnId"])
+	}
+	if target["timelineId"] != "turn-2:item:tool-ask" {
+		t.Errorf("questionTarget.timelineId = %v, want turn-2:item:tool-ask", target["timelineId"])
+	}
+	if target["page"] != 1 {
+		t.Errorf("questionTarget.page = %v, want 1", target["page"])
 	}
 	if got, want := len(projection.Entries), 4; got != want {
 		t.Fatalf("projected entries = %d, want user + asking turn shell + assistant question + question turn shell: %#v", got, projection.Entries)

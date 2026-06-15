@@ -12,6 +12,7 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 type fakeControlActionStore struct {
@@ -49,11 +50,15 @@ func (s *fakeControlActionStore) ListBySession(_ context.Context, ownerEmail, se
 
 func controlActionTestServer(t *testing.T, store controlActionStore) *appServer {
 	t.Helper()
-	return &appServer{
-		verifier:       auth.NewVerifier(testJWT(t)),
-		sessionScope:   "tank-operator-slot-3",
-		controlActions: store,
-	}
+	app := testTurnsApp(
+		t,
+		&recordingSessionBus{},
+		sdkSessionPod("session-47", "47", "owner@example.test", sessionmodel.ClaudeGUIMode, "claude-runner"),
+	)
+	app.verifier = auth.NewVerifier(testJWT(t))
+	app.sessionScope = "tank-operator-slot-3"
+	app.controlActions = store
+	return app
 }
 
 func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T) {
@@ -199,6 +204,18 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			action:     "github.pr_lane.create",
 			targetKind: "github_pull_request",
 			targetRef:  "https://github.com/romaine-life/tank-operator/pull/999",
+		},
+		{
+			name:       "azure break glass requested",
+			action:     "azure.break_glass.request",
+			targetKind: "azure_mcp",
+			targetRef:  "azure-personal",
+		},
+		{
+			name:       "azure break glass use",
+			action:     "azure.break_glass.use",
+			targetKind: "azure_mcp",
+			targetRef:  "azure-personal",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -782,6 +799,102 @@ func TestHandleInternalGrantGitBreakGlassPersistsGrant(t *testing.T) {
 	}
 }
 
+func TestHandleInternalGrantGitBreakGlassStartsSystemApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
+		"ttl_seconds": 900,
+		"operations": ["mint_full_git_token"],
+		"request_event_id": "request-approval-1",
+		"reason": "repair branch"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.Type != "submit_turn" || command.Source != "break-glass-approval" {
+		t.Fatalf("command type/source = %s/%s", command.Type, command.Source)
+	}
+	if command.Email != "owner@example.test" || command.SessionID != "47" {
+		t.Fatalf("command target = %s/%s", command.Email, command.SessionID)
+	}
+	if !strings.Contains(command.Prompt, "System message: Your GitHub break-glass request was approved by the user.") {
+		t.Fatalf("prompt missing approval notice: %q", command.Prompt)
+	}
+	if !strings.Contains(command.Prompt, "Call request_git_break_glass again") {
+		t.Fatalf("prompt missing activation instruction: %q", command.Prompt)
+	}
+	if want := gitBreakGlassApprovalTurnNonce("47:request-approval-1"); command.ClientNonce != want {
+		t.Fatalf("client nonce = %q, want %q", command.ClientNonce, want)
+	}
+	events := app.sessionEvents.(*recordingSessionEventStore).upserts
+	if len(events) < 2 {
+		t.Fatalf("persisted events = %d, want at least 2", len(events))
+	}
+	userMessage := events[0]
+	if userMessage["type"] != "user_message.created" || userMessage["author_kind"] != "system" {
+		t.Fatalf("user message event = %#v", userMessage)
+	}
+	submitted := events[1]
+	payload, _ := submitted["payload"].(map[string]any)
+	if submitted["type"] != "turn.submitted" || payload["source"] != "break-glass-approval" {
+		t.Fatalf("submitted event = %#v", submitted)
+	}
+	var body struct {
+		AgentNotification struct {
+			Delivered bool   `json:"delivered"`
+			TurnID    string `json:"turn_id"`
+		} `json:"agent_notification"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.AgentNotification.Delivered || body.AgentNotification.TurnID == "" {
+		t.Fatalf("agent notification response = %#v", body.AgentNotification)
+	}
+}
+
+func TestHandleInternalGrantGitBreakGlassReturnsErrorWhenApprovalTurnFails(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	app.sessionBus = &recordingSessionBus{err: errors.New("nats down")}
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
+		"ttl_seconds": 900,
+		"operations": ["mint_full_git_token"],
+		"request_event_id": "request-approval-1",
+		"reason": "repair branch"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want persisted grant before retryable notification failure", len(store.appendCalls))
+	}
+	if !strings.Contains(rec.Body.String(), "agent notification failed") {
+		t.Fatalf("body missing notification failure: %s", rec.Body.String())
+	}
+}
+
 func TestHandleInternalGrantGitBreakGlassPersistsAllReposBranchScope(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
@@ -889,6 +1002,213 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	}
 	if store.listOwner != "owner@example.test" || store.listSession != "47" {
 		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
+	}
+}
+
+func TestHandleInternalGrantAzureBreakGlassPersistsGrant(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/azure-break-glass/grants", strings.NewReader(`{
+		"ttl_seconds": 900,
+		"request_event_id": "request-1",
+		"reason": "inspect session_events ledger"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantAzureBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != "azure.break_glass.grant" || got.Status != "succeeded" {
+		t.Fatalf("grant action/status = %s/%s", got.Action, got.Status)
+	}
+	if got.TargetKind != "azure_mcp" || got.TargetRef != "azure-personal" {
+		t.Fatalf("target = %s/%s", got.TargetKind, got.TargetRef)
+	}
+	if got.RepoOwner != "" || got.RepoName != "" {
+		t.Fatalf("azure grant should not be repo-scoped, got %s/%s", got.RepoOwner, got.RepoName)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["request_event_id"] != "request-1" {
+		t.Fatalf("request_event_id = %v", payload["request_event_id"])
+	}
+	ops, _ := payload["operations"].([]any)
+	if len(ops) != 1 || ops[0] != "use_azure_personal_mcp" {
+		t.Fatalf("operations = %v", payload["operations"])
+	}
+}
+
+func TestHandleInternalGrantTestSlotModelApprovalPersistsGrant(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/test-slot-model-approvals/grants", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"gpt-5.5",
+		"effort":"xhigh",
+		"request_event_id":"request-1",
+		"reason":"need frontier model for this validation",
+		"ttl_seconds":1800
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantTestSlotModelApproval(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls=%d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != testSlotModelGrantAction || got.SourceTool != "test_slot_model_approval" || got.SessionID != "47" {
+		t.Fatalf("grant event = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "gpt-5.5" || payload["effort"] != "xhigh" ||
+		payload["low_model"] != "gpt-5.3-codex-spark" || payload["low_effort"] != "low" ||
+		payload["request_event_id"] != "request-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestHandleInternalGrantAzureBreakGlassActivatesMcpViaApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/azure-break-glass/grants", strings.NewReader(`{
+		"ttl_seconds": 900,
+		"request_event_id": "request-1",
+		"reason": "inspect session_events ledger"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantAzureBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.Type != "submit_turn" || command.Source != "break-glass-approval" {
+		t.Fatalf("command type/source = %s/%s", command.Type, command.Source)
+	}
+	if command.SessionID != "47" || command.Email != "owner@example.test" {
+		t.Fatalf("command target = %s/%s", command.SessionID, command.Email)
+	}
+	// B-auto: the approval turn carries the azure-personal MCP-activation payload
+	// so the runner surfaces the tools — no second request_azure_break_glass call.
+	if command.MCPActivateName != "azure-personal" || command.MCPActivateURL != "http://127.0.0.1:9991/" {
+		t.Fatalf("mcp activation = %q/%q", command.MCPActivateName, command.MCPActivateURL)
+	}
+	if !strings.Contains(command.Prompt, "Your Azure break-glass request was approved") {
+		t.Fatalf("prompt missing azure approval notice: %q", command.Prompt)
+	}
+	var body struct {
+		AgentNotification struct {
+			Delivered bool   `json:"delivered"`
+			TurnID    string `json:"turn_id"`
+		} `json:"agent_notification"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.AgentNotification.Delivered || body.AgentNotification.TurnID == "" {
+		t.Fatalf("agent notification = %#v", body.AgentNotification)
+	}
+}
+
+func TestHandleInternalGetAzureBreakGlassGrantReturnsActiveGrant(t *testing.T) {
+	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	payload, _ := json.Marshal(map[string]any{
+		"expires_at": expiresAt,
+		"operations": []string{"use_azure_personal_mcp"},
+		"reason":     "inspect ledger",
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:    "azure-grant-1",
+			Action:     "azure.break_glass.grant",
+			Status:     "succeeded",
+			TargetKind: "azure_mcp",
+			TargetRef:  "azure-personal",
+			Payload:    payload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/azure-break-glass/grant", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetAzureBreakGlassGrant(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != true || body["event_id"] != "azure-grant-1" {
+		t.Fatalf("body = %#v", body)
+	}
+	if store.listOwner != "owner@example.test" || store.listSession != "47" {
+		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
+	}
+}
+
+func TestHandleInternalGetAzureBreakGlassGrantInactiveWithoutGrant(t *testing.T) {
+	// An expired grant must not count as active.
+	expiredPayload, _ := json.Marshal(map[string]any{
+		"expires_at": time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+		"operations": []string{"use_azure_personal_mcp"},
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:    "azure-grant-expired",
+			Action:     "azure.break_glass.grant",
+			Status:     "succeeded",
+			TargetKind: "azure_mcp",
+			TargetRef:  "azure-personal",
+			Payload:    expiredPayload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/azure-break-glass/grant", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetAzureBreakGlassGrant(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != false {
+		t.Fatalf("expected inactive grant, body = %#v", body)
 	}
 }
 

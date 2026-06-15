@@ -676,11 +676,7 @@ const TANK_ASK_USER_QUESTION_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_
 const TANK_EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
 const TANK_EXIT_PLAN_MODE_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_EXIT_PLAN_MODE_TOOL}`;
 
-const askUserQuestionInputSchema = {
-  question: z
-    .string()
-    .optional()
-    .describe("Single question text when not using the questions array."),
+export const askUserQuestionInputSchema = {
   questions: z
     .array(
       z
@@ -701,8 +697,17 @@ const askUserQuestionInputSchema = {
         })
         .passthrough(),
     )
+    .min(1)
     .optional()
-    .describe("One or more questions to ask the user."),
+    .describe(
+      "One or more questions to ask the user. For a single question, either pass a one-element array or use the top-level question fields.",
+    ),
+  question: z
+    .string()
+    .optional()
+    .describe(
+      "Single-question shorthand. Equivalent to questions: [{ question, options, allowFreeForm }].",
+    ),
   options: z
     .array(
       z
@@ -713,12 +718,8 @@ const askUserQuestionInputSchema = {
         })
         .passthrough(),
     )
-    .optional()
-    .describe("Options for the single-question shorthand."),
-  allowFreeForm: z
-    .boolean()
-    .optional()
-    .describe("Whether the user may answer with free-form text."),
+    .optional(),
+  allowFreeForm: z.boolean().optional(),
 };
 
 const exitPlanModeInputSchema = {
@@ -1032,6 +1033,8 @@ export class Runner {
     count: number;
   } | null = null;
   private providerRetryStallMs = PROVIDER_RETRY_STALL_MS;
+  private providerUsageReportInFlight = false;
+  private providerUsageLastAttemptMs = 0;
   // sdkReady gates run()'s for-await loop on the first submit_turn
   // arriving so we can pin model/effort from that command's payload
   // before constructing query(). resolveSdkReady is called exactly once
@@ -1274,6 +1277,8 @@ export class Runner {
     void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
       console.warn("runtime config report failed:", err);
     });
+    this.providerUsageLastAttemptMs = 0;
+    this.scheduleProviderUsageReport(5000);
     // The model's context window is reported later, from the first SDK
     // `result` message's per-model ModelUsage (see maybeReportContextWindow).
     // The Anthropic Models API path was removed: `GET /v1/models/{model}`
@@ -1437,6 +1442,17 @@ export class Runner {
     }
     const providerItemID = this.nextTankAskUserQuestionProviderItemID(turn);
     const questions = claudeQuestionsToTankShape(input);
+    if (questions.length === 0) {
+      return Promise.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "AskUserQuestion requires questions: a non-empty array of question objects, or a top-level question string.",
+          },
+        ],
+      });
+    }
     return this.pauseTurnForInput(turn, questions, providerItemID);
   }
 
@@ -1506,6 +1522,7 @@ export class Runner {
     // window still latches even when the active turn was already interrupted.
     if (providerEvent.type === "result") {
       this.maybeReportContextWindow(message);
+      this.scheduleProviderUsageReport(0);
     }
     const activeTurn = await this.ensureActiveTurn(providerEvent);
     if (isClaudePermissionDeniedEvent(providerEvent)) {
@@ -1701,6 +1718,58 @@ export class Runner {
     return rateLimitInfo;
   }
 
+  private reportProviderRateLimitRetryStallInfo(message: ClaudeProviderEvent): void {
+    const rateLimitInfo =
+      claudeRateLimitInfo(message) ??
+      ({
+        provider: "claude",
+        status: "rejected",
+        rateLimitType: "api_retry",
+        ...(typeof message.uuid === "string" && message.uuid.trim()
+          ? { uuid: message.uuid.trim().slice(0, 512) }
+          : {}),
+        ...(typeof message.session_id === "string" && message.session_id.trim()
+          ? { session_id: message.session_id.trim().slice(0, 512) }
+          : {}),
+      } satisfies Record<string, unknown>);
+    void reportRuntimeConfig(this.cfg, {
+      providerRateLimitInfo: rateLimitInfo,
+    }).catch((err) => {
+      console.warn("provider retry-stall rate-limit info report failed:", err);
+    });
+  }
+
+  private scheduleProviderUsageReport(delayMs: number): void {
+    const timer = setTimeout(() => {
+      void this.reportProviderUsageSnapshot();
+    }, Math.max(0, delayMs));
+    const nodeTimer = timer as unknown as { unref?: () => void };
+    if (typeof nodeTimer.unref === "function") {
+      nodeTimer.unref();
+    }
+  }
+
+  private async reportProviderUsageSnapshot(): Promise<void> {
+    if (this.runSignal?.aborted || this.providerUsageReportInFlight) return;
+    const query = this.sdkQuery;
+    if (!query) return;
+    const now = Date.now();
+    if (now - this.providerUsageLastAttemptMs < 60_000) return;
+    this.providerUsageLastAttemptMs = now;
+    this.providerUsageReportInFlight = true;
+    try {
+      const usage = await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      if (!usage || typeof usage !== "object") return;
+      await reportRuntimeConfig(this.cfg, {
+        providerUsageSnapshot: usage,
+      });
+    } catch (err) {
+      console.warn("provider usage snapshot report failed:", err);
+    } finally {
+      this.providerUsageReportInFlight = false;
+    }
+  }
+
   private async failTurnForProviderRateLimit(
     turn: PendingTurn,
     message: ClaudeProviderEvent,
@@ -1786,6 +1855,7 @@ export class Runner {
     retryCount: number,
   ): Promise<void> {
     providerRateLimitDecisionTotal.labels("retry_stall_failed").inc();
+    this.reportProviderRateLimitRetryStallInfo(message);
     if (turn.terminalEmitted) return;
     providerFailureClassTotal.labels("rate_limit").inc();
     const error =
@@ -2063,6 +2133,27 @@ export class Runner {
     // the user's dropdown pick is the right choice for subsequent turns even
     // though we won't feed THIS turn into the SDK below.
     this.ensureSdkQuery(record);
+    // Break-glass surfacing: a break-glass approval turn carries
+    // mcp_activate_name — the server to reconnect. That server is configured
+    // from boot (present but tool-less while locked); the grant is now active,
+    // so reconnecting it in place re-runs the MCP handshake and surfaces its
+    // now-granted tools live. (Adding a server to a resumed query does NOT
+    // register its tools — the SDK's reconnectMcpServer on an existing server
+    // does.) Best-effort, before the turn is fed so the tools are live for it.
+    const reconnectMcp = String(record.mcp_activate_name ?? "").trim();
+    if (reconnectMcp) {
+      try {
+        await this.sdkQuery?.reconnectMcpServer(reconnectMcp);
+        console.log(
+          JSON.stringify({
+            msg: "break_glass_mcp_reconnected",
+            server: reconnectMcp,
+          }),
+        );
+      } catch (err) {
+        console.warn("break-glass mcp reconnect failed:", err);
+      }
+    }
     // Apply a scheduled mid-session re-pin at this idle boundary (no active
     // turn, nothing queued yet) before feeding the turn, so THIS turn runs on
     // the new model. max_ack_pending=1 on the data consumer guarantees idle

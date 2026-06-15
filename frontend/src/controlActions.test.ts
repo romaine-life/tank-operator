@@ -244,4 +244,28 @@ describe("controlActionRowsToEntries", () => {
     expect(entries[0]?.taskSummary).toBe("GitHub PR renamed");
     expect(entries[0]?.taskStatus).toBe("completed");
   });
+
+  test("labels azure break-glass events", () => {
+    const entries = controlActionRowsToEntries([
+      {
+        event_id: "azure-req-1",
+        invocation_id: "azure-inv-1",
+        action: "azure.break_glass.request",
+        status: "started",
+        target_ref: "azure-personal",
+        target_kind: "azure_mcp",
+      },
+      {
+        event_id: "azure-grant-1",
+        invocation_id: "azure-inv-2",
+        action: "azure.break_glass.grant",
+        status: "succeeded",
+        target_ref: "azure-personal",
+        target_kind: "azure_mcp",
+      },
+    ]);
+
+    expect(entries[0]?.taskSummary).toBe("Azure break-glass request");
+    expect(entries[1]?.taskSummary).toBe("Azure break-glass grant");
+  });
 });

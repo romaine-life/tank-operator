@@ -128,6 +128,19 @@ Tank-operator test slots are provisioned by Glimmung. Before relying on
 hardcoded slot paths or pod names, read the current hot-swap contract from
 Glimmung and use its hot-swap tools when they cover the artifact being tested.
 
+For `/test-drive`, user-visible Tank UI behavior must be proven in a real
+session created inside the checked-out test slot. Use `spawn_test_slot_session`
+so the slot orchestrator owns session creation, then drive the actual slot UI
+with browser automation and record the session URL plus a screenshot or trace.
+This is mandatory for transcript, Turns, composer, session-list, session-bar,
+auth/onboarding, and other browser-visible flows where the product surface is a
+Tank session. Static fixtures, styleguide pages, direct CSS checks, and API
+reads are useful supplemental evidence, but they do not satisfy `/test-drive`
+for those flows by themselves. If a real slot session cannot be driven, record
+the exact blocker (for example runner crash, auth failure, unavailable browser,
+or missing data) in the PR evidence and still run the best lower-level checks
+available.
+
 Slot hostnames such as `https://tank-operator-slot-N.tank.dev.romaine.life`
 are trusted auth origins through Glimmung-managed auth origins, not through a
 static auth.romaine.life allowlist.
