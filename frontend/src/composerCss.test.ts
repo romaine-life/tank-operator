@@ -233,6 +233,46 @@ test("turn view transcript rows share the same avatar gutter", () => {
   expect(inlineActivityContentRule).toMatch(/max-width:\s*100%;/);
 });
 
+test("standalone transcript artifacts align to the message content column", () => {
+  const transcriptRule = cssRule(".run-transcript");
+  expect(transcriptRule).toMatch(
+    /--run-transcript-avatar-column-left:\s*calc\(2\.625rem\s*\+\s*0\.55rem\);/,
+  );
+  expect(transcriptRule).toMatch(
+    /--run-transcript-content-column-left:\s*calc\(var\(--run-transcript-message-inset-left\)\s*\+\s*var\(--run-transcript-avatar-column-left\)\);/,
+  );
+
+  expect(indexCssSource).toMatch(
+    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-background-task,[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-reasoning,[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s*>\s*\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-content-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-content-column-left\)\);/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-turn-view-body\s*>\s*\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-turn-view-body\s*>\s*\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-turn-view-body\s*>\s*\.run-background-task,[\s\S]*?\.run-turn-view-body\s*>\s*\.run-reasoning,[\s\S]*?\.run-turn-view-body\s*>\s*\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-avatar-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-avatar-column-left\)\);/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-background-task,[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-reasoning,[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*0;[\s\S]*?max-width:\s*100%;/,
+  );
+});
+
+test("background task cards render as a compact content row", () => {
+  expect(appSource).toMatch(
+    /function backgroundTaskTitle[\s\S]*?\.find\(\(value\) => typeof value === "string" && value\.trim\(\)\.length > 0\)/,
+  );
+  expect(appSource).toMatch(/return title\?\.trim\(\) \?\? "Shell task";/);
+
+  const cardRule = cssRule(".run-background-task");
+  expect(cardRule).toMatch(/grid-template-columns:\s*1\.55rem\s+minmax\(0,\s*1fr\);/);
+  expect(cardRule).toMatch(/align-items:\s*center;/);
+
+  const bodyRule = cssRule(".run-background-task-body");
+  expect(bodyRule).toMatch(/display:\s*flex;/);
+  expect(bodyRule).toMatch(/flex-wrap:\s*wrap;/);
+  expect(bodyRule).toMatch(/align-items:\s*center;/);
+
+  const titleRule = cssRule(".run-background-task-title");
+  expect(titleRule).toMatch(/flex:\s*0 1 auto;/);
+  expect(titleRule).not.toMatch(/flex:\s*1 1 auto;/);
+});
+
 test("question page answer card aligns with assistant bubble content gutter", () => {
   const questionCardRule = cssRule('.run-turn-view-body[data-page-kind="question"] .run-tool-ask');
   expect(questionCardRule).toMatch(
