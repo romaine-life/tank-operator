@@ -30,6 +30,8 @@ data:
 {{ .Files.Get "session-config/install-agent-git-template.sh" | indent 4 }}
   git-credential-tank.sh: |
 {{ .Files.Get "session-config/git-credential-tank.sh" | indent 4 }}
+  kubectl-credential-tank.sh: |
+{{ .Files.Get "session-config/kubectl-credential-tank.sh" | indent 4 }}
   write-claude-settings.sh: |
 {{ .Files.Get "session-config/write-claude-settings.sh" | indent 4 }}
   session-pod-bootstrap.sh: |

@@ -202,14 +202,31 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 		t.Fatalf("resolve pre-push hook path: %v", err)
 	}
 
+	pluginSrc, err := filepath.Abs("../../../k8s/session-config/kubectl-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve kubectl credential plugin path: %v", err)
+	}
+
 	home := t.TempDir()
 	templateDir := filepath.Join(t.TempDir(), "template")
+	kubeconfigPath := filepath.Join(t.TempDir(), "kube", "config")
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caPath, []byte("fake-ca"), 0o600); err != nil {
+		t.Fatalf("write fake CA: %v", err)
+	}
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Env = append(isolatedGitEnv(home),
 		"TANK_RESTRICTED_GIT=true",
 		"AGENT_POST_COMMIT_HOOK="+hookPath,
 		"AGENT_PRE_PUSH_HOOK="+prePushHookPath,
 		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
+		// Provide the trusted-kubectl inputs too: restricted mode must still NOT
+		// write a kubeconfig — the two modes stay separate.
+		"AGENT_KUBECTL_CREDENTIAL_PLUGIN_SRC="+pluginSrc,
+		"AGENT_KUBECONFIG_PATH="+kubeconfigPath,
+		"AGENT_KUBE_CA_PATH="+caPath,
+		"KUBERNETES_SERVICE_HOST=10.0.0.1",
+		"KUBERNETES_SERVICE_PORT=443",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -221,6 +238,10 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
 	if configured != templateDir {
 		t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
+	}
+	// Restricted sessions must NOT get the trusted-SA kubeconfig.
+	if _, err := os.Stat(kubeconfigPath); !os.IsNotExist(err) {
+		t.Fatalf("kubeconfig written in restricted mode, stat err: %v", err)
 	}
 }
 
@@ -244,16 +265,32 @@ func TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedG
 	if err != nil {
 		t.Fatalf("resolve credential helper path: %v", err)
 	}
+	pluginSrc, err := filepath.Abs("../../../k8s/session-config/kubectl-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve kubectl credential plugin path: %v", err)
+	}
 
 	home := t.TempDir()
 	templateDir := filepath.Join(t.TempDir(), "template")
 	helperDst := filepath.Join(t.TempDir(), "bin", "git-credential-tank")
+	pluginDst := filepath.Join(t.TempDir(), "bin", "kubectl-credential-tank")
+	kubeconfigPath := filepath.Join(t.TempDir(), "kube", "config")
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caPath, []byte("fake-ca"), 0o600); err != nil {
+		t.Fatalf("write fake CA: %v", err)
+	}
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Env = append(isolatedGitEnv(home),
 		"AGENT_POST_COMMIT_HOOK="+hookPath,
 		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
 		"AGENT_GIT_CREDENTIAL_HELPER_SRC="+helperSrc,
 		"AGENT_GIT_CREDENTIAL_HELPER_DST="+helperDst,
+		"AGENT_KUBECTL_CREDENTIAL_PLUGIN_SRC="+pluginSrc,
+		"AGENT_KUBECTL_CREDENTIAL_PLUGIN_DST="+pluginDst,
+		"AGENT_KUBECONFIG_PATH="+kubeconfigPath,
+		"AGENT_KUBE_CA_PATH="+caPath,
+		"KUBERNETES_SERVICE_HOST=10.0.0.1",
+		"KUBERNETES_SERVICE_PORT=443",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -279,6 +316,18 @@ func TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedG
 	// Governed hook templates are restricted-mode only.
 	if _, err := os.Stat(filepath.Join(templateDir, "hooks", "post-commit")); !os.IsNotExist(err) {
 		t.Fatalf("post-commit hook installed without restricted git opt-in, stat err: %v", err)
+	}
+
+	// Non-restricted sessions also get a kubeconfig whose credential is the
+	// trusted-SA exec plugin, giving kubectl cluster write.
+	assertFileContains(t, kubeconfigPath, "command: "+pluginDst)
+	assertFileContains(t, kubeconfigPath, "server: https://10.0.0.1:443")
+	pinfo, err := os.Stat(pluginDst)
+	if err != nil {
+		t.Fatalf("kubectl credential plugin not installed at %s: %v", pluginDst, err)
+	}
+	if pinfo.Mode()&0o111 == 0 {
+		t.Fatalf("kubectl credential plugin %s is not executable (mode %v)", pluginDst, pinfo.Mode())
 	}
 }
 
