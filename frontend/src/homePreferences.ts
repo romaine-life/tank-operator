@@ -3,21 +3,29 @@
 // App.tsx. Extracted here so the read/write round-trip is unit-testable
 // without rendering the (very large) App component.
 
-export const RESTRICTED_GIT_PREF_KEY = "tank.homeRestrictedGit";
+// Bumped to `.v2` when restricted Git became the default (it used to be
+// opt-in). The old `tank.homeRestrictedGit` key persisted `"false"` for
+// essentially every prior visitor — the persist effect wrote the old `false`
+// default on mount — so reusing it would silently pin returning users to
+// unrestricted Git and defeat the new default. Bumping the key lets main.tsx's
+// TANK_KEY_ALLOWLIST reaper drop the stale key on boot, so the new default
+// applies cleanly to new and returning users alike.
+export const RESTRICTED_GIT_PREF_KEY = "tank.homeRestrictedGit.v2";
 
 /**
- * Whether the "Restricted Git" home toggle should start enabled. Persisting
- * this is what lets the choice survive reloads and mode switches so the next
- * session actually gets the `restricted_git` capability the user picked — the
- * toggle used to be ephemeral `useState(false)` and was silently reset, which
- * is why sessions intermittently came up non-restricted.
+ * Whether new sessions start with the `restricted_git` capability. Restricted
+ * (Tank-governed) Git is now the default, so this reads enabled unless the user
+ * has explicitly opted out — only the exact string "false" disables it. The
+ * splash toggle is an opt-out ("Unrestricted Git"); persisting the choice lets
+ * it survive reloads and mode switches so the next session actually honors it.
  */
 export function readHomeRestrictedGitEnabled(): boolean {
   try {
-    return localStorage.getItem(RESTRICTED_GIT_PREF_KEY) === "true";
+    return localStorage.getItem(RESTRICTED_GIT_PREF_KEY) !== "false";
   } catch {
-    // localStorage can be unavailable in hardened/private browser contexts.
-    return false;
+    // localStorage can be unavailable in hardened/private browser contexts;
+    // fall back to the default (restricted Git enabled).
+    return true;
   }
 }
 

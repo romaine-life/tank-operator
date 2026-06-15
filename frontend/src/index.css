@@ -113,12 +113,13 @@
   --skill-rollout-fg: #d6a16b;
   --skill-rollout-bg: rgba(126, 83, 43, 0.18);
   --skill-rollout-border: rgba(214, 161, 107, 0.28);
-  /* Restricted-git marker — tints the session-row interaction chip when a
-     session uses Tank-governed Git. Git-amber, distinct from the neutral chip
-     so the swapped glyph reads as a deliberate standing reminder. */
-  --restricted-git-fg: #e0a458;
-  --restricted-git-bg: rgba(224, 164, 88, 0.14);
-  --restricted-git-border: rgba(224, 164, 88, 0.30);
+  /* Unrestricted-git marker — tints the session-row interaction chip when a
+     GUI session opts OUT of Tank-governed Git (restricted Git is the default).
+     Red, distinct from the neutral chip so the swapped glyph reads as a
+     deliberate standing warning that the session has ungoverned Git access. */
+  --unrestricted-git-fg: #ef6f6f;
+  --unrestricted-git-bg: rgba(239, 111, 111, 0.14);
+  --unrestricted-git-border: rgba(239, 111, 111, 0.30);
 
   /* Mode chips (auth modes). subscription rides the unified accent; api-key
      uses muted lavender; config-sub uses warm clay — distinct without the
@@ -2126,13 +2127,13 @@ button:disabled {
   display: block;
 }
 
-/* Restricted-git sessions: tint the interaction chip (which renders the git
-   glyph in place of the GUI monitor glyph) so the row reads as governed Git at
+/* Unrestricted-git sessions: tint the interaction chip (which renders the git
+   glyph in place of the GUI monitor glyph) so the row flags ungoverned Git at
    a glance. Uses an inset ring instead of a border to keep the 18px box. */
-.mode-interaction-chip.is-restricted-git {
-  background: var(--restricted-git-bg);
-  color: var(--restricted-git-fg);
-  box-shadow: inset 0 0 0 1px var(--restricted-git-border);
+.mode-interaction-chip.is-unrestricted-git {
+  background: var(--unrestricted-git-bg);
+  color: var(--unrestricted-git-fg);
+  box-shadow: inset 0 0 0 1px var(--unrestricted-git-border);
 }
 
 .session-avatar {

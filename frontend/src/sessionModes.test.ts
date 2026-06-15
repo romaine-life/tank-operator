@@ -32,18 +32,18 @@ describe("hasRestrictedGit", () => {
 });
 
 describe("interactionIconKind", () => {
-  test("swaps the gui glyph for the git glyph when restricted", () => {
-    expect(interactionIconKind("gui", true)).toBe("restricted-git");
+  test("keeps the monitor glyph for restricted GUI sessions (the default)", () => {
+    expect(interactionIconKind("gui", true)).toBe("gui");
   });
 
-  test("keeps the gui glyph when not restricted", () => {
-    expect(interactionIconKind("gui", false)).toBe("gui");
+  test("swaps in the git glyph for unrestricted GUI sessions (the opt-out)", () => {
+    expect(interactionIconKind("gui", false)).toBe("unrestricted-git");
   });
 
-  test("never swaps a cli session, even if the flag is somehow set", () => {
+  test("never swaps a cli session, regardless of the restricted flag", () => {
     // restricted_git is only granted to repo-backed GUI modes; a cli row must
-    // keep its terminal glyph regardless so a stray capability can't mislabel
-    // the interaction.
+    // keep its terminal glyph regardless so the indicator can't mislabel a
+    // non-gui row.
     expect(interactionIconKind("cli", true)).toBe("cli");
     expect(interactionIconKind("cli", false)).toBe("cli");
   });

@@ -3516,9 +3516,9 @@ const INTERACTION_ICONS: Record<
 > = {
   gui: MonitorIcon,
   cli: TerminalIcon,
-  // Restricted-git GUI sessions swap the monitor glyph for a git glyph so the
-  // session row carries a standing reminder that the session uses governed Git.
-  "restricted-git": GitBranchIcon,
+  // Unrestricted (ungoverned) GUI sessions swap the monitor glyph for a red git
+  // glyph so the session row flags the opt-out; restricted Git is the default.
+  "unrestricted-git": GitBranchIcon,
 };
 
 function InteractionIcon({
@@ -3546,11 +3546,11 @@ function ModeChip({
 }) {
   const icon = MODE_CHIP_ICONS[mode];
   const label = MODE_CHIP_LABELS[mode] ?? mode;
-  // Restricted git only ever rides GUI modes; gate the affordance on `gui` so a
-  // stray capability on a non-gui row can never mislabel the interaction chip.
-  const showRestrictedGit = restrictedGit && interaction === "gui";
-  const interactionLabel = showRestrictedGit
-    ? "restricted git"
+  // Restricted Git is the default; the chip flags the *unrestricted* opt-out.
+  // Gate on `gui` so a non-gui row can never pick up the git affordance.
+  const showUnrestrictedGit = !restrictedGit && interaction === "gui";
+  const interactionLabel = showUnrestrictedGit
+    ? "unrestricted git"
     : interaction
       ? INTERACTION_LABELS[interaction]
       : null;
@@ -3569,7 +3569,7 @@ function ModeChip({
         {interaction && (
           <span
             className={`mode mode-icon-only mode-interaction-chip${
-              showRestrictedGit ? " is-restricted-git" : ""
+              showUnrestrictedGit ? " is-unrestricted-git" : ""
             }`}
             title={interactionLabel ?? undefined}
             aria-label={interactionLabel ?? undefined}
@@ -26471,21 +26471,21 @@ function AuthenticatedApp() {
                         {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                           <button
                             type="button"
-                            className={`home-quick-action home-capability-action${homeRestrictedGitEnabled ? " is-selected" : ""}`}
+                            className={`home-quick-action home-capability-action${!homeRestrictedGitEnabled ? " is-selected" : ""}`}
                             onClick={() =>
                               setHomeRestrictedGitEnabled((value) => !value)
                             }
                             disabled={busy}
-                            aria-pressed={homeRestrictedGitEnabled}
-                            title="Use experimental Tank-governed Git permissions for this session"
+                            aria-pressed={!homeRestrictedGitEnabled}
+                            title="Disable Tank-governed Git for this session and use standard git access"
                           >
                             <GitBranchIcon className="home-quick-icon" />
                             <span className="home-quick-main">
                               <span className="home-quick-title">
-                                Restricted Git
+                                Unrestricted Git
                               </span>
                               <span className="home-quick-sub">
-                                Experimental
+                                Standard git access
                               </span>
                             </span>
                           </button>
