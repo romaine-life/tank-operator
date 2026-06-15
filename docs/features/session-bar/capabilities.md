@@ -215,23 +215,27 @@ Named behaviors in the session-bar surface. See
 - **Evidence:** `frontend/src/mobileShell.test.ts` ("drawer session rows are
   touch-sized on compact").
 
-## restricted-git-row-indicator
+## unrestricted-git-row-indicator
 
 - **Status:** shipped
-- **Intent:** Give every session row a standing, glanceable marker of whether
-  the session uses Tank-governed (restricted) Git, so a user working across
-  many sessions can tell restricted-git sessions apart without opening each one.
-- **Durable source:** `sessions.capabilities text[]` (the
-  `restricted_git` member), echoed to the SPA on every session-list row. The
-  indicator reads durable session state only — it adds no browser-local flag
-  and cannot contradict the registry.
-- **Runtime behavior:** the session-row interaction chip renders a git glyph
-  (lucide `GitBranchIcon`) in place of the GUI monitor glyph and tints itself
-  with the `--restricted-git-*` accent. The swap is gated on the `gui`
-  interaction because `restricted_git` is only ever granted to repo-backed GUI
-  modes (`REPO_SUPPORTED_MODES`); a non-gui row keeps its normal glyph even if
-  the capability is somehow present. The chip's `title`/`aria-label` read
-  "restricted git" so hover and assistive tech carry the same signal.
+- **Intent:** Restricted (Tank-governed) Git is the default for new sessions,
+  so the noteworthy state is the *opt-out*. Give every session row a standing,
+  glanceable marker of whether the session has **ungoverned** Git, so a user
+  working across many sessions can spot the unrestricted exceptions without
+  opening each one.
+- **Durable source:** `sessions.capabilities text[]` (the `restricted_git`
+  member), echoed to the SPA on every session-list row. The indicator reads
+  durable session state only — it adds no browser-local flag and cannot
+  contradict the registry. A GUI session *without* the `restricted_git` member
+  is the flagged (unrestricted) case.
+- **Runtime behavior:** for an unrestricted GUI session the session-row
+  interaction chip renders a git glyph (lucide `GitBranchIcon`) in place of the
+  GUI monitor glyph and tints itself red with the `--unrestricted-git-*` accent.
+  Restricted GUI sessions (the default) keep the plain monitor glyph. The swap
+  is gated on the `gui` interaction because `restricted_git` is only ever
+  granted to repo-backed GUI modes (`REPO_SUPPORTED_MODES`); a non-gui row keeps
+  its normal glyph regardless. The chip's `title`/`aria-label` read
+  "unrestricted git" so hover and assistive tech carry the same signal.
 - **Single source of truth:** the capability string, membership test, and the
   glyph-swap decision live in `frontend/src/sessionModes.ts`
   (`RESTRICTED_GIT_CAPABILITY`, `hasRestrictedGit`, `interactionIconKind`) and

@@ -290,17 +290,21 @@ export function hasRestrictedGit(
 }
 
 /**
- * Which interaction glyph a session row renders. Restricted-git sessions swap
- * the GUI "monitor" glyph for a git glyph so the row carries a standing visual
- * reminder that the session uses governed Git. The swap is gated on `gui`
- * because `restricted_git` is only ever granted to repo-backed GUI modes (see
+ * Which interaction glyph a session row renders. Restricted (Tank-governed) Git
+ * is the default, so the noteworthy state is the *opt-out*: an unrestricted GUI
+ * session swaps the "monitor" glyph for a red git glyph as a standing reminder
+ * that the session has ungoverned Git access. Restricted GUI sessions (the
+ * default) keep the plain monitor glyph. The swap is gated on `gui` because
+ * restricted Git only ever rides repo-backed GUI modes (see
  * REPO_SUPPORTED_MODES); any other interaction keeps its normal glyph.
  */
-export type InteractionIconKind = SessionInteraction | "restricted-git";
+export type InteractionIconKind = SessionInteraction | "unrestricted-git";
 
 export function interactionIconKind(
   interaction: SessionInteraction,
   restrictedGit: boolean,
 ): InteractionIconKind {
-  return restrictedGit && interaction === "gui" ? "restricted-git" : interaction;
+  return !restrictedGit && interaction === "gui"
+    ? "unrestricted-git"
+    : interaction;
 }
