@@ -46,7 +46,11 @@ func defaultTestSlotSessionDefaults() testSlotDefaults {
 func sessionRunOptions(defaults ...testSlotDefaults) sessionRunOptionsResponse {
 	testSlot := defaultTestSlotSessionDefaults()
 	if len(defaults) > 0 {
-		testSlot = normalizeTestSlotDefaults(defaults[0])
+		if validated, status, _ := validateTestSlotDefaults(defaults[0]); status == 0 {
+			testSlot = validated
+		} else {
+			testSlot = normalizeTestSlotDefaults(defaults[0])
+		}
 	}
 	return sessionRunOptionsResponse{
 		CreateModes: []string{
@@ -212,27 +216,19 @@ func validateTestSlotDefaults(raw testSlotDefaults) (testSlotDefaults, int, stri
 	if !ok {
 		return testSlotDefaults{}, http.StatusBadRequest, "test-slot defaults must use an SDK chat mode"
 	}
-	if provider == "claude" && defaults.Model == "" && defaults.Effort == "" {
-		return testSlotDefaults{Mode: mode, UpdatedAt: defaults.UpdatedAt, UpdatedBy: defaults.UpdatedBy}, 0, ""
-	}
 	if isDefaultModelAlias(defaults.Model) {
 		return testSlotDefaults{}, http.StatusBadRequest, "model must be explicit; default is not accepted"
 	}
-	if providerRequiresExplicitModel(provider) && defaults.Model == "" {
-		return testSlotDefaults{}, http.StatusBadRequest, explicitModelRequiredMessage(provider, "sessions")
-	}
-	model := validateModelArg(provider, defaults.Model)
-	if defaults.Model != "" && model == "" {
+	if defaults.Model != "" && validateModelArg(provider, defaults.Model) == "" {
 		return testSlotDefaults{}, http.StatusBadRequest, modelUnsupportedMessage(provider)
 	}
-	effort := validateEffort(provider, defaults.Effort)
-	if defaults.Effort != "" && effort == "" {
+	if defaults.Effort != "" && validateEffort(provider, defaults.Effort) == "" {
 		return testSlotDefaults{}, http.StatusBadRequest, effortUnsupportedMessage(provider, "sessions")
 	}
 	return testSlotDefaults{
 		Mode:      mode,
-		Model:     model,
-		Effort:    effort,
+		Model:     lowCostModelForProvider(provider),
+		Effort:    lowCostEffortForProvider(provider),
 		UpdatedAt: defaults.UpdatedAt,
 		UpdatedBy: defaults.UpdatedBy,
 	}, 0, ""

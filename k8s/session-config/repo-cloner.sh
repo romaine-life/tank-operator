@@ -409,8 +409,12 @@ for slug in "${REPOS[@]}"; do
   if GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="$ASKPASS" GITHUB_TOKEN="$GITHUB_TOKEN" \
     git clone "${clone_args[@]}" "https://github.com/${slug}.git" "$tmp_target"; then
     mv "$tmp_target" "$target"
-    git -C "$target" config --local credential.helper ""
     if [ "$restricted_git" = "true" ]; then
+      # Scrub the local credential helper so the one-shot clone token cannot be
+      # reused and pushes must go through the governed Tank MCP publish path.
+      # Non-restricted clones intentionally keep no local override, so they
+      # inherit the global auto-minting credential helper (full git access).
+      git -C "$target" config --local credential.helper ""
       if ! create_session_branch_pr "$slug" "$target"; then
         msg="governed session branch PR setup failed"
         set_repo_state "$slug" "failed" "$target" "$msg"

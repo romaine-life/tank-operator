@@ -20,15 +20,16 @@ function ModePair({
   label: string;
   restrictedGit?: boolean;
 }) {
-  // Mirrors App.tsx InteractionIcon: restricted-git GUI sessions swap the
-  // monitor glyph for a git glyph and tint the chip.
-  const showRestrictedGit = restrictedGit && interaction === "gui";
-  const Interaction = showRestrictedGit
+  // Mirrors App.tsx InteractionIcon: restricted Git is the default, so the chip
+  // flags the *unrestricted* opt-out — an unrestricted GUI session swaps the
+  // monitor glyph for a red git glyph and tints the chip.
+  const showUnrestrictedGit = !restrictedGit && interaction === "gui";
+  const Interaction = showUnrestrictedGit
     ? GitBranchIcon
     : interaction === "gui"
       ? MonitorIcon
       : TerminalIcon;
-  const interactionLabel = showRestrictedGit ? "restricted git" : interaction;
+  const interactionLabel = showUnrestrictedGit ? "unrestricted git" : interaction;
   return (
     <>
       <span className="mode mode-icon-only mode-provider-chip" title={label} aria-label={label}>
@@ -36,7 +37,7 @@ function ModePair({
         <span className="sr-only">{label}</span>
       </span>
       <span
-        className={`mode mode-icon-only mode-interaction-chip${showRestrictedGit ? " is-restricted-git" : ""}`}
+        className={`mode mode-icon-only mode-interaction-chip${showUnrestrictedGit ? " is-unrestricted-git" : ""}`}
         title={interactionLabel}
         aria-label={interactionLabel}
       >
@@ -55,9 +56,10 @@ export function StyleguideSessionRow() {
         <p style={captionStyle}>
           Current sidebar rows: agent avatar, read-only name label, status dot,
           provider and interaction chips, boot/runtime stats, activity chips,
-          and inline actions such as save for config sessions. Restricted-git
-          sessions swap the GUI monitor glyph for a tinted git glyph as a
-          standing reminder that the session uses Tank-governed Git.
+          and inline actions such as save for config sessions. Restricted
+          (Tank-governed) Git is the default, so unrestricted sessions swap the
+          GUI monitor glyph for a red git glyph as a standing reminder that the
+          session has ungoverned Git access.
         </p>
         <section style={sectionStyle}>
           <ul className="sessions" style={{ maxWidth: 420, listStyle: "none", padding: 0, margin: 0 }}>
@@ -73,7 +75,7 @@ export function StyleguideSessionRow() {
               </div>
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-working" title="Agent working" aria-label="status: Agent working" />
-                <ModePair provider="codex" interaction="gui" label="Codex GUI" />
+                <ModePair provider="codex" interaction="gui" label="Codex GUI" restrictedGit />
                 <span className="session-stats">
                   <span className="session-stat" title="ready 32s after request" aria-label="ready 32s after request">
                     <span aria-hidden="true">↓</span>
@@ -98,14 +100,14 @@ export function StyleguideSessionRow() {
               </div>
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-needs-input" title="Needs input" aria-label="status: Needs input" />
-                <ModePair provider="anthropic" interaction="gui" label="Claude GUI" />
+                <ModePair provider="anthropic" interaction="gui" label="Claude GUI" restrictedGit />
               </div>
             </li>
             <li>
               <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
               <div className="session-row-top">
-                <span className="session-open" title="restricted-git-feature">
-                  <span className="session-id">restricted-git-feature</span>
+                <span className="session-open" title="unrestricted-git">
+                  <span className="session-id">unrestricted-git</span>
                 </span>
                 <button className="session-delete" aria-label="delete session" type="button">
                   <XIcon size={14} aria-hidden="true" />
@@ -113,7 +115,7 @@ export function StyleguideSessionRow() {
               </div>
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-running" title="Agent working" aria-label="status: Agent working" />
-                <ModePair provider="anthropic" interaction="gui" label="Claude GUI" restrictedGit />
+                <ModePair provider="anthropic" interaction="gui" label="Claude GUI" />
               </div>
             </li>
             <li>

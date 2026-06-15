@@ -479,8 +479,14 @@ function nonEmptyString(value: unknown): string | null {
 // so a malformed provider payload still produces a renderable Tank event
 // instead of a turn-failing crash.
 export function claudeQuestionsToTankShape(input: unknown): TankAskUserQuestion[] {
-  const questions = (input as { questions?: unknown })?.questions;
-  if (!Array.isArray(questions)) return [];
+  const inputRecord =
+    input && typeof input === "object" ? (input as Record<string, unknown>) : null;
+  const rawQuestions = inputRecord?.questions;
+  const questions = Array.isArray(rawQuestions)
+    ? rawQuestions
+    : typeof inputRecord?.question === "string"
+      ? [inputRecord]
+      : [];
   return questions.flatMap((q): TankAskUserQuestion[] => {
     if (!q || typeof q !== "object") return [];
     const record = q as Record<string, unknown>;
