@@ -128,6 +128,7 @@ import {
   ChevronsRightIcon,
   ClipboardListIcon,
   Code2Icon,
+  CoinsIcon,
   CopyIcon,
   EllipsisVerticalIcon,
   FileDiffIcon,
@@ -211,7 +212,9 @@ import {
   formatCompactTokens,
   formatComposerCostUsd,
   formatTurnCostUsd,
+  tokenUsageBreakdown,
   type SessionCostEstimate,
+  type TokenUsageBreakdown,
 } from "./sessionCostEstimate";
 import {
   buildProviderQuotaSnapshots,
@@ -2323,6 +2326,56 @@ function ComposerCostEstimate({
       </span>
     </span>
   );
+}
+
+type TokenUsageBadgeTone = "message" | "tool";
+
+export function TokenUsageBadge({
+  usage,
+  tone = "message",
+}: {
+  usage: unknown;
+  tone?: TokenUsageBadgeTone;
+}) {
+  const breakdown = tokenUsageBreakdown(usage);
+  if (!breakdown) return null;
+  const title = tokenUsageBadgeTitle(breakdown, tone);
+  return (
+    <span
+      className="run-token-usage-badge"
+      data-tone={tone}
+      title={title}
+      aria-label={title}
+    >
+      <CoinsIcon size={11} strokeWidth={2.1} aria-hidden="true" />
+      <span className="run-token-usage-total">
+        {formatCompactTokens(breakdown.total)}
+      </span>
+      <span className="run-token-usage-label">tok</span>
+    </span>
+  );
+}
+
+function tokenUsageBadgeTitle(
+  usage: TokenUsageBreakdown,
+  tone: TokenUsageBadgeTone,
+): string {
+  const parts = [
+    `${usage.total.toLocaleString()} total tokens`,
+    `${usage.input.toLocaleString()} input`,
+    `${usage.output.toLocaleString()} output`,
+  ];
+  if (usage.cachedInput > 0) {
+    parts.push(`${usage.cachedInput.toLocaleString()} cached`);
+  }
+  if (usage.reasoningOutput > 0) {
+    parts.push(`${usage.reasoningOutput.toLocaleString()} reasoning`);
+  }
+  const prefix =
+    tone === "tool"
+      ? "Current turn token usage; tools do not directly spend model tokens"
+      : "Turn token usage";
+  return `${prefix}: ${parts.join(" · ")}`;
 }
 
 interface ComposerToolButtonsProps {
@@ -7860,7 +7913,9 @@ function RunMessageBubble({
   const durationMs = (entry as Record<string, unknown>).durationMs as
     | number
     | undefined;
-  const alwaysVisible = showTimestamps || showDuration;
+  const hasAssistantTokenUsage =
+    variant === "assistant" && tokenUsageBreakdown(entry.turnUsage) !== null;
+  const alwaysVisible = showTimestamps || showDuration || hasAssistantTokenUsage;
   // Collapsed-prompt tooltip. Under data-compact the CSS truncates the prompt
   // to one line (white-space:nowrap collapses newlines), so there is no
   // separate preview element to render — we only keep the flattened full text
@@ -7883,6 +7938,9 @@ function RunMessageBubble({
       className="run-msg-footer"
       data-always-visible={alwaysVisible ? "" : undefined}
     >
+      {variant === "assistant" && (
+        <TokenUsageBadge usage={entry.turnUsage} tone="message" />
+      )}
       {canonicalMessage &&
         (variant === "assistant" || variant === "user") &&
         entry.turnId &&
@@ -10923,6 +10981,7 @@ function RunToolItem({
             >
               {entry.toolName ?? "tool"}
             </span>
+            <TokenUsageBadge usage={entry.turnUsage} tone="tool" />
             {showTimestamps && (
               <ToolTiming
                 startedAt={entry.startedAt ?? entry.time}
