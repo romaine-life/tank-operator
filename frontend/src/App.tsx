@@ -8502,13 +8502,13 @@ function backgroundTaskStatusLabel(
 }
 
 function backgroundTaskTitle(entry: TranscriptEntry): string {
-  return (
-    entry.taskCommand ??
-    entry.taskSummary ??
-    entry.taskDescription ??
-    entry.lastToolName ??
-    "Shell task"
-  );
+  const title = [
+    entry.taskCommand,
+    entry.taskSummary,
+    entry.taskDescription,
+    entry.lastToolName,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+  return title?.trim() ?? "Shell task";
 }
 
 function backgroundTaskSubtitle(entry: TranscriptEntry): string {

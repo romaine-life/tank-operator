@@ -253,6 +253,26 @@ test("standalone transcript artifacts align to the message content column", () =
   );
 });
 
+test("background task cards render as a compact content row", () => {
+  expect(appSource).toMatch(
+    /function backgroundTaskTitle[\s\S]*?\.find\(\(value\) => typeof value === "string" && value\.trim\(\)\.length > 0\)/,
+  );
+  expect(appSource).toMatch(/return title\?\.trim\(\) \?\? "Shell task";/);
+
+  const cardRule = cssRule(".run-background-task");
+  expect(cardRule).toMatch(/grid-template-columns:\s*1\.55rem\s+minmax\(0,\s*1fr\);/);
+  expect(cardRule).toMatch(/align-items:\s*center;/);
+
+  const bodyRule = cssRule(".run-background-task-body");
+  expect(bodyRule).toMatch(/display:\s*flex;/);
+  expect(bodyRule).toMatch(/flex-wrap:\s*wrap;/);
+  expect(bodyRule).toMatch(/align-items:\s*center;/);
+
+  const titleRule = cssRule(".run-background-task-title");
+  expect(titleRule).toMatch(/flex:\s*0 1 auto;/);
+  expect(titleRule).not.toMatch(/flex:\s*1 1 auto;/);
+});
+
 test("question page answer card aligns with assistant bubble content gutter", () => {
   const questionCardRule = cssRule('.run-turn-view-body[data-page-kind="question"] .run-tool-ask');
   expect(questionCardRule).toMatch(
