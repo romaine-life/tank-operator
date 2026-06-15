@@ -288,7 +288,7 @@ const required = [
   {
     file: "claude-runner/src/runner.ts",
     name: "Claude AskUserQuestion schema accepts array and single-question shorthand",
-    pattern: /questions:\s*z[\s\S]{0,900}\.array\([\s\S]{0,900}\.min\(1\)[\s\S]{0,400}top-level question fields[\s\S]{0,500}question:\s*z[\s\S]{0,120}\.string\(\)[\s\S]{0,120}\.optional\(\)/,
+    pattern: /questions:\s*z[\s\S]{0,900}\.array\([\s\S]{0,900}\.min\(1\)[\s\S]{0,120}\.optional\(\)[\s\S]{0,400}top-level question fields[\s\S]{0,500}question:\s*z[\s\S]{0,120}\.string\(\)[\s\S]{0,120}\.optional\(\)/,
   },
   {
     file: "claude-runner/src/adapters/claude.ts",

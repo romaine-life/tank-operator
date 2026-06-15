@@ -4,8 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { z } from "zod";
 
 import {
+  askUserQuestionInputSchema,
   claudeRateLimitEventIsTerminal,
   claudeRateLimitInfo,
   claudeRestartClosureEvent,
@@ -956,6 +958,16 @@ test("Tank AskUserQuestion MCP tool accepts the top-level single-question shorth
   assert.equal(result.isError, undefined);
   assert.deepEqual(result.structuredContent?.answers, { "Proceed?": "Yes" });
   assert.ok(completedRecord);
+});
+
+test("Tank AskUserQuestion MCP schema accepts the top-level single-question shorthand", () => {
+  const parsed = z.object(askUserQuestionInputSchema).safeParse({
+    question: "Proceed?",
+    options: [{ label: "Yes" }],
+    allowFreeForm: false,
+  });
+
+  assert.equal(parsed.success, true, parsed.success ? undefined : parsed.error.message);
 });
 
 test("Tank AskUserQuestion MCP tool delivers free-form Other text instead of synthetic label", async () => {

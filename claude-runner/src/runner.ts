@@ -676,7 +676,7 @@ const TANK_ASK_USER_QUESTION_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_
 const TANK_EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
 const TANK_EXIT_PLAN_MODE_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_EXIT_PLAN_MODE_TOOL}`;
 
-const askUserQuestionInputSchema = {
+export const askUserQuestionInputSchema = {
   questions: z
     .array(
       z
@@ -698,6 +698,7 @@ const askUserQuestionInputSchema = {
         .passthrough(),
     )
     .min(1)
+    .optional()
     .describe(
       "One or more questions to ask the user. For a single question, either pass a one-element array or use the top-level question fields.",
     ),
