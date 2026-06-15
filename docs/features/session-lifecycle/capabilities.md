@@ -524,3 +524,40 @@ Evidence:
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
   (`TestGitCredentialTankHelperMintsToken`) covers the helper's mint request
   shape, SSE reply parsing, and non-github bail.
+
+## Non-Restricted Session Read-Only DB Access
+
+Status: complete
+
+Intent:
+Give non-restricted (trusted) sessions arbitrary READ-ONLY SQL against the
+tank-operator Postgres DB for diagnostics (the `session_events` ledger,
+`profiles`, `session_registry`, `control_action_events`, …) — the durable-ledger
+query path `docs/diagnostic-discipline.md` calls for — without putting DB
+credentials in the session pod.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- The mcp-auth-proxy injects a `query_tank_db` MCP tool into the
+  mcp-tank-operator surface **only for non-restricted sessions**
+  (`not RESTRICTED_GIT_ENABLED`). It calls Tank's internal
+  `POST /api/internal/sessions/{id}/db-read-query`.
+- The endpoint runs the SQL under the orchestrator pool in a **read-only
+  transaction** with a `statement_timeout` and a row cap, and refuses
+  restricted-git sessions (`podRestrictedGit`). Writes/DDL are rejected by the
+  read-only tx; the Flexible-Server admin is not a filesystem superuser, so the
+  blast radius is "read the app's own data" — acceptable for the trusted owner's
+  non-restricted sessions, and unavailable to restricted/test sessions.
+- No DB credential ever lands in a session pod; the orchestrator (the DB's AAD
+  admin) proxies the read. (Full `psql` CLI with a dedicated read-only role +
+  KV password is a heavier optional follow-up.)
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_query_tank_db_tool_injected_only_for_non_restricted`,
+  `test_handle_query_tank_db_tool_runs_read_query`).
+- `backend-go/cmd/tank-operator/handlers_db_read_query_test.go`
+  (`TestDBReadQuery_RestrictedRefused`, `TestDBReadQuery_NonRestrictedRequiresPool`).

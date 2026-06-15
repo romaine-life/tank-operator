@@ -93,6 +93,8 @@ _GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?(?
 _TANK_PUBLISH_TOOL = "publish_current_head"
 _TANK_BREAK_GLASS_TOOL = "request_git_break_glass"
 _TANK_AZURE_BREAK_GLASS_TOOL = "request_azure_break_glass"
+# Read-only SQL against the tank-operator DB, for NON-restricted sessions only.
+_TANK_DB_QUERY_TOOL = "query_tank_db"
 _TANK_PR_LANE_TOOL = "request_pr_lane"
 _TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
 _TANK_MERGE_TOOL = "merge_current_session_pr"
@@ -809,37 +811,71 @@ def _append_azure_break_glass_tool_to_json(value) -> bool:
     tools = result.setdefault("tools", [])
     if not isinstance(tools, list):
         return False
-    if any(isinstance(tool, dict) and tool.get("name") == _TANK_AZURE_BREAK_GLASS_TOOL for tool in tools):
-        return False
-    tools.append(
-        {
-            "name": _TANK_AZURE_BREAK_GLASS_TOOL,
-            "description": (
-                "Record a request for break-glass access to the azure-personal MCP "
-                "(Postgres, Key Vault, Cosmos, ARM/AKS) and return a human approval "
-                "URL. The azure-personal MCP is locked by default and normal feature "
-                "work never needs it. This tool does not grant access or reveal a "
-                "token. After an admin approves, the azure-personal tools become "
-                "available for the session until the grant expires; reload the MCP "
-                "registry to see them."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Short reason azure access is needed and why no governed path suffices.",
+    existing = {tool.get("name") for tool in tools if isinstance(tool, dict)}
+    changed = False
+    if _TANK_AZURE_BREAK_GLASS_TOOL not in existing:
+        tools.append(
+            {
+                "name": _TANK_AZURE_BREAK_GLASS_TOOL,
+                "description": (
+                    "Record a request for break-glass access to the azure-personal MCP "
+                    "(Postgres, Key Vault, Cosmos, ARM/AKS) and return a human approval "
+                    "URL. The azure-personal MCP is locked by default and normal feature "
+                    "work never needs it. This tool does not grant access or reveal a "
+                    "token. After an admin approves, the azure-personal tools become "
+                    "available for the session until the grant expires; reload the MCP "
+                    "registry to see them."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Short reason azure access is needed and why no governed path suffices.",
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Caller source such as agent.",
+                        },
                     },
-                    "source": {
-                        "type": "string",
-                        "description": "Caller source such as agent.",
-                    },
+                    "additionalProperties": False,
                 },
-                "additionalProperties": False,
-            },
-        }
-    )
-    return True
+            }
+        )
+        changed = True
+    # query_tank_db: read-only SQL against the tank-operator DB, surfaced only to
+    # NON-restricted (trusted) sessions. Read-only is enforced server-side.
+    if not RESTRICTED_GIT_ENABLED and _TANK_DB_QUERY_TOOL not in existing:
+        tools.append(
+            {
+                "name": _TANK_DB_QUERY_TOOL,
+                "description": (
+                    "Run a READ-ONLY SQL query against the tank-operator Postgres "
+                    "database (session_events, profiles, session_registry, "
+                    "control_action_events, etc.) for diagnostics. Read-only is "
+                    "enforced server-side (read-only transaction + statement timeout + "
+                    "row cap); writes and DDL are rejected. Available only in "
+                    "non-restricted (trusted) sessions."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {
+                            "type": "string",
+                            "description": "A single read-only SQL statement (SELECT/WITH/EXPLAIN/SHOW).",
+                        },
+                        "max_rows": {
+                            "type": "integer",
+                            "description": "Max rows to return (default 200, cap 2000).",
+                        },
+                    },
+                    "required": ["sql"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    return changed
 
 
 def _augment_glimmung_hot_swap_tool_schema(tool: dict) -> bool:
@@ -3209,6 +3245,65 @@ async def _handle_tank_azure_break_glass_tool(
         )
 
 
+async def _handle_query_tank_db_tool(http, provider, request_id, arguments) -> web.Response:
+    # Run a read-only SQL query against the tank-operator DB for a non-restricted
+    # session via Tank's internal read-query endpoint (read-only enforced there).
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for query_tank_db")
+        sql = str(arguments.get("sql") or "").strip()
+        if not sql:
+            return _mcp_error_response(request_id, -32602, "sql is required")
+        payload = {"sql": sql}
+        max_rows = arguments.get("max_rows")
+        if isinstance(max_rows, int) and max_rows > 0:
+            payload["max_rows"] = max_rows
+        service_token = await provider.token()
+        url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/db-read-query"
+        async with http.post(
+            url,
+            headers={"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
+            json=payload,
+        ) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                return _mcp_error_response(
+                    request_id, -32011, f"query_tank_db failed: HTTP {resp.status}: {text[:500]}"
+                )
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return _mcp_error_response(request_id, -32011, "query_tank_db returned invalid JSON")
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": _render_query_tank_db_text(data)}],
+                "structuredContent": data,
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank query_tank_db failed", exc_info=True)
+        return _mcp_error_response(request_id, -32011, str(exc))
+
+
+def _render_query_tank_db_text(data) -> str:
+    if not isinstance(data, dict):
+        return str(data)
+    if data.get("error"):
+        return f"SQL error: {data['error']}"
+    cols = data.get("columns") or []
+    rows = data.get("rows") or []
+    lines = ["\t".join(str(c) for c in cols)]
+    for row in rows:
+        lines.append("\t".join("" if v is None else str(v) for v in (row or [])))
+    footer = f"({data.get('row_count', len(rows))} rows"
+    if data.get("truncated"):
+        footer += ", truncated"
+    footer += ")"
+    lines.append(footer)
+    return "\n".join(lines)
+
+
 async def _handle_tank_pr_lane_tool(
     http: ClientSession,
     auth_romaine_provider,
@@ -4336,6 +4431,16 @@ def _make_handler(
                     return _mcp_error_response(request_id, -32602, "arguments must be an object")
                 record_proxy_request(mcp_label, 200)
                 return await _handle_tank_azure_break_glass_tool(http, azure_break_glass_provider, request_id, arguments)
+            if (
+                not RESTRICTED_GIT_ENABLED
+                and method == "tools/call"
+                and params.get("name") == _TANK_DB_QUERY_TOOL
+            ):
+                arguments = params.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    return _mcp_error_response(request_id, -32602, "arguments must be an object")
+                record_proxy_request(mcp_label, 200)
+                return await _handle_query_tank_db_tool(http, azure_break_glass_provider, request_id, arguments)
 
         if glimmung_hot_swap_provider is not None and parsed_method is not None:
             method, params, request_id = parsed_method
