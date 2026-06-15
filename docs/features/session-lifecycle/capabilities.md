@@ -507,6 +507,13 @@ Contract impact:
   the request path, requesting the App's full permission set. It grants nothing
   the session cannot already mint through the MCP tool surface; it removes the
   manual step.
+- `gh` is durable the same way: the session image bakes a `gh` wrapper at
+  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that, for
+  non-restricted sessions, mints a fresh token (scoped to the `/workspace` repos
+  plus any `--repo`/`-R` arg) and execs the real gh — so `gh` never needs a
+  manual re-auth. Restricted sessions pass straight through (gh stays
+  unauthenticated; the governed path owns credentials). See
+  `session-images/gh-tank-wrapper.sh`.
 - `repo-cloner` only scrubs the cloned repo's local `credential.helper` in
   restricted mode. In non-restricted mode the clone keeps no local override, so
   it inherits the global auto-minting helper. (An empty local `credential.helper`
