@@ -17,7 +17,7 @@ test("renders compact token usage with input output cached and reasoning details
   );
 
   expect(screen.getByText("12k")).toBeInTheDocument();
-  expect(screen.getByText("tok")).toBeInTheDocument();
+  expect(screen.queryByText("tok")).not.toBeInTheDocument();
   expect(screen.getByLabelText(
     "Turn token usage: 12,500 total tokens · 10,000 input · 2,000 output · 4,000 cached · 500 reasoning",
   )).toBeInTheDocument();

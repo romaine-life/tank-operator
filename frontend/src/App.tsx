@@ -2351,7 +2351,6 @@ export function TokenUsageBadge({
       <span className="run-token-usage-total">
         {formatCompactTokens(breakdown.total)}
       </span>
-      <span className="run-token-usage-label">tok</span>
     </span>
   );
 }
