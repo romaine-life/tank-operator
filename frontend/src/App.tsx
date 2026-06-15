@@ -407,6 +407,7 @@ import {
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
+import { isTranscriptMessageAvatarContinuation } from "./transcriptAvatarGrouping";
 import {
   collectGlimmungRunsFromEntries,
   type GlimmungRunLink,
@@ -6200,13 +6201,6 @@ function entryGroupKey(g: EntryGroup): string {
   return g.entry.id;
 }
 
-function messageEntryForAvatarGrouping(
-  group: EntryGroup | FlatEntryGroup | null | undefined,
-): TranscriptEntry | null {
-  if (!group) return null;
-  return group.kind === "message" ? group.entry : null;
-}
-
 function flatEntryGroupEntries(group: FlatEntryGroup): TranscriptEntry[] {
   if (group.kind === "tools" || group.kind === "message_group")
     return group.entries;
@@ -6218,9 +6212,7 @@ function isMessageAvatarContinuation(
   groups: readonly (EntryGroup | FlatEntryGroup)[],
   index: number,
 ): boolean {
-  const current = messageEntryForAvatarGrouping(groups[index]!);
-  const previous = messageEntryForAvatarGrouping(groups[index - 1]!);
-  return shouldGroupTranscriptMessageWithPrevious(previous, current);
+  return isTranscriptMessageAvatarContinuation(groups, index);
 }
 
 function isAbsorbableSystemMessage(entry: TranscriptEntry): boolean {
