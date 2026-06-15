@@ -504,6 +504,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/azure-break-glass/grant", s.handleInternalGetAzureBreakGlassGrant)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-slot-model-approvals/grants", s.handleInternalGrantTestSlotModelApproval)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

@@ -1370,6 +1370,105 @@ func TestHandleDenyBreakGlassRequestPersistsDecision(t *testing.T) {
 	}
 }
 
+func TestHandleInternalGrantTestSlotModelApprovalPersistsGrant(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/test-slot-model-approvals/grants", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"gpt-5.5",
+		"effort":"xhigh",
+		"request_event_id":"request-1",
+		"reason":"need frontier model for this validation",
+		"ttl_seconds":1800
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantTestSlotModelApproval(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls=%d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != testSlotModelGrantAction || got.SourceTool != "test_slot_model_approval" || got.SessionID != "47" {
+		t.Fatalf("grant event = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["model"] != "gpt-5.5" || payload["effort"] != "xhigh" ||
+		payload["low_model"] != "gpt-5.3-codex-spark" || payload["low_effort"] != "low" ||
+		payload["request_event_id"] != "request-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestHandleApproveAzureBreakGlassRequestActivatesMcpViaApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{
+		getRow: pgstore.ControlActionEvent{
+			EventID:      "request-1",
+			InvocationID: "invocation-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-3",
+			SessionID:    "47",
+			Action:       "azure.break_glass.request",
+			Status:       "started",
+			TargetKind:   "azure_mcp",
+			TargetRef:    "azure-personal",
+			Payload: []byte(`{
+				"operations": ["use_azure_personal_mcp"],
+				"reason": "inspect session_events ledger"
+			}`),
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/break-glass-requests/request-1/approve", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "request-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveBreakGlassRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.Type != "submit_turn" || command.Source != "break-glass-approval" {
+		t.Fatalf("command type/source = %s/%s", command.Type, command.Source)
+	}
+	if command.SessionID != "47" || command.Email != "owner@example.test" {
+		t.Fatalf("command target = %s/%s", command.SessionID, command.Email)
+	}
+	if command.MCPActivateName != "azure-personal" || command.MCPActivateURL != "http://127.0.0.1:9991/" {
+		t.Fatalf("mcp activation = %q/%q", command.MCPActivateName, command.MCPActivateURL)
+	}
+	if !strings.Contains(command.Prompt, "Your Azure break-glass request was approved") {
+		t.Fatalf("prompt missing azure approval notice: %q", command.Prompt)
+	}
+	var body struct {
+		AgentNotification struct {
+			Delivered bool   `json:"delivered"`
+			TurnID    string `json:"turn_id"`
+		} `json:"agent_notification"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.AgentNotification.Delivered || body.AgentNotification.TurnID == "" {
+		t.Fatalf("agent notification = %#v", body.AgentNotification)
+	}
+}
+
 func TestHandleBreakGlassRequestReturnsAlreadyDecided(t *testing.T) {
 	store := &fakeControlActionStore{
 		getRow: pgstore.ControlActionEvent{
