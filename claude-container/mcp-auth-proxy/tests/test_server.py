@@ -21,7 +21,6 @@ from mcp_auth_proxy.server import (
     _break_glass_approval_url,
     _azure_break_glass_approval_url,
     _activate_break_glass_mcp_config,
-    _activate_azure_break_glass_mcp_config,
     _checks_state,
     _effective_listeners,
     _feature_contracts_body_status,
@@ -1025,10 +1024,11 @@ def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatc
     assert recorded["payload"]["reason"] == "inspect ledger"
 
 
-def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch, tmp_path) -> None:
-    # When a grant is already active, the tool activates azure-personal into the
-    # workspace MCP config (the harness reconnect trigger) and reports approved.
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
+def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
+    # When a grant is already active, the tool reports approved + expiry but does
+    # NOT write any MCP config. Surfacing is now automatic (B-auto): the
+    # orchestrator enqueues an approval turn and the pod-side runner adds the
+    # server + rebuilds. The proxy never touches the (read-only) .mcp.json.
     http = _FakeRawHTTPByMethod(
         get_response=_FakeRawResponse(200, b'{"active":true,"event_id":"azg-1","expires_at":"2999-01-01T00:00:00Z"}'),
         post_response=_FakeRawResponse(201, b'{"ok":true}'),
@@ -1048,20 +1048,7 @@ def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch, tmp_path)
     assert structured["status"] == "approved"
     assert structured["privileged_tools_visible"] is True
     assert structured["expires_at"] == "2999-01-01T00:00:00Z"
-    assert structured["activation"]["server_name"] == "azure-personal"
-    mcp_config = json.loads((tmp_path / ".mcp.json").read_text())
-    assert mcp_config["mcpServers"]["azure-personal"]["url"] == "http://127.0.0.1:9991/"
-
-
-def test_azure_break_glass_activation_adds_mcp_entry(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
-    result = _activate_azure_break_glass_mcp_config({"event_id": "g1", "expires_at": "2999-01-01T00:00:00Z"})
-    assert result["server_name"] == "azure-personal"
-    assert result["reload_required"] is True
-    config = json.loads((tmp_path / ".mcp.json").read_text())
-    assert config["mcpServers"]["azure-personal"] == {"type": "http", "url": "http://127.0.0.1:9991/"}
-    marker = json.loads((tmp_path / ".tank" / "azure-break-glass-active.json").read_text())
-    assert marker["grant_event_id"] == "g1"
+    assert "activation" not in structured
 
 
 def test_tank_break_glass_tool_records_request_when_active_grant_misses_branch_scope(monkeypatch) -> None:

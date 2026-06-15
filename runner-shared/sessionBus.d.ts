@@ -84,6 +84,11 @@ export interface SessionCommand {
   created_at?: string;
   available_at?: string | null;
   message?: unknown;
+  // mcp_activate_name / mcp_activate_url ride a break-glass approval submit_turn
+  // so the runner auto-surfaces the named MCP server at the next idle boundary
+  // (the activation half of break-glass). Empty on ordinary turns.
+  mcp_activate_name?: string;
+  mcp_activate_url?: string;
   [key: string]: unknown;
 }
 
@@ -112,6 +117,8 @@ export class SessionCommandRecord implements SessionCommand {
   follow_up?: boolean;
   status?: string;
   attempt_count?: number;
+  mcp_activate_name?: string;
+  mcp_activate_url?: string;
   [key: string]: unknown;
   ack(): void;
   nak(delayMs?: number): void;

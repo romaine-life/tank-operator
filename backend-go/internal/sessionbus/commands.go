@@ -52,7 +52,15 @@ type Command struct {
 	TargetProcessID      string                          `json:"target_process_id,omitempty"`
 	Answers              map[string][]string             `json:"answers,omitempty"`
 	Annotations          map[string]InputReplyAnnotation `json:"annotations,omitempty"`
-	CreatedAt            string                          `json:"created_at"`
+	// MCPActivateName / MCPActivateURL ride a break-glass approval submit_turn
+	// to auto-surface an MCP server in the runner's registry at the next idle
+	// boundary — the activation half of break-glass, so the agent need not
+	// re-request. Empty on ordinary turns. Consumed by claude-runner's
+	// acceptCommandTurn (registerBreakGlassMcpFromRecord); the per-call grant
+	// check in mcp-azure-personal remains the security boundary.
+	MCPActivateName string `json:"mcp_activate_name,omitempty"`
+	MCPActivateURL  string `json:"mcp_activate_url,omitempty"`
+	CreatedAt       string `json:"created_at"`
 }
 
 func (c Command) Normalize() Command {
@@ -77,5 +85,7 @@ func (c Command) Normalize() Command {
 	c.TargetProviderItemID = strings.TrimSpace(c.TargetProviderItemID)
 	c.TargetTaskID = strings.TrimSpace(c.TargetTaskID)
 	c.TargetProcessID = strings.TrimSpace(c.TargetProcessID)
+	c.MCPActivateName = strings.TrimSpace(c.MCPActivateName)
+	c.MCPActivateURL = strings.TrimSpace(c.MCPActivateURL)
 	return c
 }

@@ -1012,6 +1012,15 @@ export class Runner {
   private pinnedEffort: EffortLevel | null = null;
   private pendingRepin: { model: string; effort: EffortLevel } | null = null;
   private rebuildInProgress = false;
+  // breakGlassActiveMcpServers holds MCP servers surfaced mid-session by a
+  // break-glass approval turn (e.g. azure-personal). buildSdkQuery merges these
+  // on top of the file-loaded servers, so the rebuild triggered at the idle
+  // boundary in acceptCommandTurn makes the tools appear. In-memory only: the
+  // server-side per-call grant check is the real boundary, and a runner restart
+  // re-locks until the next activation turn. Keyed by server name; additive and
+  // idempotent.
+  private readonly breakGlassActiveMcpServers: Record<string, McpServerConfig> =
+    {};
   private sdkStderrBuffer = "";
   // reportedContextWindowTokens latches the per-turn ModelUsage context
   // window so the runner POSTs it to the orchestrator exactly once per
@@ -1216,6 +1225,30 @@ export class Runner {
     this.buildSdkQuery(model, effort, commandProviderSessionID(record));
   }
 
+  // registerBreakGlassMcpFromRecord adds an MCP server carried by a break-glass
+  // approval turn (mcp_activate_{name,url}) to breakGlassActiveMcpServers and
+  // returns true when a new/changed server was registered, so the caller forces
+  // a rebuild at the idle boundary. The entry is an http server pointed at the
+  // proxy's always-on break-glass listener; mcp-azure-personal re-checks the
+  // grant on every call, so the entry alone authorizes nothing.
+  private registerBreakGlassMcpFromRecord(record: SessionCommandRecord): boolean {
+    const name = String(record.mcp_activate_name ?? "").trim();
+    const url = String(record.mcp_activate_url ?? "").trim();
+    if (!name || !url) return false;
+    const existing = this.breakGlassActiveMcpServers[name] as
+      | { url?: string }
+      | undefined;
+    if (existing && existing.url === url) return false;
+    this.breakGlassActiveMcpServers[name] = {
+      type: "http",
+      url,
+    } as McpServerConfig;
+    console.log(
+      JSON.stringify({ msg: "break_glass_mcp_activated", server: name, url }),
+    );
+    return true;
+  }
+
   // buildSdkQuery constructs query() with the given pinned model/effort and
   // (when present) a provider-session resume id, wires the runtime-config
   // report, and unblocks run()'s loop. It runs for the first pin
@@ -1241,6 +1274,9 @@ export class Runner {
 
     const mcpServers = {
       ...loadConfiguredMcpServers(this.cfg.mcpConfig),
+      // Break-glass-activated servers surfaced mid-session (after the file
+      // load, before the Tank server) so an approved grant makes them appear.
+      ...this.breakGlassActiveMcpServers,
       [TANK_MCP_SERVER_NAME]: this.createTankMcpServer(),
     };
     const options: Options = {
@@ -2121,6 +2157,22 @@ export class Runner {
     // the user's dropdown pick is the right choice for subsequent turns even
     // though we won't feed THIS turn into the SDK below.
     this.ensureSdkQuery(record);
+    // Break-glass auto-activation: a break-glass approval turn carries an
+    // mcp_activate_{name,url} payload. Register the server so buildSdkQuery
+    // merges it, then piggy-back the re-pin path below to rebuild at this idle
+    // boundary — the tools surface for THIS (the approval) turn, so the agent
+    // need not call request_*_break_glass again. A no-op re-pin (same pinned
+    // model/effort) is enough to force buildSdkQuery to re-read mcpServers.
+    if (
+      this.registerBreakGlassMcpFromRecord(record) &&
+      !this.pendingRepin &&
+      this.pinnedModel
+    ) {
+      this.pendingRepin = {
+        model: this.pinnedModel,
+        effort: this.pinnedEffort ?? DEFAULT_EFFORT,
+      };
+    }
     // Apply a scheduled mid-session re-pin at this idle boundary (no active
     // turn, nothing queued yet) before feeding the turn, so THIS turn runs on
     // the new model. max_ack_pending=1 on the data consumer guarantees idle
