@@ -30,6 +30,7 @@ from mcp_auth_proxy.server import (
     _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
     _handle_tank_azure_break_glass_tool,
+    _handle_query_tank_db_tool,
     _handle_tank_create_pr_lane_tool,
     _handle_tank_merge_tool,
     _handle_tank_rename_pr_tool,
@@ -980,13 +981,60 @@ def test_append_azure_break_glass_tool_adds_request_tool() -> None:
     augmented = json.loads(_append_azure_break_glass_tool(raw))
 
     names = [tool["name"] for tool in augmented["result"]["tools"]]
-    assert names == ["read_transcript", "request_azure_break_glass"]
-    tool = augmented["result"]["tools"][1]
-    assert "locked by default" in tool["description"]
-    assert "token" not in tool["inputSchema"]["properties"]
-    # Idempotent: a second pass must not duplicate the tool.
+    assert names[0] == "read_transcript"
+    assert "request_azure_break_glass" in names
+    azure_tool = next(t for t in augmented["result"]["tools"] if t["name"] == "request_azure_break_glass")
+    assert "locked by default" in azure_tool["description"]
+    assert "token" not in azure_tool["inputSchema"]["properties"]
+    # Idempotent: a second pass must not duplicate any tool.
     again = json.loads(_append_azure_break_glass_tool(json.dumps(augmented).encode()))
     assert [t["name"] for t in again["result"]["tools"]] == names
+
+
+def test_query_tank_db_tool_injected_only_for_non_restricted(monkeypatch) -> None:
+    raw = b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"read_transcript"}]}}'
+
+    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", False)
+    non_restricted = json.loads(_append_azure_break_glass_tool(raw))
+    nr_names = [t["name"] for t in non_restricted["result"]["tools"]]
+    assert "query_tank_db" in nr_names
+    qtool = next(t for t in non_restricted["result"]["tools"] if t["name"] == "query_tank_db")
+    assert "READ-ONLY" in qtool["description"]
+    assert qtool["inputSchema"]["required"] == ["sql"]
+
+    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", True)
+    restricted = json.loads(_append_azure_break_glass_tool(raw))
+    assert "query_tank_db" not in [t["name"] for t in restricted["result"]["tools"]]
+
+
+def test_handle_query_tank_db_tool_runs_read_query(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b"{}"),
+        post_response=_FakeRawResponse(
+            200, b'{"columns":["id","status"],"rows":[["1","ok"]],"row_count":1,"truncated":false}'
+        ),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_query_tank_db_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            7,
+            {"sql": "SELECT id, status FROM session_events LIMIT 1"},
+        )
+    )
+
+    payload = json.loads(response.text)["result"]
+    structured = payload["structuredContent"]
+    assert structured["columns"] == ["id", "status"]
+    assert structured["rows"] == [["1", "ok"]]
+    assert "id\tstatus" in payload["content"][0]["text"]
+    grant_posts = [
+        c for c in http.calls
+        if c.get("method") == "POST" and "/db-read-query" in c.get("url", "")
+    ]
+    assert grant_posts and grant_posts[0]["json"]["sql"].startswith("SELECT id, status")
 
 
 def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatch) -> None:
