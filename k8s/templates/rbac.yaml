@@ -18,6 +18,18 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
+  # Mint short-lived tokens for the trusted (cluster-admin) session SA used as
+  # the kubectl credential for NON-RESTRICTED sessions. The orchestrator's
+  # cluster-credential endpoint mints on demand after binding the caller pod to
+  # a non-restricted session. resourceNames-scoped so the orchestrator can mint
+  # ONLY for this one SA, never arbitrary accounts. Prod only — test slots have
+  # no trusted SA and stay free of cluster-scoped RBAC.
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["{{ include "tank-operator.sessionServiceAccount" . }}-trusted"]
+    verbs: ["create"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -140,6 +152,33 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: tank-session-readonly
+---
+# Trusted session SA (PROD ONLY): a cluster-admin identity used ONLY as the
+# on-demand kubectl credential for NON-RESTRICTED sessions. The orchestrator
+# mints a short-lived token for it (cluster-credential endpoint) after
+# TokenReview-binding the caller pod to a non-restricted session. It is never the
+# pod's own serviceAccountName, so MCP auth (bound to the base session SA) is
+# unaffected and restricted sessions stay read-only. Test slots never render it,
+# so they stay free of cluster-scoped RBAC (check-test-slot-provider-
+# credentials.sh) and the CI-gated hot-swap path stays closed.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "tank-operator.sessionServiceAccount" . }}-trusted
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tank-operator.sessionServiceAccount" . }}-trusted-cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tank-operator.sessionServiceAccount" . }}-trusted
+    namespace: {{ include "tank-operator.sessionsNamespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
 {{- end }}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" }}
 ---
