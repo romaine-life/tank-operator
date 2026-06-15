@@ -7602,7 +7602,10 @@ interface QuestionPageNavigation {
 export const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   workspacePathHref: (target: WorkspacePathTarget | string) => string | undefined;
-  submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
+  submitAnswer: (
+    askingTurnId: string,
+    payload: AnswerPayload,
+  ) => Promise<{ answerTurnId: string | null }>;
   askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
   setAskUserQuestionDraft: (
     key: string,
@@ -7615,7 +7618,7 @@ export const RunContext = createContext<{
 }>({
   openWorkspacePath: () => {},
   workspacePathHref: () => undefined,
-  submitAnswer: async () => {},
+  submitAnswer: async () => ({ answerTurnId: null }),
   askUserQuestionDrafts: {},
   setAskUserQuestionDraft: () => {},
   createMessageLink: async (sessionId, entryId) =>
@@ -8159,20 +8162,20 @@ function RunMetaBlock({
 }
 
 // RunQuestionHeadingMessage renders the Turns-view question page's
-// "Question N of M" heading as a system-user message rather than an orphaned
-// banner pinned above the column. AskUserQuestion is the session's system
-// identity asking the user to choose; like session.status banners, RunMetaBlock
-// status lines, and the background-wake prompt that lands "when the timer goes
-// off", it speaks through the shared system-avatar message frame instead of
-// floating in the transcript with no author. See
-// docs/features/transcript/contract.md.
+// "Question N of M" heading as a normal agent-authored message rather than an
+// orphaned banner pinned above the column. AskUserQuestion / ExitPlanMode are
+// agent-invoked tools, so the question is the agent speaking to the user — it
+// is attributed to the session (agent) avatar as its source, the same avatar
+// that fronts the agent's other messages (including the question in the asking
+// turn). As the question turn's turn-starter it occupies the prompt slot a user
+// message normally would. See docs/features/transcript/contract.md.
 function RunQuestionHeadingMessage({
-  systemAvatar,
+  avatar,
   answered,
   questionIndex,
   questionCount,
 }: {
-  systemAvatar: AgentAvatar | null;
+  avatar: AgentAvatar | null;
   answered: boolean;
   questionIndex?: number;
   questionCount?: number;
@@ -8186,20 +8189,13 @@ function RunQuestionHeadingMessage({
     <div
       className="run-transcript-message"
       data-slot="message"
-      data-variant="system"
-      data-role="system"
+      data-variant="assistant"
+      data-role="assistant"
       data-kind="question-heading"
       data-answered={answered ? "true" : "false"}
     >
-      <span
-        className="run-msg-system-avatar"
-        aria-hidden={systemAvatar ? undefined : "true"}
-      >
-        {systemAvatar ? (
-          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
-        ) : (
-          <BotIcon size={16} strokeWidth={2.1} />
-        )}
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
       <div
         className="run-transcript-message-content"
@@ -10280,6 +10276,12 @@ function RunAwaitingInputCard({
 
   if (!aw || questions.length === 0) return null;
 
+  // Prototype: the run composer is now the single answer input (the send
+  // button becomes Submit; see submitComposerAnswer in ChatPane), so the card
+  // no longer renders its own free-form textarea or Submit/Next row — it is
+  // selection + plan content only.
+  const SHOW_CARD_INPUT = false;
+
   return (
     <div
       className={`run-tool-body run-tool-ask${resolved ? " run-tool-ask-locked" : ""}`}
@@ -10405,7 +10407,7 @@ function RunAwaitingInputCard({
                 </p>
               </div>
             )}
-            {showFreeForm && (
+            {SHOW_CARD_INPUT && showFreeForm && (
               <label className="run-tool-ask-notes-label">
                 <span>
                   {q.options.length === 0
@@ -10438,7 +10440,7 @@ function RunAwaitingInputCard({
           </div>
         );
       })}
-      {!resolved && (
+      {SHOW_CARD_INPUT && !resolved && (
         <div className="run-tool-ask-submit-row">
           {hasPreviousQuestion && (
             <button
@@ -12886,6 +12888,17 @@ function RunTurnActivityScreen({
                     transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
                     onOpenTranscriptMessage={onOpenTranscriptMessage}
                   />
+                ) : selectedPageInfo?.kind === "question" ? (
+                  // No user message started this turn — the agent did, by
+                  // invoking AskUserQuestion / ExitPlanMode. The question is the
+                  // agent speaking, so the turn-starter is attributed to the
+                  // session (agent) avatar, matching the asking turn.
+                  <RunQuestionHeadingMessage
+                    avatar={avatar}
+                    answered={selectedPageInfo.answered ?? false}
+                    questionIndex={selectedPageInfo.questionIndex}
+                    questionCount={selectedPageInfo.questionCount}
+                  />
                 ) : (
                   <div className="run-turn-view-context-unavailable" role="status">
                     Prompt context unavailable
@@ -13053,14 +13066,6 @@ function RunTurnActivityScreen({
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
-            {selectedPageInfo?.kind === "question" && (
-              <RunQuestionHeadingMessage
-                systemAvatar={systemAvatar}
-                answered={selectedPageInfo.answered ?? false}
-                questionIndex={selectedPageInfo.questionIndex}
-                questionCount={selectedPageInfo.questionCount}
-              />
-            )}
             {selected && refreshProblem ? (
               <div className="run-turn-view-alert" role="alert">
                 <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />
@@ -20723,7 +20728,7 @@ function ChatPane({
   async function submitAnswer(
     askingTurnId: string,
     payload: AnswerPayload,
-  ): Promise<void> {
+  ): Promise<{ answerTurnId: string | null }> {
     const turnID = askingTurnId.trim();
     const providerItemID = payload.providerItemId.trim();
     const timelineID = payload.timelineId.trim();
@@ -20764,10 +20769,221 @@ function ChatPane({
     // the affected question turn directly; this is the same projection manual
     // refresh would load, scoped to the card the user just answered. Mark it
     // pending first so an already-running live refresh schedules one more pass.
+    // The answer creates the next durable turn (the user's answer message +
+    // the agent's continuation). Surface its id so the Turns view can advance
+    // there, ready for the ensuing conversation.
+    let answerTurnId: string | null = null;
+    try {
+      const data = await res.json();
+      if (typeof data?.turn_id === "string" && data.turn_id.trim()) {
+        answerTurnId = data.turn_id.trim();
+      }
+    } catch {
+      // Non-JSON success body — nothing to navigate to.
+    }
     if (!activityLiveRefreshPendingCursorRef.current.has(turnID)) {
       activityLiveRefreshPendingCursorRef.current.set(turnID, "");
     }
     silentlyRefreshCachedTurnActivity(turnID);
+    return { answerTurnId };
+  }
+
+  // --- AskUserQuestion answering mode ------------------------------------
+  // The single run composer doubles as the answer box for a pending synthetic
+  // AskUserQuestion turn, so the question screen never shows two text inputs.
+  // It reads the same askUserQuestionDrafts the option chips write to; its send
+  // button becomes "Submit answer" and posts the assembled answer to /answer.
+  const answeringContext = useMemo(() => {
+    if (publicView || readOnly) return null;
+    const pendingTurn = turnViewItems.find(
+      (turn) => turn.shell?.activity?.status === "needs_input",
+    );
+    if (!pendingTurn) return null;
+    const snapshot = turnActivityLoadVisibleSnapshot(
+      turnActivityLoadsByTurn[pendingTurn.turnId],
+    );
+    const awEntry = (snapshot?.entries ?? []).find(
+      (entry) =>
+        entry.metaKind === "awaiting_input" &&
+        entry.awaitingInput &&
+        !(entry.awaitingInput.answered || entry.awaitingInput.dismissed),
+    );
+    const aw = awEntry?.awaitingInput;
+    if (!awEntry || !aw) return null;
+    const questions = parseAskUserQuestions({ questions: aw.questions });
+    if (questions.length === 0) return null;
+    const draftKey = (aw.timelineId || awEntry.id || "").trim();
+    const draft =
+      askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft();
+    const selections = draft.selections;
+    const visibleIndex =
+      aw.questionIndex && aw.questionIndex >= 1 ? aw.questionIndex - 1 : 0;
+    const visibleQuestion = questions[visibleIndex] ?? questions[0] ?? null;
+    // The composer holds the live free-form text for the currently visible
+    // question, so a typed custom answer counts toward that question being
+    // answered. Without this, typing (with no option picked) left Submit
+    // disabled and the box read as frozen.
+    const composerFree = composerText.trim();
+    const hasResponse = (q: AskUserQuestion): boolean => {
+      if ((selections[q.question]?.length ?? 0) > 0) return true;
+      if (!q.allowFreeForm) return false;
+      if ((draft.notes[q.question]?.trim().length ?? 0) > 0) return true;
+      if (q === visibleQuestion && composerFree.length > 0) return true;
+      return false;
+    };
+    const pager = turnActivityPagerState(snapshot?.pageInfo);
+    return {
+      questionTurnId: (
+        aw.questionTurnId ||
+        awEntry.turnId ||
+        aw.askingTurnId ||
+        ""
+      ).trim(),
+      providerItemId: aw.providerItemId,
+      timelineId: aw.timelineId,
+      draftKey,
+      questions,
+      visibleQuestion,
+      multiQuestion: questions.length > 1,
+      // visibleAnswered gates the per-question forward action; allAnswered gates
+      // the final submit; hasNextPage/nextPage drive multi-question paging so a
+      // 2-question set can move from one question to the next.
+      visibleAnswered: visibleQuestion ? hasResponse(visibleQuestion) : false,
+      allAnswered: questions.every(hasResponse),
+      hasNextPage: pager.page < pager.pageCount,
+      nextPage: pager.page + 1,
+    };
+  }, [
+    askUserQuestionDrafts,
+    composerText,
+    publicView,
+    readOnly,
+    turnActivityLoadsByTurn,
+    turnViewItems,
+  ]);
+
+  // Refs to the latest composer text + drafts so the page-change effect below
+  // reads current values without re-running on every keystroke.
+  const composerTextRef = useRef(composerText);
+  composerTextRef.current = composerText;
+  const askUserQuestionDraftsRef = useRef(askUserQuestionDrafts);
+  askUserQuestionDraftsRef.current = askUserQuestionDrafts;
+  // Persist + restore free-form text per question while paging through a
+  // multi-question set. Leaving a question saves whatever is in the box for it;
+  // entering one restores its saved text. Covers the composer's Next button AND
+  // the header page arrows. Without this, typing on question 1, moving to
+  // question 2, and coming back showed an empty box (and a re-type overwrote).
+  const prevAnsweringVisibleRef = useRef<{
+    draftKey: string;
+    question: string;
+  } | null>(null);
+  const answeringDraftKey = answeringContext?.draftKey ?? null;
+  const answeringVisibleQuestion =
+    answeringContext?.visibleQuestion?.question ?? null;
+  useEffect(() => {
+    // Do NOT clear the binding on a transient null (the gap while the next
+    // question's activity page loads). Dropping it there is what leaked the
+    // previous question's text into the next one — the box was never saved or
+    // cleared. Keep the last binding and act only on a real question change.
+    if (!answeringDraftKey || !answeringVisibleQuestion) return;
+    const prev = prevAnsweringVisibleRef.current;
+    const cur = {
+      draftKey: answeringDraftKey,
+      question: answeringVisibleQuestion,
+    };
+    if (
+      prev &&
+      (prev.draftKey !== cur.draftKey || prev.question !== cur.question)
+    ) {
+      // Capture eagerly: the setComposerValue("") seed below fires a synchronous
+      // setComposerText(""), which flips composerTextRef before this updater
+      // runs — reading the ref inside the updater would save "" over the text.
+      const leavingText = composerTextRef.current;
+      setAskUserQuestionDraft(prev.draftKey, (d) => ({
+        ...(d ?? emptyAskUserQuestionDraft()),
+        notes: { ...(d?.notes ?? {}), [prev.question]: leavingText },
+      }));
+      const draft = askUserQuestionDraftsRef.current[cur.draftKey];
+      setComposerValue(draft?.notes?.[cur.question] ?? "");
+    }
+    prevAnsweringVisibleRef.current = cur;
+  }, [answeringDraftKey, answeringVisibleQuestion, setAskUserQuestionDraft]);
+
+  // After answering, advance the Turns view to the new answer turn so the user
+  // is where the conversation continues. That turn is brand new and unnumbered,
+  // so navigating immediately falls back to the latest loaded turn; instead we
+  // hold the target id and navigate once it appears in the loaded turn list.
+  const [pendingAnswerNavTurnId, setPendingAnswerNavTurnId] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (!pendingAnswerNavTurnId) return;
+    if (turnViewItems.some((t) => t.turnId === pendingAnswerNavTurnId)) {
+      selectTurnViewTurn(pendingAnswerNavTurnId);
+      setPendingAnswerNavTurnId(null);
+    }
+  }, [pendingAnswerNavTurnId, turnViewItems, selectTurnViewTurn]);
+
+  async function submitComposerAnswer(): Promise<void> {
+    const ctx = answeringContext;
+    if (!ctx || !ctx.allAnswered) return;
+    const typed = composerText.trim();
+    const draft =
+      askUserQuestionDrafts[ctx.draftKey] ?? emptyAskUserQuestionDraft();
+    const selections = draft.selections;
+    const notes: Record<string, string> = { ...draft.notes };
+    if (typed && ctx.visibleQuestion?.allowFreeForm) {
+      notes[ctx.visibleQuestion.question] = typed;
+    }
+    const answers: Record<string, string[]> = {};
+    const annotations: Record<
+      string,
+      { preview?: string; notes?: string }
+    > = {};
+    for (const q of ctx.questions) {
+      const labels = selections[q.question] ?? [];
+      const noteText = q.allowFreeForm ? (notes[q.question]?.trim() ?? "") : "";
+      if (labels.length > 0) answers[q.question] = labels;
+      else if (noteText) answers[q.question] = ["Other"];
+      else continue;
+      const preview = q.options.find((opt) =>
+        labels.includes(opt.label),
+      )?.preview;
+      const ann: { preview?: string; notes?: string } = {};
+      if (preview) ann.preview = preview;
+      if (noteText) ann.notes = noteText;
+      if (ann.preview || ann.notes) annotations[q.question] = ann;
+    }
+    if (Object.keys(answers).length === 0) return;
+    try {
+      const { answerTurnId } = await submitAnswer(ctx.questionTurnId, {
+        providerItemId: ctx.providerItemId,
+        timelineId: ctx.timelineId,
+        answers,
+        annotations,
+      });
+      setComposerValue("");
+      // Advance the Turns view to the new answer turn so the user lands where
+      // the conversation continues, not stranded on the answered question. The
+      // turn isn't loaded yet, so hold it; the effect above navigates once it
+      // streams into the turn list.
+      if (answerTurnId) {
+        setPendingAnswerNavTurnId(answerTurnId);
+      }
+    } catch (err) {
+      // Surface failures instead of swallowing them — a silent failure here is
+      // exactly what reads as a frozen box.
+      console.error("AskUserQuestion answer submit failed", err);
+    }
+  }
+
+  function advanceToNextQuestion(): void {
+    const ctx = answeringContext;
+    if (!ctx || !ctx.hasNextPage) return;
+    // Navigation only — the page-change effect above persists the current
+    // question's text and restores the next one's, so this button and the
+    // header page arrows behave identically.
+    selectTurnAndPage(ctx.questionTurnId, ctx.nextPage);
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
@@ -21970,7 +22186,38 @@ function ChatPane({
         composer={
           <ChatComposer
             className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
-            placeholder={RUN_COMPOSER_PLACEHOLDER}
+            placeholder={
+              answeringContext
+                ? "Type a custom answer, or pick an option above — ⏎ to submit"
+                : RUN_COMPOSER_PLACEHOLDER
+            }
+            answerMode={
+              answeringContext
+                ? {
+                    label: answeringContext.allAnswered
+                      ? answeringContext.multiQuestion
+                        ? "Submit answers"
+                        : "Submit answer"
+                      : answeringContext.hasNextPage
+                        ? "Next"
+                        : answeringContext.multiQuestion
+                          ? "Submit answers"
+                          : "Submit answer",
+                    canSubmit: answeringContext.allAnswered
+                      ? true
+                      : answeringContext.hasNextPage
+                        ? answeringContext.visibleAnswered
+                        : false,
+                    onSubmit: () => {
+                      if (answeringContext.allAnswered) {
+                        void submitComposerAnswer();
+                      } else if (answeringContext.hasNextPage) {
+                        advanceToNextQuestion();
+                      }
+                    },
+                  }
+                : undefined
+            }
             onSubmit={(args) => {
               if (readOnly) return;
               handleSubmit({ text: args.text, files: [] });

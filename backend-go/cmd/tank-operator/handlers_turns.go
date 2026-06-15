@@ -787,10 +787,14 @@ func askUserQuestionAnswerTranscriptText(answers map[string][]string, annotation
 			b.WriteString("Answer: ")
 			b.WriteString(strings.Join(cleanLabels, ", "))
 			if note != "" {
-				b.WriteString("\n")
+				// The picked option is the answer; the free-form note is
+				// supplementary, so give it its own label instead of a second
+				// "Answer:" line.
+				b.WriteString("\nAdditional text: ")
+				b.WriteString(note)
 			}
-		}
-		if note != "" {
+		} else if note != "" {
+			// Free-form only (no option picked): the note IS the answer.
 			b.WriteString("Answer: ")
 			b.WriteString(note)
 		}
