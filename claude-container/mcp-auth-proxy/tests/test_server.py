@@ -14,6 +14,12 @@ from mcp_auth_proxy.server import (
     LISTENERS,
     _MAX_UPSTREAM_ATTEMPTS,
     AuthRomaineServiceProvider,
+    AZURE_MCP_PORT,
+    GITHUB_MCP_PORT,
+    GLIMMUNG_MCP_PORT,
+    GRAFANA_MCP_PORT,
+    JWT_BEARER_PORTS,
+    TANK_OPERATOR_MCP_PORT,
     SPIRELENS_MCP_PORT,
     _append_ci_reminder,
     _append_tank_publish_tool,
@@ -44,6 +50,23 @@ from mcp_auth_proxy.server import (
     _repo_slug_from_remote,
     _watch_published_commit,
 )
+
+
+def test_tank_operator_uses_jwt_bearer_not_sa_token() -> None:
+    # mcp-tank-operator lost its kube-rbac-proxy sidecar (mcp-tank-operator#31),
+    # so the only thing that ever consumed the SA-token bearer is gone and its
+    # Authorization bearer must be the auth.romaine.life JWT. mcp-github and the
+    # SpireLens host verify the JWT directly, so they share the set.
+    assert TANK_OPERATOR_MCP_PORT in JWT_BEARER_PORTS
+    assert GITHUB_MCP_PORT in JWT_BEARER_PORTS
+    assert SPIRELENS_MCP_PORT in JWT_BEARER_PORTS
+
+
+def test_kube_rbac_proxy_upstreams_keep_sa_token_bearer() -> None:
+    # Every other in-cluster MCP still sits behind a kube-rbac-proxy that
+    # TokenReviews the SA-token bearer, so they must NOT be on the JWT bearer.
+    for port in (AZURE_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT):
+        assert port not in JWT_BEARER_PORTS
 
 
 class _FakeResponse:
