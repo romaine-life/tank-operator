@@ -8704,12 +8704,10 @@ function RunBackgroundTaskBlock({
   const description = entry.taskDescription?.trim() ?? "";
   const detail =
     description && description !== summary ? description : "";
+  const taskProcessId = String(entry.taskProcessId ?? "").trim();
+  const taskId = entry.taskId?.trim() ?? "";
   const processLabel =
-    entry.taskProcessId != null
-      ? `process ${entry.taskProcessId}`
-      : entry.taskId?.trim()
-        ? `task ${entry.taskId.trim()}`
-        : "";
+    taskProcessId ? `process ${taskProcessId}` : taskId ? `task ${taskId}` : "";
   const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
   return (
     <button
