@@ -10029,6 +10029,42 @@ textarea.run-files-viewer-editor:focus {
   gap: 0.4rem;
 }
 
+.run-token-usage-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  min-width: 0;
+  padding: 0.11rem 0.36rem;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  background: rgba(245, 158, 11, 0.08);
+  color: rgba(254, 243, 199, 0.92);
+  font-family: var(--font-mono);
+  font-size: var(--run-chat-font-code-xs);
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-token-usage-badge[data-tone="tool"] {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: rgba(254, 243, 199, 0.84);
+}
+
+.run-token-usage-total {
+  color: inherit;
+}
+
+.run-token-usage-label {
+  color: rgba(254, 243, 199, 0.58);
+  font-family: var(--font-primary);
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
 .run-msg-timing-row {
   display: inline-flex;
   align-items: center;
