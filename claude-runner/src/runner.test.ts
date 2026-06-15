@@ -1867,6 +1867,10 @@ test("Claude api_retry rate_limit stall fails the turn durably once the no-progr
   const tokenPath = path.join(tmp, "token");
   writeFileSync(tokenPath, "runtime-token\n", "utf8");
   const fetchCalls: Array<{ url: string; init?: RequestInit; body: Record<string, unknown> }> = [];
+  let resolveFirstFetchCall: (() => void) | null = null;
+  const firstFetchCall = new Promise<void>((resolve) => {
+    resolveFirstFetchCall = resolve;
+  });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     fetchCalls.push({
@@ -1874,6 +1878,7 @@ test("Claude api_retry rate_limit stall fails the turn durably once the no-progr
       init,
       body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
     });
+    resolveFirstFetchCall?.();
     return new Response("{}", { status: 200 });
   }) as typeof fetch;
   const { runner, harness } = makeInterruptHarness({
@@ -1930,9 +1935,15 @@ test("Claude api_retry rate_limit stall fails the turn durably once the no-progr
       error: "rate_limit",
       uuid: "retry-2",
     });
-    for (let i = 0; i < 5 && fetchCalls.length === 0; i += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
+    await Promise.race([
+      firstFetchCall,
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("timed out waiting for provider rate-limit report")),
+          1000,
+        ),
+      ),
+    ]);
 
     assert.equal(
       harness.events.length,
