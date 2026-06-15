@@ -11528,7 +11528,8 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript {
   --run-transcript-active-rail-left: 0.2rem;
   --run-transcript-message-inset-left: 0.7rem;
-  --run-transcript-content-column-left: calc(var(--run-transcript-message-inset-left) + 2.625rem + 0.55rem);
+  --run-transcript-avatar-column-left: calc(2.625rem + 0.55rem);
+  --run-transcript-content-column-left: calc(var(--run-transcript-message-inset-left) + var(--run-transcript-avatar-column-left));
   --run-transcript-row-gap: var(--space-2);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -12189,6 +12190,12 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript:not(.run-turn-view-body) .run-transcript-tools[data-slot="tool-group"] {
   margin-left: var(--run-transcript-content-column-left);
   max-width: calc(100% - var(--run-transcript-content-column-left));
+}
+
+.run-turn-view-body > .run-transcript-tool-single[data-slot="tool-group-single"],
+.run-turn-view-body > .run-transcript-tools[data-slot="tool-group"] {
+  margin-left: var(--run-transcript-avatar-column-left);
+  max-width: calc(100% - var(--run-transcript-avatar-column-left));
 }
 
 .run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tool-single[data-slot="tool-group-single"],
