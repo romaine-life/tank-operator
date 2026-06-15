@@ -473,3 +473,47 @@ Open hardening:
 - Until the auth.romaine.life `intent=azure-break-glass` approval card exists,
   operators can create the grant by POSTing Tank's internal endpoint directly,
   the same fallback git break-glass uses today.
+
+## Non-Restricted Session Full Git Access
+
+Status: complete
+
+Intent:
+A non-restricted session (`TANK_RESTRICTED_GIT` false/unset) is a trusted
+workspace and should have full, automatic git access — `git clone`/`fetch`/`pull`/
+`push` to any repo the session's installation can reach, with no manual token
+handling. Restricting git is an opt-in (`TANK_RESTRICTED_GIT=true`) governed
+mode, not the default posture.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- `install-agent-git-template.sh` is mode-aware. Restricted sessions install the
+  governed hook templates (post-commit auto-publish + pre-push block) exactly as
+  before. Non-restricted sessions install `git-credential-tank.sh` as the global
+  git credential helper (`credential.helper` + `credential.useHttpPath=true`).
+- `git-credential-tank.sh` mints a short-lived GitHub App token on each git op
+  via the in-pod `mcp-github` MCP (`127.0.0.1:9992`), authenticated with the
+  pod's projected `auth.romaine.life` service-account token, scoped per-repo via
+  the request path, requesting the App's full permission set. It grants nothing
+  the session cannot already mint through the MCP tool surface; it removes the
+  manual step.
+- `repo-cloner` only scrubs the cloned repo's local `credential.helper` in
+  restricted mode. In non-restricted mode the clone keeps no local override, so
+  it inherits the global auto-minting helper. (An empty local `credential.helper`
+  clears the helper list and was the reason a non-restricted clone could not
+  push.)
+- The helper ships in the `tank-session-config` ConfigMap and is mounted into
+  every session pod under `/opt/tank/session-config/`; it is only wired up in
+  non-restricted mode.
+
+Evidence:
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedGit`)
+  covers non-restricted⇒helper-wired / no governed hooks, and
+  (`TestInstallAgentGitTemplateScriptRunsUnderSh`) keeps restricted⇒hooks.
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperMintsToken`) covers the helper's mint request
+  shape, SSE reply parsing, and non-github bail.
