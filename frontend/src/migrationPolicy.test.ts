@@ -289,10 +289,13 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("Next question")).toBe(true);
   expect(appSource.includes("Question set ${selectedPageInfo.questionSet}")).toBe(false);
   expect(appSource.includes("Answer every question before submit.")).toBe(true);
-  // The question page heading is a system-user message (system avatar + label),
-  // not an orphaned full-width banner. It speaks through the same system-avatar
-  // message frame as RunMetaBlock status lines and the background-wake prompt,
-  // so the old pinned page-head template is retired.
+  // The question page heading is an agent-authored message (the session/agent
+  // avatar + label), not an orphaned full-width banner. AskUserQuestion /
+  // ExitPlanMode are agent-invoked, so the question is the agent speaking and is
+  // attributed to the agent avatar (matching how the question shows in the
+  // asking turn), rather than the generic system-avatar frame used by
+  // RunMetaBlock status lines and the background-wake prompt. The old pinned
+  // page-head template is retired.
   expect(appSource.includes(
           "Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}",
         )).toBe(false);
@@ -301,7 +304,7 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("<RunQuestionHeadingMessage")).toBe(true);
   expect(appSource.includes('data-kind="question-heading"')).toBe(true);
   expect(appSource).toMatch(
-    /data-variant="system"\s+data-role="system"\s+data-kind="question-heading"/,
+    /data-variant="assistant"\s+data-role="assistant"\s+data-kind="question-heading"/,
   );
   expect(appSource.includes("${questionIndex} of ${questionCount}")).toBe(true);
 });
