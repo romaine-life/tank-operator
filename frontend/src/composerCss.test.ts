@@ -233,6 +233,17 @@ test("turn view transcript rows share the same avatar gutter", () => {
   expect(inlineActivityContentRule).toMatch(/max-width:\s*100%;/);
 });
 
+test("top-level transcript tool cards align to the message content column", () => {
+  const transcriptRule = cssRule(".run-transcript");
+  expect(transcriptRule).toMatch(
+    /--run-transcript-content-column-left:\s*calc\(var\(--run-transcript-message-inset-left\)\s*\+\s*2\.625rem\s*\+\s*0\.55rem\);/,
+  );
+
+  expect(indexCssSource).toMatch(
+    /\.run-transcript:not\(\.run-turn-view-body\)\s+>\s+\.run-transcript-tool-single,[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\[data-index\]\s+>\s+\.run-transcript-tools\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-content-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-content-column-left\)\);/,
+  );
+});
+
 test("question page answer card aligns with assistant bubble content gutter", () => {
   const questionCardRule = cssRule('.run-turn-view-body[data-page-kind="question"] .run-tool-ask');
   expect(questionCardRule).toMatch(
