@@ -12185,12 +12185,16 @@ textarea.run-files-viewer-editor:focus {
   max-width: 100%;
 }
 
-.run-transcript:not(.run-turn-view-body) > .run-transcript-tool-single,
-.run-transcript:not(.run-turn-view-body) > .run-transcript-tools,
-.run-transcript:not(.run-turn-view-body) [data-index] > .run-transcript-tool-single,
-.run-transcript:not(.run-turn-view-body) [data-index] > .run-transcript-tools {
+.run-transcript:not(.run-turn-view-body) .run-transcript-tool-single[data-slot="tool-group-single"],
+.run-transcript:not(.run-turn-view-body) .run-transcript-tools[data-slot="tool-group"] {
   margin-left: var(--run-transcript-content-column-left);
   max-width: calc(100% - var(--run-transcript-content-column-left));
+}
+
+.run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tool-single[data-slot="tool-group-single"],
+.run-transcript:not(.run-turn-view-body) .run-turn-activity-body .run-transcript-tools[data-slot="tool-group"] {
+  margin-left: 0;
+  max-width: 100%;
 }
 
 .run-transcript-claude .run-transcript-tools {
