@@ -64,6 +64,8 @@ the rest of the product reconstruct what happened.
   inside a subagent.
 - Claude AskUserQuestion is a Tank-owned SDK MCP tool
   (`mcp__tank__AskUserQuestion`) that parks a durable `turn.awaiting_input`.
+  Its tool input uses the same question-set shape as the durable protocol:
+  `questions` is a non-empty array, including the one-question case.
   It must not depend on Claude's permission callback path; permission mode and
   human-question handoff are separate runner concerns.
 - Runner events must wake transcript and session-list followers after

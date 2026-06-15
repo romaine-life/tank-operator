@@ -4,8 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { z } from "zod";
 
 import {
+  askUserQuestionInputSchema,
   claudeRateLimitEventIsTerminal,
   claudeRateLimitInfo,
   claudeRestartClosureEvent,
@@ -903,6 +905,112 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
     completedRecord,
     "input_reply command should be acked after resolving the tool",
   );
+});
+
+test("Tank AskUserQuestion MCP tool accepts the top-level single-question shorthand", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    handleTankAskUserQuestion: (input: unknown) => Promise<{
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+      structuredContent?: { answers?: Record<string, string> };
+    }>;
+    acceptInputReply: (record: unknown) => Promise<void>;
+    activeTurn: unknown;
+    publishTerminalWithRetry: (
+      event: TankConversationEvent,
+    ) => Promise<boolean>;
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
+    commandBus: {
+      markCompleted: (record: unknown) => Promise<void>;
+      markFailed: (record: unknown) => Promise<void>;
+    };
+    sink: { upsert: (event: TankConversationEvent) => Promise<void> };
+  };
+
+  const dispatched: TankConversationEvent[] = [];
+  let awaiting: TankConversationEvent | null = null;
+  let completedRecord: unknown;
+  runner.activeTurn = {
+    turnID: "turn-active",
+    clientNonce: "turn-active",
+    terminalEmitted: false,
+    commandRecord: {},
+  };
+  runner.sink = {
+    async upsert(event) {
+      dispatched.push(event);
+    },
+  };
+  runner.publishTerminalWithRetry = async (event) => {
+    awaiting = event;
+    return true;
+  };
+  runner.rotateTurnForInputReply = async () => {};
+  runner.commandBus = {
+    async markCompleted(record) {
+      completedRecord = record;
+    },
+    async markFailed() {
+      assert.fail("input_reply should resolve the shorthand AskUserQuestion");
+    },
+  };
+
+  const resultPromise = runner.handleTankAskUserQuestion({
+    question: "Proceed?",
+    options: [{ label: "Yes" }],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    dispatched.map((e) => e.type),
+    [
+      "turn.awaiting_input.invocation",
+      "assistant_message.created",
+      "turn.submitted",
+    ],
+  );
+  assert.ok(awaiting, "expected shorthand to publish turn.awaiting_input");
+  assert.deepEqual(
+    (awaiting as { payload?: { questions?: unknown } }).payload?.questions,
+    [
+      {
+        question: "Proceed?",
+        multiSelect: false,
+        options: [{ label: "Yes" }],
+        allowFreeForm: true,
+        secret: false,
+      },
+    ],
+  );
+
+  const payload = awaiting as {
+    payload?: {
+      provider_timeline_id?: string;
+      provider_item_id?: string;
+    };
+  };
+  await runner.acceptInputReply({
+    type: "input_reply",
+    client_nonce: "answer-continuation",
+    target_turn_id: "turn-active",
+    target_timeline_id: payload.payload?.provider_timeline_id,
+    target_provider_item_id: payload.payload?.provider_item_id,
+    answers: { "Proceed?": ["Yes"] },
+  });
+  const result = await resultPromise;
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.structuredContent?.answers, { "Proceed?": "Yes" });
+  assert.ok(completedRecord);
+});
+
+test("Tank AskUserQuestion MCP schema accepts the top-level single-question shorthand", () => {
+  const parsed = z.object(askUserQuestionInputSchema).safeParse({
+    question: "Proceed?",
+    options: [{ label: "Yes" }],
+    allowFreeForm: false,
+  });
+
+  assert.equal(parsed.success, true, parsed.success ? undefined : parsed.error.message);
 });
 
 test("Tank AskUserQuestion MCP tool delivers free-form Other text instead of synthetic label", async () => {
@@ -1814,6 +1922,10 @@ test("Claude api_retry rate_limit stall fails the turn durably once the no-progr
   const tokenPath = path.join(tmp, "token");
   writeFileSync(tokenPath, "runtime-token\n", "utf8");
   const fetchCalls: Array<{ url: string; init?: RequestInit; body: Record<string, unknown> }> = [];
+  let resolveFirstFetchCall: (() => void) | null = null;
+  const firstFetchCall = new Promise<void>((resolve) => {
+    resolveFirstFetchCall = resolve;
+  });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     fetchCalls.push({
@@ -1821,6 +1933,7 @@ test("Claude api_retry rate_limit stall fails the turn durably once the no-progr
       init,
       body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
     });
+    resolveFirstFetchCall?.();
     return new Response("{}", { status: 200 });
   }) as typeof fetch;
   const { runner, harness } = makeInterruptHarness({
@@ -1877,9 +1990,15 @@ test("Claude api_retry rate_limit stall fails the turn durably once the no-progr
       error: "rate_limit",
       uuid: "retry-2",
     });
-    for (let i = 0; i < 5 && fetchCalls.length === 0; i += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
+    await Promise.race([
+      firstFetchCall,
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("timed out waiting for provider rate-limit report")),
+          1000,
+        ),
+      ),
+    ]);
 
     assert.equal(
       harness.events.length,

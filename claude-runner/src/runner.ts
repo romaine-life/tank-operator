@@ -676,11 +676,7 @@ const TANK_ASK_USER_QUESTION_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_
 const TANK_EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
 const TANK_EXIT_PLAN_MODE_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_EXIT_PLAN_MODE_TOOL}`;
 
-const askUserQuestionInputSchema = {
-  question: z
-    .string()
-    .optional()
-    .describe("Single question text when not using the questions array."),
+export const askUserQuestionInputSchema = {
   questions: z
     .array(
       z
@@ -701,8 +697,17 @@ const askUserQuestionInputSchema = {
         })
         .passthrough(),
     )
+    .min(1)
     .optional()
-    .describe("One or more questions to ask the user."),
+    .describe(
+      "One or more questions to ask the user. For a single question, either pass a one-element array or use the top-level question fields.",
+    ),
+  question: z
+    .string()
+    .optional()
+    .describe(
+      "Single-question shorthand. Equivalent to questions: [{ question, options, allowFreeForm }].",
+    ),
   options: z
     .array(
       z
@@ -713,12 +718,8 @@ const askUserQuestionInputSchema = {
         })
         .passthrough(),
     )
-    .optional()
-    .describe("Options for the single-question shorthand."),
-  allowFreeForm: z
-    .boolean()
-    .optional()
-    .describe("Whether the user may answer with free-form text."),
+    .optional(),
+  allowFreeForm: z.boolean().optional(),
 };
 
 const exitPlanModeInputSchema = {
@@ -1477,6 +1478,17 @@ export class Runner {
     }
     const providerItemID = this.nextTankAskUserQuestionProviderItemID(turn);
     const questions = claudeQuestionsToTankShape(input);
+    if (questions.length === 0) {
+      return Promise.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "AskUserQuestion requires questions: a non-empty array of question objects, or a top-level question string.",
+          },
+        ],
+      });
+    }
     return this.pauseTurnForInput(turn, questions, providerItemID);
   }
 
