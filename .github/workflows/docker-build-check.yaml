@@ -194,7 +194,7 @@ jobs:
           src='${{ steps.fingerprint.outputs.proof_tag }}'
           sha='${{ github.event.pull_request.head.sha || github.sha }}'
           az acr import --name romainecr \
-            --source "${{ matrix.image-repo }}:${src}" \
+            --source "romainecr.azurecr.io/${{ matrix.image-repo }}:${src}" \
             --image "${{ matrix.image-repo }}:${sha}" --force
           echo "Tagged romainecr.azurecr.io/${{ matrix.image-repo }}:${sha} -> ${src}"
 
