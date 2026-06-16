@@ -84,36 +84,6 @@ Evidence:
 - Frontend tests guard that Glimmung launch uses `test_slot_defaults`, not the
   browser's local default session mode.
 
-## Settings Admin Break Glass
-
-Status: active
-
-Intent:
-Let Tank admins issue short-lived, audited emergency grants for stuck sessions
-from Settings -> Admin -> Break glass without exposing raw provider tokens in
-the browser.
-
-Affected contracts:
-- App Chrome
-- Auth And Streams
-- Session Lifecycle
-
-Contract impact:
-- The browser route is admin-gated by `/api/auth/me.is_admin` and the backend
-  re-checks admin power before granting.
-- Grants are durable `control_action_events` rows scoped to the target session
-  owner, session id, and session scope.
-- GitHub and Azure grants reuse the same runner notification and MCP activation
-  paths as auth.romaine.life approval cards; the UI does not mint raw GitHub or
-  Azure secrets.
-- Agent-selection grants are limited to test-slot model approval and retain the
-  existing low-cost baseline enforcement.
-
-Evidence:
-- Backend tests cover admin-only grant access and target-owner scoping.
-- Frontend route tests pin `/settings/admin/break-glass` as a URL-addressable
-  Settings admin surface.
-
 ## Shells Menu
 
 Status: active
