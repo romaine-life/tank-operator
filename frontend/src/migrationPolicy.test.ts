@@ -959,11 +959,13 @@ test("home splash test action stays disabled on the splash page", () => {
         )).toBe(false);
 });
 
-test("pull request composer action is a popup menu with a break-glass approval link", () => {
+test("break-glass composer action owns approval links and quick approval", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
   // The PR control is a self-contained popup menu, not a single hard-coded link.
   expect(appSource).toMatch(/function PullRequestMenuButton\(/);
   expect(appSource).toMatch(/<PullRequestMenuButton \{\.\.\.pullRequest\} \/>/);
+  expect(appSource).toMatch(/function BreakGlassApprovalMenuButton\(/);
+  expect(appSource).toMatch(/<BreakGlassApprovalMenuButton \{\.\.\.breakGlass\} \/>/);
   // Latest PR and the linked PR are computed as distinct menu entries.
   expect(appSource).toMatch(
     /const latestPullRequestURL = agentGitActivity\.pullRequests\[0\]\?\.href \?\? "";/,
@@ -980,9 +982,13 @@ test("pull request composer action is a popup menu with a break-glass approval l
   expect(appSource).toMatch(/function breakGlassRequestUrl\(/);
   expect(appSource).toMatch(/"break-glass"/);
   expect(appSource).toMatch(/<BreakGlassRequestPage/);
+  expect(appSource).toMatch(/Quick approve/);
+  expect(appSource).toMatch(/appRouteUrl\("settings", "admin", "break-glass"\)/);
+  expect(appSource).toMatch(/quickApproveBreakGlassMenuItem/);
   expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
+  expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
   expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
   expect(appSource.includes("request.approvalUrl")).toBe(false);
   expect(appSource.includes("auth.romaine.life/admin")).toBe(false);

@@ -2486,6 +2486,8 @@ interface ComposerToolButtonsProps {
   };
   breakGlass: {
     items: BreakGlassApprovalMenuItem[];
+    approvingId?: string | null;
+    onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
   };
   pullRequest: {
     latestUrl?: string;
@@ -2661,6 +2663,8 @@ function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
 
 function BreakGlassApprovalMenuButton({
   items,
+  approvingId,
+  onQuickApprove,
 }: ComposerToolButtonsProps["breakGlass"]) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -2674,6 +2678,7 @@ function BreakGlassApprovalMenuButton({
     pendingCount > 0
       ? `Break-glass approvals awaiting review (${pendingCount})`
       : "No break-glass approvals pending";
+  const settingsHref = appRouteUrl("settings", "admin", "break-glass");
 
   const computeAnchor = useCallback(() => {
     const r = triggerRef.current?.getBoundingClientRect();
@@ -2751,18 +2756,11 @@ function BreakGlassApprovalMenuButton({
                 : { visibility: "hidden" }
             }
           >
-            <div className="run-slash-palette-label">Break glass</div>
-            {items.map((item) => (
+            <div className="run-pr-menu-header">
+              <div className="run-slash-palette-label">Break glass</div>
               <a
-                key={item.id}
-                role="menuitem"
-                className="run-pr-menu-item run-pr-menu-breakglass"
-                href={item.href}
-                title={
-                  item.reason
-                    ? `${item.target} — ${item.reason}`
-                    : item.target
-                }
+                className="run-pr-menu-settings"
+                href={settingsHref}
                 onClick={(event) => {
                   if (!isPlainLeftClick(event)) {
                     setOpen(false);
@@ -2770,8 +2768,22 @@ function BreakGlassApprovalMenuButton({
                   }
                   event.preventDefault();
                   setOpen(false);
-                  navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                  navigateToSessionRoute(settingsHref);
                 }}
+              >
+                Settings
+              </a>
+            </div>
+            {items.map((item) => (
+              <div
+                key={item.id}
+                role="group"
+                className="run-pr-menu-item run-pr-menu-breakglass"
+                title={
+                  item.reason
+                    ? `${item.target} — ${item.reason}`
+                    : item.target
+                }
               >
                 <span className="run-pr-menu-main">
                   <span className="run-pr-menu-name">
@@ -2783,7 +2795,35 @@ function BreakGlassApprovalMenuButton({
                     {item.reason ? ` — ${item.reason}` : ""}
                   </span>
                 </span>
-              </a>
+                <span className="run-pr-menu-actions">
+                  <a
+                    role="menuitem"
+                    className="run-pr-menu-action-link"
+                    href={item.href}
+                    onClick={(event) => {
+                      if (!isPlainLeftClick(event)) {
+                        setOpen(false);
+                        return;
+                      }
+                      event.preventDefault();
+                      setOpen(false);
+                      navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                    }}
+                  >
+                    Details
+                  </a>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="run-pr-menu-action-btn"
+                    disabled={!onQuickApprove || approvingId === item.id}
+                    onClick={() => onQuickApprove?.(item)}
+                  >
+                    <CheckIcon aria-hidden="true" />
+                    <span>{approvingId === item.id ? "Approving" : "Quick approve"}</span>
+                  </button>
+                </span>
+              </div>
             ))}
           </div>,
           document.body,
@@ -17120,6 +17160,16 @@ function ChatPane({
       session.id,
     ],
   );
+  const quickApproveBreakGlassMenuItem = useCallback(
+    (item: BreakGlassApprovalMenuItem) => {
+      if (item.kind === "model") {
+        void postTestSlotModelApproval({ eventId: item.id }, "");
+        return;
+      }
+      void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
+    },
+    [postBreakGlassDecision, postTestSlotModelApproval],
+  );
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
       setBackgroundTaskLedgerEntries([]);
@@ -23488,6 +23538,9 @@ function ChatPane({
                 }}
                 breakGlass={{
                   items: breakGlassApprovalMenuItems,
+                  approvingId: breakGlassApprovalBusyId ?? testSlotModelApprovalBusyId,
+                  onQuickApprove:
+                    publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
                 }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,

@@ -9435,9 +9435,56 @@ button:disabled {
   gap: 0.1rem;
 }
 
-.run-pr-menu-item {
+.run-pr-menu-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-right: 0.25rem;
+}
+
+.run-pr-menu-settings,
+.run-pr-menu-action-link,
+.run-pr-menu-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 1.7rem;
+  padding: 0 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.run-pr-menu-settings:hover,
+.run-pr-menu-settings:focus-visible,
+.run-pr-menu-action-link:hover,
+.run-pr-menu-action-link:focus-visible,
+.run-pr-menu-action-btn:hover:not(:disabled),
+.run-pr-menu-action-btn:focus-visible:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.run-pr-menu-action-btn:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.run-pr-menu-action-btn svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.run-pr-menu-item {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   width: 100%;
@@ -9480,6 +9527,18 @@ button:disabled {
   min-width: 0;
   display: grid;
   gap: 0.15rem;
+}
+
+.run-pr-menu-breakglass {
+  flex-direction: column;
+}
+
+.run-pr-menu-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 .run-pr-menu-glyph {
