@@ -978,8 +978,10 @@ test("pull request composer action is a popup menu with a break-glass approval l
   // endpoint. Auth authenticates the admin; it must not render or post grants
   // for Tank's app-specific request.
   expect(appSource).toMatch(/function breakGlassRequestUrl\(/);
-  expect(appSource).toMatch(/break_glass_request/);
-  expect(appSource).toMatch(/<BreakGlassApprovalIndicator/);
+  expect(appSource).toMatch(/"break-glass"/);
+  expect(appSource).toMatch(/<BreakGlassRequestPage/);
+  expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
+  expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
   expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
   expect(appSource.includes("request.approvalUrl")).toBe(false);

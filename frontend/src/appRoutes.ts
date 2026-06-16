@@ -13,6 +13,7 @@ export type SessionRouteTab =
   | "static"
   | "session-data"
   | "pull-requests"
+  | "break-glass"
   | "files"
   | "background";
 export type HomeRouteTab = "chat";
@@ -48,6 +49,9 @@ export type SessionRoute = SettingsRoute & {
   // tab === "files" and the route includes a file target.
   filePath: string | null;
   fileLine: number | null;
+  // Control-action event id selected in the break-glass approval view.
+  // Non-null only when tab === "break-glass".
+  breakGlassRequestId: string | null;
 };
 
 export type HomeRoute = SettingsRoute & {
@@ -155,6 +159,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -169,6 +174,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -195,6 +201,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -214,6 +221,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: rel,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -228,6 +236,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -245,6 +254,22 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "break-glass" && parts.length === 4 && parts[3].trim()) {
+    return {
+      sessionId: parts[1],
+      tab: "break-glass",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: parts[3],
       ...defaultSettingsRoute,
     };
   }
@@ -262,6 +287,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: fileTarget?.path ?? null,
       fileLine: fileTarget?.line ?? null,
+      breakGlassRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -276,6 +302,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -316,6 +343,7 @@ export function buildSessionRouteUrl(
   pageNumber?: number | null,
   filePath?: string | null,
   fileLine?: number | null,
+  breakGlassRequestId?: string | null,
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
@@ -335,6 +363,8 @@ export function buildSessionRouteUrl(
     suffix = "/session-data";
   } else if (tab === "pull-requests") {
     suffix = "/pull-requests";
+  } else if (tab === "break-glass" && breakGlassRequestId) {
+    suffix = `/break-glass/${encodeURIComponent(breakGlassRequestId)}`;
   } else if (tab === "files") {
     const routedFilePath = filePath
       ? filePath.split("/").map(encodeURIComponent).join("/")

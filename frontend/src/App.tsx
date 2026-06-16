@@ -1922,6 +1922,7 @@ function sessionRouteUrl(
   pageNumber?: number | null,
   filePath?: string | null,
   fileLine?: number | null,
+  breakGlassRequestId?: string | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1932,6 +1933,7 @@ function sessionRouteUrl(
     pageNumber,
     filePath,
     fileLine,
+    breakGlassRequestId,
   );
 }
 
@@ -2125,12 +2127,23 @@ function sessionUrl(id: string): string {
 }
 
 function breakGlassRequestUrl(sessionId: string, requestEventId: string): string {
-  const url = new URL(sessionRouteUrl(sessionId));
-  url.searchParams.set("break_glass_request", requestEventId);
-  return url.toString();
+  return sessionRouteUrl(
+    sessionId,
+    "break-glass",
+    null,
+    null,
+    null,
+    null,
+    null,
+    requestEventId,
+  );
 }
 
 function readBreakGlassRequestRoute(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.tab === "break-glass" && route.breakGlassRequestId) {
+    return route.breakGlassRequestId;
+  }
   const params = new URLSearchParams(window.location.search);
   return params.get("break_glass_request");
 }
@@ -5075,6 +5088,7 @@ type RunTab =
   | "files"
   | "session-data"
   | "pull-requests"
+  | "break-glass"
   | "settings"
   | "help"
   | "cluster"
@@ -9796,81 +9810,287 @@ function PRLaneApprovalIndicator({
   );
 }
 
-function BreakGlassApprovalIndicator({
-  requests,
+type BreakGlassRepoScopeKind = "current_repo" | "repos" | "all_repos";
+type BreakGlassBranchScopeKind = "named" | "count" | "unlimited";
+
+function BreakGlassRequestPage({
+  sessionId,
+  requestId,
+  rows,
   busyEventId,
-  focusEventId,
-  onApprove,
-  onDeny,
+  onDecision,
 }: {
-  requests: BreakGlassRequest[];
+  sessionId: string;
+  requestId: string | null;
+  rows: ControlActionRow[];
   busyEventId: string | null;
-  focusEventId?: string | null;
-  onApprove: (request: BreakGlassRequest) => void;
-  onDeny: (request: BreakGlassRequest) => void;
+  onDecision: (
+    request: Pick<BreakGlassRequest, "eventId">,
+    decision: "approve" | "deny",
+    body?: Record<string, unknown>,
+  ) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const request = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          nonemptyAdminValue(row.event_id) === requestId &&
+          (row.action === "github.break_glass.request" ||
+            row.action === "azure.break_glass.request"),
+      ),
+    [requestId, rows],
+  );
+  const decision = useMemo(
+    () =>
+      rows.find((row) => {
+        if (
+          row.action !== "github.break_glass.grant" &&
+          row.action !== "github.break_glass.deny" &&
+          row.action !== "azure.break_glass.grant" &&
+          row.action !== "azure.break_glass.deny"
+        )
+          return false;
+        return nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId;
+      }),
+    [requestId, rows],
+  );
+  const requestPayload = useMemo(
+    () => (request ? adminBreakGlassPayload(request) : {}),
+    [request],
+  );
+  const repoScope = useMemo(
+    () => adminBreakGlassPayloadObject(requestPayload.repo_scope),
+    [requestPayload],
+  );
+  const branchScope = useMemo(
+    () => adminBreakGlassPayloadObject(requestPayload.branch_scope),
+    [requestPayload],
+  );
+  const defaultRepo = request ? adminBreakGlassTarget(request) : "";
+  const [repoKind, setRepoKind] = useState<BreakGlassRepoScopeKind>("current_repo");
+  const [repoText, setRepoText] = useState(defaultRepo);
+  const [branchKind, setBranchKind] = useState<BreakGlassBranchScopeKind>("unlimited");
+  const [branchText, setBranchText] = useState("");
+  const [branchCount, setBranchCount] = useState("10");
+  const [note, setNote] = useState("");
+
   useEffect(() => {
-    if (focusEventId && requests.some((request) => request.eventId === focusEventId)) {
-      setOpen(true);
+    const nextRepoKind =
+      nonemptyAdminValue(repoScope.kind) === "all_repos"
+        ? "all_repos"
+        : nonemptyAdminValue(repoScope.kind) === "repos"
+          ? "repos"
+          : "current_repo";
+    const repoValues =
+      nextRepoKind === "repos"
+        ? adminBreakGlassStringList(repoScope.repos)
+        : [nonemptyAdminValue(repoScope.repo) ?? defaultRepo].filter(Boolean);
+    const nextBranchKind =
+      nonemptyAdminValue(branchScope.kind) === "named"
+        ? "named"
+        : nonemptyAdminValue(branchScope.kind) === "count"
+          ? "count"
+          : "unlimited";
+    setRepoKind(nextRepoKind);
+    setRepoText(repoValues.join("\n"));
+    setBranchKind(nextBranchKind);
+    setBranchText(adminBreakGlassStringList(branchScope.branches).join("\n"));
+    setBranchCount(
+      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
+        ? String(branchScope.count)
+        : "10",
+    );
+    setNote("");
+  }, [branchScope, defaultRepo, repoScope, requestId]);
+
+  const pending = Boolean(request && !decision && request.status === "started");
+  const busy = Boolean(requestId && busyEventId === requestId);
+  const kind = request?.action === "azure.break_glass.request" ? "azure" : "git";
+  const status = !request ? "loading" : decision ? adminBreakGlassStatusLabel(adminBreakGlassStatus({ request, decision, pending: false })) : pending ? "pending" : "closed";
+  const repoValues = splitBreakGlassScopeValues(repoText);
+  const branchValues = splitBreakGlassScopeValues(branchText);
+  const approveBody = (): Record<string, unknown> => {
+    const body: Record<string, unknown> = { note };
+    if (kind === "git") {
+      body.repo_scope =
+        repoKind === "all_repos"
+          ? { kind: "all_repos" }
+          : repoKind === "repos"
+            ? { kind: "repos", repos: repoValues }
+            : { kind: "current_repo", repo: repoValues[0] ?? defaultRepo };
+      body.branch_scope =
+        branchKind === "unlimited"
+          ? { kind: "unlimited" }
+          : branchKind === "count"
+            ? { kind: "count", count: Math.max(1, Number(branchCount) || 1) }
+            : { kind: "named", branches: branchValues };
     }
-  }, [focusEventId, requests]);
-  if (requests.length === 0) return null;
-  const countLabel = `${requests.length} break-glass request${requests.length === 1 ? "" : "s"}`;
+    return body;
+  };
+  const approveDisabled =
+    !requestId ||
+    !pending ||
+    busy ||
+    (kind === "git" &&
+      ((repoKind !== "all_repos" && repoValues.length === 0) ||
+        (branchKind === "named" && branchValues.length === 0)));
+
   return (
-    <div className="pr-lane-approval break-glass-approval">
-      <button
-        type="button"
-        className="pr-lane-approval-trigger break-glass-approval-trigger"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-      >
-        <ShieldAlertIcon size={14} aria-hidden="true" />
-        <span>{countLabel}</span>
-      </button>
-      {open && (
-        <div className="pr-lane-approval-panel break-glass-approval-panel">
-          <div className="pr-lane-approval-head">
-            <span>break-glass requests</span>
+    <div className="break-glass-page">
+      <section className="break-glass-page-main">
+        <div className="break-glass-page-head">
+          <div className="break-glass-page-title">
+            <ShieldAlertIcon aria-hidden="true" />
+            <div>
+              <h2>Break glass</h2>
+              <p>{request ? adminBreakGlassTarget(request) : requestId ?? "Request"}</p>
+            </div>
           </div>
-          <div className="pr-lane-approval-list">
-            {requests.map((request) => {
-              const busy = busyEventId === request.eventId;
-              return (
-                <div
-                  className={`pr-lane-approval-item${focusEventId === request.eventId ? " is-focused" : ""}`}
-                  key={request.eventId}
-                >
-                  <div className="pr-lane-approval-main">
-                    <div className="pr-lane-approval-title">
-                      <ShieldAlertIcon size={14} aria-hidden="true" />
-                      <span>{request.kind === "azure" ? "azure-personal" : "GitHub write access"}</span>
-                    </div>
-                    <div className="pr-lane-approval-meta">
-                      {[request.target, request.source ? `source ${request.source}` : "", request.eventId]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </div>
-                    {request.reason && (
-                      <div className="pr-lane-approval-reason">{request.reason}</div>
-                    )}
-                  </div>
-                  <div className="pr-lane-approval-actions">
-                    <button type="button" disabled={busy} onClick={() => onApprove(request)}>
-                      approve
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => onDeny(request)}>
-                      deny
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : status === "denied" ? "denied" : "pending"}`}>
+            {status}
+          </span>
         </div>
-      )}
+
+        {request ? (
+          <>
+            <dl className="break-glass-facts">
+              <div>
+                <dt>Session</dt>
+                <dd>{sessionId}</dd>
+              </div>
+              <div>
+                <dt>Requester</dt>
+                <dd>{nonemptyAdminValue(request.owner_email) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
+              </div>
+            </dl>
+            <div className="break-glass-reason">
+              {adminBreakGlassReason(request)}
+            </div>
+            {kind === "git" && (
+              <div className="break-glass-scope-grid">
+                <label>
+                  <span>Repository scope</span>
+                  <select
+                    value={repoKind}
+                    onChange={(event) => setRepoKind(event.target.value as BreakGlassRepoScopeKind)}
+                    disabled={!pending || busy}
+                  >
+                    <option value="current_repo">Current repository</option>
+                    <option value="repos">Selected repositories</option>
+                    <option value="all_repos">All repositories</option>
+                  </select>
+                </label>
+                {repoKind !== "all_repos" && (
+                  <label>
+                    <span>Repositories</span>
+                    <textarea
+                      value={repoText}
+                      onChange={(event) => setRepoText(event.target.value)}
+                      disabled={!pending || busy}
+                      rows={repoKind === "repos" ? 4 : 2}
+                    />
+                  </label>
+                )}
+                <label>
+                  <span>Branch scope</span>
+                  <select
+                    value={branchKind}
+                    onChange={(event) => setBranchKind(event.target.value as BreakGlassBranchScopeKind)}
+                    disabled={!pending || busy}
+                  >
+                    <option value="unlimited">All branches</option>
+                    <option value="named">Named branches</option>
+                    <option value="count">Branch count</option>
+                  </select>
+                </label>
+                {branchKind === "named" && (
+                  <label>
+                    <span>Branches</span>
+                    <textarea
+                      value={branchText}
+                      onChange={(event) => setBranchText(event.target.value)}
+                      disabled={!pending || busy}
+                      rows={4}
+                    />
+                  </label>
+                )}
+                {branchKind === "count" && (
+                  <label>
+                    <span>Count</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={branchCount}
+                      onChange={(event) => setBranchCount(event.target.value)}
+                      disabled={!pending || busy}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+            <label className="break-glass-note">
+              <span>Decision note</span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                disabled={!pending || busy}
+                rows={3}
+              />
+            </label>
+            {decision && (
+              <div className="admin-break-glass-decision">
+                <span>{adminBreakGlassDecisionSummary(decision)}</span>
+                <span>{formatToolFullTime(decision.created_at)}</span>
+              </div>
+            )}
+            <div className="break-glass-actions">
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={approveDisabled}
+                onClick={() => requestId && onDecision({ eventId: requestId }, "approve", approveBody())}
+              >
+                <CheckIcon aria-hidden="true" />
+                <span>Approve</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={!requestId || !pending || busy}
+                onClick={() => requestId && onDecision({ eventId: requestId }, "deny", { note })}
+              >
+                <XIcon aria-hidden="true" />
+                <span>Deny</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="break-glass-empty">Request not found</div>
+        )}
+      </section>
     </div>
   );
+}
+
+function splitBreakGlassScopeValues(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/[\n,]+/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part || seen.has(part)) return false;
+      seen.add(part);
+      return true;
+    });
 }
 
 function BackgroundScreen({
@@ -14405,7 +14625,7 @@ function AdminBreakGlassRow({
   const sessionHref = sessionID ? `/sessions/${encodeURIComponent(sessionID)}` : "";
   const focusedHref =
     sessionID && eventID
-      ? `/sessions/${encodeURIComponent(sessionID)}?break_glass_request=${encodeURIComponent(eventID)}`
+      ? `/sessions/${encodeURIComponent(sessionID)}/break-glass/${encodeURIComponent(eventID)}`
       : "";
 
   return (
@@ -16119,7 +16339,9 @@ function ChatPane({
   const [breakGlassApprovalBusyId, setBreakGlassApprovalBusyId] = useState<
     string | null
   >(null);
-  const initialBreakGlassRequestId = useMemo(() => readBreakGlassRequestRoute(), []);
+  const [activeBreakGlassRequestId, setActiveBreakGlassRequestId] = useState<
+    string | null
+  >(() => readBreakGlassRequestRoute());
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -16234,13 +16456,13 @@ function ChatPane({
     session.id,
   ]);
   const fetchFocusedBreakGlassRequest = useCallback(async () => {
-    if (publicView || readOnly || !initialBreakGlassRequestId) {
+    if (publicView || readOnly || !activeBreakGlassRequestId) {
       setFocusedBreakGlassRows([]);
       return;
     }
     const res = await authedFetch(
       scopedSessionPathForPane(
-        `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(initialBreakGlassRequestId)}`,
+        `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(activeBreakGlassRequestId)}`,
       ),
     );
     if (!res.ok) {
@@ -16253,7 +16475,7 @@ function ChatPane({
     );
     setFocusedBreakGlassRows(rows);
   }, [
-    initialBreakGlassRequestId,
+    activeBreakGlassRequestId,
     publicView,
     readOnly,
     scopedSessionPathForPane,
@@ -16324,7 +16546,11 @@ function ChatPane({
     ],
   );
   const postBreakGlassDecision = useCallback(
-    async (request: BreakGlassRequest, decision: "approve" | "deny") => {
+    async (
+      request: Pick<BreakGlassRequest, "eventId">,
+      decision: "approve" | "deny",
+      body: Record<string, unknown> = {},
+    ) => {
       if (publicView || readOnly) return;
       setBreakGlassApprovalBusyId(request.eventId);
       try {
@@ -16335,7 +16561,7 @@ function ChatPane({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify(body),
           },
         );
         await fetchControlActionEntries();
@@ -17752,6 +17978,15 @@ function ChatPane({
     }
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
+    const routedBreakGlassRequestId = readBreakGlassRequestRoute();
+    if (routedBreakGlassRequestId) {
+      setActiveBreakGlassRequestId(routedBreakGlassRequestId);
+      setActiveTab("break-glass");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
@@ -17788,6 +18023,14 @@ function ChatPane({
     }
     if (route.tab === "pull-requests") {
       setActiveTab("pull-requests");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "break-glass") {
+      setActiveBreakGlassRequestId(route.breakGlassRequestId);
+      setActiveTab("break-glass");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -20610,6 +20853,20 @@ function ChatPane({
       replaceSessionRoute(session.id, "session-data");
     } else if (activeTab === "pull-requests") {
       replaceSessionRoute(session.id, "pull-requests");
+    } else if (activeTab === "break-glass") {
+      const next = activeBreakGlassRequestId
+        ? sessionRouteUrl(
+            session.id,
+            "break-glass",
+            null,
+            null,
+            null,
+            null,
+            null,
+            activeBreakGlassRequestId,
+          )
+        : sessionRouteUrl(session.id);
+      if (next !== window.location.href) window.history.replaceState({}, "", next);
     } else if (activeTab === "files") {
       replaceSessionRoute(
         session.id,
@@ -20629,6 +20886,7 @@ function ChatPane({
   }, [
     activeTab,
     adminView,
+    activeBreakGlassRequestId,
     effectivePendingScrollMessageId,
     publicView,
     routeTurnUnavailable,
@@ -22076,6 +22334,16 @@ function ChatPane({
                 pullRequests={agentGitActivity.pullRequests}
                 commits={agentGitActivity.commits}
               />
+            ) : activeTab === "break-glass" ? (
+              <BreakGlassRequestPage
+                sessionId={session.id}
+                requestId={activeBreakGlassRequestId}
+                rows={breakGlassActionRows}
+                busyEventId={breakGlassApprovalBusyId}
+                onDecision={(request, decision, body) => {
+                  void postBreakGlassDecision(request, decision, body);
+                }}
+              />
             ) : activeTab === "settings" ? (
               <RunSettingsPanel
                 session={session}
@@ -22343,17 +22611,6 @@ function ChatPane({
               }}
               onDeny={(request) => {
                 void postPRLaneDecision(request, "deny");
-              }}
-            />
-            <BreakGlassApprovalIndicator
-              requests={breakGlassRequests}
-              busyEventId={breakGlassApprovalBusyId}
-              focusEventId={initialBreakGlassRequestId}
-              onApprove={(request) => {
-                void postBreakGlassDecision(request, "approve");
-              }}
-              onDeny={(request) => {
-                void postBreakGlassDecision(request, "deny");
               }}
             />
             {attachments.length > 0 && (

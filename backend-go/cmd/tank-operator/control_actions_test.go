@@ -1191,6 +1191,70 @@ func TestHandleApproveBreakGlassRequestPersistsAllReposBranchScope(t *testing.T)
 	}
 }
 
+func TestHandleApproveBreakGlassRequestPersistsScopeOverride(t *testing.T) {
+	store := &fakeControlActionStore{
+		getRow: pgstore.ControlActionEvent{
+			EventID:      "request-1",
+			InvocationID: "invocation-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-3",
+			SessionID:    "47",
+			Action:       "github.break_glass.request",
+			Status:       "started",
+			TargetKind:   "github_repository",
+			TargetRef:    "https://github.com/romaine-life/tank-operator",
+			RepoOwner:    "romaine-life",
+			RepoName:     "tank-operator",
+			Payload: []byte(`{
+				"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+				"branch_scope": {"kind":"unlimited"},
+				"operations": ["push_current_head"],
+				"reason": "repair branch"
+			}`),
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/break-glass-requests/request-1/approve", strings.NewReader(`{
+		"note":"broaden to companion repo",
+		"repo_scope":{"kind":"repos","repos":["romaine-life/tank-operator","romaine-life/auth"]},
+		"branch_scope":{"kind":"named","branches":["feature-a","feature-b"]}
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "request-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveBreakGlassRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := store.appendCalls[0]
+	if got.RepoOwner != "" || got.RepoName != "" || got.TargetRef != "tank://session/47/git-break-glass/repos" {
+		t.Fatalf("scope identity = owner %q repo %q target %q", got.RepoOwner, got.RepoName, got.TargetRef)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	repoScope, ok := payload["repo_scope"].(map[string]any)
+	if !ok || repoScope["kind"] != "repos" {
+		t.Fatalf("repo_scope = %#v", payload["repo_scope"])
+	}
+	repos, ok := repoScope["repos"].([]any)
+	if !ok || len(repos) != 2 || repos[0] != "romaine-life/tank-operator" || repos[1] != "romaine-life/auth" {
+		t.Fatalf("repo_scope.repos = %#v", repoScope["repos"])
+	}
+	branchScope, ok := payload["branch_scope"].(map[string]any)
+	if !ok || branchScope["kind"] != "named" {
+		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+	branches, ok := branchScope["branches"].([]any)
+	if !ok || len(branches) != 2 || branches[0] != "feature-a" || branches[1] != "feature-b" {
+		t.Fatalf("branch_scope.branches = %#v", branchScope["branches"])
+	}
+}
+
 func TestHandleApproveBreakGlassRequestRejectsConflictingRepoScope(t *testing.T) {
 	store := &fakeControlActionStore{
 		getRow: pgstore.ControlActionEvent{

@@ -350,7 +350,9 @@ func (s *appServer) handleDenyBreakGlassRequest(w http.ResponseWriter, r *http.R
 }
 
 type breakGlassDecisionBody struct {
-	Note string `json:"note"`
+	Note        string      `json:"note"`
+	RepoScope   repoScope   `json:"repo_scope,omitempty"`
+	BranchScope branchScope `json:"branch_scope,omitempty"`
 }
 
 func (s *appServer) handleBreakGlassDecision(w http.ResponseWriter, r *http.Request, decision string) {
@@ -417,7 +419,7 @@ func (s *appServer) handleBreakGlassDecision(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	row, expiresAt, agentNotification, err := s.appendBreakGlassGrantForRequest(r.Context(), request, user.Email, body.Note)
+	row, expiresAt, agentNotification, err := s.appendBreakGlassGrantForRequest(r.Context(), request, user.Email, body)
 	if err != nil {
 		var validationErr breakGlassRequestValidationError
 		if errors.As(err, &validationErr) {
@@ -533,7 +535,7 @@ func (s *appServer) appendBreakGlassDeny(ctx context.Context, request pgstore.Co
 	return s.controlActions.Append(ctx, event)
 }
 
-func (s *appServer) appendBreakGlassGrantForRequest(ctx context.Context, request pgstore.ControlActionEvent, approvedBy, note string) (pgstore.ControlActionEvent, time.Time, map[string]any, error) {
+func (s *appServer) appendBreakGlassGrantForRequest(ctx context.Context, request pgstore.ControlActionEvent, approvedBy string, body breakGlassDecisionBody) (pgstore.ControlActionEvent, time.Time, map[string]any, error) {
 	switch request.Action {
 	case "github.break_glass.request":
 		var payload struct {
@@ -547,7 +549,17 @@ func (s *appServer) appendBreakGlassGrantForRequest(ctx context.Context, request
 		if err != nil {
 			return pgstore.ControlActionEvent{Action: "github.break_glass.grant", Status: "succeeded"}, time.Time{}, nil, invalidBreakGlassRequest(err)
 		}
-		branchScope, err := normalizeBranchScope(payload.BranchScope, request.SessionID, singleRepoName(repoScopeRepos(repoScope), repoScope.Kind == "all_repos"))
+		if strings.TrimSpace(body.RepoScope.Kind) != "" {
+			repoScope, err = normalizeRepoScope(body.RepoScope, "")
+			if err != nil {
+				return pgstore.ControlActionEvent{Action: "github.break_glass.grant", Status: "succeeded"}, time.Time{}, nil, invalidBreakGlassRequest(err)
+			}
+		}
+		branchScope := payload.BranchScope
+		if strings.TrimSpace(body.BranchScope.Kind) != "" {
+			branchScope = body.BranchScope
+		}
+		branchScope, err = normalizeBranchScope(branchScope, request.SessionID, singleRepoName(repoScopeRepos(repoScope), repoScope.Kind == "all_repos"))
 		if err != nil {
 			return pgstore.ControlActionEvent{Action: "github.break_glass.grant", Status: "succeeded"}, time.Time{}, nil, invalidBreakGlassRequest(err)
 		}
@@ -563,7 +575,7 @@ func (s *appServer) appendBreakGlassGrantForRequest(ctx context.Context, request
 			TTLSeconds:     0,
 			Operations:     payload.Operations,
 			RequestEventID: request.EventID,
-			Reason:         firstNonEmptyControlAction(strings.TrimSpace(note), strings.TrimSpace(payload.Reason)),
+			Reason:         firstNonEmptyControlAction(strings.TrimSpace(body.Note), strings.TrimSpace(payload.Reason)),
 			ApprovedBy:     approvedBy,
 		})
 		agentNotification := map[string]any{"delivered": false}
@@ -594,7 +606,7 @@ func (s *appServer) appendBreakGlassGrantForRequest(ctx context.Context, request
 			TTLSeconds:     0,
 			Operations:     payload.Operations,
 			RequestEventID: request.EventID,
-			Reason:         firstNonEmptyControlAction(strings.TrimSpace(note), strings.TrimSpace(payload.Reason)),
+			Reason:         firstNonEmptyControlAction(strings.TrimSpace(body.Note), strings.TrimSpace(payload.Reason)),
 			ApprovedBy:     approvedBy,
 		})
 		agentNotification := map[string]any{"delivered": false}
