@@ -17,7 +17,7 @@ resurrection or preservation of in-flight agent work after the pod is gone.
 
 Tank sessions should behave like durable conversations with live event
 delivery layered on top. Browser tabs are clients, pod-side runners are
-producers, the Cosmos `session-events` ledger is the replay source of truth,
+producers, the Postgres `session_events` ledger is the replay source of truth,
 NATS JetStream is the durable live work fabric, and React renders a projection
 of Tank conversation events. Provider-specific events are inputs to adapters;
 they are not UI state.
