@@ -332,6 +332,45 @@ func TestProjectTurnPagesIncludesUserContextOutsidePageBody(t *testing.T) {
 	}
 }
 
+func TestProjectTurnPagesIncludesSystemContextForBackgroundWake(t *testing.T) {
+	const prompt = "A background task you started earlier has finished while this session was idle.\n\nTask id: task-ci\nFinal status: completed\n\nReview the task's output and continue from the result."
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "00000001", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{
+			"status":  "submitted",
+			"source":  "background-task",
+			"task_id": "task-ci",
+			"prompt":  prompt,
+		}),
+		projectionTestEvent("wake-tool", "00000002", "item.completed", "tool", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:tool", map[string]any{
+			"kind": "tool_result", "name": "Bash", "output": "ok",
+		}),
+	}
+
+	proj := projectTurnPages("turn_bgtask-task-ci", events)
+	if proj.TurnContext == nil {
+		t.Fatalf("TurnContext = nil, want projected system wake prompt")
+	}
+	if got := transcriptMapString(proj.TurnContext, "id"); got != "wake-submitted:turn_context" {
+		t.Fatalf("TurnContext id = %q, want wake-submitted:turn_context: %#v", got, proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "text"); got != prompt {
+		t.Fatalf("TurnContext text = %q, want wake prompt", got)
+	}
+	if got := transcriptMapString(proj.TurnContext, "authorKind"); got != "system" {
+		t.Fatalf("TurnContext authorKind = %q, want system: %#v", got, proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "turnContextSource"); got != "background-task" {
+		t.Fatalf("TurnContext source = %q, want background-task: %#v", got, proj.TurnContext)
+	}
+	for _, page := range proj.Pages {
+		for _, entry := range page.Entries {
+			if entry["kind"] == "message" && entry["role"] == "user" {
+				t.Fatalf("background wake prompt leaked into activity page body as a user message: %#v", page.Entries)
+			}
+		}
+	}
+}
+
 func TestProjectTurnPagesKeepsUserContextAcrossPagedActivity(t *testing.T) {
 	var events []map[string]any
 	seq := 0

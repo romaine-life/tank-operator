@@ -483,6 +483,11 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   );
 });
 
+test("Turns prompt context styleguide includes system-authored wake prompt state", () => {
+  expect(styleguidePortfolioTranscriptSource.includes("system-background-wake-context")).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes("Background task finished - agent re-invoked")).toBe(true);
+});
+
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
   // and "Stop requested" are not authored by the human owner or the
