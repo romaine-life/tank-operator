@@ -170,21 +170,6 @@ func (c *Client) ListRepos(ctx context.Context, userEmail string) ([]Repo, error
 	return c.callListInstallationRepos(ctx, token)
 }
 
-// MintActorToken exchanges the orchestrator's projected SA token for a fresh
-// auth.romaine.life role=service JWT whose actor_email is the supplied email,
-// returning the token and its expiry. Unlike ListRepos it bypasses the
-// per-email cache so the caller always receives a full-TTL token: the admin
-// break-glass token surface hands this JWT to a stuck agent, so a near-expiry
-// cached entry would be useless. The token shape matches what a session pod's
-// mcp-auth-proxy obtains on its own behalf.
-func (c *Client) MintActorToken(ctx context.Context, actorEmail string) (string, time.Time, error) {
-	actorEmail = strings.ToLower(strings.TrimSpace(actorEmail))
-	if actorEmail == "" {
-		return "", time.Time{}, errors.New("mcpgithub: actor email is empty")
-	}
-	return c.mintToken(ctx, actorEmail)
-}
-
 // tokenFor returns a cached or freshly-minted service JWT for the
 // caller's email. Single-flighted per email so a burst of concurrent
 // picker opens collapses to one exchange.

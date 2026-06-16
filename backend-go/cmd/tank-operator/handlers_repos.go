@@ -467,8 +467,4 @@ func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 // Production wires *mcpgithub.Client directly via main.go.
 type AppServerMCPGitHub interface {
 	ListRepos(ctx context.Context, userEmail string) ([]mcpgithub.Repo, error)
-	// MintActorToken returns a fresh auth.romaine.life role=service JWT for the
-	// given actor email (plus its expiry). Used by the admin break-glass
-	// auth-token surface to hand a stuck agent the credential it needs.
-	MintActorToken(ctx context.Context, actorEmail string) (string, time.Time, error)
 }

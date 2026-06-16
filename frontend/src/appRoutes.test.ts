@@ -328,15 +328,15 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
         settingsTab: "admin",
         adminView: "report",
       });
-  expect(readAppRouteFromPathname("/settings/admin/break-glass")).toEqual({
-        tab: "settings",
-        settingsTab: "admin",
-        adminView: "break-glass",
-      });
   expect(readAppRouteFromPathname("/settings/admin/version")).toEqual({
         tab: "settings",
         settingsTab: "admin",
         adminView: "version",
+      });
+  expect(readAppRouteFromPathname("/settings/admin/break-glass")).toEqual({
+        tab: "settings",
+        settingsTab: "admin",
+        adminView: "break-glass",
       });
   expect(readAppRouteFromPathname("/settings/admin/hidden-transcripts")).toEqual({
         tab: "settings",
