@@ -6538,6 +6538,379 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
+.admin-break-glass {
+  gap: var(--space-3);
+}
+
+.admin-break-glass-toolbar,
+.admin-break-glass-meta,
+.admin-break-glass-actions,
+.admin-break-glass-decision {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.admin-break-glass-toolbar {
+  flex-wrap: wrap;
+}
+
+.admin-break-glass-filter {
+  min-height: 1.85rem;
+  padding: 0 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm, 0.375rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.admin-break-glass-filter:hover:not(:disabled),
+.admin-break-glass-filter.is-active {
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(125, 211, 252, 0.1);
+  color: var(--text-primary);
+}
+
+.admin-break-glass-scope,
+.admin-break-glass-scope-line {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.admin-break-glass-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.admin-break-glass-row {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(10, 15, 25, 0.42);
+}
+
+.admin-break-glass-row.is-pending {
+  border-color: rgba(251, 191, 36, 0.24);
+}
+
+.admin-break-glass-row.is-approved {
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.admin-break-glass-row.is-denied {
+  border-color: rgba(248, 113, 113, 0.22);
+}
+
+.admin-break-glass-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.admin-break-glass-title {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.admin-break-glass-kind {
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.admin-break-glass-target {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.admin-break-glass-status {
+  flex: 0 0 auto;
+  min-height: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.48rem;
+  border-radius: var(--radius-sm, 0.375rem);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.admin-break-glass-status.is-pending {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--status-agent-working);
+}
+
+.admin-break-glass-status.is-approved {
+  background: var(--status-online-bg);
+  color: var(--status-online);
+}
+
+.admin-break-glass-status.is-denied {
+  background: var(--status-error-bg);
+  color: var(--status-error-fg);
+}
+
+.admin-break-glass-reason {
+  color: var(--text-body);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.admin-break-glass-meta {
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.admin-break-glass-meta span,
+.admin-break-glass-decision span {
+  min-height: 1.3rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm, 0.375rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.admin-break-glass-decision {
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.admin-break-glass-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.admin-break-glass-actions a {
+  text-decoration: none;
+}
+
+.admin-break-glass-empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.break-glass-page {
+  min-height: 100%;
+  padding: var(--space-5);
+  overflow: auto;
+}
+
+.break-glass-page-main {
+  width: min(58rem, 100%);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.break-glass-page-head,
+.break-glass-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.break-glass-page-title {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.break-glass-page-title > svg {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0.45rem;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fbbf24;
+}
+
+.break-glass-page-title h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.break-glass-page-title p {
+  margin: 0.15rem 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.break-glass-page-subtitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.55rem;
+}
+
+.break-glass-page-subtitle span {
+  color: var(--text-body);
+}
+
+.break-glass-page-subtitle code {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.break-glass-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.break-glass-facts div,
+.break-glass-reason,
+.break-glass-scope-grid label,
+.test-slot-model-pair,
+.break-glass-note {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.break-glass-facts dt,
+.break-glass-scope-grid label > span,
+.test-slot-model-pair > span,
+.break-glass-note > span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.test-slot-model-pair strong,
+.test-slot-model-pair small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.test-slot-model-pair strong {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
+.test-slot-model-pair small {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.break-glass-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-body);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.break-glass-reason {
+  color: var(--text-body);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.break-glass-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.break-glass-scope-grid select,
+.break-glass-scope-grid input,
+.break-glass-scope-grid textarea,
+.break-glass-note textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--radius-sm, 0.35rem);
+  background: rgba(4, 8, 14, 0.52);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+}
+
+.break-glass-scope-grid select,
+.break-glass-scope-grid input {
+  min-height: 2rem;
+  padding: 0 0.55rem;
+}
+
+.break-glass-scope-grid textarea,
+.break-glass-note textarea {
+  min-height: 4.5rem;
+  padding: 0.5rem 0.55rem;
+  resize: vertical;
+}
+
+.break-glass-actions {
+  justify-content: flex-start;
+}
+
+.break-glass-empty {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 640px) {
+  .admin-break-glass-row-head,
+  .admin-break-glass-actions {
+    align-items: stretch;
+  }
+
+  .admin-break-glass-row-head {
+    flex-direction: column;
+  }
+
+  .admin-break-glass-actions > * {
+    flex: 1 1 9rem;
+  }
+
+  .break-glass-page {
+    padding: var(--space-3);
+  }
+
+  .break-glass-page-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .break-glass-scope-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 768px) {
   .run-settings-admin-form {
     grid-template-columns: minmax(0, 1fr);
@@ -9026,12 +9399,11 @@ button:disabled {
   flex: 0 0 auto;
 }
 
-/* Break-glass "chip" — amber state + alert dot when a request awaits approval. */
-.run-pr-action-btn.has-alert {
+.run-break-glass-action-btn.has-alert {
   color: #f0b429;
 }
 
-.run-pr-action-btn.has-alert:hover {
+.run-break-glass-action-btn.has-alert:hover {
   color: #fbd457;
   background: rgba(240, 180, 41, 0.16);
 }
@@ -9063,9 +9435,56 @@ button:disabled {
   gap: 0.1rem;
 }
 
-.run-pr-menu-item {
+.run-pr-menu-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-right: 0.25rem;
+}
+
+.run-pr-menu-settings,
+.run-pr-menu-action-link,
+.run-pr-menu-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 1.7rem;
+  padding: 0 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.run-pr-menu-settings:hover,
+.run-pr-menu-settings:focus-visible,
+.run-pr-menu-action-link:hover,
+.run-pr-menu-action-link:focus-visible,
+.run-pr-menu-action-btn:hover:not(:disabled),
+.run-pr-menu-action-btn:focus-visible:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.run-pr-menu-action-btn:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.run-pr-menu-action-btn svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.run-pr-menu-item {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   width: 100%;
@@ -9104,6 +9523,24 @@ button:disabled {
   color: #f0b429;
 }
 
+.run-pr-menu-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.run-pr-menu-breakglass {
+  flex-direction: column;
+}
+
+.run-pr-menu-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .run-pr-menu-glyph {
   flex: 0 0 auto;
 }
@@ -9116,8 +9553,11 @@ button:disabled {
 }
 
 .run-pr-menu-breakglass .run-slash-desc {
-  flex: 1 1 auto;
-  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .run-pr-menu-sep {

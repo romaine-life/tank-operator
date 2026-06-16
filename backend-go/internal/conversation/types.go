@@ -58,10 +58,11 @@ const (
 type TurnSubmittedSource string
 
 const (
-	TurnSubmittedSourceScheduleWakeup     TurnSubmittedSource = "schedule-wakeup"
-	TurnSubmittedSourceBackgroundTask     TurnSubmittedSource = "background-task"
-	TurnSubmittedSourceLaunchDispatch     TurnSubmittedSource = "launch-dispatch"
-	TurnSubmittedSourceBreakGlassApproval TurnSubmittedSource = "break-glass-approval"
+	TurnSubmittedSourceScheduleWakeup        TurnSubmittedSource = "schedule-wakeup"
+	TurnSubmittedSourceBackgroundTask        TurnSubmittedSource = "background-task"
+	TurnSubmittedSourceLaunchDispatch        TurnSubmittedSource = "launch-dispatch"
+	TurnSubmittedSourceBreakGlassApproval    TurnSubmittedSource = "break-glass-approval"
+	TurnSubmittedSourceTestSlotModelApproval TurnSubmittedSource = "test-slot-model-approval"
 )
 
 type Visibility string
@@ -839,7 +840,8 @@ func validTurnSubmittedSource(source TurnSubmittedSource) bool {
 	case TurnSubmittedSourceScheduleWakeup,
 		TurnSubmittedSourceBackgroundTask,
 		TurnSubmittedSourceLaunchDispatch,
-		TurnSubmittedSourceBreakGlassApproval:
+		TurnSubmittedSourceBreakGlassApproval,
+		TurnSubmittedSourceTestSlotModelApproval:
 		return true
 	default:
 		return false

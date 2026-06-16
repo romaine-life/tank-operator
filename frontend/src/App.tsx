@@ -1717,6 +1717,32 @@ interface AdminHiddenSessionsBody {
   sessions?: AdminHiddenSession[];
 }
 
+type AdminBreakGlassFilter = "pending" | "recent" | "all";
+
+interface AdminBreakGlassListItem {
+  pending?: boolean;
+  request: ControlActionRow;
+  decision?: ControlActionRow;
+}
+
+interface AdminBreakGlassListBody {
+  session_scope?: string;
+  status?: AdminBreakGlassFilter;
+  requests?: AdminBreakGlassListItem[];
+}
+
+type BreakGlassApprovalMenuKind = "github" | "azure" | "model";
+
+interface BreakGlassApprovalMenuItem {
+  id: string;
+  kind: BreakGlassApprovalMenuKind;
+  href: string;
+  label: string;
+  target: string;
+  reason?: string;
+  createdAt?: string;
+}
+
 interface TestSlotSessionDefaults {
   mode: DefaultSessionMode;
   model: string;
@@ -1908,6 +1934,8 @@ function sessionRouteUrl(
   pageNumber?: number | null,
   filePath?: string | null,
   fileLine?: number | null,
+  breakGlassRequestId?: string | null,
+  testSlotModelRequestId?: string | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1918,6 +1946,8 @@ function sessionRouteUrl(
     pageNumber,
     filePath,
     fileLine,
+    breakGlassRequestId,
+    testSlotModelRequestId,
   );
 }
 
@@ -2109,6 +2139,57 @@ function clearInitialSessionId(): void {
 function sessionUrl(id: string): string {
   return sessionRouteUrl(id);
 }
+
+function breakGlassRequestUrl(sessionId: string, requestEventId: string): string {
+  return sessionRouteUrl(
+    sessionId,
+    "break-glass",
+    null,
+    null,
+    null,
+    null,
+    null,
+    requestEventId,
+  );
+}
+
+function testSlotModelRequestUrl(sessionId: string, requestEventId: string): string {
+  return sessionRouteUrl(
+    sessionId,
+    "test-slot-model",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    requestEventId,
+  );
+}
+
+function readBreakGlassRequestRoute(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.tab === "break-glass" && route.breakGlassRequestId) {
+    return route.breakGlassRequestId;
+  }
+  const params = new URLSearchParams(window.location.search);
+  return params.get("break_glass_request");
+}
+
+function readTestSlotModelRequestRoute(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.tab === "test-slot-model" && route.testSlotModelRequestId) {
+    return route.testSlotModelRequestId;
+  }
+  return null;
+}
+
+type BreakGlassRequestLookupResponse = {
+  request?: ControlActionRow;
+  decision?: ControlActionRow;
+};
+
+type TestSlotModelRequestLookupResponse = BreakGlassRequestLookupResponse;
 
 // Deep link to a specific message inside a session. Read by
 // readInitialMessageId() on cold start so we can scroll the active
@@ -2403,12 +2484,14 @@ interface ComposerToolButtonsProps {
   glimmungRuns: {
     runs: GlimmungRunLink[];
   };
+  breakGlass: {
+    items: BreakGlassApprovalMenuItem[];
+    approvingId?: string | null;
+    onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
+  };
   pullRequest: {
     latestUrl?: string;
     linkedUrl?: string;
-    breakGlass?: {
-      pending: BreakGlassRequest[];
-    };
   };
   slash: {
     disabled?: boolean;
@@ -2430,19 +2513,14 @@ interface ComposerToolButtonsProps {
 // menu instead of a single hard-coded link. It exposes the latest PR the agent
 // opened, the PR explicitly linked to the session (test/rollout), and an
 // in-app "Approve break glass" action. The break-glass entry lights up (amber
-// dot) whenever a `request_git_break_glass` call is awaiting a grant, which
-// replaces the brittle auth.romaine.life approval URL the agent used to hand
-// out (its console callback into Tank does not exist yet, so the URL was a dead
-// end). Self-contained open/outside-click/escape handling mirrors
-// BugLabelPicker so it composes cleanly inside the composer toolbar.
+// dot) whenever a `request_git_break_glass` call is awaiting a grant and links
+// to the Tank session deep link for that request. Self-contained
+// open/outside-click/escape handling mirrors BugLabelPicker so it composes
+// cleanly inside the composer toolbar.
 function PullRequestMenuButton({
   latestUrl,
   linkedUrl,
-  breakGlass: breakGlassProp,
 }: ComposerToolButtonsProps["pullRequest"]) {
-  const breakGlass = breakGlassProp ?? {
-    pending: [] as BreakGlassRequest[],
-  };
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -2503,36 +2581,26 @@ function PullRequestMenuButton({
   const latest = latestUrl?.trim() ?? "";
   const linked = linkedUrl?.trim() ?? "";
   const showLinkedDistinct = Boolean(linked) && linked !== latest;
-  const pending = breakGlass.pending;
-  const pendingCount = pending.length;
   const hasLinks = Boolean(latest || linked);
-  const hasMenu = hasLinks || pendingCount > 0;
-  const title =
-    pendingCount > 0
-      ? `Break-glass request awaiting approval (${pendingCount})`
-      : hasLinks
-        ? "Pull request"
-        : "No pull request linked yet";
+  const title = hasLinks ? "Pull request" : "No pull request linked yet";
 
   return (
     <span ref={ref} className="run-pr-menu">
       <button
         ref={triggerRef}
         type="button"
-        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}${pendingCount > 0 ? " has-alert" : ""}`}
+        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}`}
         aria-label={title}
         aria-haspopup="menu"
         aria-expanded={open}
         title={title}
-        disabled={!hasMenu}
+        disabled={!hasLinks}
         onClick={() => setOpen((value) => !value)}
       >
         <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
-        {pendingCount > 0 && (
-          <span className="run-pr-alert-dot" aria-hidden="true" />
-        )}
       </button>
-      {open && hasMenu &&
+      {open &&
+        hasLinks &&
         createPortal(
           <div
             ref={popoverRef}
@@ -2545,86 +2613,218 @@ function PullRequestMenuButton({
                 : { visibility: "hidden" }
             }
           >
-          <div className="run-slash-palette-label">Pull request</div>
-          {latest ? (
-            <a
-              role="menuitem"
-              className="run-pr-menu-item"
-              href={latest}
-              target="_blank"
-              rel="noreferrer"
-              onClick={() => setOpen(false)}
-            >
-              <span className="run-pr-menu-name">Latest PR</span>
-              <ExternalLinkIcon className="run-pr-menu-icon" aria-hidden="true" />
-            </a>
-          ) : null}
-          {showLinkedDistinct ? (
-            <a
-              role="menuitem"
-              className="run-pr-menu-item"
-              href={linked}
-              target="_blank"
-              rel="noreferrer"
-              onClick={() => setOpen(false)}
-            >
-              <span className="run-pr-menu-name">Pull request page</span>
-              <ExternalLinkIcon className="run-pr-menu-icon" aria-hidden="true" />
-            </a>
-          ) : null}
-          {!hasLinks && (
-            <div className="run-slash-empty">No pull request linked yet</div>
-          )}
-          <div className="run-pr-menu-sep" aria-hidden="true" />
-          {pendingCount === 0 ? (
-            <div className="run-slash-empty">No break-glass request pending</div>
-          ) : (
-            pending.map((request) => (
-              // "Approve break glass" is a link to the auth.romaine.life
-              // approval page (payload.approval_url) so the operator can
-              // inspect exactly what the agent requested — repo, session,
-              // reason — and grant there. The grant happens on that page, not
-              // in-app; the chip only surfaces the pending request.
+            <div className="run-slash-palette-label">Pull request</div>
+            {latest ? (
               <a
-                key={request.eventId}
                 role="menuitem"
-                className="run-pr-menu-item run-pr-menu-breakglass"
-                href={request.approvalUrl || "#"}
+                className="run-pr-menu-item"
+                href={latest}
                 target="_blank"
                 rel="noreferrer"
-                aria-disabled={request.approvalUrl ? undefined : true}
-                title={
-                  request.reason
-                    ? `${request.repo} — ${request.reason}`
-                    : `Open break-glass approval for ${request.repo}`
-                }
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-pr-menu-name">Latest PR</span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ) : null}
+            {showLinkedDistinct ? (
+              <a
+                role="menuitem"
+                className="run-pr-menu-item"
+                href={linked}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-pr-menu-name">Pull request page</span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ) : null}
+            {!hasLinks && (
+              <div className="run-slash-empty">No pull request linked yet</div>
+            )}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
+function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
+  const Icon = kind === "model" ? FlaskConicalIcon : ShieldAlertIcon;
+  return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
+}
+
+function BreakGlassApprovalMenuButton({
+  items,
+  approvingId,
+  onQuickApprove,
+}: ComposerToolButtonsProps["breakGlass"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+  const pendingCount = items.length;
+  const title =
+    pendingCount > 0
+      ? `Break-glass approvals awaiting review (${pendingCount})`
+      : "No break-glass approvals pending";
+  const settingsHref = appRouteUrl("settings", "admin", "break-glass");
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      )
+        return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="run-pr-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-break-glass-action-btn${pendingCount > 0 ? " has-alert" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={pendingCount === 0}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ShieldAlertIcon className="run-composer-icon" aria-hidden="true" />
+        {pendingCount > 0 && (
+          <span className="run-pr-alert-dot" aria-hidden="true" />
+        )}
+      </button>
+      {open &&
+        pendingCount > 0 &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover"
+            role="menu"
+            aria-label="Break-glass approvals"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-pr-menu-header">
+              <div className="run-slash-palette-label">Break glass</div>
+              <a
+                className="run-pr-menu-settings"
+                href={settingsHref}
                 onClick={(event) => {
-                  if (!request.approvalUrl) {
-                    event.preventDefault();
+                  if (!isPlainLeftClick(event)) {
+                    setOpen(false);
                     return;
                   }
+                  event.preventDefault();
                   setOpen(false);
+                  navigateToSessionRoute(settingsHref);
                 }}
               >
-                <span className="run-pr-menu-name">
-                  <ShieldAlertIcon
-                    className="run-pr-menu-glyph"
-                    size={14}
-                    aria-hidden="true"
-                  />
-                  Approve break glass
-                  <ExternalLinkIcon
-                    className="run-pr-menu-icon"
-                    aria-hidden="true"
-                  />
-                </span>
-                <span className="run-slash-desc">
-                  {request.repo}
-                  {request.reason ? ` — ${request.reason}` : ""}
-                </span>
+                Settings
               </a>
-            ))
-          )}
+            </div>
+            {items.map((item) => (
+              <div
+                key={item.id}
+                role="group"
+                className="run-pr-menu-item run-pr-menu-breakglass"
+                title={
+                  item.reason
+                    ? `${item.target} — ${item.reason}`
+                    : item.target
+                }
+              >
+                <span className="run-pr-menu-main">
+                  <span className="run-pr-menu-name">
+                    <BreakGlassMenuIcon kind={item.kind} />
+                    {item.label}
+                  </span>
+                  <span className="run-slash-desc">
+                    {item.target}
+                    {item.reason ? ` — ${item.reason}` : ""}
+                  </span>
+                </span>
+                <span className="run-pr-menu-actions">
+                  <a
+                    role="menuitem"
+                    className="run-pr-menu-action-link"
+                    href={item.href}
+                    onClick={(event) => {
+                      if (!isPlainLeftClick(event)) {
+                        setOpen(false);
+                        return;
+                      }
+                      event.preventDefault();
+                      setOpen(false);
+                      navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                    }}
+                  >
+                    Details
+                  </a>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="run-pr-menu-action-btn"
+                    disabled={!onQuickApprove || approvingId === item.id}
+                    onClick={() => onQuickApprove?.(item)}
+                  >
+                    <CheckIcon aria-hidden="true" />
+                    <span>{approvingId === item.id ? "Approving" : "Quick approve"}</span>
+                  </button>
+                </span>
+              </div>
+            ))}
           </div>,
           document.body,
         )}
@@ -2772,6 +2972,7 @@ function ComposerToolButtons({
   rollout,
   test,
   glimmungRuns,
+  breakGlass,
   pullRequest,
   slash,
   mcp,
@@ -2869,6 +3070,7 @@ function ComposerToolButtons({
       </DropdownMenu>
       <GlimmungRunMenuButton {...glimmungRuns} />
       <PullRequestMenuButton {...pullRequest} />
+      <BreakGlassApprovalMenuButton {...breakGlass} />
       {bugLabelControl}
       <button
         type="button"
@@ -4501,6 +4703,7 @@ function DemoLanding() {
                         title: "Sign in to start a session",
                       }}
                       glimmungRuns={{ runs: [] }}
+                      breakGlass={{ items: [] }}
                       pullRequest={{}}
                       slash={{
                         disabled: true,
@@ -5041,6 +5244,8 @@ type RunTab =
   | "files"
   | "session-data"
   | "pull-requests"
+  | "break-glass"
+  | "test-slot-model"
   | "settings"
   | "help"
   | "cluster"
@@ -7340,27 +7545,54 @@ function isPlainLeftClick(
   );
 }
 
+function sameOriginAppRouteHref(href: string | undefined): string | null {
+  if (!href) return null;
+  let url: URL;
+  try {
+    url = new URL(href, window.location.href);
+  } catch {
+    return null;
+  }
+  if (url.origin !== window.location.origin) return null;
+  const isAppRoute = Boolean(
+    readSessionRouteFromPathname(url.pathname) ||
+      readAppRouteFromPathname(url.pathname) ||
+      readHomeRouteFromPathname(url.pathname),
+  );
+  return isAppRoute ? url.href : null;
+}
+
 export function RunMarkdownLink(
   props: AnchorHTMLAttributes<HTMLAnchorElement>,
 ) {
   const { openWorkspacePath, workspacePathHref } = useContext(RunContext);
   const workspaceTarget =
     typeof props.href === "string" ? workspacePathFromHref(props.href) : null;
+  const appRouteHref = workspaceTarget
+    ? null
+    : sameOriginAppRouteHref(props.href);
   const href = workspaceTarget
     ? (workspacePathHref(workspaceTarget) ?? props.href)
-    : props.href;
+    : (appRouteHref ?? props.href);
   return (
     <a
       {...props}
       href={href}
-      rel={workspaceTarget ? undefined : "noreferrer"}
-      target={workspaceTarget ? undefined : "_blank"}
+      rel={workspaceTarget || appRouteHref ? undefined : "noreferrer"}
+      target={workspaceTarget || appRouteHref ? undefined : "_blank"}
       onClick={(e) => {
         props.onClick?.(e);
-        if (e.defaultPrevented || !workspaceTarget) return;
+        if (e.defaultPrevented) return;
         if (!isPlainLeftClick(e)) return;
-        e.preventDefault();
-        openWorkspacePath(workspaceTarget);
+        if (workspaceTarget) {
+          e.preventDefault();
+          openWorkspacePath(workspaceTarget);
+          return;
+        }
+        if (appRouteHref) {
+          e.preventDefault();
+          navigateToSessionRoute(appRouteHref);
+        }
       }}
     />
   );
@@ -9760,6 +9992,601 @@ function PRLaneApprovalIndicator({
       )}
     </div>
   );
+}
+
+type BreakGlassRepoScopeKind = "current_repo" | "repos" | "all_repos";
+type BreakGlassBranchScopeKind = "named" | "count" | "unlimited";
+
+function TestSlotModelApprovalPage({
+  sessionId,
+  requestId,
+  rows,
+  busyEventId,
+  onApprove,
+}: {
+  sessionId: string;
+  requestId: string | null;
+  rows: ControlActionRow[];
+  busyEventId: string | null;
+  onApprove: (request: Pick<BreakGlassRequest, "eventId">, note?: string) => void;
+}) {
+  const request = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          nonemptyAdminValue(row.event_id) === requestId &&
+          row.action === "tank.test_slot_model.request",
+      ),
+    [requestId, rows],
+  );
+  const decision = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          row.action === "tank.test_slot_model.grant" &&
+          nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId,
+      ),
+    [requestId, rows],
+  );
+  const payload = useMemo(
+    () => (request ? adminBreakGlassPayload(request) : {}),
+    [request],
+  );
+  const decisionPayload = useMemo(
+    () => (decision ? adminBreakGlassPayload(decision) : {}),
+    [decision],
+  );
+  const [note, setNote] = useState("");
+  useEffect(() => setNote(""), [requestId]);
+
+  const pending = Boolean(request && !decision && request.status === "started");
+  const busy = Boolean(requestId && busyEventId === requestId);
+  const status = !request ? "loading" : decision ? "approved" : pending ? "pending" : "closed";
+  const model = nonemptyAdminValue(payload.model) ?? "unknown";
+  const effort = nonemptyAdminValue(payload.effort) ?? "unknown";
+  const lowModel = nonemptyAdminValue(payload.low_model) ?? "unknown";
+  const lowEffort = nonemptyAdminValue(payload.low_effort) ?? "unknown";
+
+  return (
+    <div className="break-glass-page">
+      <section className="break-glass-page-main">
+        <div className="break-glass-page-head">
+          <div className="break-glass-page-title">
+            <FlaskConicalIcon aria-hidden="true" />
+            <div>
+              <h2>Test-slot model approval</h2>
+              <p>{requestId ?? "Request"}</p>
+            </div>
+          </div>
+          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : "pending"}`}>
+            {status}
+          </span>
+        </div>
+
+        {request ? (
+          <>
+            <dl className="break-glass-facts">
+              <div>
+                <dt>Session</dt>
+                <dd>{sessionId}</dd>
+              </div>
+              <div>
+                <dt>Requester</dt>
+                <dd>{nonemptyAdminValue(request.owner_email) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Mode</dt>
+                <dd>{nonemptyAdminValue(payload.mode) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
+              </div>
+            </dl>
+            <div className="break-glass-scope-grid">
+              <div className="test-slot-model-pair">
+                <span>Requested</span>
+                <strong>{model}</strong>
+                <small>{effort}</small>
+              </div>
+              <div className="test-slot-model-pair">
+                <span>Low-cost baseline</span>
+                <strong>{lowModel}</strong>
+                <small>{lowEffort}</small>
+              </div>
+            </div>
+            <div className="break-glass-reason">
+              {nonemptyAdminValue(payload.reason) ?? "Non-low-cost model or effort requested"}
+            </div>
+            <label className="break-glass-note">
+              <span>Decision note</span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                disabled={!pending || busy}
+                rows={3}
+              />
+            </label>
+            {decision && (
+              <div className="admin-break-glass-decision">
+                <span>
+                  Approved by {nonemptyAdminValue(decisionPayload.approved_by) ?? "unknown"}
+                  {nonemptyAdminValue(decisionPayload.expires_at)
+                    ? ` until ${decisionPayload.expires_at}`
+                    : ""}
+                </span>
+                <span>{formatToolFullTime(decision.created_at)}</span>
+              </div>
+            )}
+            <div className="break-glass-actions">
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={!requestId || !pending || busy}
+                onClick={() => requestId && onApprove({ eventId: requestId }, note)}
+              >
+                <CheckIcon aria-hidden="true" />
+                <span>Approve</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="break-glass-empty">Request not found</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function StandaloneTestSlotModelApprovalSurface({
+  sessionId,
+  requestId,
+}: {
+  sessionId: string;
+  requestId: string;
+}) {
+  const [rows, setRows] = useState<ControlActionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyEventId, setBusyEventId] = useState<string | null>(null);
+
+  const fetchRequest = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/test-slot-model-requests/${encodeURIComponent(requestId)}`,
+      );
+      if (!res.ok) throw new Error(`request lookup failed: ${res.status}`);
+      const body = (await res.json()) as TestSlotModelRequestLookupResponse;
+      setRows(
+        [body.request, body.decision].filter(
+          (row): row is ControlActionRow => Boolean(row?.event_id),
+        ),
+      );
+      setError(null);
+    } catch (err) {
+      setRows([]);
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [requestId, sessionId]);
+
+  useEffect(() => {
+    void fetchRequest();
+  }, [fetchRequest]);
+
+  const approveRequest = useCallback(
+    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+      setBusyEventId(request.eventId);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note }),
+          },
+        );
+        if (!res.ok) throw new Error(`approval failed: ${res.status}`);
+        await fetchRequest();
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusyEventId(null);
+      }
+    },
+    [fetchRequest, sessionId],
+  );
+
+  if (loading) {
+    return (
+      <div className="break-glass-page">
+        <section className="break-glass-page-main">
+          <div className="run-shell-loading" role="status">
+            <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+            <span>Loading request...</span>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {error && (
+        <div className="run-error" role="alert">
+          {error}
+        </div>
+      )}
+      <TestSlotModelApprovalPage
+        sessionId={sessionId}
+        requestId={requestId}
+        rows={rows}
+        busyEventId={busyEventId}
+        onApprove={(request, note) => {
+          void approveRequest(request, note);
+        }}
+      />
+    </>
+  );
+}
+
+function BreakGlassRequestPage({
+  sessionId,
+  requestId,
+  rows,
+  busyEventId,
+  onDecision,
+}: {
+  sessionId: string;
+  requestId: string | null;
+  rows: ControlActionRow[];
+  busyEventId: string | null;
+  onDecision: (
+    request: Pick<BreakGlassRequest, "eventId">,
+    decision: "approve" | "deny",
+    body?: Record<string, unknown>,
+  ) => void;
+}) {
+  const request = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          nonemptyAdminValue(row.event_id) === requestId &&
+          (row.action === "github.break_glass.request" ||
+            row.action === "azure.break_glass.request"),
+      ),
+    [requestId, rows],
+  );
+  const decision = useMemo(
+    () =>
+      rows.find((row) => {
+        if (
+          row.action !== "github.break_glass.grant" &&
+          row.action !== "github.break_glass.deny" &&
+          row.action !== "azure.break_glass.grant" &&
+          row.action !== "azure.break_glass.deny"
+        )
+          return false;
+        return nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId;
+      }),
+    [requestId, rows],
+  );
+  const requestPayload = useMemo(
+    () => (request ? adminBreakGlassPayload(request) : {}),
+    [request],
+  );
+  const repoScope = useMemo(
+    () => adminBreakGlassPayloadObject(requestPayload.repo_scope),
+    [requestPayload],
+  );
+  const branchScope = useMemo(
+    () => adminBreakGlassPayloadObject(requestPayload.branch_scope),
+    [requestPayload],
+  );
+  const defaultRepo = request ? adminBreakGlassTarget(request) : "";
+  const [repoKind, setRepoKind] = useState<BreakGlassRepoScopeKind>("current_repo");
+  const [repoText, setRepoText] = useState(defaultRepo);
+  const [branchKind, setBranchKind] = useState<BreakGlassBranchScopeKind>("unlimited");
+  const [branchText, setBranchText] = useState("");
+  const [branchCount, setBranchCount] = useState("10");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    const nextRepoKind =
+      nonemptyAdminValue(repoScope.kind) === "all_repos"
+        ? "all_repos"
+        : nonemptyAdminValue(repoScope.kind) === "repos"
+          ? "repos"
+          : "current_repo";
+    const repoValues =
+      nextRepoKind === "repos"
+        ? adminBreakGlassStringList(repoScope.repos)
+        : [nonemptyAdminValue(repoScope.repo) ?? defaultRepo].filter(Boolean);
+    const nextBranchKind =
+      nonemptyAdminValue(branchScope.kind) === "named"
+        ? "named"
+        : nonemptyAdminValue(branchScope.kind) === "count"
+          ? "count"
+          : "unlimited";
+    setRepoKind(nextRepoKind);
+    setRepoText(repoValues.join("\n"));
+    setBranchKind(nextBranchKind);
+    setBranchText(adminBreakGlassStringList(branchScope.branches).join("\n"));
+    setBranchCount(
+      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
+        ? String(branchScope.count)
+        : "10",
+    );
+    setNote("");
+  }, [branchScope, defaultRepo, repoScope, requestId]);
+
+  const pending = Boolean(request && !decision && request.status === "started");
+  const busy = Boolean(requestId && busyEventId === requestId);
+  const kind = request?.action === "azure.break_glass.request" ? "azure" : "git";
+  const approvalTitle = request
+    ? `${adminBreakGlassKind(request)} approval`
+    : "Break glass approval";
+  const accessType = request ? adminBreakGlassAccessType(request) : "";
+  const target = request ? adminBreakGlassTarget(request) : requestId ?? "Request";
+  const status = !request ? "loading" : decision ? adminBreakGlassStatusLabel(adminBreakGlassStatus({ request, decision, pending: false })) : pending ? "pending" : "closed";
+  const repoValues = splitBreakGlassScopeValues(repoText);
+  const branchValues = splitBreakGlassScopeValues(branchText);
+  const approveBody = (): Record<string, unknown> => {
+    const body: Record<string, unknown> = { note };
+    if (kind === "git") {
+      body.repo_scope =
+        repoKind === "all_repos"
+          ? { kind: "all_repos" }
+          : repoKind === "repos"
+            ? { kind: "repos", repos: repoValues }
+            : { kind: "current_repo", repo: repoValues[0] ?? defaultRepo };
+      body.branch_scope =
+        branchKind === "unlimited"
+          ? { kind: "unlimited" }
+          : branchKind === "count"
+            ? { kind: "count", count: Math.max(1, Number(branchCount) || 1) }
+            : { kind: "named", branches: branchValues };
+    }
+    return body;
+  };
+  const approveDisabled =
+    !requestId ||
+    !pending ||
+    busy ||
+    (kind === "git" &&
+      ((repoKind !== "all_repos" && repoValues.length === 0) ||
+        (branchKind === "named" && branchValues.length === 0)));
+
+  return (
+    <div className="break-glass-page">
+      <section className="break-glass-page-main">
+        <div className="break-glass-page-head">
+          <div className="break-glass-page-title">
+            <ShieldAlertIcon aria-hidden="true" />
+            <div>
+              <h2>{approvalTitle}</h2>
+              <p className="break-glass-page-subtitle">
+                {accessType && <span>{accessType}</span>}
+                <code>{target}</code>
+              </p>
+            </div>
+          </div>
+          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : status === "denied" ? "denied" : "pending"}`}>
+            {status}
+          </span>
+        </div>
+
+        {request ? (
+          <>
+            <dl className="break-glass-facts">
+              <div>
+                <dt>Type</dt>
+                <dd>{adminBreakGlassKind(request)}</dd>
+              </div>
+              <div>
+                <dt>Target</dt>
+                <dd>{adminBreakGlassTarget(request)}</dd>
+              </div>
+              <div>
+                <dt>Session</dt>
+                <dd>{sessionId}</dd>
+              </div>
+              <div>
+                <dt>Requester</dt>
+                <dd>{nonemptyAdminValue(request.owner_email) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
+              </div>
+            </dl>
+            <div className="break-glass-reason">
+              {adminBreakGlassReason(request)}
+            </div>
+            {kind === "git" && (
+              <div className="break-glass-scope-grid">
+                <label>
+                  <span>Repository scope</span>
+                  <select
+                    value={repoKind}
+                    onChange={(event) => setRepoKind(event.target.value as BreakGlassRepoScopeKind)}
+                    disabled={!pending || busy}
+                  >
+                    <option value="current_repo">Current repository</option>
+                    <option value="repos">Selected repositories</option>
+                    <option value="all_repos">All repositories</option>
+                  </select>
+                </label>
+                {repoKind !== "all_repos" && (
+                  <label>
+                    <span>Repositories</span>
+                    <textarea
+                      value={repoText}
+                      onChange={(event) => setRepoText(event.target.value)}
+                      disabled={!pending || busy}
+                      rows={repoKind === "repos" ? 4 : 2}
+                    />
+                  </label>
+                )}
+                <label>
+                  <span>Branch scope</span>
+                  <select
+                    value={branchKind}
+                    onChange={(event) => setBranchKind(event.target.value as BreakGlassBranchScopeKind)}
+                    disabled={!pending || busy}
+                  >
+                    <option value="unlimited">All branches</option>
+                    <option value="named">Named branches</option>
+                    <option value="count">Branch count</option>
+                  </select>
+                </label>
+                {branchKind === "named" && (
+                  <label>
+                    <span>Branches</span>
+                    <textarea
+                      value={branchText}
+                      onChange={(event) => setBranchText(event.target.value)}
+                      disabled={!pending || busy}
+                      rows={4}
+                    />
+                  </label>
+                )}
+                {branchKind === "count" && (
+                  <label>
+                    <span>Count</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={branchCount}
+                      onChange={(event) => setBranchCount(event.target.value)}
+                      disabled={!pending || busy}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+            <label className="break-glass-note">
+              <span>Decision note</span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                disabled={!pending || busy}
+                rows={3}
+              />
+            </label>
+            {decision && (
+              <div className="admin-break-glass-decision">
+                <span>{adminBreakGlassDecisionSummary(decision)}</span>
+                <span>{formatToolFullTime(decision.created_at)}</span>
+              </div>
+            )}
+            <div className="break-glass-actions">
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={approveDisabled}
+                onClick={() => requestId && onDecision({ eventId: requestId }, "approve", approveBody())}
+              >
+                <CheckIcon aria-hidden="true" />
+                <span>Approve</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={!requestId || !pending || busy}
+                onClick={() => requestId && onDecision({ eventId: requestId }, "deny", { note })}
+              >
+                <XIcon aria-hidden="true" />
+                <span>Deny</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="break-glass-empty">Request not found</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function splitBreakGlassScopeValues(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/[\n,]+/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part || seen.has(part)) return false;
+      seen.add(part);
+      return true;
+    });
+}
+
+function pendingTestSlotModelApprovalMenuItems(
+  sessionId: string,
+  rows: ControlActionRow[],
+): BreakGlassApprovalMenuItem[] {
+  const resolvedRequests = new Set<string>();
+  for (const row of rows) {
+    if (row.action !== "tank.test_slot_model.grant") continue;
+    const requestEventId = nonemptyAdminValue(
+      adminBreakGlassPayload(row).request_event_id,
+    );
+    if (requestEventId) resolvedRequests.add(requestEventId);
+  }
+  return rows
+    .flatMap((row) => {
+      const eventId = nonemptyAdminValue(row.event_id);
+      if (
+        row.action !== "tank.test_slot_model.request" ||
+        row.status !== "started" ||
+        !eventId ||
+        resolvedRequests.has(eventId)
+      ) {
+        return [];
+      }
+      const payload = adminBreakGlassPayload(row);
+      const model = nonemptyAdminValue(payload.model) ?? "unknown model";
+      const effort = nonemptyAdminValue(payload.effort) ?? "unknown effort";
+      return [{
+        id: eventId,
+        kind: "model" as const,
+        href: testSlotModelRequestUrl(sessionId, eventId),
+        label: "Agent selection",
+        target: `${model} / ${effort}`,
+        reason: nonemptyAdminValue(payload.reason),
+        createdAt: nonemptyAdminValue(row.created_at),
+      }];
+    });
+}
+
+function breakGlassApprovalMenuItemsForSession(
+  sessionId: string,
+  breakGlassRequests: BreakGlassRequest[],
+  testSlotModelRows: ControlActionRow[],
+): BreakGlassApprovalMenuItem[] {
+  const breakGlassItems = breakGlassRequests.map((request) => ({
+    id: request.eventId,
+    kind: request.kind === "azure" ? ("azure" as const) : ("github" as const),
+    href: breakGlassRequestUrl(sessionId, request.eventId),
+    label:
+      request.kind === "azure"
+        ? "Azure break glass"
+        : "GitHub break glass",
+    target: request.target,
+    reason: request.reason,
+    createdAt: request.createdAt,
+  }));
+  return [
+    ...breakGlassItems,
+    ...pendingTestSlotModelApprovalMenuItems(sessionId, testSlotModelRows),
+  ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
 function BackgroundScreen({
@@ -14142,6 +14969,340 @@ export function RunMessages({
   );
 }
 
+function AdminBreakGlassPanel() {
+  const [filter, setFilter] = useState<AdminBreakGlassFilter>("pending");
+  const [items, setItems] = useState<AdminBreakGlassListItem[]>([]);
+  const [sessionScope, setSessionScope] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState("");
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ status: filter, limit: "100" });
+      const res = await authedFetch(`/api/admin/break-glass-requests?${params}`);
+      if (!res.ok) {
+        throw new Error(`break-glass requests returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminBreakGlassListBody;
+      setItems(Array.isArray(body.requests) ? body.requests : []);
+      setSessionScope(body.session_scope ?? "");
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const decide = useCallback(
+    async (item: AdminBreakGlassListItem, decision: "approve" | "deny") => {
+      const sessionID = nonemptyAdminValue(item.request.session_id);
+      const eventID = nonemptyAdminValue(item.request.event_id);
+      if (!sessionID || !eventID || !item.pending) return;
+      const note =
+        decision === "deny"
+          ? window.prompt("Deny note", "")?.trim()
+          : "";
+      if (decision === "deny" && note === undefined) return;
+      setBusyId(`${decision}:${eventID}`);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(sessionID)}/break-glass-requests/${encodeURIComponent(eventID)}/${decision}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note: note ?? "" }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`break-glass ${decision} returned ${res.status}`);
+        }
+        await refresh();
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusyId("");
+      }
+    },
+    [refresh],
+  );
+
+  return (
+    <div className="run-settings-diagnostics admin-break-glass">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <ShieldAlertIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Break glass</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={() => void refresh()}
+          disabled={loading}
+          aria-label="Refresh break-glass requests"
+          title="Refresh"
+        >
+          <RotateCcwIcon
+            aria-hidden="true"
+            className={loading ? "cluster-health-spin" : undefined}
+          />
+        </button>
+      </div>
+      <div className="admin-break-glass-toolbar">
+        {(["pending", "recent", "all"] as AdminBreakGlassFilter[]).map((nextFilter) => (
+          <button
+            key={nextFilter}
+            type="button"
+            className={`admin-break-glass-filter${filter === nextFilter ? " is-active" : ""}`}
+            onClick={() => setFilter(nextFilter)}
+            disabled={loading && filter === nextFilter}
+          >
+            {adminBreakGlassFilterLabel(nextFilter)}
+          </button>
+        ))}
+        {sessionScope && (
+          <span className="admin-break-glass-scope">{sessionScope}</span>
+        )}
+      </div>
+      {error && (
+        <div className="run-settings-observability-note" role="status">
+          {error}
+        </div>
+      )}
+      <div className="admin-break-glass-list">
+        {items.length > 0 ? (
+          items.map((item) => (
+            <AdminBreakGlassRow
+              key={adminBreakGlassItemKey(item)}
+              item={item}
+              busyId={busyId}
+              onDecision={decide}
+            />
+          ))
+        ) : (
+          <div className="admin-break-glass-empty">
+            {loading ? "Loading requests..." : "No break-glass requests"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminBreakGlassRow({
+  item,
+  busyId,
+  onDecision,
+}: {
+  item: AdminBreakGlassListItem;
+  busyId: string;
+  onDecision: (item: AdminBreakGlassListItem, decision: "approve" | "deny") => void;
+}) {
+  const request = item.request;
+  const decision = item.decision;
+  const sessionID = nonemptyAdminValue(request.session_id);
+  const eventID = nonemptyAdminValue(request.event_id);
+  const pending = item.pending === true;
+  const status = adminBreakGlassStatus(item);
+  const target = adminBreakGlassTarget(request);
+  const scope = adminBreakGlassScope(request);
+  const detail = [
+    nonemptyAdminValue(request.owner_email),
+    sessionID ? `session ${sessionID}` : "",
+    nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service),
+    formatToolFullTime(request.created_at),
+  ].filter(Boolean);
+  const sessionHref = sessionID ? `/sessions/${encodeURIComponent(sessionID)}` : "";
+  const focusedHref =
+    sessionID && eventID
+      ? `/sessions/${encodeURIComponent(sessionID)}/break-glass/${encodeURIComponent(eventID)}`
+      : "";
+
+  return (
+    <article className={`admin-break-glass-row is-${status}`}>
+      <div className="admin-break-glass-row-head">
+        <div className="admin-break-glass-title">
+          <span className="admin-break-glass-kind">
+            {adminBreakGlassKind(request)}
+          </span>
+          <span className="admin-break-glass-target" title={target}>
+            {target}
+          </span>
+        </div>
+        <span className={`admin-break-glass-status is-${status}`}>
+          {adminBreakGlassStatusLabel(status)}
+        </span>
+      </div>
+      <div className="admin-break-glass-reason">
+        {adminBreakGlassReason(request)}
+      </div>
+      <div className="admin-break-glass-meta">
+        {detail.map((part) => (
+          <span key={part}>{part}</span>
+        ))}
+      </div>
+      {scope && <div className="admin-break-glass-scope-line">{scope}</div>}
+      {decision && (
+        <div className="admin-break-glass-decision">
+          <span>{adminBreakGlassDecisionSummary(decision)}</span>
+          <span>{formatToolFullTime(decision.created_at)}</span>
+        </div>
+      )}
+      <div className="admin-break-glass-actions">
+        {sessionHref && (
+          <a className="run-settings-test-btn" href={sessionHref}>
+            Open session
+          </a>
+        )}
+        {focusedHref && (
+          <a className="run-settings-test-btn" href={focusedHref}>
+            Focus request
+          </a>
+        )}
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `approve:${eventID}`}
+          onClick={() => onDecision(item, "approve")}
+        >
+          <CheckIcon aria-hidden="true" />
+          <span>Approve</span>
+        </button>
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `deny:${eventID}`}
+          onClick={() => onDecision(item, "deny")}
+        >
+          <XIcon aria-hidden="true" />
+          <span>Deny</span>
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function adminBreakGlassFilterLabel(filter: AdminBreakGlassFilter): string {
+  switch (filter) {
+    case "pending":
+      return "Pending";
+    case "recent":
+      return "Recent";
+    case "all":
+      return "All";
+  }
+}
+
+function adminBreakGlassItemKey(item: AdminBreakGlassListItem): string {
+  return [
+    nonemptyAdminValue(item.request.session_id),
+    nonemptyAdminValue(item.request.event_id),
+    nonemptyAdminValue(item.decision?.event_id),
+  ].filter(Boolean).join(":");
+}
+
+function adminBreakGlassStatus(
+  item: AdminBreakGlassListItem,
+): "pending" | "approved" | "denied" {
+  if (item.pending) return "pending";
+  const action = nonemptyAdminValue(item.decision?.action);
+  return action?.endsWith(".deny") ? "denied" : "approved";
+}
+
+function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): string {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "approved":
+      return "approved";
+    case "denied":
+      return "denied";
+  }
+}
+
+function adminBreakGlassKind(row: ControlActionRow): string {
+  return row.action === "azure.break_glass.request" ? "Azure break glass" : "GitHub break glass";
+}
+
+function adminBreakGlassAccessType(row: ControlActionRow): string {
+  return row.action === "azure.break_glass.request"
+    ? "Azure personal MCP access"
+    : "GitHub write access";
+}
+
+function adminBreakGlassTarget(row: ControlActionRow): string {
+  if (row.action === "azure.break_glass.request") return "azure-personal";
+  const repo = [nonemptyAdminValue(row.repo_owner), nonemptyAdminValue(row.repo_name)]
+    .filter(Boolean)
+    .join("/");
+  return repo || nonemptyAdminValue(row.target_ref) || "GitHub";
+}
+
+function adminBreakGlassReason(row: ControlActionRow): string {
+  return nonemptyAdminValue(adminBreakGlassPayload(row).reason) || "No reason provided";
+}
+
+function adminBreakGlassScope(row: ControlActionRow): string {
+  const payload = adminBreakGlassPayload(row);
+  const repoScope = adminBreakGlassPayloadObject(payload.repo_scope);
+  const branchScope = adminBreakGlassPayloadObject(payload.branch_scope);
+  const repos = adminBreakGlassStringList(repoScope.repos);
+  const branches = adminBreakGlassStringList(branchScope.branches);
+  const parts = [
+    adminScopeLabel("repos", nonemptyAdminValue(repoScope.kind), repos),
+    adminScopeLabel("branches", nonemptyAdminValue(branchScope.kind), branches),
+  ].filter(Boolean);
+  return parts.join(" / ");
+}
+
+function adminScopeLabel(
+  label: string,
+  kind: string | undefined,
+  values: string[],
+): string {
+  if (kind === "all_repos") return "all repos";
+  if (kind === "unlimited") return "all branches";
+  if (kind === "count") return `${label}: count`;
+  if (values.length > 0) return `${label}: ${values.join(", ")}`;
+  return "";
+}
+
+function adminBreakGlassDecisionSummary(row: ControlActionRow): string {
+  const payload = adminBreakGlassPayload(row);
+  const actor = nonemptyAdminValue(payload.approved_by) ?? nonemptyAdminValue(payload.denied_by);
+  const label = row.action?.endsWith(".deny") ? "Denied" : "Approved";
+  return actor ? `${label} by ${actor}` : label;
+}
+
+function adminBreakGlassPayload(row: ControlActionRow): Record<string, unknown> {
+  return adminBreakGlassPayloadObject(row.payload);
+}
+
+function adminBreakGlassPayloadObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function adminBreakGlassStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.flatMap((item) => {
+        const text = nonemptyAdminValue(item);
+        return text ? [text] : [];
+      })
+    : [];
+}
+
+function nonemptyAdminValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function AdminObservabilityPanel({
   state,
   onRefresh,
@@ -14860,6 +16021,7 @@ function RunSettingsPanel({
     showAdminTab &&
     (adminView === "avatars" ||
       adminView === "report" ||
+      adminView === "break-glass" ||
       adminView === "hidden-transcripts" ||
       adminView === "observability")
       ? "run-settings-screen run-settings-screen-wide"
@@ -14965,6 +16127,23 @@ function RunSettingsPanel({
               state={adminControls.observability}
               onRefresh={adminControls.onRefreshObservability}
             />
+          </>
+        ) : adminView === "break-glass" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Break glass</h2>
+              </div>
+            </section>
+            <AdminBreakGlassPanel />
           </>
         ) : adminView === "hidden-transcripts" ? (
           <>
@@ -15073,6 +16252,20 @@ function RunSettingsPanel({
                   <span>Session repo report</span>
                 </span>
                 <span className="run-settings-scope-value">Draft</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "break-glass")}
+              >
+                <span className="run-settings-link-label">
+                  <ShieldAlertIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Break glass</span>
+                </span>
+                <span className="run-settings-scope-value">Review</span>
               </button>
               <button
                 type="button"
@@ -15639,9 +16832,26 @@ function ChatPane({
   const [controlActionRows, setControlActionRows] = useState<
     ControlActionRow[]
   >([]);
+  const [focusedBreakGlassRows, setFocusedBreakGlassRows] = useState<
+    ControlActionRow[]
+  >([]);
+  const [focusedTestSlotModelRows, setFocusedTestSlotModelRows] = useState<
+    ControlActionRow[]
+  >([]);
   const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
     string | null
   >(null);
+  const [breakGlassApprovalBusyId, setBreakGlassApprovalBusyId] = useState<
+    string | null
+  >(null);
+  const [testSlotModelApprovalBusyId, setTestSlotModelApprovalBusyId] = useState<
+    string | null
+  >(null);
+  const [activeBreakGlassRequestId, setActiveBreakGlassRequestId] = useState<
+    string | null
+  >(() => readBreakGlassRequestRoute());
+  const [activeTestSlotModelRequestId, setActiveTestSlotModelRequestId] =
+    useState<string | null>(() => readTestSlotModelRequestRoute());
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -15728,11 +16938,15 @@ function ChatPane({
     if (publicView) {
       setControlActionEntries([]);
       setControlActionRows([]);
+      setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       return;
     }
     if (readOnly) {
       setControlActionEntries([]);
       setControlActionRows([]);
+      setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       return;
     }
     const res = await fetchPaneResource(
@@ -15753,13 +16967,82 @@ function ChatPane({
     scopedSessionPathForPane,
     session.id,
   ]);
+  const fetchFocusedBreakGlassRequest = useCallback(async () => {
+    if (publicView || readOnly || !activeBreakGlassRequestId) {
+      setFocusedBreakGlassRows([]);
+      return;
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(activeBreakGlassRequestId)}`,
+      ),
+    );
+    if (!res.ok) {
+      setFocusedBreakGlassRows([]);
+      return;
+    }
+    const body = (await res.json()) as BreakGlassRequestLookupResponse;
+    const rows = [body.request, body.decision].filter(
+      (row): row is ControlActionRow => Boolean(row?.event_id),
+    );
+    setFocusedBreakGlassRows(rows);
+  }, [
+    activeBreakGlassRequestId,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
+  const fetchFocusedTestSlotModelRequest = useCallback(async () => {
+    if (publicView || readOnly || !activeTestSlotModelRequestId) {
+      setFocusedTestSlotModelRows([]);
+      return;
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(activeTestSlotModelRequestId)}`,
+      ),
+    );
+    if (!res.ok) {
+      setFocusedTestSlotModelRows([]);
+      return;
+    }
+    const body = (await res.json()) as TestSlotModelRequestLookupResponse;
+    const rows = [body.request, body.decision].filter(
+      (row): row is ControlActionRow => Boolean(row?.event_id),
+    );
+    setFocusedTestSlotModelRows(rows);
+  }, [
+    activeTestSlotModelRequestId,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
+  const breakGlassActionRows = useMemo(
+    () => [...controlActionRows, ...focusedBreakGlassRows],
+    [controlActionRows, focusedBreakGlassRows],
+  );
+  const testSlotModelActionRows = useMemo(
+    () => [...controlActionRows, ...focusedTestSlotModelRows],
+    [controlActionRows, focusedTestSlotModelRows],
+  );
   const prLaneRequests = useMemo(
     () => pendingPRLaneRequests(controlActionRows),
     [controlActionRows],
   );
   const breakGlassRequests = useMemo(
-    () => pendingBreakGlassRequests(controlActionRows),
-    [controlActionRows],
+    () => pendingBreakGlassRequests(breakGlassActionRows),
+    [breakGlassActionRows],
+  );
+  const breakGlassApprovalMenuItems = useMemo(
+    () =>
+      breakGlassApprovalMenuItemsForSession(
+        session.id,
+        breakGlassRequests,
+        testSlotModelActionRows,
+      ),
+    [breakGlassRequests, session.id, testSlotModelActionRows],
   );
   const postPRLaneDecision = useCallback(
     async (
@@ -15812,6 +17095,80 @@ function ChatPane({
       scopedSessionPathForPane,
       session.id,
     ],
+  );
+  const postBreakGlassDecision = useCallback(
+    async (
+      request: Pick<BreakGlassRequest, "eventId">,
+      decision: "approve" | "deny",
+      body: Record<string, unknown> = {},
+    ) => {
+      if (publicView || readOnly) return;
+      setBreakGlassApprovalBusyId(request.eventId);
+      try {
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(request.eventId)}/${decision}`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        await fetchControlActionEntries();
+        await fetchFocusedBreakGlassRequest();
+      } finally {
+        setBreakGlassApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      fetchFocusedBreakGlassRequest,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const postTestSlotModelApproval = useCallback(
+    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+      if (publicView || readOnly) return;
+      setTestSlotModelApprovalBusyId(request.eventId);
+      try {
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note }),
+          },
+        );
+        await fetchControlActionEntries();
+        await fetchFocusedTestSlotModelRequest();
+      } finally {
+        setTestSlotModelApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      fetchFocusedTestSlotModelRequest,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const quickApproveBreakGlassMenuItem = useCallback(
+    (item: BreakGlassApprovalMenuItem) => {
+      if (item.kind === "model") {
+        void postTestSlotModelApproval({ eventId: item.id }, "");
+        return;
+      }
+      void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
+    },
+    [postBreakGlassDecision, postTestSlotModelApproval],
   );
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
@@ -17212,6 +18569,24 @@ function ChatPane({
     }
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
+    const routedBreakGlassRequestId = readBreakGlassRequestRoute();
+    if (routedBreakGlassRequestId) {
+      setActiveBreakGlassRequestId(routedBreakGlassRequestId);
+      setActiveTab("break-glass");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    const routedTestSlotModelRequestId = readTestSlotModelRequestRoute();
+    if (routedTestSlotModelRequestId) {
+      setActiveTestSlotModelRequestId(routedTestSlotModelRequestId);
+      setActiveTab("test-slot-model");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
@@ -17248,6 +18623,22 @@ function ChatPane({
     }
     if (route.tab === "pull-requests") {
       setActiveTab("pull-requests");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "break-glass") {
+      setActiveBreakGlassRequestId(route.breakGlassRequestId);
+      setActiveTab("break-glass");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "test-slot-model") {
+      setActiveTestSlotModelRequestId(route.testSlotModelRequestId);
+      setActiveTab("test-slot-model");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -19677,6 +21068,8 @@ function ChatPane({
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
       setControlActionRows([]);
+      setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
     }
@@ -19687,6 +21080,12 @@ function ChatPane({
           setControlActionEntries([]);
           setControlActionRows([]);
         }
+      });
+      void fetchFocusedBreakGlassRequest().catch(() => {
+        if (!cancelled) setFocusedBreakGlassRows([]);
+      });
+      void fetchFocusedTestSlotModelRequest().catch(() => {
+        if (!cancelled) setFocusedTestSlotModelRows([]);
       });
       void fetchBackgroundTaskEntries().catch(() => {
         if (!cancelled) setBackgroundTaskLedgerEntries([]);
@@ -19701,6 +21100,8 @@ function ChatPane({
   }, [
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
+    fetchFocusedBreakGlassRequest,
+    fetchFocusedTestSlotModelRequest,
     publicView,
     readOnly,
     visible,
@@ -20065,6 +21466,35 @@ function ChatPane({
       replaceSessionRoute(session.id, "session-data");
     } else if (activeTab === "pull-requests") {
       replaceSessionRoute(session.id, "pull-requests");
+    } else if (activeTab === "break-glass") {
+      const next = activeBreakGlassRequestId
+        ? sessionRouteUrl(
+            session.id,
+            "break-glass",
+            null,
+            null,
+            null,
+            null,
+            null,
+            activeBreakGlassRequestId,
+          )
+        : sessionRouteUrl(session.id);
+      if (next !== window.location.href) window.history.replaceState({}, "", next);
+    } else if (activeTab === "test-slot-model") {
+      const next = activeTestSlotModelRequestId
+        ? sessionRouteUrl(
+            session.id,
+            "test-slot-model",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            activeTestSlotModelRequestId,
+          )
+        : sessionRouteUrl(session.id);
+      if (next !== window.location.href) window.history.replaceState({}, "", next);
     } else if (activeTab === "files") {
       replaceSessionRoute(
         session.id,
@@ -20084,6 +21514,8 @@ function ChatPane({
   }, [
     activeTab,
     adminView,
+    activeBreakGlassRequestId,
+    activeTestSlotModelRequestId,
     effectivePendingScrollMessageId,
     publicView,
     routeTurnUnavailable,
@@ -21531,6 +22963,26 @@ function ChatPane({
                 pullRequests={agentGitActivity.pullRequests}
                 commits={agentGitActivity.commits}
               />
+            ) : activeTab === "break-glass" ? (
+              <BreakGlassRequestPage
+                sessionId={session.id}
+                requestId={activeBreakGlassRequestId}
+                rows={breakGlassActionRows}
+                busyEventId={breakGlassApprovalBusyId}
+                onDecision={(request, decision, body) => {
+                  void postBreakGlassDecision(request, decision, body);
+                }}
+              />
+            ) : activeTab === "test-slot-model" ? (
+              <TestSlotModelApprovalPage
+                sessionId={session.id}
+                requestId={activeTestSlotModelRequestId}
+                rows={testSlotModelActionRows}
+                busyEventId={testSlotModelApprovalBusyId}
+                onApprove={(request, note) => {
+                  void postTestSlotModelApproval(request, note);
+                }}
+              />
             ) : activeTab === "settings" ? (
               <RunSettingsPanel
                 session={session}
@@ -22084,12 +23536,15 @@ function ChatPane({
                 glimmungRuns={{
                   runs: glimmungRunLinks,
                 }}
+                breakGlass={{
+                  items: breakGlassApprovalMenuItems,
+                  approvingId: breakGlassApprovalBusyId ?? testSlotModelApprovalBusyId,
+                  onQuickApprove:
+                    publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
+                }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
                   linkedUrl: linkedPullRequestURL,
-                  breakGlass: {
-                    pending: breakGlassRequests,
-                  },
                 }}
                 slash={{
                   title: "Show slash commands",
@@ -25514,6 +26969,17 @@ function AuthenticatedApp() {
     active == null
       ? null
       : (sessions.find((session) => session.id === active) ?? null);
+  const standaloneSessionRoute =
+    active == null ? readSessionRouteFromPath() : null;
+  const standaloneTestSlotModelRoute =
+    standaloneSessionRoute?.tab === "test-slot-model" &&
+    standaloneSessionRoute.sessionId &&
+    standaloneSessionRoute.testSlotModelRequestId
+      ? {
+          sessionId: standaloneSessionRoute.sessionId,
+          requestId: standaloneSessionRoute.testSlotModelRequestId,
+        }
+      : null;
   const activeConnectionLabel =
     activeWorkspaceSession == null
       ? null
@@ -25937,7 +27403,21 @@ function AuthenticatedApp() {
 
       <main className="workspace">
         {workspaceTitleChrome}
-        {active == null ? (
+        {standaloneTestSlotModelRoute ? (
+          <WorkspaceShell
+            className="run-panel-home"
+            bodyAriaLabel="Test-slot model approval"
+            title={<WorkspaceTitleSpacer />}
+            body={
+              <StandaloneTestSlotModelApprovalSurface
+                sessionId={standaloneTestSlotModelRoute.sessionId}
+                requestId={standaloneTestSlotModelRoute.requestId}
+              />
+            }
+            composer={null}
+            composerVisible={false}
+          />
+        ) : active == null ? (
           // Pre-session "home" state. Same workspace scaffold as an active
           // session — same body/composer column and same composer footer at
           // the same y-coordinate — with the header strip restored so the
@@ -26668,6 +28148,7 @@ function AuthenticatedApp() {
                       title: "Available in an active chat session",
                     }}
                     glimmungRuns={{ runs: [] }}
+                    breakGlass={{ items: [] }}
                     pullRequest={{}}
                     slash={{
                       disabled: true,

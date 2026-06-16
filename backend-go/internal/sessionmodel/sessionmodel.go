@@ -338,6 +338,7 @@ type ManifestOptions struct {
 	ArgoCDTrackingApp         string
 	SandboxAgentPort          int
 	TankOperatorInternalURL   string
+	TankUIHost                string
 	// Optional: in-cluster Service IPs for host alias injection.
 	OAuthGatewayIP            string
 	APIProxyIP                string
@@ -907,6 +908,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	mcpProxyEnv := []any{
 		map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
 		map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+		map[string]any{"name": "TANK_UI_HOST", "value": opts.TankUIHost},
 		map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 		map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 		map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
@@ -1364,6 +1366,9 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.TankOperatorInternalURL == "" {
 		opts.TankOperatorInternalURL = "http://tank-operator.tank-operator.svc.cluster.local"
+	}
+	if opts.TankUIHost == "" {
+		opts.TankUIHost = "https://tank.romaine.life"
 	}
 	if opts.OAuthGatewayCAConfigMap == "" {
 		opts.OAuthGatewayCAConfigMap = DefaultOAuthGatewayCA

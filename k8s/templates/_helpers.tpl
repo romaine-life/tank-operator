@@ -68,6 +68,10 @@ codex-credentials
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s.%s" (include "tank-operator.slotName" .) .Values.testEnv.recordBase }}{{- else -}}{{ .Values.ingress.hostname }}{{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.publicUIHost" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "https://%s" (include "tank-operator.ingressHostname" .) }}{{- else -}}{{ .Values.internalApi.tankUiHost }}{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.ingressTlsSecret" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-tls" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.ingress.tlsSecret }}{{- end -}}
 {{- end -}}

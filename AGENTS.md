@@ -95,8 +95,9 @@ hook intentionally fails direct pushes so GitHub write credentials stay inside
 Tank-controlled MCP/server paths. CI and mergeability failures must be treated
 as unfinished work unless explicitly called out in the final handoff. If the
 governed path is insufficient, call the Tank MCP `request_git_break_glass` tool.
-Normal mode only returns an auth.romaine.life approval URL. After a short-lived
-grant exists, calling the request tool again activates the separate
+Normal mode returns a Tank approval URL for an admin to approve in the Tank UI;
+auth.romaine.life only authenticates that admin. After a short-lived grant
+exists, calling the request tool again activates the separate
 `tank-git-break-glass` MCP server for that session/repo; an existing agent may
 need to reload its MCP registry before it sees `mint_full_git_token` or
 `push_current_head`.
