@@ -1899,7 +1899,18 @@ func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo,
 			sawMerge = true
 			resp.PRNumber = row.PRNumber
 			if row.Status == "succeeded" {
-				resp.MergeVerified = true
+				// A branch that is behind its base has no conflicts, so the
+				// watcher records it mergeable — but testing it validates code
+				// that changes the moment it's brought current, and may
+				// merge-conflict later. Treat behind-as-not-current: the gate
+				// passes only a head that is both mergeable AND current with
+				// main, so a slot never runs (and a merge never lands) stale-
+				// relative-to-base work.
+				if controlActionPayloadString(row.Payload, "mergeable_state") == "behind" {
+					resp.Reasons = append(resp.Reasons, "branch is behind its base (mergeable_state=behind) — rebase/update onto main before testing or merging")
+				} else {
+					resp.MergeVerified = true
+				}
 			} else {
 				reason := "latest PR mergeability observation for this commit is not clean"
 				if row.Error != "" {

@@ -1483,8 +1483,8 @@ async def _verify_github_hot_swap_head(
             else:
                 mergeable = detail_body.get("mergeable")
                 mergeable_state = str(detail_body.get("mergeable_state") or "")
-                if mergeable is not True or mergeable_state == "dirty":
-                    reasons.append(f"PR #{pr_number} is not confirmed mergeable: {mergeable_state or mergeable}")
+                if mergeable is not True or mergeable_state in {"dirty", "behind"}:
+                    reasons.append(f"PR #{pr_number} is not confirmed mergeable/current: {mergeable_state or mergeable}")
 
     check_status, check_body = await _github_api_json(
         http,
@@ -2096,7 +2096,15 @@ async def _watch_published_commit(
                             pr_url = str(detail_body.get("html_url") or pr_url)
                     merge_status = "started"
                     merge_error = "mergeability is still unknown"
-                    if mergeable is True and mergeable_state not in {"dirty", "blocked"}:
+                    if mergeable_state == "behind":
+                        # A behind branch has no conflicts (mergeable=True) but is
+                        # stale relative to its base: testing it validates code that
+                        # changes the moment it's brought current, and may conflict
+                        # on the eventual merge. Record it as not mergeable so the
+                        # governed gate refuses it until it's rebased onto main.
+                        merge_status = "failed"
+                        merge_error = "branch is behind its base; rebase/update onto main before testing or merging"
+                    elif mergeable is True and mergeable_state not in {"dirty", "blocked"}:
                         merge_status = "succeeded"
                         merge_error = ""
                     elif mergeable is False or mergeable_state == "dirty":
