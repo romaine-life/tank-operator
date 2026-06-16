@@ -487,6 +487,21 @@ func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
 }
 
+// azureGrantActivatedTotal counts the orchestrator's POSTs to mcp-azure-personal
+// /internal/grant-activated on azure break-glass grant activation (the live
+// tools/list_changed surfacing trigger). result: ok | error.
+var azureGrantActivatedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_azure_grant_activated_total",
+		Help: "Outcomes of the orchestrator POST to mcp-azure-personal /internal/grant-activated on azure break-glass grant activation.",
+	},
+	[]string{"result"},
+)
+
+func recordAzureGrantActivated(result string) {
+	azureGrantActivatedTotal.WithLabelValues(result).Inc()
+}
+
 // sessionImageOverrideAppliedTotal counts NEW session pods stamped with a
 // test-slot session-image override instead of the chart-pinned image, by scope
 // and runner family. This is the user-trust signal for the "did new sessions

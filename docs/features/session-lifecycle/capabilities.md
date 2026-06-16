@@ -480,6 +480,17 @@ Contract impact:
   (`.mcp.json` activation) are separate concerns and the design needs both: a
   server-side gate alone is invisible to the harness, with no event to reconnect
   on after a grant.
+- **Live surfacing (event-driven).** A mid-session SDK reconnect does *not*
+  re-register an MCP server's tools, so on grant the orchestrator also POSTs
+  `mcp-azure-personal`'s `/internal/grant-activated {session_id}`
+  (`internal/azurepersonal`, fired from `enqueueAzureBreakGlassApprovalTurn` —
+  best-effort + async, counter `tank_azure_grant_activated_total`). The stateful
+  azure-personal server emits `notifications/tools/list_changed` on that session's
+  live stream and the SDK auto-refreshes `tools/list`, so the tools surface with
+  no reconnect or re-request. That endpoint is off the kube-rbac SA gate
+  (kube-rbac-proxy `--ignore-paths`) and authorized by the orchestrator's
+  auth.romaine.life service principal (`svc:tank-operator:orchestrator`), keeping
+  it on the same identity plane as the rest of the ecosystem.
 
 Open hardening:
 - Hermes (the only other subject on `mcp-azure-personal`'s RoleBinding) was

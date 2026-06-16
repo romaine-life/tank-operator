@@ -103,6 +103,13 @@ type appServer struct {
 	// then 503s loudly rather than mis-routing the request.
 	mcpGitHub AppServerMCPGitHub
 
+	// azurePersonal fires mcp-azure-personal's /internal/grant-activated when an
+	// azure break-glass grant goes active, so its tools surface live
+	// (tools/list_changed) rather than relying on the SDK reconnect (which does
+	// not re-register tools). nil when the auth.romaine.life-audience projected
+	// SA token isn't mounted — the trigger then no-ops.
+	azurePersonal AzurePersonalNotifier
+
 	// glimmung returns checked-out test-slot leases from the Session Data page.
 	// nil when the auth.romaine.life-audience projected SA token is unavailable.
 	glimmung AppServerGlimmung
