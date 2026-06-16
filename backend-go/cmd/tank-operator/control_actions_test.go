@@ -124,6 +124,30 @@ func (s *fakeControlActionStore) BreakGlassDecisionForRequest(_ context.Context,
 	return pgstore.ControlActionEvent{}, pgx.ErrNoRows
 }
 
+func (s *fakeControlActionStore) TestSlotModelDecisionForRequest(_ context.Context, sessionScope, sessionID, requestEventID string) (pgstore.ControlActionEvent, error) {
+	s.decisionScope = sessionScope
+	s.decisionSession = sessionID
+	s.decisionRequest = requestEventID
+	if s.decisionErr != nil {
+		return pgstore.ControlActionEvent{}, s.decisionErr
+	}
+	if s.decisionRow.EventID != "" {
+		return s.decisionRow, nil
+	}
+	for _, row := range s.listRows {
+		if row.SessionScope != sessionScope || row.SessionID != sessionID {
+			continue
+		}
+		if row.Action != testSlotModelGrantAction {
+			continue
+		}
+		if controlActionPayloadString(row.Payload, "request_event_id") == requestEventID {
+			return row, nil
+		}
+	}
+	return pgstore.ControlActionEvent{}, pgx.ErrNoRows
+}
+
 func controlActionTestServer(t *testing.T, store controlActionStore) *appServer {
 	t.Helper()
 	app := testTurnsApp(
@@ -1579,6 +1603,65 @@ func TestHandleInternalGrantTestSlotModelApprovalPersistsGrant(t *testing.T) {
 		payload["low_model"] != "gpt-5.3-codex-spark" || payload["low_effort"] != "low" ||
 		payload["request_event_id"] != "request-1" {
 		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestHandleApproveTestSlotModelApprovalRequestStartsSystemApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{
+		getRow: pgstore.ControlActionEvent{
+			EventID:      "model-request-1",
+			InvocationID: "invocation-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-3",
+			SessionID:    "47",
+			Action:       testSlotModelRequestAction,
+			Status:       "started",
+			TargetKind:   "tank_session_model",
+			TargetRef:    "tank://session-scope/tank-operator-slot-3/sessions/47/test-slot-model/codex_gui",
+			Payload: []byte(`{
+				"mode": "codex_gui",
+				"provider": "codex",
+				"model": "gpt-5.5",
+				"effort": "xhigh",
+				"low_model": "gpt-5.3-codex-spark",
+				"low_effort": "low",
+				"reason": "frontier validation"
+			}`),
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/test-slot-model-requests/model-request-1/approve", strings.NewReader(`{"note":"ok"}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "model-request-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveTestSlotModelApprovalRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls=%d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != testSlotModelGrantAction || got.OwnerEmail != "owner@example.test" {
+		t.Fatalf("grant event = %#v", got)
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.Type != "submit_turn" || command.Source != "test-slot-model-approval" {
+		t.Fatalf("command type/source = %s/%s", command.Type, command.Source)
+	}
+	if command.Email != "owner@example.test" || command.SessionID != "47" {
+		t.Fatalf("command target = %s/%s", command.Email, command.SessionID)
+	}
+	if !strings.Contains(command.Prompt, "Your test-slot model request was approved") ||
+		!strings.Contains(command.Prompt, "Retry the test-slot session creation") {
+		t.Fatalf("prompt = %q", command.Prompt)
 	}
 }
 

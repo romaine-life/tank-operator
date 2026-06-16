@@ -326,4 +326,28 @@ describe("controlActionRowsToEntries", () => {
     expect(entries[0]?.taskSummary).toBe("Azure break-glass request");
     expect(entries[1]?.taskSummary).toBe("Azure break-glass grant");
   });
+
+  test("labels test-slot model approval events", () => {
+    const entries = controlActionRowsToEntries([
+      {
+        event_id: "model-request-1",
+        invocation_id: "model-inv-1",
+        action: "tank.test_slot_model.request",
+        status: "started",
+        target_ref: "tank://session-scope/tank-operator-slot-3/sessions/47/test-slot-model/codex_gui",
+        target_kind: "tank_session_model",
+      },
+      {
+        event_id: "model-grant-1",
+        invocation_id: "model-inv-2",
+        action: "tank.test_slot_model.grant",
+        status: "succeeded",
+        target_ref: "tank://session-scope/tank-operator-slot-3/sessions/47/test-slot-model/codex_gui",
+        target_kind: "tank_session_model",
+      },
+    ]);
+
+    expect(entries[0]?.taskSummary).toBe("Test-slot model request");
+    expect(entries[1]?.taskSummary).toBe("Test-slot model grant");
+  });
 });

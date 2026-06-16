@@ -158,6 +158,10 @@ function actionTitle(action: string | undefined): string {
       return "Azure break-glass denied";
     case "azure.break_glass.use":
       return "Azure break-glass use";
+    case "tank.test_slot_model.request":
+      return "Test-slot model request";
+    case "tank.test_slot_model.grant":
+      return "Test-slot model grant";
     case "github.pr_lane.request":
       return "PR lane request";
     case "github.pr_lane.approve":

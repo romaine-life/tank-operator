@@ -22,6 +22,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -37,6 +38,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -51,6 +53,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -66,6 +69,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -84,6 +88,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -101,6 +106,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -116,6 +122,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -130,6 +137,22 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: "request 1",
+    testSlotModelRequestId: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  expect(readSessionRouteFromPathname("/sessions/s-1/test-slot-model/request%201")).toEqual({
+    sessionId: "s-1",
+    tab: "test-slot-model",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    filePath: null,
+    fileLine: null,
+    breakGlassRequestId: null,
+    testSlotModelRequestId: "request 1",
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -146,6 +169,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -160,6 +184,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -174,6 +199,7 @@ test("session routes parse only session-scoped pages", () => {
     filePath: "src/App.tsx",
     fileLine: 42,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -195,6 +221,7 @@ test("session routes parse the sandboxed static-page subroute", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -237,6 +264,7 @@ test("session route urls broadcast only session-owned pages", () => {
   expect(buildSessionRouteUrl(current, "s 1", "session-data")).toBe("https://tank.example.test/sessions/s%201/session-data");
   expect(buildSessionRouteUrl(current, "s 1", "pull-requests")).toBe("https://tank.example.test/sessions/s%201/pull-requests");
   expect(buildSessionRouteUrl(current, "s 1", "break-glass", null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/break-glass/request%201");
+  expect(buildSessionRouteUrl(current, "s 1", "test-slot-model", null, null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/test-slot-model/request%201");
   expect(buildSessionRouteUrl(current, "s 1", "files")).toBe("https://tank.example.test/sessions/s%201/files");
   expect(buildSessionRouteUrl(current, "s 1", "background")).toBe("https://tank.example.test/sessions/s%201/background");
 });
@@ -253,6 +281,7 @@ test("turn routes carry an optional page ordinal", () => {
     filePath: null,
     fileLine: null,
     breakGlassRequestId: null,
+    testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });

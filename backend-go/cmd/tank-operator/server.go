@@ -255,6 +255,7 @@ type controlActionStore interface {
 	ListBreakGlassRequests(context.Context, string, int) ([]pgstore.ControlActionEvent, error)
 	GetBySessionEvent(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 	BreakGlassDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
+	TestSlotModelDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 }
 
 // sessionImageOverrideStore is the durable per-scope session-image override
@@ -452,6 +453,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests/{request_event_id}", s.handleGetBreakGlassRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/approve", s.handleApproveBreakGlassRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/deny", s.handleDenyBreakGlassRequest)
+	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}", s.handleGetTestSlotModelApprovalRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}/approve", s.handleApproveTestSlotModelApprovalRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/approve", s.handleApprovePRLaneRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)

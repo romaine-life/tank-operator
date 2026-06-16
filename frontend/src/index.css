@@ -6773,6 +6773,7 @@ button:disabled {
 .break-glass-facts div,
 .break-glass-reason,
 .break-glass-scope-grid label,
+.test-slot-model-pair,
 .break-glass-note {
   display: grid;
   gap: 0.35rem;
@@ -6785,12 +6786,30 @@ button:disabled {
 
 .break-glass-facts dt,
 .break-glass-scope-grid label > span,
+.test-slot-model-pair > span,
 .break-glass-note > span {
   color: var(--text-muted);
   font-size: 0.68rem;
   font-weight: 700;
   line-height: 1;
   text-transform: uppercase;
+}
+
+.test-slot-model-pair strong,
+.test-slot-model-pair small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.test-slot-model-pair strong {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
+.test-slot-model-pair small {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .break-glass-facts dd {

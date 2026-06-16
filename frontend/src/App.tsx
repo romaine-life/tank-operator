@@ -1923,6 +1923,7 @@ function sessionRouteUrl(
   filePath?: string | null,
   fileLine?: number | null,
   breakGlassRequestId?: string | null,
+  testSlotModelRequestId?: string | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1934,6 +1935,7 @@ function sessionRouteUrl(
     filePath,
     fileLine,
     breakGlassRequestId,
+    testSlotModelRequestId,
   );
 }
 
@@ -2148,10 +2150,20 @@ function readBreakGlassRequestRoute(): string | null {
   return params.get("break_glass_request");
 }
 
+function readTestSlotModelRequestRoute(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.tab === "test-slot-model" && route.testSlotModelRequestId) {
+    return route.testSlotModelRequestId;
+  }
+  return null;
+}
+
 type BreakGlassRequestLookupResponse = {
   request?: ControlActionRow;
   decision?: ControlActionRow;
 };
+
+type TestSlotModelRequestLookupResponse = BreakGlassRequestLookupResponse;
 
 // Deep link to a specific message inside a session. Read by
 // readInitialMessageId() on cold start so we can scroll the active
@@ -5089,6 +5101,7 @@ type RunTab =
   | "session-data"
   | "pull-requests"
   | "break-glass"
+  | "test-slot-model"
   | "settings"
   | "help"
   | "cluster"
@@ -9812,6 +9825,147 @@ function PRLaneApprovalIndicator({
 
 type BreakGlassRepoScopeKind = "current_repo" | "repos" | "all_repos";
 type BreakGlassBranchScopeKind = "named" | "count" | "unlimited";
+
+function TestSlotModelApprovalPage({
+  sessionId,
+  requestId,
+  rows,
+  busyEventId,
+  onApprove,
+}: {
+  sessionId: string;
+  requestId: string | null;
+  rows: ControlActionRow[];
+  busyEventId: string | null;
+  onApprove: (request: Pick<BreakGlassRequest, "eventId">, note?: string) => void;
+}) {
+  const request = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          nonemptyAdminValue(row.event_id) === requestId &&
+          row.action === "tank.test_slot_model.request",
+      ),
+    [requestId, rows],
+  );
+  const decision = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          row.action === "tank.test_slot_model.grant" &&
+          nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId,
+      ),
+    [requestId, rows],
+  );
+  const payload = useMemo(
+    () => (request ? adminBreakGlassPayload(request) : {}),
+    [request],
+  );
+  const decisionPayload = useMemo(
+    () => (decision ? adminBreakGlassPayload(decision) : {}),
+    [decision],
+  );
+  const [note, setNote] = useState("");
+  useEffect(() => setNote(""), [requestId]);
+
+  const pending = Boolean(request && !decision && request.status === "started");
+  const busy = Boolean(requestId && busyEventId === requestId);
+  const status = !request ? "loading" : decision ? "approved" : pending ? "pending" : "closed";
+  const model = nonemptyAdminValue(payload.model) ?? "unknown";
+  const effort = nonemptyAdminValue(payload.effort) ?? "unknown";
+  const lowModel = nonemptyAdminValue(payload.low_model) ?? "unknown";
+  const lowEffort = nonemptyAdminValue(payload.low_effort) ?? "unknown";
+
+  return (
+    <div className="break-glass-page">
+      <section className="break-glass-page-main">
+        <div className="break-glass-page-head">
+          <div className="break-glass-page-title">
+            <FlaskConicalIcon aria-hidden="true" />
+            <div>
+              <h2>Test-slot model approval</h2>
+              <p>{requestId ?? "Request"}</p>
+            </div>
+          </div>
+          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : "pending"}`}>
+            {status}
+          </span>
+        </div>
+
+        {request ? (
+          <>
+            <dl className="break-glass-facts">
+              <div>
+                <dt>Session</dt>
+                <dd>{sessionId}</dd>
+              </div>
+              <div>
+                <dt>Requester</dt>
+                <dd>{nonemptyAdminValue(request.owner_email) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Mode</dt>
+                <dd>{nonemptyAdminValue(payload.mode) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
+              </div>
+            </dl>
+            <div className="break-glass-scope-grid">
+              <div className="test-slot-model-pair">
+                <span>Requested</span>
+                <strong>{model}</strong>
+                <small>{effort}</small>
+              </div>
+              <div className="test-slot-model-pair">
+                <span>Low-cost baseline</span>
+                <strong>{lowModel}</strong>
+                <small>{lowEffort}</small>
+              </div>
+            </div>
+            <div className="break-glass-reason">
+              {nonemptyAdminValue(payload.reason) ?? "Non-low-cost model or effort requested"}
+            </div>
+            <label className="break-glass-note">
+              <span>Decision note</span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                disabled={!pending || busy}
+                rows={3}
+              />
+            </label>
+            {decision && (
+              <div className="admin-break-glass-decision">
+                <span>
+                  Approved by {nonemptyAdminValue(decisionPayload.approved_by) ?? "unknown"}
+                  {nonemptyAdminValue(decisionPayload.expires_at)
+                    ? ` until ${decisionPayload.expires_at}`
+                    : ""}
+                </span>
+                <span>{formatToolFullTime(decision.created_at)}</span>
+              </div>
+            )}
+            <div className="break-glass-actions">
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={!requestId || !pending || busy}
+                onClick={() => requestId && onApprove({ eventId: requestId }, note)}
+              >
+                <CheckIcon aria-hidden="true" />
+                <span>Approve</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="break-glass-empty">Request not found</div>
+        )}
+      </section>
+    </div>
+  );
+}
 
 function BreakGlassRequestPage({
   sessionId,
@@ -16333,15 +16487,23 @@ function ChatPane({
   const [focusedBreakGlassRows, setFocusedBreakGlassRows] = useState<
     ControlActionRow[]
   >([]);
+  const [focusedTestSlotModelRows, setFocusedTestSlotModelRows] = useState<
+    ControlActionRow[]
+  >([]);
   const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
     string | null
   >(null);
   const [breakGlassApprovalBusyId, setBreakGlassApprovalBusyId] = useState<
     string | null
   >(null);
+  const [testSlotModelApprovalBusyId, setTestSlotModelApprovalBusyId] = useState<
+    string | null
+  >(null);
   const [activeBreakGlassRequestId, setActiveBreakGlassRequestId] = useState<
     string | null
   >(() => readBreakGlassRequestRoute());
+  const [activeTestSlotModelRequestId, setActiveTestSlotModelRequestId] =
+    useState<string | null>(() => readTestSlotModelRequestRoute());
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -16429,12 +16591,14 @@ function ChatPane({
       setControlActionEntries([]);
       setControlActionRows([]);
       setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       return;
     }
     if (readOnly) {
       setControlActionEntries([]);
       setControlActionRows([]);
       setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       return;
     }
     const res = await fetchPaneResource(
@@ -16481,9 +16645,39 @@ function ChatPane({
     scopedSessionPathForPane,
     session.id,
   ]);
+  const fetchFocusedTestSlotModelRequest = useCallback(async () => {
+    if (publicView || readOnly || !activeTestSlotModelRequestId) {
+      setFocusedTestSlotModelRows([]);
+      return;
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(activeTestSlotModelRequestId)}`,
+      ),
+    );
+    if (!res.ok) {
+      setFocusedTestSlotModelRows([]);
+      return;
+    }
+    const body = (await res.json()) as TestSlotModelRequestLookupResponse;
+    const rows = [body.request, body.decision].filter(
+      (row): row is ControlActionRow => Boolean(row?.event_id),
+    );
+    setFocusedTestSlotModelRows(rows);
+  }, [
+    activeTestSlotModelRequestId,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const breakGlassActionRows = useMemo(
     () => [...controlActionRows, ...focusedBreakGlassRows],
     [controlActionRows, focusedBreakGlassRows],
+  );
+  const testSlotModelActionRows = useMemo(
+    () => [...controlActionRows, ...focusedTestSlotModelRows],
+    [controlActionRows, focusedTestSlotModelRows],
   );
   const prLaneRequests = useMemo(
     () => pendingPRLaneRequests(controlActionRows),
@@ -16573,6 +16767,36 @@ function ChatPane({
     [
       fetchControlActionEntries,
       fetchFocusedBreakGlassRequest,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const postTestSlotModelApproval = useCallback(
+    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+      if (publicView || readOnly) return;
+      setTestSlotModelApprovalBusyId(request.eventId);
+      try {
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note }),
+          },
+        );
+        await fetchControlActionEntries();
+        await fetchFocusedTestSlotModelRequest();
+      } finally {
+        setTestSlotModelApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      fetchFocusedTestSlotModelRequest,
       publicView,
       readOnly,
       scopedSessionPathForPane,
@@ -17987,6 +18211,15 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    const routedTestSlotModelRequestId = readTestSlotModelRequestRoute();
+    if (routedTestSlotModelRequestId) {
+      setActiveTestSlotModelRequestId(routedTestSlotModelRequestId);
+      setActiveTab("test-slot-model");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
@@ -18031,6 +18264,14 @@ function ChatPane({
     if (route.tab === "break-glass") {
       setActiveBreakGlassRequestId(route.breakGlassRequestId);
       setActiveTab("break-glass");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "test-slot-model") {
+      setActiveTestSlotModelRequestId(route.testSlotModelRequestId);
+      setActiveTab("test-slot-model");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -20461,6 +20702,7 @@ function ChatPane({
       setControlActionEntries([]);
       setControlActionRows([]);
       setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
     }
@@ -20474,6 +20716,9 @@ function ChatPane({
       });
       void fetchFocusedBreakGlassRequest().catch(() => {
         if (!cancelled) setFocusedBreakGlassRows([]);
+      });
+      void fetchFocusedTestSlotModelRequest().catch(() => {
+        if (!cancelled) setFocusedTestSlotModelRows([]);
       });
       void fetchBackgroundTaskEntries().catch(() => {
         if (!cancelled) setBackgroundTaskLedgerEntries([]);
@@ -20489,6 +20734,7 @@ function ChatPane({
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
     fetchFocusedBreakGlassRequest,
+    fetchFocusedTestSlotModelRequest,
     publicView,
     readOnly,
     visible,
@@ -20867,6 +21113,21 @@ function ChatPane({
           )
         : sessionRouteUrl(session.id);
       if (next !== window.location.href) window.history.replaceState({}, "", next);
+    } else if (activeTab === "test-slot-model") {
+      const next = activeTestSlotModelRequestId
+        ? sessionRouteUrl(
+            session.id,
+            "test-slot-model",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            activeTestSlotModelRequestId,
+          )
+        : sessionRouteUrl(session.id);
+      if (next !== window.location.href) window.history.replaceState({}, "", next);
     } else if (activeTab === "files") {
       replaceSessionRoute(
         session.id,
@@ -20887,6 +21148,7 @@ function ChatPane({
     activeTab,
     adminView,
     activeBreakGlassRequestId,
+    activeTestSlotModelRequestId,
     effectivePendingScrollMessageId,
     publicView,
     routeTurnUnavailable,
@@ -22342,6 +22604,16 @@ function ChatPane({
                 busyEventId={breakGlassApprovalBusyId}
                 onDecision={(request, decision, body) => {
                   void postBreakGlassDecision(request, decision, body);
+                }}
+              />
+            ) : activeTab === "test-slot-model" ? (
+              <TestSlotModelApprovalPage
+                sessionId={session.id}
+                requestId={activeTestSlotModelRequestId}
+                rows={testSlotModelActionRows}
+                busyEventId={testSlotModelApprovalBusyId}
+                onApprove={(request, note) => {
+                  void postTestSlotModelApproval(request, note);
                 }}
               />
             ) : activeTab === "settings" ? (

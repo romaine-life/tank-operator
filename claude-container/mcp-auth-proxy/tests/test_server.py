@@ -830,9 +830,8 @@ def test_hot_swap_tool_schema_gets_repo_path_for_tank_gate() -> None:
 def test_break_glass_approval_url_carries_request_context() -> None:
     url = _break_glass_approval_url("95", "request-123")
 
-    assert url == "https://tank.romaine.life/sessions/95?break_glass_request=request-123"
+    assert url == "https://tank.romaine.life/sessions/95/break-glass/request-123"
     query = parse_qs(urlparse(url).query)
-    assert query["break_glass_request"] == ["request-123"]
     assert "repo_scope" not in query
     assert "branch_scope" not in query
     assert "reason" not in query
@@ -846,7 +845,7 @@ def test_break_glass_approval_url_carries_slot_scope(monkeypatch) -> None:
 
     assert (
         url
-        == "https://tank-operator-slot-2.tank.dev.romaine.life/sessions/slot%2Fsession?break_glass_request=request-123"
+        == "https://tank-operator-slot-2.tank.dev.romaine.life/sessions/slot%2Fsession/break-glass/request-123"
     )
 
 
@@ -963,7 +962,7 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
 
     payload = json.loads(response.text)
     structured = payload["result"]["structuredContent"]
-    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95?break_glass_request=")
+    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95/break-glass/")
     assert payload["result"]["structuredContent"]["privileged_tools_visible"] is False
     recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
@@ -976,7 +975,9 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     assert recorded["payload"]["request_event_id"] == recorded["event_id"]
     assert recorded["payload"]["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
     assert recorded["payload"]["branch_scope"] == {"kind": "unlimited"}
-    approval_query = parse_qs(urlparse(structured["approval_url"]).query)
+    parsed_approval = urlparse(structured["approval_url"])
+    approval_query = parse_qs(parsed_approval.query)
+    assert parsed_approval.path.startswith("/sessions/95/break-glass/")
     assert "repo_scope" not in approval_query
     assert "branch_scope" not in approval_query
     assert "reason" not in approval_query
@@ -986,7 +987,7 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
 def test_azure_break_glass_approval_url_carries_intent_without_repo() -> None:
     url = _azure_break_glass_approval_url("95", "request-abc")
 
-    assert url == "https://tank.romaine.life/sessions/95?break_glass_request=request-abc"
+    assert url == "https://tank.romaine.life/sessions/95/break-glass/request-abc"
     assert "intent=azure-break-glass" not in url
     assert "repo=" not in url
     assert "reason=" not in url
@@ -1080,7 +1081,7 @@ def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatc
     assert structured["resource"] == "azure-personal"
     assert structured["status"] == "approval_required"
     assert structured["privileged_tools_visible"] is False
-    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95?break_glass_request=")
+    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95/break-glass/")
     assert "token" not in structured
     recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
@@ -1212,8 +1213,9 @@ def test_tank_break_glass_tool_records_all_repo_branch_scope(monkeypatch) -> Non
     assert recorded["target_ref"] == "tank://session/95/git-break-glass/all-repos"
     assert recorded["payload"]["repo_scope"] == {"kind": "all_repos"}
     assert recorded["payload"]["branch_scope"] == {"kind": "named", "branches": ["branch-a", "branch-b"]}
-    query = parse_qs(urlparse(recorded["payload"]["approval_url"]).query)
-    assert query["break_glass_request"] == [recorded["event_id"]]
+    parsed_approval = urlparse(recorded["payload"]["approval_url"])
+    query = parse_qs(parsed_approval.query)
+    assert parsed_approval.path == f"/sessions/95/break-glass/{recorded['event_id']}"
     assert "repo_scope" not in query
     assert "branch_scope" not in query
 

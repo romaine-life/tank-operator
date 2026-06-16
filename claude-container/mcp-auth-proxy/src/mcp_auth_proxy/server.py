@@ -1528,7 +1528,7 @@ def _tank_ui_host() -> str:
 
 
 def _break_glass_approval_url(session_id: str, request_event_id: str) -> str:
-    return f"{_tank_ui_host()}/sessions/{quote(session_id, safe='')}?{urlencode({'break_glass_request': request_event_id})}"
+    return f"{_tank_ui_host()}/sessions/{quote(session_id, safe='')}/break-glass/{quote(request_event_id, safe='')}"
 
 
 def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> str:

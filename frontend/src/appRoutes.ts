@@ -14,6 +14,7 @@ export type SessionRouteTab =
   | "session-data"
   | "pull-requests"
   | "break-glass"
+  | "test-slot-model"
   | "files"
   | "background";
 export type HomeRouteTab = "chat";
@@ -52,6 +53,9 @@ export type SessionRoute = SettingsRoute & {
   // Control-action event id selected in the break-glass approval view.
   // Non-null only when tab === "break-glass".
   breakGlassRequestId: string | null;
+  // Control-action event id selected in the test-slot model approval view.
+  // Non-null only when tab === "test-slot-model".
+  testSlotModelRequestId: string | null;
 };
 
 export type HomeRoute = SettingsRoute & {
@@ -160,6 +164,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -175,6 +180,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -202,6 +208,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -222,6 +229,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -237,6 +245,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -255,6 +264,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -270,6 +280,23 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: parts[3],
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "test-slot-model" && parts.length === 4 && parts[3].trim()) {
+    return {
+      sessionId: parts[1],
+      tab: "test-slot-model",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: parts[3],
       ...defaultSettingsRoute,
     };
   }
@@ -288,6 +315,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: fileTarget?.path ?? null,
       fileLine: fileTarget?.line ?? null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -303,6 +331,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       filePath: null,
       fileLine: null,
       breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -344,6 +373,7 @@ export function buildSessionRouteUrl(
   filePath?: string | null,
   fileLine?: number | null,
   breakGlassRequestId?: string | null,
+  testSlotModelRequestId?: string | null,
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
@@ -365,6 +395,8 @@ export function buildSessionRouteUrl(
     suffix = "/pull-requests";
   } else if (tab === "break-glass" && breakGlassRequestId) {
     suffix = `/break-glass/${encodeURIComponent(breakGlassRequestId)}`;
+  } else if (tab === "test-slot-model" && testSlotModelRequestId) {
+    suffix = `/test-slot-model/${encodeURIComponent(testSlotModelRequestId)}`;
   } else if (tab === "files") {
     const routedFilePath = filePath
       ? filePath.split("/").map(encodeURIComponent).join("/")
