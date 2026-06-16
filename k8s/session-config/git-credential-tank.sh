@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tank git credential helper for non-restricted sessions.
+# Tank git credential helper (mode-aware).
 #
 # On every git network operation, mints a short-lived (~1h) GitHub App
 # installation token via the in-pod mcp-github MCP server, scoped to exactly
@@ -8,10 +8,15 @@
 # agent already uses to mint tokens through the MCP tool surface, so this
 # helper grants no capability the session does not already have.
 #
-# This is installed ONLY in non-restricted sessions (TANK_RESTRICTED_GIT
-# false/unset) by install-agent-git-template.sh. Restricted sessions keep the
-# governed publish path (publish_current_head / break-glass) and never get
-# this helper.
+# Installed in BOTH modes by install-agent-git-template.sh; the scope is
+# mode-aware:
+#   - non-restricted (TANK_RESTRICTED_GIT false/unset): mints the App's full
+#     permission set so clone/fetch/pull/push all work with no manual token.
+#   - restricted (TANK_RESTRICTED_GIT truthy): mints a READ-ONLY token
+#     (contents:read) so clone/fetch/pull work for reads while writes stay on
+#     the governed publish_current_head / break-glass path. The pre-push hook
+#     still blocks pushes and a read-only token cannot push anyway, so this
+#     grants nothing the session can't already do via the GitHub read MCP tools.
 #
 # git invokes it as: git-credential-tank <get|store|erase>
 # POSIX sh (no bashisms) so it runs under dash as well as bash.
@@ -50,11 +55,21 @@ esac
 auth_tok="$(cat "$AUTH_TOKEN_PATH" 2>/dev/null || true)"
 [ -n "$auth_tok" ] || exit 0
 
-# Full-access token (the App's full permission set) for the trusted,
-# non-restricted path; write+workflows are included belt-and-suspenders so
-# `git push` and workflow-file pushes always work regardless of how the
-# server composes the flags.
-req="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mint_clone_token","arguments":{"repos":["%s"],"full":true,"write":true,"workflows":true}}}' "$repo")"
+# Scope is mode-aware. Restricted sessions mint a read-only token so reads work
+# without a push-capable credential in the shell; non-restricted sessions mint
+# the App's full permission set (write+workflows belt-and-suspenders) so
+# `git push` and workflow-file pushes always work regardless of how the server
+# composes the flags.
+restricted=false
+case "$(printf '%s' "${TANK_RESTRICTED_GIT:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) restricted=true ;;
+esac
+if [ "$restricted" = "true" ]; then
+  args="$(printf '{"repos":["%s"],"write":false,"workflows":false,"full":false}' "$repo")"
+else
+  args="$(printf '{"repos":["%s"],"full":true,"write":true,"workflows":true}' "$repo")"
+fi
+req="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mint_clone_token","arguments":%s}}' "$args")"
 
 resp="$(curl -sS -m 25 \
   -H "Authorization: Bearer ${auth_tok}" \
