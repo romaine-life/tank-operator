@@ -6561,7 +6561,7 @@ button:disabled {
   font: 0.75rem/1.45 var(--font-mono, monospace);
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .break-glass-grid,
   .break-glass-grid-three,
   .break-glass-options {
