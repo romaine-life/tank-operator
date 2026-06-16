@@ -38,6 +38,8 @@ auth POST that this proxy already injects.
 from __future__ import annotations
 
 import asyncio
+import base64
+import fnmatch
 import json
 import logging
 import os
@@ -1520,23 +1522,15 @@ async def _verify_github_hot_swap_head(
                 if mergeable is not True or mergeable_state in {"dirty", "behind"}:
                     reasons.append(f"PR #{pr_number} is not confirmed mergeable/current: {mergeable_state or mergeable}")
 
-    check_status, check_body = await _github_api_json(
+    ci_status, ci_error, ci_payload = await _resolve_ci_state(
         http,
         github_token,
-        "GET",
-        f"/repos/{owner}/{repo}/commits/{sha}/check-runs",
+        owner,
+        repo,
+        sha,
+        pr_number=pr_number,
+        branch=branch,
     )
-    status_status, status_body = await _github_api_json(
-        http,
-        github_token,
-        "GET",
-        f"/repos/{owner}/{repo}/commits/{sha}/status",
-    )
-    check_runs = []
-    if check_status < 400 and isinstance(check_body, dict) and isinstance(check_body.get("check_runs"), list):
-        check_runs = check_body["check_runs"]
-    combined_status = status_body if status_status < 400 and isinstance(status_body, dict) else None
-    ci_status, ci_error, ci_payload = _checks_state(check_runs, combined_status)
     if ci_status != "succeeded":
         reasons.append(f"CI for {sha[:12]} is not green: {ci_error}")
     return {
@@ -2039,6 +2033,318 @@ def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, 
     return "succeeded", "all observed checks passed", {"pending": pending, "failed": failed, "completed": completed, "statuses": len(statuses)}
 
 
+def _check_run_name(run: dict) -> str:
+    return str(run.get("name") or run.get("app", {}).get("slug") or "check")
+
+
+def _check_run_actions_run_id(run: dict) -> int:
+    for key in ("details_url", "html_url"):
+        match = re.search(r"/actions/runs/([0-9]+)", str(run.get(key) or ""))
+        if match:
+            return int(match.group(1))
+    return 0
+
+
+def _check_run_is_green(run: dict) -> bool:
+    return str(run.get("status") or "") == "completed" and str(run.get("conclusion") or "") in {"success", "skipped", "neutral"}
+
+
+def _check_run_failure(run: dict) -> str:
+    name = _check_run_name(run)
+    status = str(run.get("status") or "")
+    conclusion = str(run.get("conclusion") or "")
+    if status != "completed":
+        return f"{name}: pending"
+    if conclusion not in {"success", "skipped", "neutral"}:
+        return f"{name}: {conclusion or 'failed'}"
+    return ""
+
+
+def _workflow_path_filters_from_yaml(text: str) -> tuple[list[str] | None, list[str] | None, str]:
+    """Extract the simple pull_request paths subset Tank can prove safely.
+
+    This intentionally supports the workflow shape this repo uses and returns a
+    reason for anything more complex. Unknown syntax requires exact-HEAD CI.
+    """
+    lines = text.splitlines()
+    pull_request_indent: int | None = None
+    paths_indent: int | None = None
+    paths_ignore_indent: int | None = None
+    paths: list[str] | None = None
+    paths_ignore: list[str] | None = None
+    in_on = False
+    on_indent = 0
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if re.match(r"^on:\s*$", stripped):
+            in_on = True
+            on_indent = indent
+            continue
+        if re.match(r"^on:\s*\[.*pull_request.*\]\s*$", stripped):
+            return None, None, ""
+        if re.match(r"^on:\s*\{", stripped):
+            return None, None, "workflow uses inline on: syntax Tank cannot inspect"
+        if in_on and indent <= on_indent and not stripped.startswith("-"):
+            break
+        if not in_on:
+            continue
+        if pull_request_indent is None:
+            if re.match(r"^pull_request:\s*$", stripped):
+                pull_request_indent = indent
+                continue
+            if stripped == "pull_request":
+                return None, None, ""
+            continue
+        if indent <= pull_request_indent:
+            break
+        if re.match(r"^paths:\s*$", stripped):
+            paths = []
+            paths_indent = indent
+            paths_ignore_indent = None
+            continue
+        if re.match(r"^paths-ignore:\s*$", stripped):
+            paths_ignore = []
+            paths_ignore_indent = indent
+            paths_indent = None
+            continue
+        if paths_indent is not None:
+            if indent <= paths_indent:
+                paths_indent = None
+            elif stripped.startswith("- "):
+                paths.append(stripped[2:].strip().strip("'\""))
+                continue
+        if paths_ignore_indent is not None:
+            if indent <= paths_ignore_indent:
+                paths_ignore_indent = None
+            elif stripped.startswith("- "):
+                paths_ignore.append(stripped[2:].strip().strip("'\""))
+                continue
+    return paths, paths_ignore, ""
+
+
+def _path_pattern_supported(pattern: str) -> bool:
+    return not re.search(r"[\{\}\(\)\+@]", pattern)
+
+
+def _path_matches_any(path: str, patterns: list[str]) -> bool:
+    matched = False
+    for raw in patterns:
+        pattern = raw.strip()
+        if not pattern:
+            continue
+        negated = pattern.startswith("!")
+        if negated:
+            pattern = pattern[1:]
+        if not _path_pattern_supported(pattern):
+            # Unknown syntax must be handled by the caller as ambiguous.
+            return True
+        hit = fnmatch.fnmatchcase(path, pattern) or fnmatch.fnmatchcase(path, pattern.rstrip("/") + "/**")
+        if hit and negated:
+            matched = False
+        elif hit:
+            matched = True
+    return matched
+
+
+def _workflow_would_run_for_paths(paths: list[str], include: list[str] | None, ignore: list[str] | None) -> bool:
+    if not paths:
+        return False
+    if include is not None:
+        return any(_path_matches_any(path, include) for path in paths)
+    if ignore is not None:
+        return not all(_path_matches_any(path, ignore) for path in paths)
+    return True
+
+
+async def _github_check_runs_for_sha(http: ClientSession, token: str, owner: str, repo: str, sha: str) -> list:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/commits/{sha}/check-runs")
+    if status < 400 and isinstance(body, dict) and isinstance(body.get("check_runs"), list):
+        return body["check_runs"]
+    return []
+
+
+async def _github_combined_status_for_sha(http: ClientSession, token: str, owner: str, repo: str, sha: str) -> dict | None:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/commits/{sha}/status")
+    return body if status < 400 and isinstance(body, dict) else None
+
+
+async def _github_pr_commit_shas(http: ClientSession, token: str, owner: str, repo: str, pr_number: int, head_sha: str) -> list[str]:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/commits?per_page=100")
+    if status >= 400 or not isinstance(body, list):
+        return []
+    out: list[str] = []
+    for item in body:
+        if isinstance(item, dict):
+            sha = str(item.get("sha") or "")
+            if sha and sha != head_sha:
+                out.append(sha)
+    return out
+
+
+async def _github_action_run_info(http: ClientSession, token: str, owner: str, repo: str, run_id: int) -> dict:
+    if run_id <= 0:
+        return {}
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/actions/runs/{run_id}")
+    if status < 400 and isinstance(body, dict):
+        return {"path": str(body.get("path") or ""), "event": str(body.get("event") or "")}
+    return {}
+
+
+async def _github_file_text_at_ref(http: ClientSession, token: str, owner: str, repo: str, path: str, ref: str) -> str:
+    status, body = await _github_api_json(
+        http,
+        token,
+        "GET",
+        f"/repos/{owner}/{repo}/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}",
+    )
+    if status >= 400 or not isinstance(body, dict):
+        return ""
+    content = str(body.get("content") or "")
+    if not content:
+        return ""
+    try:
+        return base64.b64decode(content, validate=False).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+async def _github_changed_paths(http: ClientSession, token: str, owner: str, repo: str, base_sha: str, head_sha: str) -> list[str]:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}")
+    if status >= 400 or not isinstance(body, dict) or not isinstance(body.get("files"), list):
+        return []
+    out: list[str] = []
+    for item in body["files"]:
+        if isinstance(item, dict):
+            path = str(item.get("filename") or "")
+            if path:
+                out.append(path)
+    return out
+
+
+async def _resolve_ci_state(
+    http: ClientSession,
+    token: str,
+    owner: str,
+    repo: str,
+    sha: str,
+    *,
+    pr_number: int | None = None,
+    branch: str = "",
+) -> tuple[str, str, dict]:
+    check_runs = await _github_check_runs_for_sha(http, token, owner, repo, sha)
+    combined_status = await _github_combined_status_for_sha(http, token, owner, repo, sha)
+    head_latest = {_check_run_name(run): run for run in _latest_check_runs(check_runs)}
+    ci_status, ci_error, base_payload = _checks_state(check_runs, combined_status)
+    evidence: list[dict] = []
+    failed: list[str] = []
+    pending: list[str] = []
+    for name, run in sorted(head_latest.items()):
+        problem = _check_run_failure(run)
+        if problem:
+            if problem.endswith(": pending"):
+                pending.append(name)
+                evidence.append({"check": name, "status": "pending", "head_sha": sha, "reason": "observed_on_head"})
+            else:
+                failed.append(problem)
+                evidence.append({"check": name, "status": "failed", "head_sha": sha, "reason": problem})
+        else:
+            evidence.append({"check": name, "status": "satisfied", "head_sha": sha, "satisfied_by_sha": sha, "reason": "exact_head_success"})
+    if failed:
+        return "failed", "; ".join(failed), base_payload | {"evidence": evidence, "policy_source": "observed_head_checks"}
+    if pending:
+        return "started", "pending checks: " + ", ".join(pending), base_payload | {"evidence": evidence, "policy_source": "observed_head_checks"}
+
+    prior_latest: dict[str, dict] = {}
+    prior_runs_by_name: dict[str, tuple[str, dict]] = {}
+    if pr_number:
+        for prior_sha in await _github_pr_commit_shas(http, token, owner, repo, pr_number, sha):
+            for run in await _github_check_runs_for_sha(http, token, owner, repo, prior_sha):
+                if not isinstance(run, dict):
+                    continue
+                name = _check_run_name(run)
+                existing = prior_latest.get(name)
+                if existing is None or _check_run_recency(run) >= _check_run_recency(existing):
+                    prior_latest[name] = run
+                    prior_runs_by_name[name] = (prior_sha, run)
+
+    missing_blockers: list[str] = []
+    run_info_cache: dict[int, dict] = {}
+    workflow_cache: dict[str, tuple[list[str] | None, list[str] | None, str]] = {}
+    changed_cache: dict[str, list[str]] = {}
+    for name, (prior_sha, prior_run) in sorted(prior_runs_by_name.items()):
+        if name in head_latest:
+            continue
+        if not _check_run_is_green(prior_run):
+            problem = _check_run_failure(prior_run) or f"{name}: prior run was not green"
+            missing_blockers.append(f"{name} missing on HEAD after non-green prior run ({problem})")
+            evidence.append({"check": name, "status": "missing_no_prior_success", "head_sha": sha, "satisfied_by_sha": prior_sha, "reason": problem})
+            continue
+        run_id = _check_run_actions_run_id(prior_run)
+        if run_id not in run_info_cache:
+            run_info_cache[run_id] = await _github_action_run_info(http, token, owner, repo, run_id)
+        run_info = run_info_cache[run_id]
+        run_event = str(run_info.get("event") or "")
+        if run_event and run_event not in {"pull_request", "pull_request_target"}:
+            continue
+        workflow_path = str(run_info.get("path") or "")
+        if not workflow_path:
+            missing_blockers.append(f"{name} missing on HEAD; could not identify the prior run's workflow")
+            evidence.append({"check": name, "status": "missing_no_workflow", "head_sha": sha, "satisfied_by_sha": prior_sha, "reason": "workflow_path_unavailable"})
+            continue
+        if workflow_path not in workflow_cache:
+            workflow_text = await _github_file_text_at_ref(http, token, owner, repo, workflow_path, sha)
+            if not workflow_text:
+                workflow_cache[workflow_path] = (None, None, "workflow file is absent on HEAD")
+            else:
+                workflow_cache[workflow_path] = _workflow_path_filters_from_yaml(workflow_text)
+        include, ignore, parse_reason = workflow_cache[workflow_path]
+        if parse_reason:
+            missing_blockers.append(f"{name} missing on HEAD; {parse_reason}")
+            evidence.append({"check": name, "status": "missing_uninspectable_inputs", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "reason": parse_reason})
+            continue
+        if include is None and ignore is None:
+            missing_blockers.append(f"{name} missing on HEAD; workflow {workflow_path} has no pull_request path filter")
+            evidence.append({"check": name, "status": "missing_unfiltered_workflow", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "reason": "exact_head_run_required"})
+            continue
+        if prior_sha not in changed_cache:
+            changed_cache[prior_sha] = await _github_changed_paths(http, token, owner, repo, prior_sha, sha)
+        changed_paths = changed_cache[prior_sha]
+        if workflow_path in changed_paths:
+            missing_blockers.append(f"{name} missing on HEAD; workflow file {workflow_path} changed since {prior_sha[:12]}")
+            evidence.append({"check": name, "status": "missing_changed_inputs", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "changed_paths": changed_paths, "reason": "workflow_file_changed"})
+            continue
+        if _workflow_would_run_for_paths(changed_paths, include, ignore):
+            matching = [path for path in changed_paths if include is None or _path_matches_any(path, include)]
+            missing_blockers.append(f"{name} missing on HEAD; inputs changed since {prior_sha[:12]}: {', '.join(matching[:8]) or ', '.join(changed_paths[:8])}")
+            evidence.append({"check": name, "status": "missing_changed_inputs", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "changed_paths": changed_paths, "reason": "trigger_paths_changed"})
+            continue
+        evidence.append({
+            "check": name,
+            "status": "satisfied",
+            "head_sha": sha,
+            "satisfied_by_sha": prior_sha,
+            "workflow_path": workflow_path,
+            "changed_paths": changed_paths,
+            "reason": "paths_unchanged_since_success",
+        })
+
+    payload = base_payload | {
+        "evidence": evidence,
+        "policy_source": "pr_check_history_with_workflow_paths" if pr_number else "observed_head_checks",
+        "branch": branch,
+    }
+    if missing_blockers:
+        return "started", "; ".join(missing_blockers), payload | {"missing": missing_blockers}
+    if evidence:
+        return "succeeded", "all required checks satisfied", payload
+    if ci_status != "succeeded":
+        return ci_status, ci_error, payload
+    return "succeeded", "all observed checks passed", payload
+
+
 async def _watch_published_commit(
     http: ClientSession,
     auth_romaine_provider,
@@ -2057,25 +2363,15 @@ async def _watch_published_commit(
         try:
             service_token = await auth_romaine_provider.token()
             github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
-            check_status, check_body = await _github_api_json(
+            ci_status, ci_error, ci_payload = await _resolve_ci_state(
                 http,
                 github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/commits/{sha}/check-runs",
+                owner,
+                repo,
+                sha,
+                pr_number=pr_number,
+                branch=branch,
             )
-            status_status, status_body = await _github_api_json(
-                http,
-                github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/commits/{sha}/status",
-            )
-            check_runs = []
-            if check_status < 400 and isinstance(check_body, dict):
-                raw_runs = check_body.get("check_runs")
-                if isinstance(raw_runs, list):
-                    check_runs = raw_runs
-            combined_status = status_body if status_status < 400 and isinstance(status_body, dict) else None
-            ci_status, ci_error, ci_payload = _checks_state(check_runs, combined_status)
             headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
             await _post_tank_control_action(
                 http,
@@ -2092,7 +2388,7 @@ async def _watch_published_commit(
                     "repo_owner": owner,
                     "repo_name": repo,
                     "result_sha": sha,
-                    "error": "" if ci_status != "failed" else ci_error,
+                    "error": "" if ci_status == "succeeded" else ci_error,
                     "payload": ci_payload | {"attempt": attempt},
                 },
             )
@@ -2358,34 +2654,24 @@ async def _handle_tank_watch_pr_tool(
                 break
             await asyncio.sleep(1.5)
 
-        # Reduce the check rollup for the resolved head SHA to pass/fail/pending.
+        # Reduce CI evidence for the resolved head SHA to pass/fail/pending.
         check_state = "pending"
         failing: list[str] = []
+        ci_payload: dict = {}
+        ci_error = "checks have not appeared yet"
         if head_sha:
-            runs_status, runs_body = await _github_api_json(
+            ci_status, ci_error, ci_payload = await _resolve_ci_state(
                 http,
                 github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/commits/{head_sha}/check-runs",
+                owner,
+                repo,
+                head_sha,
+                pr_number=pr_number,
+                branch=branch,
             )
-            if runs_status < 400 and isinstance(runs_body, dict):
-                runs = runs_body.get("check_runs")
-                if isinstance(runs, list):
-                    any_incomplete = False
-                    for run in runs:
-                        if not isinstance(run, dict):
-                            continue
-                        if str(run.get("status") or "") != "completed":
-                            any_incomplete = True
-                            continue
-                        if str(run.get("conclusion") or "") in {"failure", "cancelled", "timed_out", "action_required", "stale"}:
-                            failing.append(str(run.get("name") or "check"))
-                    if failing:
-                        check_state = "failure"
-                    elif any_incomplete:
-                        check_state = "pending"
-                    else:
-                        check_state = "success"
+            check_state = "success" if ci_status == "succeeded" else "failure" if ci_status == "failed" else "pending"
+            if ci_status == "failed":
+                failing = [str(item).split(":", 1)[0] for item in ci_payload.get("failed", []) if str(item).strip()]
 
         # Classify into the small, unambiguous set the rollout skill acts on.
         if mergeable_state in {"dirty", "behind"}:
@@ -2399,7 +2685,7 @@ async def _handle_tank_watch_pr_tool(
             detail = f"PR #{pr_number} is green and mergeable, awaiting human merge in Tank."
         else:
             state = "watching"
-            detail = f"CI in progress (mergeable_state={mergeable_state or 'unknown'}, checks={check_state})."
+            detail = f"CI in progress (mergeable_state={mergeable_state or 'unknown'}, checks={check_state}: {ci_error})."
 
         # Register a durable watch only for the genuinely-pending case. 'conflict'
         # and 'failed' are returned for the agent to fix now; 'ready' needs no wait.
@@ -2434,6 +2720,7 @@ async def _handle_tank_watch_pr_tool(
                     "mergeable_state": mergeable_state,
                     "check_state": check_state,
                     "failing_checks": failing,
+                    "ci": ci_payload,
                 },
             },
         )

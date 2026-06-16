@@ -133,16 +133,20 @@ Handler behavior (fail-fast, synchronous — this is the value the agent cannot 
    `mergeable_state == "unknown"`, re-GET with backoff until GitHub has computed it
    (bounded, e.g. ≤10s). This is the single fix for the "says it's good over a
    conflict" class.
-3. Read the required-check rollup for the head SHA (latest-per-name check-runs +
-   combined status, same logic as `_verify_github_hot_swap_head` → `_checks_state`).
+3. Resolve CI evidence for the PR head. A check is satisfied by an exact-head green
+   run, or by a prior green run on the same PR branch when Tank can prove every commit
+   since that run skipped the workflow because its `pull_request.paths` inputs were
+   unchanged. If the workflow path filter cannot be inspected, exact-head evidence is
+   required.
 4. Return one of a small, unambiguous set:
    - `dirty` / `behind` → `{"state":"conflict", "base": "...", "detail": ...}`
    - a required check already failed → `{"state":"failed", "failing": [...], "logs_url": ...}`
    - `unknown`-but-no-checks-yet **and** checks expected → register a watch, return
      `{"state":"watching"}` (do **not** treat "no checks reported yet" as green —
      see [the empty-green trap](#the-empty-green-trap)).
-   - `clean` + required checks still pending → register a watch, `{"state":"watching"}`
-   - `clean` + all required already green → go straight to the merge path,
+   - `clean` + required checks still pending/missing with changed inputs → register a
+     watch, `{"state":"watching"}`
+   - `clean` + all required CI evidence satisfied → go straight to the merge path,
      `{"state":"merging"}`.
 5. Registering a watch = upsert a `ci_watches` row (below) and record a control-action
    ledger event (`action=watch_current_session_pr`) for audit, consistent with every
@@ -210,12 +214,12 @@ stale-SHA guard.
 
 A single PR emits dozens of `check_run`/`check_suite`/`workflow_run`/`status` events.
 The watcher does **not** wake on each. On every (non-stale) event it recomputes the
-aggregate for the current head SHA — reusing the exact reduction already shipped in
-`_verify_github_hot_swap_head` / `_checks_state` (latest-per-name, required-set,
+CI evidence for the current head SHA — reusing the same resolver as
+`_verify_github_hot_swap_head` (latest-per-name, path-aware prior-green evidence,
 mergeable + `mergeable_state`) — and only acts on a **transition into a terminal
 state**:
 
-- all required green + `mergeable == true` + `mergeable_state == clean` → **green**
+- all required CI evidence satisfied + `mergeable == true` + `mergeable_state == clean` → **green**
 - any required check `conclusion ∈ {failure, cancelled, timed_out}` → **red**
 - `mergeable_state ∈ {dirty, behind}` → **conflict**
 - otherwise still pending → record `last_event_at`, do nothing
@@ -228,11 +232,12 @@ finishing within a second produce one terminal transition, hence one action.
 "No red checks" is **not** green. Immediately post-push, or on a PR whose required
 workflows have not registered yet, the check list can be empty and `mergeable_state`
 `clean` — which naively reads as green and would merge on nothing. Guard: a watch only
-reaches **green** when the **expected required-check set** (from branch protection /
-recorded at registration in `required_checks`) is present *and* all-success. Until the
-required set has reported, the state is pending, not green. Note `check-pr-body` is a
-required check (per tank-operator `CLAUDE.md`), so the Feature-Contracts PR-body gate is
-naturally part of "green" — no special-casing needed.
+reaches **green** when every expected check has auditable evidence: either present and
+green on HEAD, or absent on HEAD with a prior green run whose workflow inputs are proven
+unchanged by the workflow's `pull_request.paths` filter. Until that evidence exists, the
+state is pending, not green. Note `check-pr-body` is a required check (per
+tank-operator `CLAUDE.md`), so the Feature-Contracts PR-body gate is naturally part of
+"green" — no special-casing needed.
 
 ### E. Green path — server-side governed merge + synthetic UI record
 

@@ -72,6 +72,10 @@ class _WatchHTTP:
             return _Resp(200, _dumps(self._pr_list))
         if "/check-runs" in url:
             return _Resp(200, _dumps({"check_runs": self._check_runs}))
+        if "/status" in url:
+            return _Resp(200, _dumps({"state": "pending", "statuses": []}))
+        if "/pulls/" in url and "/commits" in url:
+            return _Resp(200, _dumps([]))
         if "/pulls/" in url:
             idx = min(self.pr_detail_calls, len(self._pr_detail_sequence) - 1)
             mergeable, mergeable_state = self._pr_detail_sequence[idx]

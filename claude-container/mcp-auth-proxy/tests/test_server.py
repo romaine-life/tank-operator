@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -50,6 +51,7 @@ from mcp_auth_proxy.server import (
     _post_tank_control_action,
     _push_head_with_token,
     _repo_slug_from_remote,
+    _resolve_ci_state,
     _watch_published_commit,
 )
 
@@ -145,6 +147,82 @@ class _FakeRawHTTPByMethod:
     def get(self, url: str, *, headers: dict):
         self.calls.append({"method": "GET", "url": url, "headers": headers})
         return self.get_response
+
+
+class _GitHubAPIFake:
+    def __init__(
+        self,
+        *,
+        head_sha: str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        prior_sha: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        changed_paths: list[str] | None = None,
+        workflow_text: str | None = None,
+        workflow_path: str = ".github/workflows/go-backend.yml",
+        run_event: str = "pull_request",
+        prior_conclusion: str = "success",
+        head_runs: list[dict] | None = None,
+    ) -> None:
+        self.head_sha = head_sha
+        self.prior_sha = prior_sha
+        self.changed_paths = changed_paths or []
+        self.workflow_text = workflow_text if workflow_text is not None else (
+            "name: Go backend\n"
+            "on:\n"
+            "  pull_request:\n"
+            "    paths:\n"
+            "      - 'backend-go/**'\n"
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+        )
+        self.workflow_path = workflow_path
+        self.run_event = run_event
+        self.prior_conclusion = prior_conclusion
+        self.head_runs = head_runs or []
+        self.requests: list[dict] = []
+
+    def request(self, method: str, url: str, *, headers: dict, json=None, **kwargs):
+        self.requests.append({"method": method, "url": url, "headers": headers, "json": json, "kwargs": kwargs})
+        path = url.split("https://api.github.com", 1)[-1]
+        if path.endswith(f"/commits/{self.head_sha}/check-runs"):
+            return _FakeRawResponse(200, json_module_dumps({"check_runs": self.head_runs}))
+        if path.endswith(f"/commits/{self.prior_sha}/check-runs"):
+            return _FakeRawResponse(
+                200,
+                json_module_dumps({
+                    "check_runs": [
+                        {
+                            "name": "test",
+                            "status": "completed",
+                            "conclusion": self.prior_conclusion,
+                            "started_at": "2026-06-16T05:18:05Z",
+                            "id": 81586055969,
+                            "details_url": "https://github.com/romaine-life/tank-operator/actions/runs/27595901622/job/81586055969",
+                        }
+                    ]
+                }),
+            )
+        if path.endswith(f"/commits/{self.head_sha}/status") or path.endswith(f"/commits/{self.prior_sha}/status"):
+            return _FakeRawResponse(200, json_module_dumps({"state": "pending", "statuses": []}))
+        if path.endswith("/pulls/1245/commits?per_page=100"):
+            return _FakeRawResponse(
+                200,
+                json_module_dumps([
+                    {"sha": self.prior_sha},
+                    {"sha": self.head_sha},
+                ]),
+            )
+        if path.endswith("/actions/runs/27595901622"):
+            return _FakeRawResponse(200, json_module_dumps({"path": self.workflow_path, "name": "Go backend", "event": self.run_event}))
+        if f"/contents/{self.workflow_path}" in path:
+            encoded = base64.b64encode(self.workflow_text.encode("utf-8")).decode("ascii")
+            return _FakeRawResponse(200, json_module_dumps({"content": encoded}))
+        if f"/compare/{self.prior_sha}...{self.head_sha}" in path:
+            return _FakeRawResponse(
+                200,
+                json_module_dumps({"files": [{"filename": item} for item in self.changed_paths]}),
+            )
+        return _FakeRawResponse(404, b"{}")
 
 
 class _HotSwapHTTP:
@@ -1619,6 +1697,109 @@ def test_checks_state_latest_pending_run_overrides_old_success() -> None:
     status, _, payload = _checks_state(runs, None)
     assert status == "started"
     assert "test" in payload["pending"]
+
+
+def test_resolve_ci_state_satisfies_missing_path_filtered_check_from_prior_green() -> None:
+    http = _GitHubAPIFake(changed_paths=["docs/features/ci-watch/capabilities.md"])
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "succeeded", error
+    evidence = payload["evidence"]
+    assert evidence[-1]["check"] == "test"
+    assert evidence[-1]["reason"] == "paths_unchanged_since_success"
+    assert evidence[-1]["satisfied_by_sha"] == http.prior_sha
+
+
+def test_resolve_ci_state_blocks_missing_check_when_trigger_paths_changed() -> None:
+    http = _GitHubAPIFake(changed_paths=["backend-go/cmd/tank-operator/ci_merge.go"])
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "started"
+    assert "inputs changed" in error
+    assert payload["evidence"][-1]["status"] == "missing_changed_inputs"
+
+
+def test_resolve_ci_state_blocks_missing_unfiltered_workflow() -> None:
+    http = _GitHubAPIFake(
+        changed_paths=["docs/features/ci-watch/capabilities.md"],
+        workflow_text=(
+            "name: Always runs\n"
+            "on:\n"
+            "  pull_request:\n"
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+        ),
+    )
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "started"
+    assert "has no pull_request path filter" in error
+    assert payload["evidence"][-1]["status"] == "missing_unfiltered_workflow"
+
+
+def test_resolve_ci_state_does_not_expect_prior_manual_workflow_dispatch_run() -> None:
+    http = _GitHubAPIFake(
+        changed_paths=["docs/features/ci-watch/capabilities.md"],
+        workflow_text=(
+            "name: Manual proof image build\n"
+            "on:\n"
+            "  workflow_dispatch:\n"
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+        ),
+        run_event="workflow_dispatch",
+    )
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "started"
+    assert error == "checks are pending or have not appeared yet"
+    assert payload["evidence"] == []
 
 
 def test_watch_published_commit_records_clean_mergeability_via_single_pr(monkeypatch) -> None:
