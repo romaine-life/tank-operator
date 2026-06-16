@@ -66,6 +66,7 @@ import {
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { AdminBreakGlassPanel } from "./AdminBreakGlassPanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -14859,6 +14860,7 @@ function RunSettingsPanel({
     settingsTab === "admin" &&
     showAdminTab &&
     (adminView === "avatars" ||
+      adminView === "break-glass" ||
       adminView === "report" ||
       adminView === "hidden-transcripts" ||
       adminView === "observability")
@@ -14928,6 +14930,28 @@ function RunSettingsPanel({
                 onCatalogChanged={adminControls.onAvatarCatalogChanged}
               />
             </DesktopOnly>
+          </>
+        ) : adminView === "break-glass" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Break glass</h2>
+              </div>
+            </section>
+            <section className="run-settings-section">
+              <AdminBreakGlassPanel
+                initialSessionId={session?.id}
+                sessionScope={adminControls.reportScope}
+              />
+            </section>
           </>
         ) : adminView === "report" ? (
           <>
@@ -15059,6 +15083,20 @@ function RunSettingsPanel({
                   {adminControls.observability.summary?.status ??
                     (adminControls.observability.error ? "error" : "Open")}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "break-glass")}
+              >
+                <span className="run-settings-link-label">
+                  <ShieldAlertIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Break glass</span>
+                </span>
+                <span className="run-settings-scope-value">Grant</span>
               </button>
               <button
                 type="button"

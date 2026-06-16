@@ -799,6 +799,68 @@ func TestHandleInternalGrantGitBreakGlassPersistsGrant(t *testing.T) {
 	}
 }
 
+func TestHandleAdminGrantGitBreakGlassRequiresAdmin(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
+		"reason": "repair branch"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleAdminGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestHandleAdminGrantGitBreakGlassPersistsForTargetOwnerAndNotifiesAgent(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+		"branch_scope": {"kind":"unlimited"},
+		"ttl_seconds": 900,
+		"operations": ["mint_full_git_token"],
+		"request_event_id": "manual-request-1",
+		"reason": "repair stuck session"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleAdminGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.OwnerEmail != "owner@example.test" || got.SessionScope != "tank-operator-slot-3" {
+		t.Fatalf("grant owner/scope = %q/%q", got.OwnerEmail, got.SessionScope)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["approved_by"] != adminEmail || payload["request_event_id"] != "manual-request-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 || bus.commands[0].Email != "owner@example.test" || bus.commands[0].SessionID != "47" {
+		t.Fatalf("agent notification commands = %#v", bus.commands)
+	}
+}
+
 func TestHandleInternalGrantGitBreakGlassStartsSystemApprovalTurn(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
@@ -1048,6 +1110,39 @@ func TestHandleInternalGrantAzureBreakGlassPersistsGrant(t *testing.T) {
 	}
 }
 
+func TestHandleAdminGrantAzureBreakGlassPersistsForTargetOwner(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/sessions/47/azure-break-glass/grants", strings.NewReader(`{
+		"ttl_seconds": 900,
+		"request_event_id": "manual-azure-1",
+		"reason": "inspect azure resources"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleAdminGrantAzureBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.OwnerEmail != "owner@example.test" || got.Action != "azure.break_glass.grant" {
+		t.Fatalf("grant = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["approved_by"] != adminEmail || payload["request_event_id"] != "manual-azure-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
 func TestHandleInternalGrantTestSlotModelApprovalPersistsGrant(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
@@ -1082,6 +1177,43 @@ func TestHandleInternalGrantTestSlotModelApprovalPersistsGrant(t *testing.T) {
 	if payload["model"] != "gpt-5.5" || payload["effort"] != "xhigh" ||
 		payload["low_model"] != "gpt-5.3-codex-spark" || payload["low_effort"] != "low" ||
 		payload["request_event_id"] != "request-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestHandleAdminGrantTestSlotModelApprovalPersistsForTargetOwner(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/sessions/47/test-slot-model-approvals/grants", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"gpt-5.5",
+		"effort":"xhigh",
+		"request_event_id":"manual-model-1",
+		"reason":"unblock agent selection",
+		"ttl_seconds":1800
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleAdminGrantTestSlotModelApproval(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.OwnerEmail != "owner@example.test" || got.Action != testSlotModelGrantAction {
+		t.Fatalf("grant = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["approved_by"] != adminEmail || payload["request_event_id"] != "manual-model-1" ||
+		payload["model"] != "gpt-5.5" || payload["effort"] != "xhigh" {
 		t.Fatalf("payload = %#v", payload)
 	}
 }

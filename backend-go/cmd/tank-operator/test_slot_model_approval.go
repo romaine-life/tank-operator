@@ -198,6 +198,93 @@ func activeTestSlotModelGrant(rows []pgstore.ControlActionEvent, approval testSl
 	return ""
 }
 
+type testSlotModelGrantInput struct {
+	SessionID      string
+	SessionScope   string
+	OwnerEmail     string
+	Mode           string
+	Model          string
+	Effort         string
+	RequestEventID string
+	Reason         string
+	TTLSeconds     int
+	ApprovedBy     string
+}
+
+func (s *appServer) appendTestSlotModelGrant(ctx context.Context, in testSlotModelGrantInput) (pgstore.ControlActionEvent, testSlotModelApproval, time.Time, error) {
+	mode, status, detail := validateCreateSessionMode(in.Mode)
+	if status != 0 {
+		return pgstore.ControlActionEvent{}, testSlotModelApproval{}, time.Time{}, statusError{status: status, detail: detail}
+	}
+	provider, ok := sdkProviderForMode(mode)
+	if !ok {
+		return pgstore.ControlActionEvent{}, testSlotModelApproval{}, time.Time{}, statusError{status: http.StatusBadRequest, detail: "model approval is only supported for SDK chat sessions"}
+	}
+	runConfig, status, detail := validateCreateRunConfig(mode, in.Model, in.Effort)
+	if status != 0 {
+		return pgstore.ControlActionEvent{}, testSlotModelApproval{}, time.Time{}, statusError{status: status, detail: detail}
+	}
+	if !testSlotRunConfigNeedsApproval(mode, provider, runConfig.Model, runConfig.Effort) {
+		return pgstore.ControlActionEvent{}, testSlotModelApproval{}, time.Time{}, statusError{status: http.StatusBadRequest, detail: "requested model and effort already match the low-cost test-slot baseline"}
+	}
+	ttl := in.TTLSeconds
+	if ttl <= 0 {
+		ttl = 3600
+	}
+	if ttl > 24*3600 {
+		ttl = 24 * 3600
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(ttl) * time.Second)
+	approval := testSlotModelApproval{
+		Mode:      mode,
+		Provider:  provider,
+		Model:     runConfig.Model,
+		Effort:    runConfig.Effort,
+		LowModel:  lowCostModelForProvider(provider),
+		LowEffort: lowCostEffortForProvider(provider),
+		SessionID: in.SessionID,
+	}
+	sessionScope := normalizeSessionScope(firstNonEmptyControlAction(in.SessionScope, s.localSessionScope()))
+	payload, _ := json.Marshal(map[string]any{
+		"approved_by":      strings.TrimSpace(in.ApprovedBy),
+		"expires_at":       expiresAt.Format(time.RFC3339),
+		"ttl_seconds":      ttl,
+		"request_event_id": strings.TrimSpace(in.RequestEventID),
+		"reason":           strings.TrimSpace(in.Reason),
+		"mode":             approval.Mode,
+		"provider":         approval.Provider,
+		"model":            approval.Model,
+		"effort":           approval.Effort,
+		"low_model":        approval.LowModel,
+		"low_effort":       approval.LowEffort,
+	})
+	event := pgstore.ControlActionEvent{
+		EventID:       "tank-test-slot-model-grant-" + in.SessionID + "-" + randomHex(12),
+		InvocationID:  "tank-test-slot-model-grant-" + randomHex(12),
+		OwnerEmail:    in.OwnerEmail,
+		SessionScope:  sessionScope,
+		SessionID:     in.SessionID,
+		SourceService: "tank-operator",
+		SourceTool:    "test_slot_model_approval",
+		Action:        testSlotModelGrantAction,
+		Status:        "succeeded",
+		TargetKind:    "tank_session_model",
+		TargetRef:     testSlotModelTargetRef(sessionScope, approval),
+		Payload:       payload,
+	}
+	row, err := s.controlActions.Append(ctx, event)
+	return row, approval, expiresAt, err
+}
+
+type statusError struct {
+	status int
+	detail string
+}
+
+func (e statusError) Error() string {
+	return e.detail
+}
+
 func (s *appServer) handleInternalGrantTestSlotModelApproval(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/test-slot-model-approvals/grants")
 	if user == nil {
@@ -230,65 +317,24 @@ func (s *appServer) handleInternalGrantTestSlotModelApproval(w http.ResponseWrit
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	mode, status, detail := validateCreateSessionMode(body.Mode)
-	if status != 0 {
-		writeError(w, status, detail)
-		return
-	}
-	provider, ok := sdkProviderForMode(mode)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "model approval is only supported for SDK chat sessions")
-		return
-	}
-	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
-	if status != 0 {
-		writeError(w, status, detail)
-		return
-	}
-	if !testSlotRunConfigNeedsApproval(mode, provider, runConfig.Model, runConfig.Effort) {
-		writeError(w, http.StatusBadRequest, "requested model and effort already match the low-cost test-slot baseline")
-		return
-	}
-	ttl := body.TTLSeconds
-	if ttl <= 0 {
-		ttl = 3600
-	}
-	if ttl > 24*3600 {
-		ttl = 24 * 3600
-	}
-	expiresAt := time.Now().UTC().Add(time.Duration(ttl) * time.Second)
-	payload, _ := json.Marshal(map[string]any{
-		"approved_by":      user.ActorEmail,
-		"expires_at":       expiresAt.Format(time.RFC3339),
-		"ttl_seconds":      ttl,
-		"request_event_id": strings.TrimSpace(body.RequestEventID),
-		"reason":           strings.TrimSpace(body.Reason),
-		"mode":             mode,
-		"provider":         provider,
-		"model":            runConfig.Model,
-		"effort":           runConfig.Effort,
-		"low_model":        lowCostModelForProvider(provider),
-		"low_effort":       lowCostEffortForProvider(provider),
+	row, approval, expiresAt, err := s.appendTestSlotModelGrant(r.Context(), testSlotModelGrantInput{
+		SessionID:      sessionID,
+		SessionScope:   s.localSessionScope(),
+		OwnerEmail:     user.ActorEmail,
+		Mode:           body.Mode,
+		Model:          body.Model,
+		Effort:         body.Effort,
+		RequestEventID: body.RequestEventID,
+		Reason:         body.Reason,
+		TTLSeconds:     body.TTLSeconds,
+		ApprovedBy:     user.ActorEmail,
 	})
-	event := pgstore.ControlActionEvent{
-		EventID:       "tank-test-slot-model-grant-" + sessionID + "-" + randomHex(12),
-		InvocationID:  "tank-test-slot-model-grant-" + randomHex(12),
-		OwnerEmail:    user.ActorEmail,
-		SessionScope:  s.localSessionScope(),
-		SessionID:     sessionID,
-		SourceService: "tank-operator",
-		SourceTool:    "test_slot_model_approval",
-		Action:        testSlotModelGrantAction,
-		Status:        "succeeded",
-		TargetKind:    "tank_session_model",
-		TargetRef: testSlotModelTargetRef(s.localSessionScope(), testSlotModelApproval{
-			Mode: mode, Provider: provider, Model: runConfig.Model, Effort: runConfig.Effort, SessionID: sessionID,
-		}),
-		Payload: payload,
-	}
-	row, err := s.controlActions.Append(r.Context(), event)
 	if err != nil {
-		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
+		if se, ok := err.(statusError); ok {
+			writeError(w, se.status, se.detail)
+			return
+		}
+		recordControlActionEvent("tank-operator", "test_slot_model_approval", testSlotModelGrantAction, "succeeded", "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -298,10 +344,95 @@ func (s *appServer) handleInternalGrantTestSlotModelApproval(w http.ResponseWrit
 		"event_id":         row.EventID,
 		"session_id":       sessionID,
 		"session_scope":    s.localSessionScope(),
-		"mode":             mode,
-		"provider":         provider,
-		"model":            runConfig.Model,
-		"effort":           runConfig.Effort,
+		"mode":             approval.Mode,
+		"provider":         approval.Provider,
+		"model":            approval.Model,
+		"effort":           approval.Effort,
+		"expires_at":       expiresAt.Format(time.RFC3339),
+		"request_event_id": strings.TrimSpace(body.RequestEventID),
+	})
+}
+
+func (s *appServer) handleAdminGrantTestSlotModelApproval(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if sessionScope != s.localSessionScope() {
+		writeError(w, http.StatusBadRequest, "break-glass grants must be issued from the target session scope")
+		return
+	}
+	if sessionScope == prodSessionScope {
+		writeError(w, http.StatusBadRequest, "agent selection break glass is only used for test-slot sessions")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	info, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	var body struct {
+		Mode           string `json:"mode"`
+		Model          string `json:"model"`
+		Effort         string `json:"effort"`
+		RequestEventID string `json:"request_event_id"`
+		Reason         string `json:"reason"`
+		TTLSeconds     int    `json:"ttl_seconds"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	row, approval, expiresAt, err := s.appendTestSlotModelGrant(r.Context(), testSlotModelGrantInput{
+		SessionID:      sessionID,
+		SessionScope:   sessionScope,
+		OwnerEmail:     info.Owner,
+		Mode:           body.Mode,
+		Model:          body.Model,
+		Effort:         body.Effort,
+		RequestEventID: body.RequestEventID,
+		Reason:         body.Reason,
+		TTLSeconds:     body.TTLSeconds,
+		ApprovedBy:     user.Email,
+	})
+	if err != nil {
+		if se, ok := err.(statusError); ok {
+			writeError(w, se.status, se.detail)
+			return
+		}
+		recordControlActionEvent("tank-operator", "test_slot_model_approval", testSlotModelGrantAction, "succeeded", "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"active":           true,
+		"event_id":         row.EventID,
+		"session_id":       sessionID,
+		"session_scope":    sessionScope,
+		"owner_email":      info.Owner,
+		"mode":             approval.Mode,
+		"provider":         approval.Provider,
+		"model":            approval.Model,
+		"effort":           approval.Effort,
+		"low_model":        approval.LowModel,
+		"low_effort":       approval.LowEffort,
 		"expires_at":       expiresAt.Format(time.RFC3339),
 		"request_event_id": strings.TrimSpace(body.RequestEventID),
 	})

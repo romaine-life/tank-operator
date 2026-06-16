@@ -2,6 +2,7 @@ export type SettingsTab = "preferences" | "admin";
 export type AdminView =
   | "controls"
   | "avatars"
+  | "break-glass"
   | "report"
   | "hidden-transcripts"
   | "observability"
@@ -92,6 +93,7 @@ function parseAdminView(value: string | undefined): AdminView {
     case "controls":
       return "controls";
     case "avatars":
+    case "break-glass":
     case "report":
     case "hidden-transcripts":
     case "observability":
