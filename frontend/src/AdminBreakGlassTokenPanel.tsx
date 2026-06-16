@@ -100,7 +100,7 @@ export function AdminBreakGlassTokenPanel({ sessionScope }: Props) {
       <div className="break-glass-token-actions">
         <button
           type="button"
-          className="btn-primary run-settings-admin-save"
+          className="btn-primary break-glass-token-btn"
           disabled={!canSubmit}
           onClick={mint}
         >
