@@ -32,6 +32,19 @@ type SessionTranscriptRowStore interface {
 	ListChangedAfterOrderKey(ctx context.Context, tankSessionID, afterOrderKey string, rows int) (TranscriptRowDeltaPage, error)
 	ListLatest(ctx context.Context, tankSessionID string, rows int) (TranscriptRowPage, error)
 	ListOldest(ctx context.Context, tankSessionID string, rows int) (TranscriptRowPage, error)
+	// ListTurnDirectory returns the COMPLETE, submission-ordered set of
+	// turn_activity shell rows for a session — the durable turn directory the
+	// Turns selector lists, independent of the bounded /timeline window
+	// (transcript-navigation contract: the durable ledger, not the loaded
+	// window, owns the selectable turn set). The shells are the same rows
+	// /timeline windows over, each stamped with the durable turn_number, so the
+	// SPA reuses its transcript-row projection to build the selector. Background
+	// (turn_bgtask-*) wake turns never get a shell — they fold into their
+	// originating turn — so the directory matches the projection's turn set.
+	// Capped at maxRows (<=0 means TurnDirectoryMaxRows); on overflow the NEWEST
+	// shells survive (the active/latest turn must always be present) and the
+	// page is marked Truncated.
+	ListTurnDirectory(ctx context.Context, tankSessionID string, maxRows int) (TurnDirectoryPage, error)
 	ListBefore(ctx context.Context, tankSessionID, beforeCursor string, rows int) (TranscriptRowPage, error)
 	ListAround(ctx context.Context, tankSessionID, rowCursor string, rowsBefore, rowsAfter int) (TranscriptRowPage, error)
 	ResolveCursorForTimelineID(ctx context.Context, tankSessionID, timelineID string) (string, error)
@@ -62,6 +75,28 @@ type TranscriptRowPage struct {
 	NextCursor  string
 	FoundOldest bool
 	FoundNewest bool
+}
+
+// TurnDirectoryMaxRows caps the durable turn-directory payload. It is a
+// memory/payload safety valve set far above any realistic per-session turn
+// count, not a navigation window: tank_turn_directory_size observes the live
+// distribution so the cap can be revisited (with cursor paging) before it ever
+// bites. A session past the cap keeps its newest TurnDirectoryMaxRows turns and
+// the response is marked truncated.
+const TurnDirectoryMaxRows = 5000
+
+// TurnDirectoryPage is the complete (or cap-truncated) ordered set of
+// turn_activity shells plus the latest durable turn number for the session.
+type TurnDirectoryPage struct {
+	// Shells are submission-ordered (ascending) turn_activity rows, the same
+	// shape /timeline returns.
+	Shells []map[string]any
+	// LatestTurnNumber is the durable number of the most recently submitted
+	// turn (0 when the session has no numbered turns yet).
+	LatestTurnNumber int64
+	// Truncated is true when the session has more turns than the cap and the
+	// oldest shells were elided.
+	Truncated bool
 }
 
 type TranscriptRowDelta struct {
@@ -448,6 +483,54 @@ func (s *transcriptRowStore) ListOldest(ctx context.Context, tankSessionID strin
 	`, []any{storageKey, rows + 1}, rows, "asc", true, false)
 }
 
+func (s *transcriptRowStore) ListTurnDirectory(ctx context.Context, tankSessionID string, maxRows int) (TurnDirectoryPage, error) {
+	if maxRows < 1 {
+		maxRows = TurnDirectoryMaxRows
+	}
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	// Newest-first so the cap keeps the active/latest turn; maxRows+1 detects
+	// overflow. Rides session_transcript_rows_turn_directory (partial index on
+	// row_kind='turn_activity'). Reversed to ascending before return.
+	dbRows, err := s.pool.Query(ctx, `
+		SELECT payload
+		FROM session_transcript_rows
+		WHERE tank_session_id = $1 AND row_kind = 'turn_activity'
+		ORDER BY row_cursor DESC
+		LIMIT $2
+	`, storageKey, maxRows+1)
+	if err != nil {
+		return TurnDirectoryPage{}, err
+	}
+	defer dbRows.Close()
+	shells := make([]map[string]any, 0, maxRows+1)
+	for dbRows.Next() {
+		var payload []byte
+		if err := dbRows.Scan(&payload); err != nil {
+			return TurnDirectoryPage{}, err
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(payload, &entry); err != nil {
+			return TurnDirectoryPage{}, fmt.Errorf("transcript row payload is not JSON: %w", err)
+		}
+		shells = append(shells, entry)
+	}
+	if err := dbRows.Err(); err != nil {
+		return TurnDirectoryPage{}, err
+	}
+	truncated := len(shells) > maxRows
+	if truncated {
+		shells = shells[:maxRows]
+	}
+	// shells is newest-first here, so the head carries the latest turn number.
+	latest := int64(0)
+	if len(shells) > 0 {
+		latest = transcriptRowTurnNumber(shells[0])
+	}
+	// Return submission order (ascending) so the SPA selector lists Turn 1..N.
+	reverseEntries(shells)
+	return TurnDirectoryPage{Shells: shells, LatestTurnNumber: latest, Truncated: truncated}, nil
+}
+
 func (s *transcriptRowStore) ListBefore(ctx context.Context, tankSessionID, beforeCursor string, rows int) (TranscriptRowPage, error) {
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
 	rawCursor, err := DecodeTranscriptRowCursor(beforeCursor)
@@ -826,6 +909,28 @@ func reverseRows(rows []map[string]any, cursors []string) {
 	}
 }
 
+func reverseEntries(entries []map[string]any) {
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+}
+
+// transcriptRowTurnNumber reads the durable turn_number a materializer stamped
+// onto a turn_activity shell payload. JSON numbers decode to float64 (or
+// json.Number when a decoder uses UseNumber); 0 means unstamped.
+func transcriptRowTurnNumber(entry map[string]any) int64 {
+	switch v := entry["turnNumber"].(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	}
+	return 0
+}
+
 type StubSessionTranscriptRowStore struct{}
 
 func (StubSessionTranscriptRowStore) RewriteEpoch(context.Context, string) (int64, error) {
@@ -853,6 +958,9 @@ func (StubSessionTranscriptRowStore) ListLatest(context.Context, string, int) (T
 }
 func (StubSessionTranscriptRowStore) ListOldest(context.Context, string, int) (TranscriptRowPage, error) {
 	return TranscriptRowPage{Rows: []map[string]any{}, FoundOldest: true, FoundNewest: true}, nil
+}
+func (StubSessionTranscriptRowStore) ListTurnDirectory(context.Context, string, int) (TurnDirectoryPage, error) {
+	return TurnDirectoryPage{Shells: []map[string]any{}}, nil
 }
 func (StubSessionTranscriptRowStore) ListBefore(context.Context, string, string, int) (TranscriptRowPage, error) {
 	return TranscriptRowPage{Rows: []map[string]any{}, FoundOldest: true, FoundNewest: false}, nil

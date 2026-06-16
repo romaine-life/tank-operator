@@ -45,9 +45,27 @@ yanking the viewport away from a user reading history.
   current projection version. Status rows alone do not satisfy backfill; stale
   sessions are materialized on demand for the requested session before
   `/timeline` or transcript SSE read from `session_transcript_rows`.
+- The **durable turn directory** owns the *selectable turn set* — the list of
+  turns the Turns selector enumerates. It is served by
+  `GET /api/sessions/{id}/turns/directory` (and the public-share / admin-hidden
+  mirrors) as the COMPLETE, submission-ordered set of `turn_activity` shells
+  (each stamped with its `session_turns.turn_number`), independent of the
+  bounded `/timeline` window. The browser never derives the turn set from
+  whatever transcript window it has loaded: a turn is listable iff the durable
+  directory lists it. This extends the turn-number resolver invariant from "the
+  durable row resolves one number" to "the durable directory owns the whole
+  turn set." Background-task wake turns (`turn_bgtask-*`) carry no number and no
+  own shell — they fold into their originating turn — so the directory excludes
+  them by construction, matching the projection. The directory is bounded by
+  `TurnDirectoryMaxRows`; on overflow the newest turns survive and the response
+  is marked `truncated` (observable, never a silent cap).
 - Server timeline pages own bounded windows of top-level transcript rows. Raw
   events inside a collapsed Turn activity row are loaded only through the
-  explicit Turn activity endpoint.
+  explicit Turn activity endpoint. The bounded `/timeline` window is the chat
+  surface's history pager; it is NOT the source of the Turns selector's turn set
+  (that is the durable turn directory above). A turn's expansion body still
+  loads lazily through the Turn activity endpoint whether the turn is in the
+  current `/timeline` window or only in the directory.
 - Turn activity itself paginates. A turn's expansion body is split into pages
   sealed at `turnPageEventLimit` events and at semantic AskUserQuestion
   boundaries; each `turn.awaiting_input` event starts one `question_set` page
@@ -117,6 +135,17 @@ yanking the viewport away from a user reading history.
 - Returning to the live tail is an explicit state transition.
 - Load, ready, reconnect, and resync must not reset the viewport unless the
   user has explicitly returned to live tail or the current cursor is invalid.
+- The Turns view's turn selector lists every turn in the durable turn directory,
+  not just the turns in the loaded `/timeline` window. The directory loads on
+  session open and refreshes when the live stream surfaces a turn the directory
+  does not yet list (a newly submitted turn), so the selector reaches Turn 1 of
+  a long session without the reader paging the chat window back. Selecting a turn
+  the chat window never loaded resolves through the same lazy `/activity` load as
+  any other turn — the detail surface is already directory-agnostic. While the
+  directory has not loaded the view shows an explicit loading or retryable error
+  state; it never silently lists only the loaded window. The just-submitted turn
+  appears immediately as the active "Current turn" (from `renderedActiveTurnId`)
+  and gains its durable number when the directory refresh lands.
 - The Turns view exposes a dedicated **Page dropdown** beside the turn selector.
   It is present whenever a turn is selected; a single-page turn renders it
   **disabled** ("Page 1 of 1") rather than omitting it, and a turn that crosses
@@ -190,8 +219,15 @@ yanking the viewport away from a user reading history.
   freshly accepted `/turns` response cannot include the durable number, so Turns
   composer routing gaps localize to the submit boundary instead of the later
   transcript projection.
-
-## Acceptance Checks
+- The durable turn directory is observable on both sides.
+  `tank_turn_directory_list_total{result}` counts directory reads as `ok` /
+  `truncated` / `error`, and `tank_turn_directory_size` is a histogram of the
+  per-session turn count returned — it observes the live distribution so the
+  `TurnDirectoryMaxRows` cap can be revisited (with cursor paging) before it ever
+  bites, and a sustained `truncated` rate names sessions the cap is eliding. The
+  SPA emits bounded `turn-directory-request` / `turn-directory-loaded` /
+  `turn-directory-error` client events so a directory load that fails (leaving
+  the retryable Turns error state) is diagnosable without browser devtools.
 
 - Normal session open lands at the live tail.
 - A copied message link resolves through a durable cursor and lands on the
@@ -214,6 +250,16 @@ yanking the viewport away from a user reading history.
   to the latest turn. The retired `turn_<uuid>` public route form and the
   array-position "Turn N" label cannot reappear without failing
   `scripts/check-removed-chat-runtime.mjs`.
+- The Turns selector lists every turn of a session longer than the `/timeline`
+  tail window. Opening such a session and opening the turn selector shows Turn 1
+  (not just the recent tail); selecting Turn 1 loads its activity. The selector's
+  turn set is sourced from `GET /turns/directory`, never from the loaded
+  transcript window — `scripts/check-removed-chat-runtime.mjs` fails if
+  `turnViewItems` is rebuilt from `renderedEntries` (the window-derived
+  selector). A failed directory load shows a retryable error in the Turns view,
+  not a window-only list. Background-wake turns do not appear as separate
+  selector entries (they fold into their originating turn, matching the
+  directory).
 - Opening a pending `needs_input` turn lands on the question-set page, not the
   last output page. Multiple questions from one AskUserQuestion invocation stay
   in one answer set but render as adjacent semantic `question_set` pages, and

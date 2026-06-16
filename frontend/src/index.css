@@ -5110,6 +5110,17 @@ button:disabled {
   padding: 0 0.55rem;
 }
 
+.run-turn-view-truncation {
+  width: min(100%, 42rem);
+  margin: var(--space-2) auto 0;
+  border: 1px solid rgba(250, 204, 21, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(113, 63, 18, 0.18);
+  color: var(--text-muted);
+  padding: 0.45rem 0.6rem;
+  font-size: var(--text-xs);
+}
+
 .run-shell-tasks-list {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);

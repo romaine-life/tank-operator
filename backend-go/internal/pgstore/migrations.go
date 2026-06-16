@@ -2009,6 +2009,18 @@ var schemaMigrations = []migration{
 		)
 		  AND payload ? 'request_event_id'
 		  AND payload->>'request_event_id' <> ''`},
+
+	// The durable turn directory (GET /api/sessions/{id}/turns/directory) reads
+	// the COMPLETE, submission-ordered set of turn_activity shell rows so the
+	// Turns selector lists every turn independent of the bounded /timeline
+	// window (transcript-navigation contract: the durable ledger, not the
+	// loaded window, owns the selectable turn set). This partial index serves
+	// that "all shells for one session, ordered" scan without touching the
+	// per-turn child rows the cursor index also covers. Owned by
+	// internal/store/session_transcript_rows.go ListTurnDirectory.
+	{ID: "0164", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_turn_directory
+		ON session_transcript_rows (tank_session_id, row_cursor)
+		WHERE row_kind = 'turn_activity'`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

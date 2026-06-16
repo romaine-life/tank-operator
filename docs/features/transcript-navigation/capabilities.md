@@ -48,6 +48,52 @@ Evidence:
   `scripts/check-removed-chat-runtime.mjs` guards against the retired
   `turn_<uuid>` route and the array-position label.
 
+## Durable turn directory
+
+Status: shipped
+
+Intent:
+The Turns selector lists every turn in a session — Turn 1..N — regardless of how
+far back the chat transcript window has paged. Before this, the selector was
+built from the bounded `/timeline` tail (~24 rows), so a session longer than the
+window showed a truncated turn list starting mid-session and the earliest turns
+were unreachable from the Turns view (the user could only reach them by paging
+the Chat tab back). The selectable turn set is now owned by the durable ledger,
+not by whatever transcript window the browser happens to have loaded.
+
+Affected contracts:
+- Transcript Navigation (primary — the selectable turn set)
+- Transcript (the directory returns `turn_activity` shells, the same projection
+  rows `/timeline` windows over)
+- Observability (directory list/size counters)
+
+Contract impact:
+- `GET /api/sessions/{id}/turns/directory` (and the public-share / admin-hidden
+  mirrors) returns the COMPLETE, submission-ordered set of `turn_activity`
+  shells, each stamped with its `session_turns.turn_number`. The browser builds
+  the Turns selector from this directory, never from `renderedEntries`; the live
+  window only overlays fresh status onto turns the directory already lists.
+- A turn is listable iff the directory lists it. A failed directory load shows a
+  retryable Turns error, never a silent fall-back to the loaded window.
+- Background-wake turns (`turn_bgtask-*`) carry no number and no own shell, so
+  the directory excludes them by construction (matching the projection's fold).
+- The directory is bounded by `TurnDirectoryMaxRows`; overflow keeps the newest
+  turns and sets `truncated`, surfaced in the UI and counted — never a silent cap.
+
+Evidence:
+- Backend: migration `0164` (partial index `session_transcript_rows_turn_directory`),
+  `SessionTranscriptRowStore.ListTurnDirectory`, `GET /turns/directory` on owner
+  / public-share / admin-hidden surfaces, `tank_turn_directory_list_total` +
+  `tank_turn_directory_size`, store integration tests (ordering, bgtask/non-shell
+  exclusion, cap-keeps-newest) and handler tests (complete set, empty,
+  truncation, auth, route precedence over `/turns/{number}`).
+- Frontend: `turnDirectoryEntries` load via `turnDirectoryRequestPathForPane`,
+  `turnViewItems` sourced from `mergeTurnDirectoryWithLiveShells(directory,
+  window)` instead of the window-derived builder call, new-turn refetch, Turns
+  loading/error/truncation states, `turn-directory-*` client telemetry,
+  `turnDirectory.test.ts`, and the `scripts/check-removed-chat-runtime.mjs` guard
+  blocking the window-derived selector.
+
 ## Deep-linkable turn activity pages
 
 Status: active

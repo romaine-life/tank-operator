@@ -636,6 +636,19 @@ type TranscriptTimelineBody = {
   target_timeline_id?: string;
   target_cursor?: string;
 };
+// The durable turn directory: the COMPLETE, submission-ordered set of
+// turn_activity shells (server_turn_directory_v1). It owns the selectable turn
+// set for the Turns view, independent of the bounded /timeline window the chat
+// surface pages. `turns` are the same shell rows /timeline returns, so the SPA
+// reuses normalizeProjectedTranscriptEntries to build the selector.
+type TurnDirectoryBody = {
+  session_id?: string;
+  turns?: unknown[];
+  count?: number;
+  latest_turn_number?: number;
+  truncated?: boolean;
+};
+type TurnDirectoryStatus = "idle" | "loading" | "ready" | "error";
 type SdkHistoryRefreshSource =
   | "history"
   | "projected-refresh"
@@ -12711,7 +12724,31 @@ function turnActivityLastActivityAt(
   );
 }
 
-function buildTurnViewItems(
+// mergeTurnDirectoryWithLiveShells overlays the live transcript window's fresh
+// turn_activity shells onto the durable directory's complete, ordered turn set.
+// The SET is always the directory's — a turnId only appears here if the
+// directory listed it — so a turn the directory doesn't yet carry is never
+// surfaced from the window alone (no silent fall-back to the bounded window).
+// The live shell wins on a turnId collision so an in-flight turn stays live
+// without re-reading the directory on every terminal. An empty directory yields
+// no turns (an explicit loading/error state renders instead).
+export function mergeTurnDirectoryWithLiveShells(
+  directoryEntries: TranscriptEntry[],
+  liveEntries: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (directoryEntries.length === 0) return directoryEntries;
+  const liveShellByTurn = new Map<string, TranscriptEntry>();
+  for (const entry of liveEntries) {
+    const tid = (entry.turnId ?? "").trim();
+    if (tid && isTurnActivityEntry(entry)) liveShellByTurn.set(tid, entry);
+  }
+  return directoryEntries.map((shell) => {
+    const tid = (shell.turnId ?? "").trim();
+    return (tid && liveShellByTurn.get(tid)) || shell;
+  });
+}
+
+export function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
@@ -13501,6 +13538,7 @@ function RunTurnActivityGroup({
 
 function RunTurnActivityScreen({
   turns,
+  truncated,
   selectedTurnId,
   avatar,
   systemAvatar,
@@ -13524,6 +13562,10 @@ function RunTurnActivityScreen({
   onActivitySelectPage,
 }: {
   turns: TurnViewItem[];
+  // True when the durable directory exceeded its cap and the oldest turns were
+  // elided — a >5000-turn session. Surfaced so the list never silently claims
+  // to be complete when it isn't.
+  truncated?: boolean;
   selectedTurnId: string | null;
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
@@ -13940,6 +13982,12 @@ function RunTurnActivityScreen({
 
   return (
     <div className="run-turn-view" aria-label="Turn view">
+      {truncated && (
+        <div className="run-turn-view-truncation" role="status">
+          This session has more turns than the directory lists; the oldest turns
+          aren’t shown.
+        </div>
+      )}
       {selected ? (
         <>
           {statsExpanded && (
@@ -16641,6 +16689,31 @@ function ChatPane({
     },
     [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id],
   );
+  // Durable turn-directory path. Mirrors timelineRequestPathForPane across the
+  // three transcript-read surfaces (public share / admin hidden / owner) so the
+  // Turns selector reads the same complete turn set on every surface.
+  const turnDirectoryRequestPathForPane = useCallback(() => {
+    if (publicView && publicShareTokenValue) {
+      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/directory`;
+    }
+    if (session.read_only_hidden === true) {
+      let path = `/api/admin/hidden-sessions/${encodeURIComponent(session.id)}/turns/directory`;
+      path = appendQueryParam(path, "session_scope", sessionScope);
+      if (session.owner) path = appendQueryParam(path, "owner", session.owner);
+      return path;
+    }
+    return scopedSessionPathForPane(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/directory`,
+    );
+  }, [
+    publicShareTokenValue,
+    publicView,
+    scopedSessionPathForPane,
+    session.id,
+    session.owner,
+    session.read_only_hidden,
+    sessionScope,
+  ]);
   const fetchPaneResource = useCallback(
     (input: RequestInfo, init?: RequestInit) =>
       publicView ? fetch(input, init) : authedFetch(input, init),
@@ -17292,6 +17365,110 @@ function ChatPane({
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+
+  // Durable turn directory (transcript-navigation contract: the selectable turn
+  // set is owned by the durable ledger, not by whatever transcript window the
+  // browser has loaded). The Turns selector lists EVERY turn from here; the
+  // chat surface keeps its own bounded `entries` window. A directory miss
+  // surfaces an explicit error state — it never silently falls back to listing
+  // only the loaded window (that was the bug this replaces).
+  const [turnDirectoryEntries, setTurnDirectoryEntries] = useState<
+    TranscriptEntry[]
+  >([]);
+  const [turnDirectoryStatus, setTurnDirectoryStatus] =
+    useState<TurnDirectoryStatus>("idle");
+  const [turnDirectoryTruncated, setTurnDirectoryTruncated] = useState(false);
+  // Revision bumps after every load attempt so the new-turn refetch effect
+  // re-evaluates against the freshly-known turn-id set (and re-fires if a turn
+  // appeared while a single-flighted load was in progress).
+  const [turnDirectoryRevision, setTurnDirectoryRevision] = useState(0);
+  const turnDirectoryTurnIdsRef = useRef<Set<string>>(new Set());
+  const loadTurnDirectoryInFlightRef = useRef(false);
+  const loadTurnDirectory = useCallback(
+    async (source: string): Promise<void> => {
+      // The pre-session splash has no session to read; admin/public read-only
+      // surfaces do load their complete directory.
+      if (publicView && !publicShareTokenValue) return;
+      if (loadTurnDirectoryInFlightRef.current) return;
+      loadTurnDirectoryInFlightRef.current = true;
+      const requestSessionId = session.id;
+      setTurnDirectoryStatus((prev) => (prev === "ready" ? prev : "loading"));
+      logChatScrollEvent("turn-directory-request", {
+        surface: "session",
+        sessionId: requestSessionId,
+        sessionMode: session.mode,
+        source,
+      });
+      try {
+        const res = await fetchPaneResource(turnDirectoryRequestPathForPane());
+        if (sessionIdRef.current !== requestSessionId) return;
+        if (!res.ok) {
+          setTurnDirectoryStatus("error");
+          logChatScrollEvent("turn-directory-error", {
+            surface: "session",
+            sessionId: requestSessionId,
+            sessionMode: session.mode,
+            source,
+            status: res.status,
+          });
+          return;
+        }
+        const body = (await res.json()) as TurnDirectoryBody;
+        if (sessionIdRef.current !== requestSessionId) return;
+        const shells = normalizeProjectedTranscriptEntries(
+          Array.isArray(body.turns) ? body.turns : [],
+        );
+        const ids = new Set<string>();
+        for (const shell of shells) {
+          const tid = (shell.turnId ?? "").trim();
+          if (tid) ids.add(tid);
+        }
+        turnDirectoryTurnIdsRef.current = ids;
+        setTurnDirectoryEntries(shells);
+        setTurnDirectoryTruncated(body.truncated === true);
+        setTurnDirectoryStatus("ready");
+        logChatScrollEvent("turn-directory-loaded", {
+          surface: "session",
+          sessionId: requestSessionId,
+          sessionMode: session.mode,
+          source,
+          eventCount: shells.length,
+        });
+      } catch {
+        if (sessionIdRef.current === requestSessionId) {
+          setTurnDirectoryStatus("error");
+        }
+      } finally {
+        loadTurnDirectoryInFlightRef.current = false;
+        setTurnDirectoryRevision((n) => n + 1);
+      }
+    },
+    [
+      fetchPaneResource,
+      publicShareTokenValue,
+      publicView,
+      session.id,
+      session.mode,
+      turnDirectoryRequestPathForPane,
+    ],
+  );
+  // Drop the previous session's directory the instant the pane is pointed at a
+  // new session, so the Turns view never shows a stale turn set during the
+  // cross-session load (harmless if the pane remounts per session).
+  useEffect(() => {
+    setTurnDirectoryEntries([]);
+    setTurnDirectoryStatus("idle");
+    setTurnDirectoryTruncated(false);
+    turnDirectoryTurnIdsRef.current = new Set();
+  }, [session.id]);
+  // Load the directory when the pane becomes visible (open / tab switch /
+  // session change). The new-turn refetch effect lives lower, after
+  // renderedEntries is defined.
+  useEffect(() => {
+    if (!visible) return;
+    if (publicView && !publicShareTokenValue) return;
+    void loadTurnDirectory("open");
+  }, [visible, publicView, publicShareTokenValue, loadTurnDirectory]);
   // runningRef is read from the SSE silence watchdog so we can tell
   // whether a silent stream was silent *during a turn* (the
   // candidate-B signature) or just idle. Mirrors the visibleRef
@@ -20891,10 +21068,25 @@ function ChatPane({
   const appliedModelId = (session.runtime_model ?? "").trim();
   const modelForCostEstimate = appliedModelId || selectedModelId;
   const contextWindow = runtimeContextWindowTokens;
+  // The Turns selector is built from the durable turn directory, NOT the
+  // bounded chat window: the directory owns the COMPLETE turn set so every turn
+  // (Turn 1..N) is listable regardless of how far back the chat window paged.
+  // The live `renderedEntries` window only OVERLAYS fresh status onto the turns
+  // the directory already lists (the active/recent tail), so an in-flight turn
+  // stays live without re-reading the directory on every terminal; the live
+  // shell wins on a turnId collision. The set is always the directory's — a
+  // directory the browser hasn't loaded yields no turns here (an explicit
+  // loading/error state renders), it never falls back to listing the window.
+  // buildTurnViewItems still appends the single active turn (renderedActiveTurnId)
+  // for the sub-second gap between submitting a turn and the directory refetch.
+  const turnViewSourceEntries = useMemo(
+    () => mergeTurnDirectoryWithLiveShells(turnDirectoryEntries, renderedEntries),
+    [turnDirectoryEntries, renderedEntries],
+  );
   const turnViewItems = useMemo(
     () =>
       buildTurnViewItems(
-        renderedEntries,
+        turnViewSourceEntries,
         renderedActiveTurnId,
         activityEntriesByTurn,
         modelForCostEstimate,
@@ -20905,9 +21097,33 @@ function ChatPane({
       contextWindow,
       modelForCostEstimate,
       renderedActiveTurnId,
-      renderedEntries,
+      turnViewSourceEntries,
     ],
   );
+  // Refetch the directory when the live tail surfaces a turn it does not yet
+  // list — a turn was submitted/started after the last directory read. The
+  // directory read is durable (materialize-on-read), so the new turn joins with
+  // its durable number; until then buildTurnViewItems shows it as the active
+  // "Current turn". turnDirectoryRevision re-runs this after each load so a turn
+  // that appeared mid-load is not missed.
+  useEffect(() => {
+    if (turnDirectoryStatus !== "ready") return;
+    const known = turnDirectoryTurnIdsRef.current;
+    let hasNewTurn = false;
+    for (const entry of renderedEntries) {
+      const tid = (entry.turnId ?? "").trim();
+      if (tid && isTurnActivityEntry(entry) && !known.has(tid)) {
+        hasNewTurn = true;
+        break;
+      }
+    }
+    if (hasNewTurn) void loadTurnDirectory("new-turn");
+  }, [
+    renderedEntries,
+    turnDirectoryStatus,
+    turnDirectoryRevision,
+    loadTurnDirectory,
+  ]);
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId =
     turnViewItems.find((turn) => turn.active)?.turnId ?? null;
@@ -22607,9 +22823,45 @@ function ChatPane({
                     </div>
                   </div>
                 </div>
+              ) : turnViewItems.length === 0 &&
+                turnDirectoryStatus === "error" ? (
+                <div className="run-turn-view" aria-label="Turn view">
+                  <div className="run-turn-view-body run-transcript run-transcript-claude">
+                    <div className="run-turn-view-alert" role="alert">
+                      <span>Couldn’t load this session’s turns.</span>
+                      <button
+                        type="button"
+                        className="btn-secondary run-turn-view-alert-action"
+                        onClick={() => void loadTurnDirectory("retry")}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : turnViewItems.length === 0 &&
+                (turnDirectoryStatus === "loading" ||
+                  turnDirectoryStatus === "idle") ? (
+                <div className="run-turn-view" aria-label="Turn view">
+                  <div className="run-turn-view-body run-transcript run-transcript-claude">
+                    <div
+                      className="run-shell-loading"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <Loader2Icon
+                        size={18}
+                        className="run-spin"
+                        aria-hidden="true"
+                      />
+                      <span>Loading turns...</span>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <RunTurnActivityScreen
                   turns={turnViewItems}
+                  truncated={turnDirectoryTruncated}
                   selectedTurnId={effectiveSelectedTurnId}
                   avatar={sessionAvatar}
                   systemAvatar={systemAvatar}

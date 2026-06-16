@@ -181,6 +181,9 @@ func (s *memoryFoldRowsStore) ListLatest(context.Context, string, int) (store.Tr
 func (s *memoryFoldRowsStore) ListOldest(context.Context, string, int) (store.TranscriptRowPage, error) {
 	return store.TranscriptRowPage{}, nil
 }
+func (s *memoryFoldRowsStore) ListTurnDirectory(context.Context, string, int) (store.TurnDirectoryPage, error) {
+	return store.TurnDirectoryPage{}, nil
+}
 func (s *memoryFoldRowsStore) ListBefore(context.Context, string, string, int) (store.TranscriptRowPage, error) {
 	return store.TranscriptRowPage{}, nil
 }

@@ -168,6 +168,12 @@ const blocked = [
   // builders use `turns/` + slash and are intentionally not matched).
   { name: "retired array-position turn label", pattern: /`Turn \$\{[^}]*\bindex\b[^}]*\}`/ },
   { name: "retired turn_<uuid> public route segment", pattern: /\/turns\$\{turnId/ },
+  // The Turns selector must source its turn set from the durable turn directory
+  // (turnDirectoryEntries via /turns/directory), never from the bounded
+  // transcript window. buildTurnViewItems(renderedEntries, …) was the window
+  // derivation that hid every turn older than the ~24-row tail; the cutover
+  // feeds it turnViewSourceEntries (directory-owned set, live-overlaid).
+  { name: "window-derived Turns selector", pattern: /buildTurnViewItems\(\s*renderedEntries\b/ },
   { name: "retired runner Cosmos event module", pattern: /\b(?:agent|codex)-runner\/src\/cosmos\.ts\b/ },
   { name: "retired runner Cosmos tests", pattern: /\bcosmos\.test\.ts\b/ },
   { name: "retired session Azure config secret", pattern: /\bSESSION_AZURE_CONFIG_SECRET\b/ },
