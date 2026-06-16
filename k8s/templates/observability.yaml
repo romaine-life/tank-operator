@@ -327,6 +327,15 @@ spec:
             summary: "session-events persister terminated an event for schema reasons"
             runbook: "A producer is emitting non-Tank events to the bus. Steady-state expectation is zero. Inspect persister logs for `session bus event terminated: schema rejected`."
 
+        - alert: TankControlActionAuthorizationDenied
+          expr: increase(tank_control_action_events_total{result="forbidden"}[15m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "control-action ledger writes are being authorization-denied"
+            runbook: "A session-pod service principal is being rejected by the per-session authorization gate, so governed-git evidence (publish/CI/mergeability), break-glass requests, and PR control-actions stop landing in control_action_events — silently, because the sidecar swallows the 4xx. Steady-state is zero. A nonzero rate means either a forged-identity attempt or an authorization regression like the 2026-06-16 #1207 incident (writes gated on a caller-asserted header instead of the verified svc:tank:<id> subject). Inspect handleInternalAppendControlAction / serviceSubjectMatchesSession and confirm the exchanged subject matches the target session and scope."
+
         - alert: TankSessionEventWakePublishFailures
           expr: rate(tank_session_event_wake_publish_failure_total[10m]) > 0
             or on() rate(tank_session_list_event_publish_failure_total[10m]) > 0
