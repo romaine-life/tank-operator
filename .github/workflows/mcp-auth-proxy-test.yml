@@ -1,0 +1,41 @@
+name: mcp-auth-proxy tests
+
+# Runs the mcp-auth-proxy sidecar's pytest suite. The proxy enforces the
+# restricted-git GitHub write-tool denylist (and the read-only mint_clone_token
+# carve-out), so its tests are a security gate, not just a build artifact — the
+# image-build workflows only compile the image, they never run these tests.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'claude-container/mcp-auth-proxy/**'
+      - '.github/workflows/mcp-auth-proxy-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'claude-container/mcp-auth-proxy/**'
+      - '.github/workflows/mcp-auth-proxy-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: claude-container/mcp-auth-proxy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install (runtime deps + pytest)
+        run: pip install -e . pytest
+
+      - name: pytest
+        run: pytest -q
