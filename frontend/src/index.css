@@ -9399,12 +9399,11 @@ button:disabled {
   flex: 0 0 auto;
 }
 
-/* Break-glass "chip" — amber state + alert dot when a request awaits approval. */
-.run-pr-action-btn.has-alert {
+.run-break-glass-action-btn.has-alert {
   color: #f0b429;
 }
 
-.run-pr-action-btn.has-alert:hover {
+.run-break-glass-action-btn.has-alert:hover {
   color: #fbd457;
   background: rgba(240, 180, 41, 0.16);
 }
@@ -9477,6 +9476,12 @@ button:disabled {
   color: #f0b429;
 }
 
+.run-pr-menu-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
 .run-pr-menu-glyph {
   flex: 0 0 auto;
 }
@@ -9489,8 +9494,11 @@ button:disabled {
 }
 
 .run-pr-menu-breakglass .run-slash-desc {
-  flex: 1 1 auto;
-  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .run-pr-menu-sep {

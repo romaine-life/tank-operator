@@ -1731,6 +1731,18 @@ interface AdminBreakGlassListBody {
   requests?: AdminBreakGlassListItem[];
 }
 
+type BreakGlassApprovalMenuKind = "github" | "azure" | "model";
+
+interface BreakGlassApprovalMenuItem {
+  id: string;
+  kind: BreakGlassApprovalMenuKind;
+  href: string;
+  label: string;
+  target: string;
+  reason?: string;
+  createdAt?: string;
+}
+
 interface TestSlotSessionDefaults {
   mode: DefaultSessionMode;
   model: string;
@@ -2141,6 +2153,20 @@ function breakGlassRequestUrl(sessionId: string, requestEventId: string): string
   );
 }
 
+function testSlotModelRequestUrl(sessionId: string, requestEventId: string): string {
+  return sessionRouteUrl(
+    sessionId,
+    "test-slot-model",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    requestEventId,
+  );
+}
+
 function readBreakGlassRequestRoute(): string | null {
   const route = readSessionRouteFromPath();
   if (route?.tab === "break-glass" && route.breakGlassRequestId) {
@@ -2458,13 +2484,12 @@ interface ComposerToolButtonsProps {
   glimmungRuns: {
     runs: GlimmungRunLink[];
   };
+  breakGlass: {
+    items: BreakGlassApprovalMenuItem[];
+  };
   pullRequest: {
     latestUrl?: string;
     linkedUrl?: string;
-    breakGlass?: {
-      pending: BreakGlassRequest[];
-      sessionId?: string;
-    };
   };
   slash: {
     disabled?: boolean;
@@ -2493,12 +2518,7 @@ interface ComposerToolButtonsProps {
 function PullRequestMenuButton({
   latestUrl,
   linkedUrl,
-  breakGlass: breakGlassProp,
 }: ComposerToolButtonsProps["pullRequest"]) {
-  const breakGlass = breakGlassProp ?? {
-    pending: [] as BreakGlassRequest[],
-    sessionId: "",
-  };
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -2559,37 +2579,26 @@ function PullRequestMenuButton({
   const latest = latestUrl?.trim() ?? "";
   const linked = linkedUrl?.trim() ?? "";
   const showLinkedDistinct = Boolean(linked) && linked !== latest;
-  const pending = breakGlass.pending;
-  const pendingCount = pending.length;
   const hasLinks = Boolean(latest || linked);
-  const hasMenu = hasLinks || pendingCount > 0;
-  const title =
-    pendingCount > 0
-      ? `Break-glass request awaiting approval (${pendingCount})`
-      : hasLinks
-        ? "Pull request"
-        : "No pull request linked yet";
+  const title = hasLinks ? "Pull request" : "No pull request linked yet";
 
   return (
     <span ref={ref} className="run-pr-menu">
       <button
         ref={triggerRef}
         type="button"
-        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}${pendingCount > 0 ? " has-alert" : ""}`}
+        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}`}
         aria-label={title}
         aria-haspopup="menu"
         aria-expanded={open}
         title={title}
-        disabled={!hasMenu}
+        disabled={!hasLinks}
         onClick={() => setOpen((value) => !value)}
       >
         <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
-        {pendingCount > 0 && (
-          <span className="run-pr-alert-dot" aria-hidden="true" />
-        )}
       </button>
       {open &&
-        hasMenu &&
+        hasLinks &&
         createPortal(
           <div
             ref={popoverRef}
@@ -2638,52 +2647,144 @@ function PullRequestMenuButton({
             {!hasLinks && (
               <div className="run-slash-empty">No pull request linked yet</div>
             )}
-            <div className="run-pr-menu-sep" aria-hidden="true" />
-            {pendingCount === 0 ? (
-              <div className="run-slash-empty">
-                No break-glass request pending
-              </div>
-            ) : (
-              pending.map((request) => {
-                const approvalHref = breakGlass.sessionId
-                  ? breakGlassRequestUrl(breakGlass.sessionId, request.eventId)
-                  : "#";
-                return (
-                  <a
-                    key={request.eventId}
-                    role="menuitem"
-                    className="run-pr-menu-item run-pr-menu-breakglass"
-                    href={approvalHref}
-                    aria-disabled={breakGlass.sessionId ? undefined : true}
-                    title={
-                      request.reason
-                        ? `${request.target} — ${request.reason}`
-                        : `Open break-glass approval for ${request.target}`
-                    }
-                    onClick={(event) => {
-                      if (!breakGlass.sessionId) {
-                        event.preventDefault();
-                        return;
-                      }
-                      setOpen(false);
-                    }}
-                  >
-                    <span className="run-pr-menu-name">
-                      <ShieldAlertIcon
-                        className="run-pr-menu-glyph"
-                        size={14}
-                        aria-hidden="true"
-                      />
-                      Approve break glass
-                    </span>
-                    <span className="run-slash-desc">
-                      {request.target}
-                      {request.reason ? ` — ${request.reason}` : ""}
-                    </span>
-                  </a>
-                );
-              })
-            )}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
+function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
+  const Icon = kind === "model" ? FlaskConicalIcon : ShieldAlertIcon;
+  return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
+}
+
+function BreakGlassApprovalMenuButton({
+  items,
+}: ComposerToolButtonsProps["breakGlass"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+  const pendingCount = items.length;
+  const title =
+    pendingCount > 0
+      ? `Break-glass approvals awaiting review (${pendingCount})`
+      : "No break-glass approvals pending";
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      )
+        return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="run-pr-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-break-glass-action-btn${pendingCount > 0 ? " has-alert" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={pendingCount === 0}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ShieldAlertIcon className="run-composer-icon" aria-hidden="true" />
+        {pendingCount > 0 && (
+          <span className="run-pr-alert-dot" aria-hidden="true" />
+        )}
+      </button>
+      {open &&
+        pendingCount > 0 &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover"
+            role="menu"
+            aria-label="Break-glass approvals"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Break glass</div>
+            {items.map((item) => (
+              <a
+                key={item.id}
+                role="menuitem"
+                className="run-pr-menu-item run-pr-menu-breakglass"
+                href={item.href}
+                title={
+                  item.reason
+                    ? `${item.target} — ${item.reason}`
+                    : item.target
+                }
+                onClick={(event) => {
+                  if (!isPlainLeftClick(event)) {
+                    setOpen(false);
+                    return;
+                  }
+                  event.preventDefault();
+                  setOpen(false);
+                  navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                }}
+              >
+                <span className="run-pr-menu-main">
+                  <span className="run-pr-menu-name">
+                    <BreakGlassMenuIcon kind={item.kind} />
+                    {item.label}
+                  </span>
+                  <span className="run-slash-desc">
+                    {item.target}
+                    {item.reason ? ` — ${item.reason}` : ""}
+                  </span>
+                </span>
+              </a>
+            ))}
           </div>,
           document.body,
         )}
@@ -2831,6 +2932,7 @@ function ComposerToolButtons({
   rollout,
   test,
   glimmungRuns,
+  breakGlass,
   pullRequest,
   slash,
   mcp,
@@ -2928,6 +3030,7 @@ function ComposerToolButtons({
       </DropdownMenu>
       <GlimmungRunMenuButton {...glimmungRuns} />
       <PullRequestMenuButton {...pullRequest} />
+      <BreakGlassApprovalMenuButton {...breakGlass} />
       {bugLabelControl}
       <button
         type="button"
@@ -4560,6 +4663,7 @@ function DemoLanding() {
                         title: "Sign in to start a session",
                       }}
                       glimmungRuns={{ runs: [] }}
+                      breakGlass={{ items: [] }}
                       pullRequest={{}}
                       slash={{
                         disabled: true,
@@ -10382,6 +10486,67 @@ function splitBreakGlassScopeValues(value: string): string[] {
       seen.add(part);
       return true;
     });
+}
+
+function pendingTestSlotModelApprovalMenuItems(
+  sessionId: string,
+  rows: ControlActionRow[],
+): BreakGlassApprovalMenuItem[] {
+  const resolvedRequests = new Set<string>();
+  for (const row of rows) {
+    if (row.action !== "tank.test_slot_model.grant") continue;
+    const requestEventId = nonemptyAdminValue(
+      adminBreakGlassPayload(row).request_event_id,
+    );
+    if (requestEventId) resolvedRequests.add(requestEventId);
+  }
+  return rows
+    .flatMap((row) => {
+      const eventId = nonemptyAdminValue(row.event_id);
+      if (
+        row.action !== "tank.test_slot_model.request" ||
+        row.status !== "started" ||
+        !eventId ||
+        resolvedRequests.has(eventId)
+      ) {
+        return [];
+      }
+      const payload = adminBreakGlassPayload(row);
+      const model = nonemptyAdminValue(payload.model) ?? "unknown model";
+      const effort = nonemptyAdminValue(payload.effort) ?? "unknown effort";
+      return [{
+        id: eventId,
+        kind: "model" as const,
+        href: testSlotModelRequestUrl(sessionId, eventId),
+        label: "Agent selection",
+        target: `${model} / ${effort}`,
+        reason: nonemptyAdminValue(payload.reason),
+        createdAt: nonemptyAdminValue(row.created_at),
+      }];
+    });
+}
+
+function breakGlassApprovalMenuItemsForSession(
+  sessionId: string,
+  breakGlassRequests: BreakGlassRequest[],
+  testSlotModelRows: ControlActionRow[],
+): BreakGlassApprovalMenuItem[] {
+  const breakGlassItems = breakGlassRequests.map((request) => ({
+    id: request.eventId,
+    kind: request.kind === "azure" ? ("azure" as const) : ("github" as const),
+    href: breakGlassRequestUrl(sessionId, request.eventId),
+    label:
+      request.kind === "azure"
+        ? "Azure break glass"
+        : "GitHub break glass",
+    target: request.target,
+    reason: request.reason,
+    createdAt: request.createdAt,
+  }));
+  return [
+    ...breakGlassItems,
+    ...pendingTestSlotModelApprovalMenuItems(sessionId, testSlotModelRows),
+  ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
 function BackgroundScreen({
@@ -16829,6 +16994,15 @@ function ChatPane({
   const breakGlassRequests = useMemo(
     () => pendingBreakGlassRequests(breakGlassActionRows),
     [breakGlassActionRows],
+  );
+  const breakGlassApprovalMenuItems = useMemo(
+    () =>
+      breakGlassApprovalMenuItemsForSession(
+        session.id,
+        breakGlassRequests,
+        testSlotModelActionRows,
+      ),
+    [breakGlassRequests, session.id, testSlotModelActionRows],
   );
   const postPRLaneDecision = useCallback(
     async (
@@ -23312,13 +23486,12 @@ function ChatPane({
                 glimmungRuns={{
                   runs: glimmungRunLinks,
                 }}
+                breakGlass={{
+                  items: breakGlassApprovalMenuItems,
+                }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
                   linkedUrl: linkedPullRequestURL,
-                  breakGlass: {
-                    pending: breakGlassRequests,
-                    sessionId: session.id,
-                  },
                 }}
                 slash={{
                   title: "Show slash commands",
@@ -27922,6 +28095,7 @@ function AuthenticatedApp() {
                       title: "Available in an active chat session",
                     }}
                     glimmungRuns={{ runs: [] }}
+                    breakGlass={{ items: [] }}
                     pullRequest={{}}
                     slash={{
                       disabled: true,
