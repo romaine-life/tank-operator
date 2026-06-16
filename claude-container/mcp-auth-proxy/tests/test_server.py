@@ -839,7 +839,7 @@ def test_break_glass_approval_url_carries_request_context() -> None:
 
 
 def test_break_glass_approval_url_carries_slot_scope(monkeypatch) -> None:
-    monkeypatch.setattr("mcp_auth_proxy.server.TANK_UI_HOST", "")
+    monkeypatch.setattr("mcp_auth_proxy.server.TANK_UI_HOST", "https://tank.romaine.life")
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_SCOPE", "tank-operator-slot-2")
 
     url = _break_glass_approval_url("slot/session", "request-123")

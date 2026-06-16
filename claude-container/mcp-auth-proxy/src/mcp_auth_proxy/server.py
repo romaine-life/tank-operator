@@ -1517,11 +1517,13 @@ async def _verify_github_hot_swap_head(
 
 
 def _tank_ui_host() -> str:
+    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "").strip()
+    if re.fullmatch(r"tank-operator-slot-[0-9]+", scope) and (
+        not TANK_UI_HOST or TANK_UI_HOST == "https://tank.romaine.life"
+    ):
+        return f"https://{scope}.tank.dev.romaine.life"
     if TANK_UI_HOST:
         return TANK_UI_HOST
-    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "").strip()
-    if re.fullmatch(r"tank-operator-slot-[0-9]+", scope):
-        return f"https://{scope}.tank.dev.romaine.life"
     return "https://tank.romaine.life"
 
 
