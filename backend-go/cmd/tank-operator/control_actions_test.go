@@ -2111,6 +2111,79 @@ func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing
 	}
 }
 
+func TestHandleInternalVerifyHotSwapBlocksBehindMain(t *testing.T) {
+	prNumber := 1113
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				Action:    "github.pull_request.mergeability",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				PRNumber:  &prNumber,
+				ResultSHA: sha,
+				// Mergeable (no conflicts) but behind its base. A pre-fix watcher
+				// records this as succeeded; the gate must still refuse it, so a
+				// slot never runs (and a merge never lands) stale-relative-to-main
+				// work that changes the moment it's brought current.
+				Payload: []byte(`{"branch":"tank/session/47/tank-operator","mergeable":true,"mergeable_state":"behind"}`),
+			},
+			{
+				Action:    "github.commit.ci",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"completed":3}`),
+			},
+			{
+				Action:    "github.commit.push",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	// A blocked verification returns 409 with the structured body.
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// CI and publish are green — only the behind-main check blocks, proving the
+	// gate refuses a current-with-main failure on its own.
+	if !body.CIVerified || !body.PublishVerified {
+		t.Fatalf("expected CI+publish verified; body = %#v", body)
+	}
+	if body.MergeVerified {
+		t.Fatalf("behind-main head must not be merge-verified; body = %#v", body)
+	}
+	if body.Allowed {
+		t.Fatalf("behind-main head must not be allowed; body = %#v", body)
+	}
+	if joined := strings.Join(body.Reasons, " | "); !strings.Contains(joined, "behind") {
+		t.Fatalf("expected a behind reason; reasons = %q", joined)
+	}
+}
+
 func TestHandleInternalVerifyHotSwapBlocksPendingCI(t *testing.T) {
 	prNumber := 1113
 	sha := "0123456789abcdef0123456789abcdef01234567"
