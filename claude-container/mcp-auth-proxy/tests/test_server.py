@@ -33,6 +33,7 @@ from mcp_auth_proxy.server import (
     _first_pr_from_response,
     _filter_github_write_tools,
     _github_tool_block_response,
+    _is_read_only_clone_token_request,
     _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
     _handle_tank_azure_break_glass_tool,
@@ -1528,7 +1529,7 @@ def test_github_write_tool_block_response_returns_mcp_error() -> None:
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": {"name": "mint_clone_token", "arguments": {"repos": ["romaine-life/tank-operator"]}},
+        "params": {"name": "mint_clone_token", "arguments": {"repos": ["romaine-life/tank-operator"], "write": True}},
     }).encode()
 
     response = _github_tool_block_response(body, "mint_clone_token")
@@ -1593,6 +1594,103 @@ def test_filter_github_write_tools_removes_denied_tools_from_sse_list() -> None:
     names = [tool["name"] for tool in payload["result"]["tools"]]
 
     assert names == ["get_pull_request", "list_pull_requests"]
+
+
+def test_is_read_only_clone_token_request() -> None:
+    # No write-capability flags → read-only (mcp-github mints contents:read).
+    assert _is_read_only_clone_token_request({"repos": ["a/b"]}) is True
+    assert _is_read_only_clone_token_request({"repos": ["a/b"], "write": False}) is True
+    assert _is_read_only_clone_token_request({}) is True
+    # Any write-capability flag → not read-only.
+    assert _is_read_only_clone_token_request({"write": True}) is False
+    assert _is_read_only_clone_token_request({"workflows": True}) is False
+    assert _is_read_only_clone_token_request({"full": True}) is False
+    # Defensive: non-dict args are not read-only.
+    assert _is_read_only_clone_token_request("nope") is False  # type: ignore[arg-type]
+
+
+def _mint_clone_token_body(**arguments: object) -> bytes:
+    return json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "mint_clone_token",
+            "arguments": {"repos": ["romaine-life/tank-operator"], **arguments},
+        },
+    }).encode()
+
+
+async def _run_github_write_block_proxy(call_body: bytes) -> tuple[int, str, int]:
+    """POST `call_body` through a proxy built with block_github_write_tools=True
+    (the restricted-git GitHub-port wiring) against a recording upstream.
+    Returns (status, response_text, upstream_call_count)."""
+    upstream_calls = [0]
+
+    async def upstream_handler(request: web.Request) -> web.Response:
+        upstream_calls[0] += 1
+        return web.json_response(
+            {"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": {"token": "ro-token"}}}
+        )
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/{tail:.*}", upstream_handler)
+    upstream_server = TestServer(upstream_app)
+    await upstream_server.start_server()
+    try:
+        http = ClientSession(timeout=ClientTimeout(total=10, sock_connect=2))
+        try:
+            upstream_url = f"http://{upstream_server.host}:{upstream_server.port}"
+            proxy_app = web.Application()
+            proxy_app.router.add_route(
+                "*",
+                "/{tail:.*}",
+                _make_handler(
+                    upstream_url,
+                    http,
+                    _StaticTokenProvider("sa-token"),
+                    block_github_write_tools=True,
+                ),
+            )
+            proxy_server = TestServer(proxy_app)
+            client = TestClient(proxy_server)
+            await client.start_server()
+            try:
+                resp = await client.post("/", data=call_body)
+                text = await resp.text()
+                return resp.status, text, upstream_calls[0]
+            finally:
+                await client.close()
+        finally:
+            await http.close()
+    finally:
+        await upstream_server.close()
+
+
+def test_read_only_mint_clone_token_is_forwarded_in_restricted_mode() -> None:
+    # The read-only mint is what makes `gh`/`git fetch` work for reads: it must
+    # reach mcp-github, not get blocked.
+    status, body, upstream_calls = asyncio.run(
+        _run_github_write_block_proxy(_mint_clone_token_body())
+    )
+    assert status == 200
+    assert upstream_calls == 1
+    payload = json.loads(body)
+    assert payload["result"]["structuredContent"]["token"] == "ro-token"
+
+
+def test_write_mint_clone_token_is_blocked_in_restricted_mode() -> None:
+    # write / workflows / full mints would hand the shell a push-capable token —
+    # blocked at the proxy, never reaching mcp-github.
+    for args in ({"write": True}, {"write": True, "workflows": True}, {"full": True}):
+        status, body, upstream_calls = asyncio.run(
+            _run_github_write_block_proxy(_mint_clone_token_body(**args))
+        )
+        assert status == 200, args  # JSON-RPC error rides an HTTP 200
+        assert upstream_calls == 0, args
+        payload = json.loads(body)
+        assert payload["error"]["code"] == -32010, args
+        assert "restricted Git mode" in payload["error"]["message"], args
 
 
 def test_repo_slug_from_remote_accepts_https_and_ssh() -> None:

@@ -309,8 +309,13 @@ Every mutation in `romaine-life/mcp-github/src/mcp_github/tools.py` resolves bas
 Pair with: normal Tank sessions no longer expose raw GitHub write tokens to the
 agent shell. The Tank-owned `publish_current_head` MCP path owns session branch
 pushes, records each commit, and starts CI/mergeability watching. Direct
-`git push`, `mint_clone_token`, and GitHub MCP file/PR write tools are blocked
-in normal mode so there is one governed path from commit to CI evidence.
+`git push`, write-capable `mint_clone_token` (write/workflows/full), and GitHub
+MCP file/PR write tools are blocked in restricted mode so there is one governed
+path from commit to CI evidence. Reads are NOT blocked: a read-only
+`mint_clone_token` is allowed through, so the mode-aware credential helper and
+`gh` wrapper give the agent automatic read-only `git`/`gh` access (and the GitHub
+read MCP tools work as always). See the "Restricted Session Read-Only Git Access"
+capability in `docs/features/session-lifecycle/capabilities.md`.
 
 ### azure-mcp config keys
 

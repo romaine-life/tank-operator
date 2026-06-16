@@ -352,8 +352,10 @@ Contract impact:
 - `repo-cloner` prepares the governed branch and draft PR before the repo is
   marked cloned.
 - The user-facing sandbox has no normal direct-push path. The `pre-push` hook
-  fails loudly, and the localhost GitHub MCP proxy denies raw write-token and
-  file/PR write tools in normal mode.
+  fails loudly, and the localhost GitHub MCP proxy denies write-capable
+  `mint_clone_token` and file/PR write tools in restricted mode (a read-only
+  `mint_clone_token` is allowed through so reads keep working — see "Restricted
+  Session Read-Only Git Access").
 - The `post-commit` hook calls the Tank MCP publish tool rather than printing
   reminder-only guidance.
 - Commit publication, CI state, PR creation, and mergeability are durable
@@ -508,29 +510,81 @@ Contract impact:
   the session cannot already mint through the MCP tool surface; it removes the
   manual step.
 - `gh` is durable the same way: the session image bakes a `gh` wrapper at
-  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that, for
-  non-restricted sessions, mints a fresh token (scoped to the `/workspace` repos
-  plus any `--repo`/`-R` arg) and execs the real gh — so `gh` never needs a
-  manual re-auth. Restricted sessions pass straight through (gh stays
-  unauthenticated; the governed path owns credentials). See
+  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that mints a fresh
+  token (scoped to the `/workspace` repos plus any `--repo`/`-R` arg) and execs
+  the real gh — so `gh` never needs a manual re-auth. The scope is mode-aware:
+  full read/write in non-restricted mode, read-only in restricted mode (see
+  "Restricted Session Read-Only Git Access" below). See
   `session-images/gh-tank-wrapper.sh`.
-- `repo-cloner` only scrubs the cloned repo's local `credential.helper` in
-  restricted mode. In non-restricted mode the clone keeps no local override, so
-  it inherits the global auto-minting helper. (An empty local `credential.helper`
-  clears the helper list and was the reason a non-restricted clone could not
-  push.)
+- `repo-cloner` keeps no local `credential.helper` override in either mode, so
+  the clone inherits the global mode-aware helper (full in non-restricted,
+  read-only in restricted). (An empty local `credential.helper` clears the helper
+  list — it was the reason a non-restricted clone could not push, and would also
+  disable restricted-mode reads, so it is no longer written.)
 - The helper ships in the `tank-session-config` ConfigMap and is mounted into
-  every session pod under `/opt/tank/session-config/`; it is only wired up in
-  non-restricted mode.
+  every session pod under `/opt/tank/session-config/`; it is wired up in both
+  modes (mode-aware scope).
 
 Evidence:
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
   (`TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedGit`)
   covers non-restricted⇒helper-wired / no governed hooks, and
-  (`TestInstallAgentGitTemplateScriptRunsUnderSh`) keeps restricted⇒hooks.
+  (`TestInstallAgentGitTemplateScriptRunsUnderSh`) covers restricted⇒hooks **and**
+  the read-only helper wired alongside them.
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
-  (`TestGitCredentialTankHelperMintsToken`) covers the helper's mint request
-  shape, SSE reply parsing, and non-github bail.
+  (`TestGitCredentialTankHelperMintsToken`) covers the helper's mode-aware mint
+  request shape (full vs read-only), SSE reply parsing, and non-github bail.
+
+## Restricted Session Read-Only Git Access
+
+Status: complete
+
+Intent:
+A restricted session (`TANK_RESTRICTED_GIT=true`) governs *writes* — pushes go
+through `publish_current_head` / break-glass, not a raw token in the shell — but
+it must not feel like *reads* are disabled. The agent already has full GitHub
+read access through the GitHub read MCP tools and the pre-cloned `/workspace`
+repos; restricted sessions additionally get automatic **read-only** git/`gh`
+access so the familiar tools (`gh pr view`, `gh run view`, `git fetch`/`clone`)
+just work and an agent does not wrongly conclude "read is disabled here". A
+read-only token grants nothing the session can't already do via the read MCP
+tools and cannot push, so it does not weaken the governed-write invariant.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `git-credential-tank.sh` and the `gh` wrapper are **mode-aware**: in restricted
+  mode they request `mint_clone_token` with no `write`/`workflows`/`full`, so
+  mcp-github mints a `{contents: read, metadata: read}` token. Non-restricted
+  mode is unchanged (full read/write).
+- `install-agent-git-template.sh` installs the credential helper in **both**
+  modes; the elevated cluster kubeconfig stays non-restricted-only.
+- `repo-cloner.sh` no longer writes an empty local `credential.helper` in
+  restricted mode, so cloned repos inherit the global read-only helper.
+- The mcp-auth-proxy keeps `mint_clone_token` and the file/PR write tools on the
+  restricted-mode denylist, but **allows a read-only `mint_clone_token`** through
+  to mcp-github (`_is_read_only_clone_token_request`); `write`/`workflows`/`full`
+  mints are still blocked with the governed-path error. This carve-out is the
+  only thing that lets the mode-aware helper/wrapper mint at all.
+- Writes stay governed regardless: the `pre-push` hook still fails direct pushes
+  and a read-only token cannot push even if the hook is bypassed.
+- Observability:
+  `tank_mcp_auth_proxy_github_write_tool_decision_total{tool,decision}` counts
+  `allowed_read_only` vs `blocked` decisions on the denylist.
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_read_only_mint_clone_token_is_forwarded_in_restricted_mode`,
+  `test_write_mint_clone_token_is_blocked_in_restricted_mode`,
+  `test_is_read_only_clone_token_request`).
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperMintsToken`, `TestGhTankWrapperMintsModeAwareToken`
+  assert the read-only request shape in restricted mode;
+  `TestInstallAgentGitTemplateScriptRunsUnderSh` asserts the helper installs in
+  restricted mode).
 
 ## Non-Restricted Session Read-Only DB Access
 

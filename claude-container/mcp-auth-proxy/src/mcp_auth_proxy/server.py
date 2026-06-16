@@ -54,6 +54,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from .metrics import (
     record_auth_romaine_exchange,
+    record_github_write_tool_decision,
     record_proxy_request,
     record_proxy_retry,
     record_sa_token_read,
@@ -120,6 +121,28 @@ _GITHUB_WRITE_TOOL_DENYLIST = {
     "merge_pull_request",
     "update_issue",
 }
+# mint_clone_token is on the denylist because a write-capable token in the
+# session shell would bypass the governed publish path. A *read-only* mint
+# (contents:read, the mcp-github default) is different: it grants nothing the
+# session can't already do through the GitHub read MCP tools, and it cannot
+# push. We allow that one shape through in restricted mode so `gh` and
+# `git fetch`/`clone` keep working for reads; write/workflows/full stay blocked.
+_GITHUB_READ_ONLY_MINTABLE_TOOL = "mint_clone_token"
+
+
+def _is_read_only_clone_token_request(arguments: dict) -> bool:
+    """True for a mint_clone_token call that requests no write capability.
+
+    mcp-github mints {contents: read, metadata: read} unless write/workflows/full
+    is set, so the absence of all three is exactly a read-only token.
+    """
+    if not isinstance(arguments, dict):
+        return False
+    return not (
+        bool(arguments.get("write"))
+        or bool(arguments.get("workflows"))
+        or bool(arguments.get("full"))
+    )
 _CI_ENFORCEMENT_TEXT = (
     "Tank quality gate: watch the PR's current HEAD CI checks until they pass, "
     "confirm there are no merge conflicts, and do not hand work back as complete "
@@ -4396,8 +4419,16 @@ def _make_handler(
         if block_github_write_tools:
             parsed_tool = _parse_mcp_tool_call(body)
             if parsed_tool is not None and parsed_tool[0] in _GITHUB_WRITE_TOOL_DENYLIST:
-                record_proxy_request(mcp_label, 200)
-                return _github_tool_block_response(body, parsed_tool[0])
+                tool_name, tool_args = parsed_tool
+                if tool_name == _GITHUB_READ_ONLY_MINTABLE_TOOL and _is_read_only_clone_token_request(tool_args):
+                    # Read-only clone token (no write/workflows/full): allowed in
+                    # restricted mode so `gh` and `git fetch`/`clone` work for
+                    # reads. Falls through to the normal upstream forward below.
+                    record_github_write_tool_decision(tool_name, "allowed_read_only")
+                else:
+                    record_github_write_tool_decision(tool_name, "blocked")
+                    record_proxy_request(mcp_label, 200)
+                    return _github_tool_block_response(body, tool_name)
 
         parsed_method = _parse_mcp_method(body)
         if tank_publish_provider is not None and parsed_method is not None:

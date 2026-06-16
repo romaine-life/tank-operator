@@ -410,11 +410,14 @@ for slug in "${REPOS[@]}"; do
     git clone "${clone_args[@]}" "https://github.com/${slug}.git" "$tmp_target"; then
     mv "$tmp_target" "$target"
     if [ "$restricted_git" = "true" ]; then
-      # Scrub the local credential helper so the one-shot clone token cannot be
-      # reused and pushes must go through the governed Tank MCP publish path.
-      # Non-restricted clones intentionally keep no local override, so they
-      # inherit the global auto-minting credential helper (full git access).
-      git -C "$target" config --local credential.helper ""
+      # Leave NO local credential.helper override so the clone inherits the
+      # global mode-aware helper, which mints READ-ONLY tokens in restricted
+      # mode — so clone/fetch/pull keep working for reads. (An empty local value
+      # clears the helper list and would disable those reads; that was the old
+      # behavior.) Writes stay governed regardless: the pre-push hook blocks
+      # pushes and a read-only token cannot push, so the one-shot write token
+      # used for this clone is not reusable from the agent shell.
+      git -C "$target" config --local --unset-all credential.helper 2>/dev/null || true
       if ! create_session_branch_pr "$slug" "$target"; then
         msg="governed session branch PR setup failed"
         set_repo_state "$slug" "failed" "$target" "$msg"
