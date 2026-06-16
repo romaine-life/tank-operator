@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -592,6 +593,47 @@ func TestProjectTranscriptEventsKeepsSnapshotAndTerminalUsageDistinct(t *testing
 	terminalObservation := transcriptAnyMap(terminalAnnotated["usageObservation"])
 	if got, want := terminalObservation["usage_source"], "claude.result"; got != want {
 		t.Fatalf("terminal source = %#v, want %#v in %#v", got, want, terminalAnnotated)
+	}
+}
+
+func TestAnnotateProjectionTerminalScopesUsageToFinalAnswer(t *testing.T) {
+	usage := map[string]any{"input_tokens": float64(120), "output_tokens": float64(30)}
+	observation := map[string]any{"usage_source": "thread.tokenUsage.updated"}
+	terminal := turnTerminalProjection{
+		TurnID:           "turn-1",
+		Status:           "completed",
+		Usage:            usage,
+		UsageObservation: observation,
+		FinalAnswerIDs:   map[string]bool{"turn-1:item:answer": true},
+	}
+	progress := annotateProjectionTerminal(map[string]any{
+		"id":     "turn-1:item:progress",
+		"kind":   "message",
+		"role":   "assistant",
+		"turnId": "turn-1",
+	}, map[string]turnTerminalProjection{"turn-1": terminal})
+	if progress["turnUsage"] != nil {
+		t.Fatalf("progress row inherited terminal usage: %#v", progress)
+	}
+	tool := annotateProjectionTerminal(map[string]any{
+		"id":     "turn-1:item:tool",
+		"kind":   "tool",
+		"turnId": "turn-1",
+	}, map[string]turnTerminalProjection{"turn-1": terminal})
+	if tool["turnUsage"] != nil {
+		t.Fatalf("tool row inherited terminal usage: %#v", tool)
+	}
+	answer := annotateProjectionTerminal(map[string]any{
+		"id":     "turn-1:item:answer",
+		"kind":   "message",
+		"role":   "assistant",
+		"turnId": "turn-1",
+	}, map[string]turnTerminalProjection{"turn-1": terminal})
+	if got := answer["turnUsage"]; !reflect.DeepEqual(got, usage) {
+		t.Fatalf("final answer turnUsage = %#v, want %#v in %#v", got, usage, answer)
+	}
+	if got := answer["usageObservation"]; !reflect.DeepEqual(got, observation) {
+		t.Fatalf("final answer usageObservation = %#v, want %#v in %#v", got, observation, answer)
 	}
 }
 

@@ -4048,6 +4048,15 @@ TANK_OPERATOR_MCP_PORT = 9996
 SPIRELENS_MCP_PORT = 9997
 GRAFANA_MCP_PORT = 9998
 
+# Upstreams whose Authorization bearer is the auth.romaine.life service JWT
+# (not the pod SA token). mcp-github / SpireLens verify the JWT directly;
+# mcp-tank-operator joined this set once its kube-rbac-proxy sidecar — the only
+# thing that consumed the SA-token bearer — was removed (mcp-tank-operator#31),
+# leaving the JWT (also forwarded in X-Auth-Romaine-Token) as its sole identity.
+# Every other in-cluster MCP still sits behind a kube-rbac-proxy that
+# TokenReviews the SA-token bearer, so they stay on ServiceAccountTokenProvider.
+JWT_BEARER_PORTS = frozenset({GITHUB_MCP_PORT, SPIRELENS_MCP_PORT, TANK_OPERATOR_MCP_PORT})
+
 # Optional tailnet upstream: the SpireLens game-host MCP (spire-lens-mcp's
 # server.py --transport http). Unlike the in-cluster .svc upstreams below it
 # lives on the Tailscale tailnet (tag:spirelens-host), so its requests are
@@ -4677,25 +4686,39 @@ async def run() -> None:
             # RFC 7591 Dynamic Client Registration â€” also intercepted so the
             # SDK gets a JSON 404 rather than an upstream plain-text one.
             app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
-            if port in (GITHUB_MCP_PORT, SPIRELENS_MCP_PORT):
-                # Both authenticate with the auth.romaine.life service JWT as
+            if port in JWT_BEARER_PORTS:
+                # These authenticate with the auth.romaine.life service JWT as
                 # the bearer. mcp-github verifies it against the IdP's JWKS and
                 # resolves the caller's GitHub App installation by calling
                 # tank-operator's /api/internal/github/installation with the
                 # same bearer forwarded; the SpireLens game-host MCP validates
-                # it directly with --auth-mode jwt.
+                # it directly with --auth-mode jwt. mcp-tank-operator no longer
+                # runs a kube-rbac-proxy sidecar (its per-caller RBAC allowlist
+                # was removed in mcp-tank-operator#31): authorization is the
+                # auth.romaine.life JWT, validated by the orchestrator, so there
+                # is no SA token for a transport gate to TokenReview and the
+                # bearer is the JWT here too. The JWT also still rides the
+                # X-Auth-Romaine-Token side header below — that, not
+                # Authorization, is the identity contract its
+                # CallerIdentityMiddleware reads.
                 token_provider = auth_romaine_provider
             else:
                 token_provider = ServiceAccountTokenProvider()
 
             # mcp-tank-operator, mcp-glimmung, mcp-grafana, and mcp-azure-personal
             # gate their tool surface on the caller's auth.romaine.life service
-            # JWT (read from X-Auth-Romaine-Token because Authorization carries
-            # the SA token kube-rbac-proxy validates in front of each). Inject
-            # the header so the upstreams can attribute and authorize every call
-            # to the originating session/user. For mcp-azure-personal this JWT,
-            # plus the caller-session headers below, is what lets the server look
-            # up the session's break-glass grant and refuse without one.
+            # JWT, read from X-Auth-Romaine-Token. For mcp-glimmung, mcp-grafana,
+            # and mcp-azure-personal the Authorization bearer carries the SA token
+            # their kube-rbac-proxy sidecar TokenReviews in front of each, so the
+            # JWT has to ride this side header. mcp-tank-operator has no such
+            # sidecar (removed in mcp-tank-operator#31) and already takes the JWT
+            # as its bearer above; the side header stays its identity contract
+            # (CallerIdentityMiddleware reads X-Auth-Romaine-Token, not
+            # Authorization). Inject the header so the upstreams can attribute and
+            # authorize every call to the originating session/user. For
+            # mcp-azure-personal this JWT, plus the caller-session headers below,
+            # is what lets the server look up the session's break-glass grant and
+            # refuse without one.
             extra_header_provider = None
             if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT, AZURE_MCP_PORT):
                 async def _provide_auth_romaine_header(
