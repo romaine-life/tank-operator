@@ -7401,27 +7401,54 @@ function isPlainLeftClick(
   );
 }
 
+function sameOriginAppRouteHref(href: string | undefined): string | null {
+  if (!href) return null;
+  let url: URL;
+  try {
+    url = new URL(href, window.location.href);
+  } catch {
+    return null;
+  }
+  if (url.origin !== window.location.origin) return null;
+  const isAppRoute = Boolean(
+    readSessionRouteFromPathname(url.pathname) ||
+      readAppRouteFromPathname(url.pathname) ||
+      readHomeRouteFromPathname(url.pathname),
+  );
+  return isAppRoute ? url.href : null;
+}
+
 export function RunMarkdownLink(
   props: AnchorHTMLAttributes<HTMLAnchorElement>,
 ) {
   const { openWorkspacePath, workspacePathHref } = useContext(RunContext);
   const workspaceTarget =
     typeof props.href === "string" ? workspacePathFromHref(props.href) : null;
+  const appRouteHref = workspaceTarget
+    ? null
+    : sameOriginAppRouteHref(props.href);
   const href = workspaceTarget
     ? (workspacePathHref(workspaceTarget) ?? props.href)
-    : props.href;
+    : (appRouteHref ?? props.href);
   return (
     <a
       {...props}
       href={href}
-      rel={workspaceTarget ? undefined : "noreferrer"}
-      target={workspaceTarget ? undefined : "_blank"}
+      rel={workspaceTarget || appRouteHref ? undefined : "noreferrer"}
+      target={workspaceTarget || appRouteHref ? undefined : "_blank"}
       onClick={(e) => {
         props.onClick?.(e);
-        if (e.defaultPrevented || !workspaceTarget) return;
+        if (e.defaultPrevented) return;
         if (!isPlainLeftClick(e)) return;
-        e.preventDefault();
-        openWorkspacePath(workspaceTarget);
+        if (workspaceTarget) {
+          e.preventDefault();
+          openWorkspacePath(workspaceTarget);
+          return;
+        }
+        if (appRouteHref) {
+          e.preventDefault();
+          navigateToSessionRoute(appRouteHref);
+        }
       }}
     />
   );
@@ -10154,6 +10181,11 @@ function BreakGlassRequestPage({
   const pending = Boolean(request && !decision && request.status === "started");
   const busy = Boolean(requestId && busyEventId === requestId);
   const kind = request?.action === "azure.break_glass.request" ? "azure" : "git";
+  const approvalTitle = request
+    ? `${adminBreakGlassKind(request)} approval`
+    : "Break glass approval";
+  const accessType = request ? adminBreakGlassAccessType(request) : "";
+  const target = request ? adminBreakGlassTarget(request) : requestId ?? "Request";
   const status = !request ? "loading" : decision ? adminBreakGlassStatusLabel(adminBreakGlassStatus({ request, decision, pending: false })) : pending ? "pending" : "closed";
   const repoValues = splitBreakGlassScopeValues(repoText);
   const branchValues = splitBreakGlassScopeValues(branchText);
@@ -10190,8 +10222,11 @@ function BreakGlassRequestPage({
           <div className="break-glass-page-title">
             <ShieldAlertIcon aria-hidden="true" />
             <div>
-              <h2>Break glass</h2>
-              <p>{request ? adminBreakGlassTarget(request) : requestId ?? "Request"}</p>
+              <h2>{approvalTitle}</h2>
+              <p className="break-glass-page-subtitle">
+                {accessType && <span>{accessType}</span>}
+                <code>{target}</code>
+              </p>
             </div>
           </div>
           <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : status === "denied" ? "denied" : "pending"}`}>
@@ -10202,6 +10237,14 @@ function BreakGlassRequestPage({
         {request ? (
           <>
             <dl className="break-glass-facts">
+              <div>
+                <dt>Type</dt>
+                <dd>{adminBreakGlassKind(request)}</dd>
+              </div>
+              <div>
+                <dt>Target</dt>
+                <dd>{adminBreakGlassTarget(request)}</dd>
+              </div>
               <div>
                 <dt>Session</dt>
                 <dd>{sessionId}</dd>
@@ -14979,7 +15022,13 @@ function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): 
 }
 
 function adminBreakGlassKind(row: ControlActionRow): string {
-  return row.action === "azure.break_glass.request" ? "Azure" : "GitHub";
+  return row.action === "azure.break_glass.request" ? "Azure break glass" : "GitHub break glass";
+}
+
+function adminBreakGlassAccessType(row: ControlActionRow): string {
+  return row.action === "azure.break_glass.request"
+    ? "Azure personal MCP access"
+    : "GitHub write access";
 }
 
 function adminBreakGlassTarget(row: ControlActionRow): string {

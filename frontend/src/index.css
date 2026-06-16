@@ -6758,9 +6758,25 @@ button:disabled {
 .break-glass-page-title p {
   margin: 0.15rem 0 0;
   color: var(--text-muted);
-  font-family: var(--font-mono);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
+}
+
+.break-glass-page-subtitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.55rem;
+}
+
+.break-glass-page-subtitle span {
+  color: var(--text-body);
+}
+
+.break-glass-page-subtitle code {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .break-glass-facts {
