@@ -81,7 +81,7 @@ Contract impact:
   turns and sets `truncated`, surfaced in the UI and counted — never a silent cap.
 
 Evidence:
-- Backend: migration `0163` (partial index `session_transcript_rows_turn_directory`),
+- Backend: migration `0164` (partial index `session_transcript_rows_turn_directory`),
   `SessionTranscriptRowStore.ListTurnDirectory`, `GET /turns/directory` on owner
   / public-share / admin-hidden surfaces, `tank_turn_directory_list_total` +
   `tank_turn_directory_size`, store integration tests (ordering, bgtask/non-shell

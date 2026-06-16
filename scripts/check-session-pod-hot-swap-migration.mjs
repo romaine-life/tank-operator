@@ -23,8 +23,9 @@
 //   3. Nothing else is touched that already works — orchestrator hot-swap
 //      paths, tank-supervisor source, the orchestrator Dockerfile, the
 //      orchestrator backend hot-swap wiring, k8s/values.yaml's orchestrator
-//      hot-swap defaults, and the existing static + backend sub-blocks of
-//      README's test_slot_hot_swap entry retain their behavior.
+//      hot-swap defaults, and README's static + backend test_slot_hot_swap
+//      entries retain their behavior and declare the apply-endpoint fields
+//      needed for governed slot swaps.
 //
 // After merge, this script stays in scripts/ as a regression guard.
 //
@@ -314,22 +315,20 @@ const CHECKS = [
     base: "origin/main",
   },
   {
-    id: "readme-static-block-unchanged",
+    id: "readme-static-apply-fields",
     from: "Checkbox 3: nothing else touched",
-    description: "the static sub-block of README's test_slot_hot_swap is unchanged (only SDK runner sub-blocks are added)",
-    kind: "json-block-unchanged",
+    description: "README's static hot-swap contract declares build_command, pod_selector, container, and builder_image for the apply endpoint",
+    kind: "grep-present",
     file: "README.md",
-    parentJSONPath: ["test_slot_hot_swap"],
-    subKey: "static",
+    pattern: /"static"[\s\S]{0,500}?"build_command"\s*:\s*"cd frontend && npm ci && npm run build"[\s\S]{0,500}?"pod_selector"\s*:\s*"app\.kubernetes\.io\/name=tank-operator"[\s\S]{0,500}?"container"\s*:\s*"tank-operator"[\s\S]{0,500}?"builder_image"\s*:\s*"node:20-alpine"/,
   },
   {
-    id: "readme-backend-block-unchanged",
+    id: "readme-backend-apply-fields",
     from: "Checkbox 3: nothing else touched",
-    description: "the backend sub-block of README's test_slot_hot_swap is unchanged",
-    kind: "json-block-unchanged",
+    description: "README's backend hot-swap contract declares pod_selector, container, builder_image, and health_port for governed backend apply",
+    kind: "grep-present",
     file: "README.md",
-    parentJSONPath: ["test_slot_hot_swap"],
-    subKey: "backend",
+    pattern: /"backend"[\s\S]{0,700}?"health_path"\s*:\s*"\/healthz"[\s\S]{0,300}?"health_port"\s*:\s*8000[\s\S]{0,300}?"pod_selector"\s*:\s*"app\.kubernetes\.io\/name=tank-operator"[\s\S]{0,300}?"container"\s*:\s*"tank-operator"[\s\S]{0,300}?"builder_image"\s*:\s*"golang:1\.26-alpine"/,
   },
 
   // ───────────── Executable gates ─────────────

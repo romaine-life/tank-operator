@@ -1253,7 +1253,6 @@ var schemaMigrations = []migration{
 		ON control_action_events (owner_email, session_scope, session_id, created_at DESC)`},
 	{ID: "0105", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
 		ON control_action_events (source_service, target_kind, target_ref, created_at DESC)`},
-
 	// Repair guard for the runtime-context migrations after a branch image wrote
 	// a production ledger checksum under the same IDs before the final main
 	// migration text landed. These statements are idempotent and intentionally
@@ -2000,6 +1999,16 @@ var schemaMigrations = []migration{
 	)`},
 	{ID: "0162", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_refresh_state_retry
 		ON provider_quota_refresh_state (session_scope, next_retry_at)`},
+	{ID: "0163", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS control_action_events_break_glass_request_decision
+		ON control_action_events (session_scope, session_id, (payload->>'request_event_id'))
+		WHERE action IN (
+			'github.break_glass.grant',
+			'github.break_glass.deny',
+			'azure.break_glass.grant',
+			'azure.break_glass.deny'
+		)
+		  AND payload ? 'request_event_id'
+		  AND payload->>'request_event_id' <> ''`},
 
 	// The durable turn directory (GET /api/sessions/{id}/turns/directory) reads
 	// the COMPLETE, submission-ordered set of turn_activity shell rows so the
@@ -2009,7 +2018,7 @@ var schemaMigrations = []migration{
 	// that "all shells for one session, ordered" scan without touching the
 	// per-turn child rows the cursor index also covers. Owned by
 	// internal/store/session_transcript_rows.go ListTurnDirectory.
-	{ID: "0163", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_turn_directory
+	{ID: "0164", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_turn_directory
 		ON session_transcript_rows (tank_session_id, row_cursor)
 		WHERE row_kind = 'turn_activity'`},
 }

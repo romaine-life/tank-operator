@@ -501,6 +501,24 @@ All metric names are prefixed `tank_`. The full namespace:
   runner cannot reliably emit from inside the killed process. Correlate it with
   durable turn lifecycle and scheduled-wakeup rows to distinguish a missing
   schedule intent from a fired wake whose runner died mid-turn.
+  `reason="error"` (exit-1) is the crash-loop signal
+  `TankSessionContainerCrashLooping` alerts on — the session-979 class where an
+  agent-runner cannot resume a gone provider-session transcript and the kubelet
+  restarts it forever.
+- `tank_session_pod_reaped_total{reason}` — session pods the orchestrator
+  actively deleted to STOP them (distinct from user/idle deletes):
+  `reason="provider_fatal"` is a runner-reported unrecoverable session;
+  `reason="runner_crashloop"` is the K8s-watch restart-budget backstop killing a
+  pod still looping past the budget. Each reap converts an unbounded
+  CrashLoopBackOff into a terminal Failed session; a crash-loop rate with no
+  matching reap is the regression signature.
+- `tank_runner_unrecoverable_exit_total{reason}` — runner terminal exits taken
+  because the session cannot progress on restart.
+  `reason="provider_session_lost"` is a resume whose on-disk transcript was wiped
+  by a container restart (the runner reports `session.provider_fatal` and exits
+  terminally instead of crash-looping); `reason="report_failed"` is a failed
+  provider-fatal POST (the backstop is then the safety net). Steady state is
+  zero.
 - `tank_session_run_config_rejected_total` - backend rejections of invalid
   session mode/model/effort requests before runner dispatch. Labels are bounded:
   `surface` (`create`, `turn`, `runtime_config`, `other`), `provider`
@@ -1075,6 +1093,13 @@ declares one rule group per subsystem:
   `turn.interrupt_requested` persist/publish failures (the durable stop
   boundary; non-zero rate means stops are losing durability or never
   reaching the runner).
+- **Session pod lifecycle**: `TankSessionContainerOOMKilled` (a session
+  container was OOMKilled), `TankSessionContainerCrashLooping` (a session
+  container is exiting non-zero and restarting — the session-979 unrecoverable
+  agent-runner resume class), and `TankSessionProviderFatal` (a runner declared
+  a session terminally Failed and its pod was reaped). The crash-loop alert
+  firing without a matching `tank_session_pod_reaped_total` increment means the
+  runner terminal path or the restart-budget backstop regressed.
 - **Persister pipeline** (tank-operator#1051):
   `TankSessionEventPersisterBacklog` pages when the persister durable's
   pending backlog or processed-event age is sustained — every session's

@@ -237,7 +237,7 @@ spec:
             # Public hostname the orchestrator uses to build session URLs in
             # internal session API responses (mcp-tank-operator uses these).
             - name: TANK_UI_HOST
-              value: {{ .Values.internalApi.tankUiHost | quote }}
+              value: {{ include "tank-operator.publicUIHost" . | quote }}
             # Projected SA token used by /api/github/repos. The backend
             # exchanges it on-behalf-of the SPA caller at auth.romaine.life,
             # then calls mcp-github over the cluster network.

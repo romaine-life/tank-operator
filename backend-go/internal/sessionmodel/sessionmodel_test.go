@@ -206,6 +206,7 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		SessionImage:            "claude-image",
 		CodexSessionImage:       "codex-image",
 		TankOperatorInternalURL: "http://tank-operator.test",
+		TankUIHost:              "https://tank-slot.test",
 		AgentAvatarID:           "jp1-grant",
 		SystemAvatarID:          "jp1-lex",
 	})
@@ -254,6 +255,9 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	mcpProxyEnv := containerEnv(mcpProxy)
 	if got, want := mcpProxyEnv["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.test"; got != want {
 		t.Fatalf("mcp-auth-proxy TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
+	}
+	if got, want := mcpProxyEnv["TANK_UI_HOST"], "https://tank-slot.test"; got != want {
+		t.Fatalf("mcp-auth-proxy TANK_UI_HOST = %v, want %q", got, want)
 	}
 	if got, want := mcpProxyEnv["MCP_GITHUB_URL"], "http://mcp-github.mcp-github.svc:80"; got != want {
 		t.Fatalf("mcp-auth-proxy MCP_GITHUB_URL = %v, want %q", got, want)

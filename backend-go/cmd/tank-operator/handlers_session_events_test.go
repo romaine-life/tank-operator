@@ -602,6 +602,67 @@ func TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation(t *testing.
 	}
 }
 
+func TestHandleSessionTurnActivityProjectsBackgroundWakePromptContext(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+
+	const wakePrompt = "A background task you started earlier has finished while this session was idle.\n\nTask id: task-ci\nFinal status: completed\n\nReview the task output and continue."
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "00000001", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{
+			"status":  "submitted",
+			"source":  "background-task",
+			"task_id": "task-ci",
+			"prompt":  wakePrompt,
+		}),
+		projectionTestEvent("wake-final", "00000002", "item.completed", "assistant", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:final", map[string]any{
+			"kind": "message",
+			"text": "CI passed. The branch is ready.",
+		}),
+		projectionTestEvent("wake-terminal", "00000003", "turn.completed", "runner", "claude", "turn_bgtask-task-ci", "", projectionFinalAnswerPayload("turn_bgtask-task-ci:item:final")),
+	}
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: events, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/turn_bgtask-task-ci/activity", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn_bgtask-task-ci")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	contextEntry, _ := body["turn_context"].(map[string]any)
+	if contextEntry == nil {
+		t.Fatalf("turn_context missing from response: %s", res.Body.String())
+	}
+	if got := contextEntry["text"]; got != wakePrompt {
+		t.Fatalf("turn_context.text = %#v, want wake prompt: %#v", got, contextEntry)
+	}
+	if got := contextEntry["role"]; got != "user" {
+		t.Fatalf("turn_context.role = %#v, want user: %#v", got, contextEntry)
+	}
+	if got := contextEntry["authorKind"]; got != "system" {
+		t.Fatalf("turn_context.authorKind = %#v, want system: %#v", got, contextEntry)
+	}
+	if got := contextEntry["turnContextSource"]; got != "background-task" {
+		t.Fatalf("turn_context.turnContextSource = %#v, want background-task: %#v", got, contextEntry)
+	}
+	entries, _ := body["entries"].([]any)
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		if entry["kind"] == "message" && entry["role"] == "user" && entry["text"] == wakePrompt {
+			t.Fatalf("wake prompt duplicated into activity entries: %#v", entries)
+		}
+	}
+}
+
 func TestHandleSessionTurnActivityDefaultsNeedsInputToQuestionPage(t *testing.T) {
 	app := adminTestServer(t)
 	app.sessionScope = "default"

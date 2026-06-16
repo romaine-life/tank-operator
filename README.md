@@ -164,7 +164,11 @@ Project metadata for Glimmung:
     "static": {
       "enabled": true,
       "source": "frontend/dist",
-      "target": "/var/run/tank-operator-static-override"
+      "target": "/var/run/tank-operator-static-override",
+      "build_command": "cd frontend && npm ci && npm run build",
+      "pod_selector": "app.kubernetes.io/name=tank-operator",
+      "container": "tank-operator",
+      "builder_image": "node:20-alpine"
     },
     "backend": {
       "enabled": true,
@@ -172,7 +176,11 @@ Project metadata for Glimmung:
       "build_command": "cd backend-go && go build -o /tmp/tank-operator-go ./cmd/tank-operator",
       "artifact": "/tmp/tank-operator-go",
       "target": "/var/run/tank-operator-hot/tank-operator-go",
-      "health_path": "/healthz"
+      "health_path": "/healthz",
+      "health_port": 8000,
+      "pod_selector": "app.kubernetes.io/name=tank-operator",
+      "container": "tank-operator",
+      "builder_image": "golang:1.26-alpine"
     },
     "fidelity_classifier": {
       "enabled": true,
