@@ -522,6 +522,29 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 	return nil
 }
 
+// ReapPod deletes a session's pod to STOP it — e.g. a crash-looping runner that
+// reported provider-fatal — without marking the registry row deleted. Unlike
+// Delete, the session stays visible as Failed (its durable terminal state); only
+// the kubelet-restarting pod is removed so the crash-loop ends. Idempotent: a
+// missing pod is success.
+func (m *Manager) ReapPod(ctx context.Context, owner, sessionID string) error {
+	pod, err := m.findPodBySessionID(ctx, owner, sessionID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if pod == nil {
+		return nil
+	}
+	if delErr := m.client.CoreV1().Pods(m.namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); delErr != nil && !k8serrors.IsNotFound(delErr) {
+		return fmt.Errorf("reap pod: %w", delErr)
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return nil
+}
+
 // SetName updates the session name on the pod annotation and registry. Name
 // is NON-NULL: clearing (nil/empty input) no longer stores null — it reassigns
 // the canonical SessionDisplayName default (the short id derived from the pod

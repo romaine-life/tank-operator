@@ -2026,6 +2026,17 @@ var (
 		Name: "tank_session_container_terminations_total",
 		Help: "Session pod container terminations observed by the K8s watch, labeled by bounded container, reason, and exit code.",
 	}, []string{"container", "reason", "exit_code"})
+	// sessionPodReapedTotal counts session pods the orchestrator actively
+	// deleted to STOP them (distinct from user/idle deletes): reason
+	// "provider_fatal" is a runner-reported unrecoverable session;
+	// "runner_crashloop" is the K8s-watch restart-budget backstop killing a
+	// still-looping pod the runner never classified. Each reap converts an
+	// unbounded CrashLoopBackOff into a terminal Failed session. Steady state is
+	// near zero; a sustained rate means runners are dying on boot/resume.
+	sessionPodReapedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_pod_reaped_total",
+		Help: "Session pods the orchestrator deleted to stop them, by reason (provider_fatal | runner_crashloop). Distinct from user/idle deletes; each reap ends a crash-loop with a terminal Failed session.",
+	}, []string{"reason"})
 	// sessionCompactionTotal counts durable context.compaction events recorded
 	// per session, labeled by provider (claude, codex, other) and trigger
 	// (auto, manual, other). It increments once per newly-observed compaction —
@@ -2079,6 +2090,21 @@ func (promK8sWatchMetrics) RecordContainerTermination(container, reason string, 
 		boundedTerminationReason(reason),
 		boundedExitCode(exitCode),
 	).Inc()
+}
+
+func (promK8sWatchMetrics) RecordPodReaped(reason string) {
+	sessionPodReapedTotal.WithLabelValues(boundedReapReason(reason)).Inc()
+}
+
+func boundedReapReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "provider_fatal":
+		return "provider_fatal"
+	case "runner_crashloop":
+		return "runner_crashloop"
+	default:
+		return "other"
+	}
 }
 
 func boundedSessionContainer(container string) string {

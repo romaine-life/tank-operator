@@ -110,6 +110,27 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+// unrecoverableExitTotal counts runner terminal exits taken because the
+// session is UNRECOVERABLE — a container restart cannot make progress, so
+// instead of the normal exit(1)-to-restart the runner reports
+// session.provider_fatal and exits terminally (exit code 3). The load-bearing
+// reason is `provider_session_lost`: the SDK could not resume the
+// provider-session because its on-disk transcript was wiped by a container
+// restart (the transcript is container-ephemeral, not on a volume — by design,
+// there is no per-session PVC). Before this counter existed that case became a
+// silent unbounded CrashLoopBackOff (session 979, 2026-06-16) with only a
+// transient-looking turn.failed{provider_failure} and a flapping session
+// status. Steady state is zero; any `provider_session_lost` increment is a
+// session that died and could not self-heal. `report_failed` counts a
+// provider-fatal POST that itself failed — the orchestrator restart-budget
+// backstop is then the safety net that still reaps the pod.
+export const unrecoverableExitTotal = new Counter({
+  name: "tank_runner_unrecoverable_exit_total",
+  help: "Runner terminal exits taken because the session is unrecoverable (a restart cannot progress). reason='provider_session_lost' is a resume whose on-disk transcript was wiped by a container restart; the runner reports session.provider_fatal and exits terminally instead of crash-looping. reason='report_failed' is a failed provider-fatal POST. Steady state is zero.",
+  labelNames: ["reason"],
+  registers: [registry],
+});
+
 // providerFailureClassTotal classifies every turn.failed{reason:
 // "provider_failure"} terminal by the *shape* of the upstream Anthropic
 // error, not just that one occurred. The load-bearing class is

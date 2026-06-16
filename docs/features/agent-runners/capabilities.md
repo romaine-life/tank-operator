@@ -671,3 +671,59 @@ Evidence:
   pre-split copies approaching the rejection threshold);
   command-stream publish failures ride the existing
   publish-failure counter with `cmd_stream_`-prefixed reasons.
+
+
+Status: done
+
+Intent:
+An unrecoverable agent-runner restart must become a loud, durable, terminal
+session failure — never a silent crash-loop. Originating incident: session 979
+on 2026-06-16. The runner container restarted mid-turn (16 concurrent background
+builds/tests under memory pressure); on every restart the Claude SDK could not
+resume the provider-session because its on-disk transcript lives on the
+container-ephemeral filesystem (no per-session PVC, by design) and was wiped. The
+SDK threw "No conversation found with session ID", the runner took its normal
+exit(1)-to-restart path, and the pod crash-looped (CrashLoopBackOff, restartCount
+5+) until it would have hit the ~24h idle reaper. The only signals were a
+transient-looking `turn.failed{provider_failure}` and a session status flapping
+Failed↔Active — no alert (the only termination alert keyed on oom_killed; this
+was reason=error).
+
+Affected contracts:
+- Agent Runners
+
+Contract impact:
+- Satisfies "Provider failures must become durable failure events instead of
+  silent strandings": an unrecoverable resume becomes
+  `turn.failed{reason:"provider_session_lost"}` plus a session-level
+  `session.provider_fatal{reason:"provider_session_lost"}` Failed banner, and the
+  runner exits terminally instead of looping.
+- The orchestrator reaps the pod on provider-fatal so the kubelet crash-loop
+  actually stops; a restart-budget backstop (`CrashloopRestartBudget`, default 5)
+  reaps any runner crash-loop the runner never classified, marking it
+  `session.provider_fatal{reason:"runner_crashloop"}`.
+- A terminal Failed (provider-fatal / pod-terminating, which stamp
+  `terminating_at`) is sticky — a later pod-ready observation can no longer flip
+  the row back to Active, killing the 979 status flapping. A transient
+  `pod_failed` that may recover stays non-sticky.
+
+Observability:
+- Runner `tank_runner_unrecoverable_exit_total{reason}` (`provider_session_lost`,
+  `report_failed`); orchestrator `tank_session_pod_reaped_total{reason}`
+  (`provider_fatal`, `runner_crashloop`) and the existing
+  `tank_session_provider_fatal_total{provider,result}`.
+- Alerts `TankSessionContainerCrashLooping` (reason=error crash loop, the
+  previously un-alerted gap) and `TankSessionProviderFatal`.
+
+Evidence:
+- Runner (claude-runner/src/runner.test.ts):
+  `isConversationNotFoundMessage matches the SDK resume-not-found signature
+  only`, `isUnrecoverableResumeFailure fires only for a resume`,
+  `reportUnrecoverableResume POSTs session.provider_fatal and exits terminally`,
+  `failActiveCommandTurn emits the honest provider_session_lost reason`.
+- Orchestrator (internal/sessioncontroller): `TestBackstopReapsCrashlooping
+  RunnerPastBudget`, `TestBackstopDoesNotReapUnderBudget`,
+  `TestBackstopDoesNotReapRecoveredRunner`, `TestCrashloopFatalEventIsSticky
+  Terminal` (k8s_watch_test.go); the `provider_fatal → status Failed +
+  terminating_at (sticky)` and guarded recovery rows in
+  `TestDeriveRowColumnChangesPerEventType` (writer_test.go).

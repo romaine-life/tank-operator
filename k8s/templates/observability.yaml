@@ -1141,6 +1141,60 @@ spec:
               activity row, durable turn lifecycle, and scheduled wakeup rows;
               inspect orchestrator logs for `session container terminated`.
 
+        # Crash-loop guard. tank_session_container_terminations_total already
+        # counts every container exit by reason; only oom_killed had an alert.
+        # An exit-1 "error" crash loop (the session 979 class: a runner resuming
+        # a gone provider-session transcript) was counted but un-alerted, so it
+        # looped silently. This pairs with the runner's provider-fatal terminal
+        # and the orchestrator restart-budget backstop.
+        - alert: TankSessionContainerCrashLooping
+          expr: |
+            sum by (container) (
+              increase(tank_session_container_terminations_total{reason="error"}[15m])
+            ) > 3
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "session container {{`{{ $labels.container }}`}} is crash-looping (reason=error)"
+            runbook: |
+              A session-pod container is exiting non-zero and being restarted by
+              the kubelet (reason="error", distinct from oom_killed which has its
+              own alert). The common cause is an agent-runner that cannot make
+              progress on restart — e.g. a provider-session resume whose on-disk
+              transcript was wiped by the restart ("No conversation found with
+              session ID", the session 979 failure). The runner now reports
+              session.provider_fatal{reason:provider_session_lost} and the K8s
+              watch's restart-budget backstop reaps a pod still looping past the
+              budget (tank_session_pod_reaped_total{reason="runner_crashloop"}).
+              A sustained nonzero rate here WITHOUT a matching
+              tank_session_pod_reaped_total increment means the backstop or the
+              runner terminal path regressed — the loop is no longer being
+              converted to a terminal Failed. Inspect runner logs
+              (`claude_sdk_stderr`, "SDK query exited with error") and
+              tank_runner_unrecoverable_exit_total.
+
+        # Provider-fatal terminal. The loud, durable session-level failure that
+        # replaced the silent crash-loop: a runner declared a session
+        # unrecoverable, or the backstop reaped a crash-looping pod.
+        - alert: TankSessionProviderFatal
+          expr: increase(tank_session_provider_fatal_total{result="ok"}[15m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a session was marked Failed by a runner provider-fatal report"
+            runbook: |
+              A pod-side runner reported an unrecoverable, session-terminal
+              condition (POST /api/internal/sessions/{id}/provider-fatal); the
+              session moved to Failed and its pod was reaped so the crash-loop
+              stops. reason="provider_session_lost" is the
+              conversation-transcript-gone-after-restart case (session 979). This
+              is the terminal signal that replaced the silent loop — an expected,
+              low rate. A spike means runners are dying unrecoverably; correlate
+              with tank_runner_unrecoverable_exit_total and
+              tank_session_pod_reaped_total{reason}.
+
         # Cross-scope event leak guard. The per-(owner, scope) NATS
         # subject prevents cross-scope delivery in steady state; if a
         # publisher ever lands a wrong-scope payload (regression of the
