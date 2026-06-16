@@ -101,8 +101,8 @@ function parseAdminView(value: string | undefined): AdminView {
     case "controls":
       return "controls";
     case "avatars":
-    case "report":
     case "break-glass":
+    case "report":
     case "hidden-transcripts":
     case "observability":
     case "version":
