@@ -85,7 +85,7 @@ func (s *appServer) handleAdminMintSessionAuthToken(w http.ResponseWriter, r *ht
 		SourceTool:    "auth_break_glass_token",
 		Action:        "auth.break_glass.token",
 		Status:        "succeeded",
-		TargetKind:    "auth_token",
+		TargetKind:    "service_jwt",
 		TargetRef:     owner,
 		Payload:       auditPayload,
 	}
