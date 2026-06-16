@@ -1592,36 +1592,6 @@ async def _active_azure_break_glass_grant(http: ClientSession, service_jwt: str)
     return None
 
 
-async def _auto_grant_azure_break_glass(http: ClientSession, service_jwt: str, reason: str) -> dict | None:
-    # Non-restricted (trusted) sessions are pre-approved for azure-personal: create
-    # the grant directly via Tank's internal grant endpoint instead of returning an
-    # approval URL. This reuses the exact grant + B-auto activation-turn machinery
-    # the admin-approval path uses; the non-restricted session policy is simply the
-    # approver. Restricted sessions never call this — they keep the approval flow.
-    if not ORIGIN_SESSION_ID:
-        return None
-    url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/azure-break-glass/grants"
-    payload = {
-        "reason": (reason or "non-restricted session: azure-personal pre-approved"),
-        "request_event_id": f"tank-azure-auto-{ORIGIN_SESSION_ID}-{uuid4().hex}",
-    }
-    async with http.post(
-        url,
-        headers={"Authorization": f"Bearer {service_jwt}", "Content-Type": "application/json"},
-        json=payload,
-    ) as resp:
-        body = await resp.text()
-        if resp.status >= 400:
-            raise RuntimeError(f"Tank azure auto-grant failed with HTTP {resp.status}: {body[:500]}")
-    try:
-        value = json.loads(body)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(value, dict) and value.get("active") is True:
-        return value
-    return None
-
-
 async def _active_pr_lane_auto_approval(
     http: ClientSession,
     service_jwt: str,
@@ -3160,11 +3130,6 @@ async def _handle_tank_azure_break_glass_tool(
         service_token = await auth_romaine_provider.token()
         grant = await _active_azure_break_glass_grant(http, service_token)
         event_id = f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
-        if grant is None and not RESTRICTED_GIT_ENABLED:
-            # Non-restricted (trusted) sessions are pre-approved for azure-personal:
-            # self-approve now (no human break-glass) so the B-auto activation turn
-            # surfaces the tools. Restricted sessions fall through to the approval URL.
-            grant = await _auto_grant_azure_break_glass(http, service_token, reason)
         approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         await _post_tank_control_action(
             http,
@@ -3188,7 +3153,7 @@ async def _handle_tank_azure_break_glass_tool(
         )
         if grant:
             text = (
-                "Azure access is approved and active for this session; the "
+                "Azure break-glass access is already approved and active; the "
                 "azure-personal tools surface automatically for this session "
                 "(Tank sends an approval turn that activates them — no re-request "
                 "needed).\n"
