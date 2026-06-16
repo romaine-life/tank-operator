@@ -315,12 +315,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/app-version", s.handleAdminAppVersion)
 	mux.HandleFunc("GET /api/admin/test-slot-session-defaults", s.handleAdminGetTestSlotSessionDefaults)
 	mux.HandleFunc("PUT /api/admin/test-slot-session-defaults", s.handleAdminSetTestSlotSessionDefaults)
-	mux.HandleFunc("POST /api/admin/sessions/{session_id}/git-break-glass/grants", s.handleAdminGrantGitBreakGlass)
-	mux.HandleFunc("POST /api/admin/sessions/{session_id}/azure-break-glass/grants", s.handleAdminGrantAzureBreakGlass)
-	mux.HandleFunc("POST /api/admin/sessions/{session_id}/test-slot-model-approvals/grants", s.handleAdminGrantTestSlotModelApproval)
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
 	mux.HandleFunc("GET /api/admin/break-glass-requests", s.handleAdminBreakGlassRequests)
+	mux.HandleFunc("POST /api/admin/sessions/{session_id}/auth-token", s.handleAdminMintSessionAuthToken)
 	// Admin-only durable support surface for avatar upload failures. The
 	// form error returns attempt_id; this endpoint turns that reference into
 	// a curl-able diagnosis without browser devtools.

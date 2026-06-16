@@ -66,7 +66,7 @@ import {
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
-import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
+import { AdminBreakGlassTokenPanel } from "./AdminBreakGlassTokenPanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -16021,8 +16021,8 @@ function RunSettingsPanel({
     settingsTab === "admin" &&
     showAdminTab &&
     (adminView === "avatars" ||
-      adminView === "break-glass" ||
       adminView === "report" ||
+      adminView === "break-glass" ||
       adminView === "hidden-transcripts" ||
       adminView === "observability")
       ? "run-settings-screen run-settings-screen-wide"
@@ -16092,31 +16092,6 @@ function RunSettingsPanel({
               />
             </DesktopOnly>
           </>
-        ) : adminView === "break-glass" ? (
-          <>
-            <section className="run-settings-section">
-              <div className="run-settings-admin-heading">
-                <button
-                  type="button"
-                  className="run-settings-back-btn"
-                  onClick={() => setSettingsRoute("admin", "controls")}
-                >
-                  <ArrowLeftIcon aria-hidden="true" />
-                  <span>Admin</span>
-                </button>
-                <h2 className="run-settings-title">Break glass</h2>
-              </div>
-            </section>
-            <section className="run-settings-section">
-              <AdminBreakGlassPanel />
-            </section>
-            <section className="run-settings-section">
-              <AdminBreakGlassGrantPanel
-                initialSessionId={session?.id}
-                sessionScope={adminControls.reportScope}
-              />
-            </section>
-          </>
         ) : adminView === "report" ? (
           <>
             <section className="run-settings-section">
@@ -16153,6 +16128,24 @@ function RunSettingsPanel({
               state={adminControls.observability}
               onRefresh={adminControls.onRefreshObservability}
             />
+          </>
+        ) : adminView === "break-glass" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Break glass</h2>
+              </div>
+            </section>
+            <AdminBreakGlassPanel />
+            <AdminBreakGlassTokenPanel sessionScope={adminControls.reportScope} />
           </>
         ) : adminView === "hidden-transcripts" ? (
           <>
@@ -16247,20 +16240,6 @@ function RunSettingsPanel({
                   {adminControls.observability.summary?.status ??
                     (adminControls.observability.error ? "error" : "Open")}
                 </span>
-              </button>
-              <button
-                type="button"
-                className="run-settings-link"
-                onClick={() => setSettingsRoute("admin", "break-glass")}
-              >
-                <span className="run-settings-link-label">
-                  <ShieldAlertIcon
-                    className="run-settings-link-icon"
-                    aria-hidden="true"
-                  />
-                  <span>Break glass</span>
-                </span>
-                <span className="run-settings-scope-value">Grant</span>
               </button>
               <button
                 type="button"
