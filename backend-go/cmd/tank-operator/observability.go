@@ -236,6 +236,15 @@ var (
 		Help:    "Number of pages a turn-activity projection split into (sealed at turnPageEventLimit events).",
 		Buckets: []float64{1, 2, 3, 5, 10, 25, 50},
 	})
+	turnDirectoryListTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_turn_directory_list_total",
+		Help: "Durable turn-directory (GET /turns/directory) responses, labeled by bounded result (ok / truncated / error). The directory is what lets the Turns selector list every turn independent of the /timeline window; truncated means a session exceeded TurnDirectoryMaxRows and the oldest shells were elided.",
+	}, []string{"result"})
+	turnDirectorySize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_turn_directory_size",
+		Help:    "Number of turns returned in one durable turn-directory response. Observes the live per-session turn-count distribution so the TurnDirectoryMaxRows cap can be revisited (with cursor paging) before it bites.",
+		Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000},
+	})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -2498,6 +2507,23 @@ func turnNumberResolveResultLabel(raw string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func recordTurnDirectoryList(result string) {
+	turnDirectoryListTotal.WithLabelValues(turnDirectoryListResultLabel(result)).Inc()
+}
+
+func turnDirectoryListResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "truncated", "error":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
+}
+
+func recordTurnDirectorySize(size int) {
+	turnDirectorySize.Observe(float64(size))
 }
 
 func recordSessionBackgroundTasksList(result string) {

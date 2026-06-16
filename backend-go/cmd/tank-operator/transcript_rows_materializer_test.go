@@ -77,6 +77,10 @@ func (s *recordingTranscriptRowsStore) ListOldest(context.Context, string, int) 
 	return store.TranscriptRowPage{}, nil
 }
 
+func (s *recordingTranscriptRowsStore) ListTurnDirectory(context.Context, string, int) (store.TurnDirectoryPage, error) {
+	return store.TurnDirectoryPage{}, nil
+}
+
 func (s *recordingTranscriptRowsStore) ListBefore(context.Context, string, string, int) (store.TranscriptRowPage, error) {
 	return store.TranscriptRowPage{}, nil
 }

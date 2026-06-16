@@ -381,6 +381,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Admin-only picker surface for soft-deleted/hidden session transcripts.
 	mux.HandleFunc("GET /api/admin/hidden-sessions", s.handleAdminHiddenSessions)
 	mux.HandleFunc("GET /api/admin/hidden-sessions/{session_id}/timeline", s.handleAdminHiddenSessionTimeline)
+	mux.HandleFunc("GET /api/admin/hidden-sessions/{session_id}/turns/directory", s.handleAdminHiddenSessionTurnDirectory)
 	// Admin-only debug surface for the durable conversation_read_state
 	// cursor + sessions.activity_summary view. Pairs with the
 	// TankChatScrollUserAtBottomLatched alert: when the alert fires,
@@ -449,6 +450,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
+	// Durable turn directory: the COMPLETE submission-ordered turn set so the
+	// Turns selector lists every turn independent of the bounded /timeline
+	// window. The literal "directory" segment is strictly more specific than
+	// /turns/{number}, so the mux routes it here, not to the number resolver.
+	mux.HandleFunc("GET /api/sessions/{session_id}/turns/directory", s.handleSessionTurnDirectory)
 	// Durable resolver for the public per-session turn number: the canonical
 	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor
 	// server-side so a cold deep link resolves from session_turns, not from the
@@ -464,6 +470,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/image", s.handlePublicMessageLinkAvatarImage)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/backing", s.handlePublicMessageLinkAvatarBacking)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/timeline", s.handlePublicMessageLinkTimeline)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/turns/directory", s.handlePublicMessageLinkTurnDirectory)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/turns/{turn_id}/activity", s.handlePublicMessageLinkTurnActivity)
 	mux.HandleFunc("GET /api/public/session-report-shares/{share_token}", s.handleGetPublicSessionReportShare)
 
