@@ -320,3 +320,181 @@ func condStatus(ready bool) corev1.ConditionStatus {
 	}
 	return corev1.ConditionFalse
 }
+
+// --- crash-loop backstop --------------------------------------------------
+//
+// The restart-budget backstop reaps a session pod whose agent-runner container
+// is stuck in CrashLoopBackOff past the budget, marking the session
+// provider_fatal{reason:"runner_crashloop"}. It is the defense-in-depth that
+// guarantees no session-pod container crash-loops unbounded (session 979 looped
+// until it would have hit the ~24h idle reaper). Reaping the pod is what
+// actually stops the kubelet restartPolicy=Always loop.
+
+type reapRecorder struct {
+	mu   sync.Mutex
+	pods []string
+}
+
+func (r *reapRecorder) reap(_ context.Context, pod *corev1.Pod) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pods = append(r.pods, pod.Name)
+	return nil
+}
+
+func (r *reapRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.pods)
+}
+
+type reapMetricRecorder struct {
+	noopK8sWatchMetrics
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (r *reapMetricRecorder) RecordPodReaped(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reasons = append(r.reasons, reason)
+}
+
+func (r *reapMetricRecorder) reapedReasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.reasons))
+	copy(out, r.reasons)
+	return out
+}
+
+func newBackstopTracker(budget int32) (*transitionTracker, *reapRecorder, *reapMetricRecorder) {
+	rec := &eventRecorder{}
+	writer := &RowWriter{
+		Emitter: &recordingEmitter{rec: rec},
+		Pool:    nil,
+		Metrics: noopRowWriterMetrics{},
+	}
+	reaper := &reapRecorder{}
+	metrics := &reapMetricRecorder{}
+	tracker := &transitionTracker{
+		metrics:         metrics,
+		scope:           "default",
+		last:            make(map[types.UID]podState),
+		crashloopReaped: make(map[types.UID]struct{}),
+		crashloopBudget: budget,
+		writer:          writer,
+		reap:            reaper.reap,
+	}
+	return tracker, reaper, metrics
+}
+
+// newCrashloopPod returns a Running pod whose claude-runner container is in
+// CrashLoopBackOff with the given restart count.
+func newCrashloopPod(id, owner string, restartCount int32) *corev1.Pod {
+	pod := newSessionPod(id, owner, corev1.PodRunning, false)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{Name: "claude", Ready: true},
+		{
+			Name:         "claude-runner",
+			Ready:        false,
+			RestartCount: restartCount,
+			State: corev1.ContainerState{
+				Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+			},
+			LastTerminationState: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1},
+			},
+		},
+		{Name: "mcp-auth-proxy", Ready: true},
+	}
+	return pod
+}
+
+func TestBackstopReapsCrashloopingRunnerPastBudget(t *testing.T) {
+	tracker, reaper, metrics := newBackstopTracker(5)
+	pod := newCrashloopPod("979", "nelson@romaine.life", 5)
+
+	tracker.handleUpsert(context.Background(), nil, pod)
+
+	if reaper.count() != 1 {
+		t.Fatalf("reap calls = %d, want 1", reaper.count())
+	}
+	if reasons := metrics.reapedReasons(); len(reasons) != 1 || reasons[0] != "runner_crashloop" {
+		t.Fatalf("reaped reasons = %v, want [runner_crashloop]", reasons)
+	}
+
+	// Fires at most once per pod: a second observation of the same crash-looping
+	// pod must not reap again (the row is already terminally Failed).
+	tracker.handleUpsert(context.Background(), pod, pod)
+	if reaper.count() != 1 {
+		t.Fatalf("reap calls after second observation = %d, want 1 (once per pod)", reaper.count())
+	}
+}
+
+func TestBackstopDoesNotReapUnderBudget(t *testing.T) {
+	tracker, reaper, _ := newBackstopTracker(5)
+	pod := newCrashloopPod("44", "u@example.com", 4)
+
+	tracker.handleUpsert(context.Background(), nil, pod)
+
+	if reaper.count() != 0 {
+		t.Fatalf("reap calls = %d, want 0 (restart count under budget)", reaper.count())
+	}
+}
+
+func TestBackstopDoesNotReapRecoveredRunner(t *testing.T) {
+	tracker, reaper, _ := newBackstopTracker(5)
+	// 12 lifetime restarts but the runner is currently Running and Ready — a
+	// session that flapped early then stabilized must NOT be reaped.
+	pod := newSessionPod("45", "u@example.com", corev1.PodRunning, true)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{Name: "claude", Ready: true},
+		{
+			Name:         "claude-runner",
+			Ready:        true,
+			RestartCount: 12,
+			State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+		},
+		{Name: "mcp-auth-proxy", Ready: true},
+	}
+
+	tracker.handleUpsert(context.Background(), nil, pod)
+
+	if reaper.count() != 0 {
+		t.Fatalf("reap calls = %d, want 0 (recovered runner, not currently looping)", reaper.count())
+	}
+}
+
+func TestBackstopDisabledWithoutReaper(t *testing.T) {
+	tracker, _ := newTestTracker() // reap == nil
+	pod := newCrashloopPod("46", "u@example.com", 99)
+	// Must not panic and must fall through to the normal transition path.
+	tracker.handleUpsert(context.Background(), nil, pod)
+}
+
+// TestCrashloopFatalEventIsStickyTerminal pins that the backstop's event reuses
+// the provider-fatal transition: a Failed row that is sticky (terminating_at
+// set) so a doomed-but-briefly-ready container can't flip it back to Active.
+func TestCrashloopFatalEventIsStickyTerminal(t *testing.T) {
+	pod := newCrashloopPod("979", "nelson@romaine.life", 7)
+	ev := crashloopFatalEvent("default", "nelson@romaine.life", "979", pod, 7)
+
+	if ev.Type != EventTypeProviderFatal {
+		t.Fatalf("type = %q, want %q", ev.Type, EventTypeProviderFatal)
+	}
+	if ev.Payload["reason"] != "runner_crashloop" {
+		t.Fatalf("reason = %v, want runner_crashloop", ev.Payload["reason"])
+	}
+	if ev.Payload["restart_count"] != int32(7) {
+		t.Fatalf("restart_count = %v, want int32(7)", ev.Payload["restart_count"])
+	}
+
+	changes, ok := deriveRowColumnChanges(ev)
+	if !ok || changes.status != "Failed" {
+		t.Fatalf("provider_fatal row = %+v ok=%v, want status Failed", changes, ok)
+	}
+	if changes.terminatingAt == nil {
+		t.Fatalf("provider_fatal must set terminating_at (sticky terminal)")
+	}
+}

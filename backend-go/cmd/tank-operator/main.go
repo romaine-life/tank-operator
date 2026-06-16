@@ -259,6 +259,7 @@ func main() {
 	namespace := envDefault("SESSIONS_NAMESPACE", sessionmodel.SessionsNamespace)
 	sessionServiceAccount := envDefault("SESSION_SERVICE_ACCOUNT", sessionmodel.SessionServiceAccount)
 	tankOperatorInternalURL := envDefault("TANK_OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local")
+	tankUIHost := envDefault("TANK_UI_HOST", "https://tank.romaine.life")
 	designSelectionNamespace := envDefault("DESIGN_SELECTION_NAMESPACE", currentPodNamespace())
 
 	// Session image tags come from the chart's values.yaml session.*
@@ -338,6 +339,7 @@ func main() {
 			CodexSessionImageMetadata:      sessionmodel.ParseImageVersionMetadata(os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
 			SessionScope:                   sessionScope,
 			TankOperatorInternalURL:        tankOperatorInternalURL,
+			TankUIHost:                     tankUIHost,
 			NATSURL:                        envDefault("NATS_URL", ""),
 			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 			NATSCommandStream:              envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),

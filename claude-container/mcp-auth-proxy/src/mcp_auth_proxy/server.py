@@ -81,7 +81,7 @@ TANK_OPERATOR_INTERNAL_URL = (
     os.environ.get("TANK_OPERATOR_INTERNAL_URL")
     or "http://tank-operator.tank-operator.svc.cluster.local"
 ).rstrip("/")
-TANK_UI_HOST = (os.environ.get("TANK_UI_HOST") or "https://tank.romaine.life").rstrip("/")
+TANK_UI_HOST = (os.environ.get("TANK_UI_HOST") or "").rstrip("/")
 WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE", "/workspace")).resolve()
 MCP_GITHUB_INTERNAL_URL = (
     os.environ.get("MCP_GITHUB_URL") or "http://mcp-github.mcp-github.svc:80"
@@ -111,7 +111,6 @@ _BREAK_GLASS_MCP_PORT = 9999
 # mcp-azure-personal still re-checks the grant on every call.
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
-_AUTH_ROMAINE_BREAK_GLASS_URL = os.environ.get("AUTH_ROMAINE_BREAK_GLASS_URL") or "https://auth.romaine.life/admin"
 _GITHUB_WRITE_TOOL_DENYLIST = {
     "mint_clone_token",
     "create_pull_request",
@@ -1022,7 +1021,9 @@ async def _record_github_tool_activity(
 
 async def _post_tank_control_action(http: ClientSession, headers: dict[str, str], payload: dict) -> None:
     url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/control-actions"
-    async with http.post(url, headers=headers, json=payload) as resp:
+    request_headers = dict(headers)
+    request_headers.update(_tank_caller_session_headers())
+    async with http.post(url, headers=request_headers, json=payload) as resp:
         if resp.status >= 400:
             text = await resp.text()
             log.warning("failed to record GitHub MCP activity in Tank: status=%d body=%s", resp.status, text[:500])
@@ -1030,10 +1031,25 @@ async def _post_tank_control_action(http: ClientSession, headers: dict[str, str]
 
 async def _post_tank_pull_request_link(http: ClientSession, headers: dict[str, str], pr_url: str) -> None:
     url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pull-request-link"
-    async with http.post(url, headers=headers, json={"url": pr_url}) as resp:
+    request_headers = dict(headers)
+    request_headers.update(_tank_caller_session_headers())
+    async with http.post(url, headers=request_headers, json={"url": pr_url}) as resp:
         if resp.status >= 400:
             text = await resp.text()
             log.warning("failed to update Tank pull request link: status=%d body=%s", resp.status, text[:500])
+
+
+def _tank_caller_session_headers() -> dict[str, str]:
+    if not ORIGIN_SESSION_ID:
+        return {}
+    headers = {
+        CALLER_SYSTEM_FORWARD_HEADER: "tank-operator",
+        CALLER_KIND_FORWARD_HEADER: "session",
+        CALLER_SESSION_ID_FORWARD_HEADER: ORIGIN_SESSION_ID,
+    }
+    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
+    headers[CALLER_SESSION_SCOPE_FORWARD_HEADER] = scope
+    return headers
 
 
 async def _post_tank_hot_swap_verify(http: ClientSession, service_token: str, payload: dict) -> dict:
@@ -1500,54 +1516,27 @@ async def _verify_github_hot_swap_head(
     }
 
 
-def _break_glass_approval_url(
-    session_id: str,
-    repo_scope: dict,
-    branch_scope: dict,
-    reason: str,
-    source: str,
-    *,
-    session_scope: str | None = None,
-) -> str:
-    scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
-    params = {
-        "intent": "git-break-glass",
-        "session_id": session_id,
-        "session_scope": scope,
-        "repo_scope": json.dumps(repo_scope, separators=(",", ":")),
-        "branch_scope": json.dumps(branch_scope, separators=(",", ":")),
-        "source": source,
-    }
-    if reason:
-        params["reason"] = reason
-    separator = "&" if "?" in _AUTH_ROMAINE_BREAK_GLASS_URL else "?"
-    return f"{_AUTH_ROMAINE_BREAK_GLASS_URL}{separator}{urlencode(params)}"
+def _tank_ui_host() -> str:
+    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "").strip()
+    if re.fullmatch(r"tank-operator-slot-[0-9]+", scope) and (
+        not TANK_UI_HOST or TANK_UI_HOST == "https://tank.romaine.life"
+    ):
+        return f"https://{scope}.tank.dev.romaine.life"
+    if TANK_UI_HOST:
+        return TANK_UI_HOST
+    return "https://tank.romaine.life"
 
 
-def _azure_break_glass_approval_url(
-    session_id: str,
-    reason: str,
-    source: str,
-    session_scope: str | None = None,
-) -> str:
-    # Mirrors _break_glass_approval_url. azure-personal break-glass is not
-    # repo-scoped, so there is no repo param; the auth.romaine.life admin
-    # console keys its approval card on intent=azure-break-glass.
-    scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
-    params = {
-        "intent": "azure-break-glass",
-        "session_id": session_id,
-        "session_scope": scope,
-        "source": source,
-    }
-    if reason:
-        params["reason"] = reason
-    separator = "&" if "?" in _AUTH_ROMAINE_BREAK_GLASS_URL else "?"
-    return f"{_AUTH_ROMAINE_BREAK_GLASS_URL}{separator}{urlencode(params)}"
+def _break_glass_approval_url(session_id: str, request_event_id: str) -> str:
+    return f"{_tank_ui_host()}/sessions/{quote(session_id, safe='')}/break-glass/{quote(request_event_id, safe='')}"
+
+
+def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> str:
+    return _break_glass_approval_url(session_id, request_event_id)
 
 
 def _pr_lane_approval_url(session_id: str, request_event_id: str) -> str:
-    return f"{TANK_UI_HOST}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
+    return f"{_tank_ui_host()}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
 
 
 async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_slug: str = "") -> dict | None:
@@ -3067,13 +3056,8 @@ async def _handle_tank_break_glass_tool(
         if grant and not _grant_covers_branch_scope(grant, branch_scope):
             grant = None
         activation = _activate_break_glass_mcp_config(repo_slug, grant) if grant else None
-        approval_url = _break_glass_approval_url(
-            ORIGIN_SESSION_ID,
-            repo_scope,
-            branch_scope,
-            reason,
-            source,
-        )
+        event_id = f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
+        approval_url = _break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         target_ref = f"https://github.com/{repo_slug}"
         if repo_scope.get("kind") == "all_repos":
             target_ref = f"tank://session/{ORIGIN_SESSION_ID}/git-break-glass/all-repos"
@@ -3083,7 +3067,7 @@ async def _handle_tank_break_glass_tool(
             http,
             {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
             {
-                "event_id": f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "event_id": event_id,
                 "invocation_id": invocation_id,
                 "source_service": "mcp-tank-operator",
                 "source_tool": _TANK_BREAK_GLASS_TOOL,
@@ -3095,6 +3079,7 @@ async def _handle_tank_break_glass_tool(
                 "repo_name": repo,
                 "payload": {
                     "approval_url": approval_url,
+                    "request_event_id": event_id,
                     "reason": reason,
                     "source": source,
                     "repo_scope": repo_scope,
@@ -3113,6 +3098,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "request_event_id": event_id,
                 "status": "approved",
                 "approval_url": approval_url,
                 "privileged_tools_visible": True,
@@ -3129,6 +3115,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
                 "privileged_tools_visible": False,
@@ -3156,13 +3143,12 @@ async def _handle_tank_azure_break_glass_tool(
     request_id: object,
     arguments: dict,
 ) -> web.Response:
-    # Records the request and returns an auth.romaine.life approval URL; it never
-    # mints or reveals a token, and it no longer writes any MCP config. Surfacing
-    # is now automatic (B-auto): on approval the orchestrator enqueues an approval
-    # turn carrying the azure-personal MCP-activation payload, and the pod-side
-    # runner adds the server + rebuilds at the next idle boundary — so the tools
-    # appear without a second call to this tool. mcp-azure-personal re-checks the
-    # grant on every call, so it stays the real boundary.
+    # Mirrors _handle_tank_break_glass_tool. Records the request and returns a
+    # Tank approval URL; it never mints or reveals a token, and it no longer
+    # writes any MCP config. Surfacing is automatic: on approval Tank enqueues an
+    # approval turn carrying the azure-personal MCP-activation payload, and the
+    # runner adds the server at the next idle boundary. mcp-azure-personal
+    # re-checks the grant on every call, so it stays the real boundary.
     invocation_id = f"tank-azure-break-glass-{uuid4().hex}"
     try:
         if not ORIGIN_SESSION_ID:
@@ -3173,17 +3159,18 @@ async def _handle_tank_azure_break_glass_tool(
         source = str(arguments.get("source") or "agent").strip() or "agent"
         service_token = await auth_romaine_provider.token()
         grant = await _active_azure_break_glass_grant(http, service_token)
+        event_id = f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
         if grant is None and not RESTRICTED_GIT_ENABLED:
             # Non-restricted (trusted) sessions are pre-approved for azure-personal:
             # self-approve now (no human break-glass) so the B-auto activation turn
             # surfaces the tools. Restricted sessions fall through to the approval URL.
             grant = await _auto_grant_azure_break_glass(http, service_token, reason)
-        approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, reason, source)
+        approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         await _post_tank_control_action(
             http,
             {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
             {
-                "event_id": f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "event_id": event_id,
                 "invocation_id": invocation_id,
                 "source_service": "mcp-tank-operator",
                 "source_tool": _TANK_AZURE_BREAK_GLASS_TOOL,
@@ -3193,6 +3180,7 @@ async def _handle_tank_azure_break_glass_tool(
                 "target_ref": "azure-personal",
                 "payload": {
                     "approval_url": approval_url,
+                    "request_event_id": event_id,
                     "reason": reason,
                     "source": source,
                 },
@@ -3209,6 +3197,7 @@ async def _handle_tank_azure_break_glass_tool(
             structured = {
                 "resource": "azure-personal",
                 "status": "approved",
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "expires_at": grant.get("expires_at"),
                 "privileged_tools_visible": True,
@@ -3224,6 +3213,7 @@ async def _handle_tank_azure_break_glass_tool(
             )
             structured = {
                 "resource": "azure-personal",
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
                 "privileged_tools_visible": False,

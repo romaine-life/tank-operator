@@ -1239,6 +1239,8 @@ func sdkTurnSource(source string) string {
 		return string(conversation.TurnSubmittedSourceLaunchDispatch)
 	case string(conversation.TurnSubmittedSourceBreakGlassApproval):
 		return string(conversation.TurnSubmittedSourceBreakGlassApproval)
+	case string(conversation.TurnSubmittedSourceTestSlotModelApproval):
+		return string(conversation.TurnSubmittedSourceTestSlotModelApproval)
 	default:
 		return "sdk"
 	}

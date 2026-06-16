@@ -962,11 +962,13 @@ test("home splash test action stays disabled on the splash page", () => {
         )).toBe(false);
 });
 
-test("pull request composer action is a popup menu with a break-glass approval link", () => {
+test("break-glass composer action owns approval links and quick approval", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
   // The PR control is a self-contained popup menu, not a single hard-coded link.
   expect(appSource).toMatch(/function PullRequestMenuButton\(/);
   expect(appSource).toMatch(/<PullRequestMenuButton \{\.\.\.pullRequest\} \/>/);
+  expect(appSource).toMatch(/function BreakGlassApprovalMenuButton\(/);
+  expect(appSource).toMatch(/<BreakGlassApprovalMenuButton \{\.\.\.breakGlass\} \/>/);
   // Latest PR and the linked PR are computed as distinct menu entries.
   expect(appSource).toMatch(
     /const latestPullRequestURL = agentGitActivity\.pullRequests\[0\]\?\.href \?\? "";/,
@@ -977,14 +979,25 @@ test("pull request composer action is a popup menu with a break-glass approval l
   // The retired single-URL link shape must not come back.
   expect(appSource.includes("aria-label=\"Pull request link unavailable\"")).toBe(false);
   expect(appSource.includes("aria-label=\"Open pull request in new tab\"")).toBe(false);
-  // Break-glass approval is a LINK to the auth.romaine.life approval page
-  // (payload.approval_url) so the operator can inspect the request and grant
-  // there — NOT an in-app grant POST.
-  expect(appSource).toMatch(/href=\{request\.approvalUrl \|\| "#"\}/);
-  expect(appSource).toMatch(/pendingBreakGlassRequests\(controlActionRows\)/);
-  // The retired in-app approval POST must not return.
+  // Break-glass approval is a Tank-owned deep link and Tank-owned decision
+  // endpoint. Auth authenticates the admin; it must not render or post grants
+  // for Tank's app-specific request.
+  expect(appSource).toMatch(/function breakGlassRequestUrl\(/);
+  expect(appSource).toMatch(/"break-glass"/);
+  expect(appSource).toMatch(/<BreakGlassRequestPage/);
+  expect(appSource).toMatch(/Quick approve/);
+  expect(appSource).toMatch(/appRouteUrl\("settings", "admin", "break-glass"\)/);
+  expect(appSource).toMatch(/quickApproveBreakGlassMenuItem/);
+  expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
+  expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
+  expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
+  expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
+  expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
+  expect(appSource.includes("request.approvalUrl")).toBe(false);
+  expect(appSource.includes("auth.romaine.life/admin")).toBe(false);
+  // The retired pre-Tank endpoint shape must not return.
   expect(appSource.includes("git-break-glass/approve")).toBe(false);
-  expect(appSource.includes("postBreakGlassApproval")).toBe(false);
+  expect(appSource.includes("/admin/git-break-glass")).toBe(false);
   // Disabled placeholder composers still omit a live PR menu.
   expect((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length).toBe(2);
   expect(appSource.includes("testState?.active && testState.pull_request_url")).toBe(false);
