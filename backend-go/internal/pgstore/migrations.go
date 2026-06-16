@@ -2009,6 +2009,14 @@ var schemaMigrations = []migration{
 		)
 		  AND payload ? 'request_event_id'
 		  AND payload->>'request_event_id' <> ''`},
+	{ID: "0164", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS control_action_events_kubernetes_break_glass_request_decision
+		ON control_action_events (session_scope, session_id, (payload->>'request_event_id'))
+		WHERE action IN (
+			'kubernetes.break_glass.grant',
+			'kubernetes.break_glass.deny'
+		)
+		  AND payload ? 'request_event_id'
+		  AND payload->>'request_event_id' <> ''`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

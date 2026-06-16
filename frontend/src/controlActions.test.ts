@@ -268,6 +268,36 @@ describe("pendingBreakGlassRequests", () => {
       },
     ]);
   });
+
+  test("returns kubernetes break-glass requests until an exact decision exists", () => {
+    const rows: ControlActionRow[] = [
+      {
+        event_id: "k8s-bg-1",
+        invocation_id: "k8s-inv-1",
+        created_at: "2026-06-13T07:31:00Z",
+        action: "kubernetes.break_glass.request",
+        status: "started",
+        target_kind: "kubernetes_mcp",
+        target_ref: "kubernetes-break-glass",
+        payload: { reason: "restart a wedged controller", source: "agent" },
+      },
+    ];
+
+    expect(pendingBreakGlassRequests(rows, NOW)).toEqual([
+      {
+        eventId: "k8s-bg-1",
+        invocationId: "k8s-inv-1",
+        createdAt: "2026-06-13T07:31:00Z",
+        kind: "kubernetes",
+        target: "kubernetes-break-glass",
+        repo: "",
+        repoOwner: undefined,
+        repoName: undefined,
+        reason: "restart a wedged controller",
+        source: "agent",
+      },
+    ]);
+  });
 });
 
 describe("controlActionRowsToEntries", () => {
@@ -325,6 +355,30 @@ describe("controlActionRowsToEntries", () => {
 
     expect(entries[0]?.taskSummary).toBe("Azure break-glass request");
     expect(entries[1]?.taskSummary).toBe("Azure break-glass grant");
+  });
+
+  test("labels kubernetes break-glass events", () => {
+    const entries = controlActionRowsToEntries([
+      {
+        event_id: "k8s-req-1",
+        invocation_id: "k8s-inv-1",
+        action: "kubernetes.break_glass.request",
+        status: "started",
+        target_ref: "kubernetes-break-glass",
+        target_kind: "kubernetes_mcp",
+      },
+      {
+        event_id: "k8s-grant-1",
+        invocation_id: "k8s-inv-2",
+        action: "kubernetes.break_glass.grant",
+        status: "succeeded",
+        target_ref: "kubernetes-break-glass",
+        target_kind: "kubernetes_mcp",
+      },
+    ]);
+
+    expect(entries[0]?.taskSummary).toBe("Kubernetes break-glass request");
+    expect(entries[1]?.taskSummary).toBe("Kubernetes break-glass grant");
   });
 
   test("labels test-slot model approval events", () => {

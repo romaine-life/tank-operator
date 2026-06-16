@@ -985,6 +985,7 @@ test("break-glass composer action owns approval links and quick approval", () =>
   expect(appSource).toMatch(/Quick approve/);
   expect(appSource).toMatch(/appRouteUrl\("settings", "admin", "break-glass"\)/);
   expect(appSource).toMatch(/quickApproveBreakGlassMenuItem/);
+  expect(appSource).toMatch(/Kubernetes break glass/);
   expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);

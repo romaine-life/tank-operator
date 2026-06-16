@@ -18,14 +18,17 @@ from mcp_auth_proxy.server import (
     GITHUB_MCP_PORT,
     GLIMMUNG_MCP_PORT,
     GRAFANA_MCP_PORT,
+    K8S_MCP_PORT,
     JWT_BEARER_PORTS,
     TANK_OPERATOR_MCP_PORT,
     SPIRELENS_MCP_PORT,
     _append_ci_reminder,
     _append_tank_publish_tool,
     _append_azure_break_glass_tool,
+    _filter_k8s_break_glass_tools,
     _break_glass_approval_url,
     _azure_break_glass_approval_url,
+    _kubernetes_break_glass_approval_url,
     _activate_break_glass_mcp_config,
     _checks_state,
     _effective_listeners,
@@ -36,6 +39,7 @@ from mcp_auth_proxy.server import (
     _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
     _handle_tank_azure_break_glass_tool,
+    _handle_tank_kubernetes_break_glass_tool,
     _handle_query_tank_db_tool,
     _handle_tank_create_pr_lane_tool,
     _handle_tank_merge_tool,
@@ -67,7 +71,7 @@ def test_tank_operator_uses_jwt_bearer_not_sa_token() -> None:
 def test_kube_rbac_proxy_upstreams_keep_sa_token_bearer() -> None:
     # Every other in-cluster MCP still sits behind a kube-rbac-proxy that
     # TokenReviews the SA-token bearer, so they must NOT be on the JWT bearer.
-    for port in (AZURE_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT):
+    for port in (AZURE_MCP_PORT, K8S_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT):
         assert port not in JWT_BEARER_PORTS
 
 
@@ -993,6 +997,14 @@ def test_azure_break_glass_approval_url_carries_intent_without_repo() -> None:
     assert "reason=" not in url
 
 
+def test_kubernetes_break_glass_approval_url_carries_intent_without_repo() -> None:
+    url = _kubernetes_break_glass_approval_url("95", "request-k8s")
+
+    assert url == "https://tank.romaine.life/sessions/95/break-glass/request-k8s"
+    assert "intent=kubernetes-break-glass" not in url
+    assert "reason=" not in url
+
+
 def test_append_azure_break_glass_tool_adds_request_tool() -> None:
     raw = b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"read_transcript"}]}}'
 
@@ -1004,9 +1016,24 @@ def test_append_azure_break_glass_tool_adds_request_tool() -> None:
     azure_tool = next(t for t in augmented["result"]["tools"] if t["name"] == "request_azure_break_glass")
     assert "locked by default" in azure_tool["description"]
     assert "token" not in azure_tool["inputSchema"]["properties"]
+    k8s_tool = next(t for t in augmented["result"]["tools"] if t["name"] == "request_kubernetes_break_glass")
+    assert "Kubernetes mutation access" in k8s_tool["description"]
+    assert "token" not in k8s_tool["inputSchema"]["properties"]
     # Idempotent: a second pass must not duplicate any tool.
     again = json.loads(_append_azure_break_glass_tool(json.dumps(augmented).encode()))
     assert [t["name"] for t in again["result"]["tools"]] == names
+
+
+def test_filter_k8s_break_glass_tools_hides_mutations() -> None:
+    raw = (
+        b'{"jsonrpc":"2.0","id":1,"result":{"tools":['
+        b'{"name":"list_resources"},{"name":"delete_pod"},{"name":"rollout_restart"}'
+        b']}}'
+    )
+
+    filtered = json.loads(_filter_k8s_break_glass_tools(raw))
+
+    assert [t["name"] for t in filtered["result"]["tools"]] == ["list_resources"]
 
 
 def test_query_tank_db_tool_injected_only_for_non_restricted(monkeypatch) -> None:
@@ -1093,6 +1120,41 @@ def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatc
     assert recorded["payload"]["reason"] == "inspect ledger"
     assert recorded["payload"]["approval_url"] == structured["approval_url"]
     assert recorded["payload"]["request_event_id"] == recorded["event_id"]
+
+
+def test_tank_kubernetes_break_glass_tool_records_request_without_granting(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":false}'),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_kubernetes_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            9,
+            {"reason": "restart a wedged controller"},
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    assert structured["resource"] == "kubernetes-break-glass"
+    assert structured["status"] == "approval_required"
+    assert structured["privileged_tools_visible"] is False
+    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95/break-glass/")
+    assert "token" not in structured
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
+    recorded = recorded_call["json"]
+    assert recorded["action"] == "kubernetes.break_glass.request"
+    assert recorded["event_id"] == structured["request_event_id"]
+    assert recorded["source_tool"] == "request_kubernetes_break_glass"
+    assert recorded["target_kind"] == "kubernetes_mcp"
+    assert recorded["target_ref"] == "kubernetes-break-glass"
+    assert recorded["payload"]["reason"] == "restart a wedged controller"
+    assert recorded["payload"]["operations"] == ["use_kubernetes_break_glass_mcp"]
+    assert recorded["payload"]["approval_url"] == structured["approval_url"]
 
 
 def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:

@@ -424,6 +424,18 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			targetKind: "azure_mcp",
 			targetRef:  "azure-personal",
 		},
+		{
+			name:       "kubernetes break glass requested",
+			action:     "kubernetes.break_glass.request",
+			targetKind: "kubernetes_mcp",
+			targetRef:  "kubernetes-break-glass",
+		},
+		{
+			name:       "kubernetes break glass use",
+			action:     "kubernetes.break_glass.use",
+			targetKind: "kubernetes_mcp",
+			targetRef:  "kubernetes-break-glass",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &fakeControlActionStore{}
@@ -1726,6 +1738,59 @@ func TestHandleApproveAzureBreakGlassRequestActivatesMcpViaApprovalTurn(t *testi
 	}
 }
 
+func TestHandleApproveKubernetesBreakGlassRequestActivatesMcpViaApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{
+		getRow: pgstore.ControlActionEvent{
+			EventID:      "request-1",
+			InvocationID: "invocation-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-3",
+			SessionID:    "47",
+			Action:       "kubernetes.break_glass.request",
+			Status:       "started",
+			TargetKind:   "kubernetes_mcp",
+			TargetRef:    "kubernetes-break-glass",
+			Payload: []byte(`{
+				"operations": ["use_kubernetes_break_glass_mcp"],
+				"reason": "restart a wedged controller"
+			}`),
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/break-glass-requests/request-1/approve", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "request-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveBreakGlassRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != "kubernetes.break_glass.grant" || got.Status != "succeeded" {
+		t.Fatalf("grant action/status = %s/%s", got.Action, got.Status)
+	}
+	if got.TargetKind != "kubernetes_mcp" || got.TargetRef != "kubernetes-break-glass" {
+		t.Fatalf("target = %s/%s", got.TargetKind, got.TargetRef)
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.MCPActivateName != "kubernetes-break-glass" || command.MCPActivateURL != "http://127.0.0.1:9993/" {
+		t.Fatalf("mcp activation = %q/%q", command.MCPActivateName, command.MCPActivateURL)
+	}
+	if !strings.Contains(command.Prompt, "Your Kubernetes break-glass request was approved") {
+		t.Fatalf("prompt missing kubernetes approval notice: %q", command.Prompt)
+	}
+}
+
 func TestHandleBreakGlassRequestReturnsAlreadyDecided(t *testing.T) {
 	store := &fakeControlActionStore{
 		getRow: pgstore.ControlActionEvent{
@@ -1915,6 +1980,46 @@ func TestHandleInternalGetAzureBreakGlassGrantInactiveWithoutGrant(t *testing.T)
 	}
 	if body["active"] != false {
 		t.Fatalf("expected inactive grant, body = %#v", body)
+	}
+}
+
+func TestHandleInternalGetKubernetesBreakGlassGrantReturnsActiveGrant(t *testing.T) {
+	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	payload, _ := json.Marshal(map[string]any{
+		"expires_at": expiresAt,
+		"operations": []string{"use_kubernetes_break_glass_mcp"},
+		"reason":     "restart a wedged controller",
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:    "kubernetes-grant-1",
+			Action:     "kubernetes.break_glass.grant",
+			Status:     "succeeded",
+			TargetKind: "kubernetes_mcp",
+			TargetRef:  "kubernetes-break-glass",
+			Payload:    payload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/kubernetes-break-glass/grant", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetKubernetesBreakGlassGrant(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != true || body["event_id"] != "kubernetes-grant-1" || body["resource"] != "kubernetes-break-glass" {
+		t.Fatalf("body = %#v", body)
+	}
+	if store.listOwner != "owner@example.test" || store.listSession != "47" {
+		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
 	}
 }
 

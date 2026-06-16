@@ -1731,7 +1731,7 @@ interface AdminBreakGlassListBody {
   requests?: AdminBreakGlassListItem[];
 }
 
-type BreakGlassApprovalMenuKind = "github" | "azure" | "model";
+type BreakGlassApprovalMenuKind = "github" | "azure" | "kubernetes" | "model";
 
 interface BreakGlassApprovalMenuItem {
   id: string;
@@ -10255,7 +10255,8 @@ function BreakGlassRequestPage({
         (row) =>
           nonemptyAdminValue(row.event_id) === requestId &&
           (row.action === "github.break_glass.request" ||
-            row.action === "azure.break_glass.request"),
+            row.action === "azure.break_glass.request" ||
+            row.action === "kubernetes.break_glass.request"),
       ),
     [requestId, rows],
   );
@@ -10266,7 +10267,9 @@ function BreakGlassRequestPage({
           row.action !== "github.break_glass.grant" &&
           row.action !== "github.break_glass.deny" &&
           row.action !== "azure.break_glass.grant" &&
-          row.action !== "azure.break_glass.deny"
+          row.action !== "azure.break_glass.deny" &&
+          row.action !== "kubernetes.break_glass.grant" &&
+          row.action !== "kubernetes.break_glass.deny"
         )
           return false;
         return nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId;
@@ -10324,7 +10327,12 @@ function BreakGlassRequestPage({
 
   const pending = Boolean(request && !decision && request.status === "started");
   const busy = Boolean(requestId && busyEventId === requestId);
-  const kind = request?.action === "azure.break_glass.request" ? "azure" : "git";
+  const kind =
+    request?.action === "azure.break_glass.request"
+      ? "azure"
+      : request?.action === "kubernetes.break_glass.request"
+        ? "kubernetes"
+        : "git";
   const approvalTitle = request
     ? `${adminBreakGlassKind(request)} approval`
     : "Break glass approval";
@@ -10573,11 +10581,18 @@ function breakGlassApprovalMenuItemsForSession(
 ): BreakGlassApprovalMenuItem[] {
   const breakGlassItems = breakGlassRequests.map((request) => ({
     id: request.eventId,
-    kind: request.kind === "azure" ? ("azure" as const) : ("github" as const),
+    kind:
+      request.kind === "azure"
+        ? ("azure" as const)
+        : request.kind === "kubernetes"
+          ? ("kubernetes" as const)
+          : ("github" as const),
     href: breakGlassRequestUrl(sessionId, request.eventId),
     label:
       request.kind === "azure"
         ? "Azure break glass"
+        : request.kind === "kubernetes"
+          ? "Kubernetes break glass"
         : "GitHub break glass",
     target: request.target,
     reason: request.reason,
@@ -15227,17 +15242,20 @@ function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): 
 }
 
 function adminBreakGlassKind(row: ControlActionRow): string {
-  return row.action === "azure.break_glass.request" ? "Azure break glass" : "GitHub break glass";
+  if (row.action === "azure.break_glass.request") return "Azure break glass";
+  if (row.action === "kubernetes.break_glass.request") return "Kubernetes break glass";
+  return "GitHub break glass";
 }
 
 function adminBreakGlassAccessType(row: ControlActionRow): string {
-  return row.action === "azure.break_glass.request"
-    ? "Azure personal MCP access"
-    : "GitHub write access";
+  if (row.action === "azure.break_glass.request") return "Azure personal MCP access";
+  if (row.action === "kubernetes.break_glass.request") return "Kubernetes mutation MCP access";
+  return "GitHub write access";
 }
 
 function adminBreakGlassTarget(row: ControlActionRow): string {
   if (row.action === "azure.break_glass.request") return "azure-personal";
+  if (row.action === "kubernetes.break_glass.request") return "kubernetes-break-glass";
   const repo = [nonemptyAdminValue(row.repo_owner), nonemptyAdminValue(row.repo_name)]
     .filter(Boolean)
     .join("/");

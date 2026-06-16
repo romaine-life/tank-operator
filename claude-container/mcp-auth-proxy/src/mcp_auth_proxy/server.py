@@ -93,6 +93,7 @@ _GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?(?
 _TANK_PUBLISH_TOOL = "publish_current_head"
 _TANK_BREAK_GLASS_TOOL = "request_git_break_glass"
 _TANK_AZURE_BREAK_GLASS_TOOL = "request_azure_break_glass"
+_TANK_KUBERNETES_BREAK_GLASS_TOOL = "request_kubernetes_break_glass"
 # Read-only SQL against the tank-operator DB, for NON-restricted sessions only.
 _TANK_DB_QUERY_TOOL = "query_tank_db"
 _TANK_PR_LANE_TOOL = "request_pr_lane"
@@ -119,6 +120,7 @@ _GITHUB_WRITE_TOOL_DENYLIST = {
     "merge_pull_request",
     "update_issue",
 }
+_K8S_READ_ONLY_TOOL_ALLOWLIST = {"list_resources", "list_namespaces", "top_nodes"}
 _CI_ENFORCEMENT_TEXT = (
     "Tank quality gate: watch the PR's current HEAD CI checks until they pass, "
     "confirm there are no merge conflicts, and do not hand work back as complete "
@@ -331,6 +333,53 @@ def _filter_github_write_tools(raw: bytes) -> bytes:
                 isinstance(tool, dict)
                 and isinstance(tool.get("name"), str)
                 and tool["name"] in _GITHUB_WRITE_TOOL_DENYLIST
+            )
+        ]
+        return payload
+
+    text = raw.decode("utf-8", errors="replace")
+    if any(line.strip().startswith("data:") for line in text.splitlines()):
+        next_lines: list[str] = []
+        changed = False
+        for line in text.splitlines():
+            if not line.startswith("data:"):
+                next_lines.append(line)
+                continue
+            data = line[len("data:") :].strip()
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                next_lines.append(line)
+                continue
+            filtered = filter_payload(payload)
+            next_lines.append("data: " + json.dumps(filtered, separators=(",", ":")))
+            changed = True
+        if changed:
+            return ("\n".join(next_lines) + "\n").encode("utf-8")
+        return raw
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return raw
+    return json.dumps(filter_payload(payload), separators=(",", ":")).encode("utf-8")
+
+
+def _filter_k8s_break_glass_tools(raw: bytes) -> bytes:
+    def filter_payload(payload: dict) -> dict:
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return payload
+        tools = result.get("tools")
+        if not isinstance(tools, list):
+            return payload
+        result["tools"] = [
+            tool
+            for tool in tools
+            if not (
+                isinstance(tool, dict)
+                and isinstance(tool.get("name"), str)
+                and tool["name"] not in _K8S_READ_ONLY_TOOL_ALLOWLIST
             )
         ]
         return payload
@@ -831,6 +880,34 @@ def _append_azure_break_glass_tool_to_json(value) -> bool:
                         "reason": {
                             "type": "string",
                             "description": "Short reason azure access is needed and why no governed path suffices.",
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Caller source such as agent.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    if _TANK_KUBERNETES_BREAK_GLASS_TOOL not in existing:
+        tools.append(
+            {
+                "name": _TANK_KUBERNETES_BREAK_GLASS_TOOL,
+                "description": (
+                    "Record a request for break-glass Kubernetes mutation access "
+                    "and return a human approval URL. Normal mcp-k8s access remains "
+                    "read-only; after an admin approves, Tank activates the separate "
+                    "kubernetes-break-glass MCP surface for this session until the "
+                    "grant expires. This tool does not grant access or reveal a token."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Short reason Kubernetes mutation access is needed and why no governed path suffices.",
                         },
                         "source": {
                             "type": "string",
@@ -1535,6 +1612,10 @@ def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> s
     return _break_glass_approval_url(session_id, request_event_id)
 
 
+def _kubernetes_break_glass_approval_url(session_id: str, request_event_id: str) -> str:
+    return _break_glass_approval_url(session_id, request_event_id)
+
+
 def _pr_lane_approval_url(session_id: str, request_event_id: str) -> str:
     return f"{_tank_ui_host()}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
 
@@ -1584,6 +1665,29 @@ async def _active_azure_break_glass_grant(http: ClientSession, service_jwt: str)
     except json.JSONDecodeError as exc:
         log.warning(
             "Tank azure break-glass grant lookup returned invalid JSON; treating as no active grant",
+            exc_info=exc,
+        )
+        return None
+    if isinstance(value, dict) and value.get("active") is True:
+        return value
+    return None
+
+
+async def _active_kubernetes_break_glass_grant(http: ClientSession, service_jwt: str) -> dict | None:
+    if not ORIGIN_SESSION_ID:
+        return None
+    url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/kubernetes-break-glass/grant"
+    async with http.get(url, headers={"Authorization": f"Bearer {service_jwt}"}) as resp:
+        body = await resp.text()
+        if resp.status == 204 or not body.strip():
+            return None
+        if resp.status >= 400:
+            raise RuntimeError(f"Tank Kubernetes break-glass grant lookup failed with HTTP {resp.status}: {body[:500]}")
+    try:
+        value = json.loads(body)
+    except json.JSONDecodeError as exc:
+        log.warning(
+            "Tank Kubernetes break-glass grant lookup returned invalid JSON; treating as no active grant",
             exc_info=exc,
         )
         return None
@@ -3235,6 +3339,92 @@ async def _handle_tank_azure_break_glass_tool(
         )
 
 
+async def _handle_tank_kubernetes_break_glass_tool(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    arguments: dict,
+) -> web.Response:
+    invocation_id = f"tank-kubernetes-break-glass-{uuid4().hex}"
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for Tank break-glass requests")
+        reason = str(arguments.get("reason") or "").strip()
+        if len(reason) > 400:
+            reason = reason[:400]
+        source = str(arguments.get("source") or "agent").strip() or "agent"
+        service_token = await auth_romaine_provider.token()
+        grant = await _active_kubernetes_break_glass_grant(http, service_token)
+        event_id = f"tank-kubernetes-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
+        approval_url = _kubernetes_break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
+        await _post_tank_control_action(
+            http,
+            {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
+            {
+                "event_id": event_id,
+                "invocation_id": invocation_id,
+                "source_service": "mcp-tank-operator",
+                "source_tool": _TANK_KUBERNETES_BREAK_GLASS_TOOL,
+                "action": "kubernetes.break_glass.request",
+                "status": "started",
+                "target_kind": "kubernetes_mcp",
+                "target_ref": "kubernetes-break-glass",
+                "payload": {
+                    "approval_url": approval_url,
+                    "request_event_id": event_id,
+                    "reason": reason,
+                    "source": source,
+                    "operations": ["use_kubernetes_break_glass_mcp"],
+                },
+            },
+        )
+        if grant:
+            text = (
+                "Kubernetes break-glass access is approved and active for this session; "
+                "the kubernetes-break-glass tools surface automatically for this session "
+                "(Tank sends an approval turn that activates them — no re-request needed).\n"
+                f"Grant expires: {grant.get('expires_at')}"
+            )
+            structured = {
+                "resource": "kubernetes-break-glass",
+                "status": "approved",
+                "request_event_id": event_id,
+                "approval_url": approval_url,
+                "expires_at": grant.get("expires_at"),
+                "privileged_tools_visible": True,
+            }
+        else:
+            text = (
+                "Break-glass Kubernetes access request recorded.\n"
+                f"Approval URL: {approval_url}\n"
+                "This tool did not grant access or reveal a token. Once an admin "
+                "approves, Tank surfaces the kubernetes-break-glass tools into this "
+                "session automatically — you do not need to call this tool again."
+            )
+            structured = {
+                "resource": "kubernetes-break-glass",
+                "request_event_id": event_id,
+                "approval_url": approval_url,
+                "status": "approval_required",
+                "privileged_tools_visible": False,
+            }
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": text}],
+                "structuredContent": structured,
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank request_kubernetes_break_glass failed", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32012,
+            str(exc),
+            {"tool": _TANK_KUBERNETES_BREAK_GLASS_TOOL, "invocation_id": invocation_id},
+        )
+
+
 async def _handle_query_tank_db_tool(http, provider, request_id, arguments) -> web.Response:
     # Run a read-only SQL query against the tank-operator DB for a non-restricted
     # session via Tank's internal read-query endpoint (read-only enforced there).
@@ -4033,6 +4223,7 @@ log = logging.getLogger(__name__)
 SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 AZURE_MCP_PORT = 9991
 GITHUB_MCP_PORT = 9992
+K8S_MCP_PORT = 9993
 GLIMMUNG_MCP_PORT = 9995
 TANK_OPERATOR_MCP_PORT = 9996
 SPIRELENS_MCP_PORT = 9997
@@ -4138,7 +4329,7 @@ LISTENERS: list[tuple[int, str]] = [
     # server + rebuild, so this 9991 listener becomes reachable only then.
     (9991, "http://mcp-azure-personal.mcp-azure-personal.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
-    (9993, "http://mcp-k8s.mcp-k8s.svc:80"),
+    (K8S_MCP_PORT, "http://mcp-k8s.mcp-k8s.svc:80"),
     (9994, "http://mcp-argocd.mcp-argocd.svc:80"),
     (9995, "http://mcp-glimmung.mcp-glimmung.svc:80"),
     (9996, "http://mcp-tank-operator.mcp-tank-operator.svc:80"),
@@ -4317,6 +4508,7 @@ def _make_handler(
     github_activity_provider=None,
     tank_publish_provider=None,
     azure_break_glass_provider=None,
+    kubernetes_break_glass_provider=None,
     glimmung_hot_swap_provider=None,
     block_github_write_tools: bool = False,
 ):
@@ -4441,6 +4633,40 @@ def _make_handler(
                 record_proxy_request(mcp_label, 200)
                 return await _handle_query_tank_db_tool(http, azure_break_glass_provider, request_id, arguments)
 
+        if kubernetes_break_glass_provider is not None and parsed_method is not None:
+            method, params, request_id = parsed_method
+            if method == "tools/call" and params.get("name") == _TANK_KUBERNETES_BREAK_GLASS_TOOL:
+                arguments = params.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    return _mcp_error_response(request_id, -32602, "arguments must be an object")
+                record_proxy_request(mcp_label, 200)
+                return await _handle_tank_kubernetes_break_glass_tool(
+                    http,
+                    kubernetes_break_glass_provider,
+                    request_id,
+                    arguments,
+                )
+
+        if kubernetes_break_glass_provider is not None and parsed_method is not None:
+            method, params, request_id = parsed_method
+            tool_name = params.get("name")
+            if method == "tools/call" and isinstance(tool_name, str) and tool_name not in _K8S_READ_ONLY_TOOL_ALLOWLIST:
+                service_token = await kubernetes_break_glass_provider.token()
+                grant = await _active_kubernetes_break_glass_grant(http, service_token)
+                if grant is None:
+                    return _mcp_error_response(
+                        request_id,
+                        -32031,
+                        (
+                            f"Kubernetes MCP tool '{tool_name}' requires Kubernetes break-glass approval. "
+                            "Call request_kubernetes_break_glass from the Tank MCP to get an approval URL."
+                        ),
+                        {
+                            "blocked_tool": tool_name,
+                            "break_glass_tool": _TANK_KUBERNETES_BREAK_GLASS_TOOL,
+                        },
+                    )
+
         if glimmung_hot_swap_provider is not None and parsed_method is not None:
             method, params, request_id = parsed_method
             if method == "tools/call" and params.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
@@ -4462,6 +4688,7 @@ def _make_handler(
         github_tool_call = _parse_mcp_tool_call(body) if github_activity_provider is not None else None
         tank_tools_list = tank_publish_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
         azure_tools_list = azure_break_glass_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
+        k8s_tools_list = kubernetes_break_glass_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
         github_tools_list = block_github_write_tools and parsed_method is not None and parsed_method[0] == "tools/list"
         url = upstream + request.path_qs
 
@@ -4536,7 +4763,7 @@ def _make_handler(
                             for k, v in upstream_resp.headers.items()
                             if k.lower() not in _STRIP_RESPONSE_HEADERS
                         }
-                        if github_tool_call is not None or tank_tools_list or azure_tools_list or github_tools_list:
+                        if github_tool_call is not None or tank_tools_list or azure_tools_list or k8s_tools_list or github_tools_list:
                             response_headers.pop("Content-Length", None)
                             response_headers.pop("content-length", None)
                             response_body = await upstream_resp.read()
@@ -4562,6 +4789,11 @@ def _make_handler(
                                     response_body = _append_tank_publish_tool(response_body)
                                 if azure_tools_list:
                                     response_body = _append_azure_break_glass_tool(response_body)
+                                if k8s_tools_list:
+                                    service_token = await kubernetes_break_glass_provider.token()
+                                    grant = await _active_kubernetes_break_glass_grant(http, service_token)
+                                    if grant is None:
+                                        response_body = _filter_k8s_break_glass_tools(response_body)
                                 if github_tools_list:
                                     response_body = _filter_github_write_tools(response_body)
                             record_proxy_request(mcp_label, status)
@@ -4764,6 +4996,11 @@ async def run() -> None:
                     # locked by default for every session.
                     azure_break_glass_provider=(
                         auth_romaine_provider if port == TANK_OPERATOR_MCP_PORT else None
+                    ),
+                    kubernetes_break_glass_provider=(
+                        auth_romaine_provider
+                        if port in (TANK_OPERATOR_MCP_PORT, K8S_MCP_PORT)
+                        else None
                     ),
                     glimmung_hot_swap_provider=(
                         auth_romaine_provider

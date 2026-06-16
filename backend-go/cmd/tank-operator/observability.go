@@ -1213,7 +1213,7 @@ func controlActionSourceServiceLabel(sourceService string) string {
 
 func controlActionSourceToolLabel(sourceTool string) string {
 	switch sourceTool {
-	case "merge_pull_request", "merge_current_session_pr", "rename_current_session_pr", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_pr_lane", "create_pr_lane", "pr_lane_approval", "request_git_break_glass", "git_break_glass_approval", "break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare", "request_azure_break_glass", "azure_break_glass_approval", "azure_personal_mcp", "create_session", "test_slot_model_approval":
+	case "merge_pull_request", "merge_current_session_pr", "rename_current_session_pr", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_pr_lane", "create_pr_lane", "pr_lane_approval", "request_git_break_glass", "git_break_glass_approval", "break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare", "request_azure_break_glass", "azure_break_glass_approval", "azure_personal_mcp", "request_kubernetes_break_glass", "kubernetes_break_glass_approval", "kubernetes_mcp", "create_session", "test_slot_model_approval":
 		return sourceTool
 	default:
 		return "other"
@@ -1245,6 +1245,10 @@ func controlActionActionLabel(action string) string {
 		"azure.break_glass.grant",
 		"azure.break_glass.deny",
 		"azure.break_glass.use",
+		"kubernetes.break_glass.request",
+		"kubernetes.break_glass.grant",
+		"kubernetes.break_glass.deny",
+		"kubernetes.break_glass.use",
 		testSlotModelRequestAction,
 		testSlotModelGrantAction:
 		return action

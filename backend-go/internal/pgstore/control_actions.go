@@ -139,7 +139,11 @@ func (s *ControlActionStore) ListBreakGlassRequests(ctx context.Context, session
 			repo_owner, repo_name, pr_number, result_sha, error, payload
 		FROM control_action_events
 		WHERE session_scope = $1
-		  AND action IN ('github.break_glass.request', 'azure.break_glass.request')
+		  AND action IN (
+			'github.break_glass.request',
+			'azure.break_glass.request',
+			'kubernetes.break_glass.request'
+		  )
 		ORDER BY created_at DESC, event_id DESC
 		LIMIT $2
 	`
@@ -209,7 +213,9 @@ func (s *ControlActionStore) BreakGlassDecisionForRequest(ctx context.Context, s
 			'github.break_glass.grant',
 			'github.break_glass.deny',
 			'azure.break_glass.grant',
-			'azure.break_glass.deny'
+			'azure.break_glass.deny',
+			'kubernetes.break_glass.grant',
+			'kubernetes.break_glass.deny'
 		  )
 		ORDER BY created_at ASC, event_id ASC
 		LIMIT 1

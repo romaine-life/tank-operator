@@ -70,7 +70,7 @@ export type BreakGlassRequest = {
   eventId: string;
   invocationId: string;
   createdAt?: string;
-  kind: "git" | "azure";
+  kind: "git" | "azure" | "kubernetes";
   target: string;
   repo?: string;
   repoOwner?: string;
@@ -158,6 +158,14 @@ function actionTitle(action: string | undefined): string {
       return "Azure break-glass denied";
     case "azure.break_glass.use":
       return "Azure break-glass use";
+    case "kubernetes.break_glass.request":
+      return "Kubernetes break-glass request";
+    case "kubernetes.break_glass.grant":
+      return "Kubernetes break-glass grant";
+    case "kubernetes.break_glass.deny":
+      return "Kubernetes break-glass denied";
+    case "kubernetes.break_glass.use":
+      return "Kubernetes break-glass use";
     case "tank.test_slot_model.request":
       return "Test-slot model request";
     case "tank.test_slot_model.grant":
@@ -307,7 +315,9 @@ export function pendingBreakGlassRequests(
       action !== "github.break_glass.grant" &&
       action !== "github.break_glass.deny" &&
       action !== "azure.break_glass.grant" &&
-      action !== "azure.break_glass.deny"
+      action !== "azure.break_glass.deny" &&
+      action !== "kubernetes.break_glass.grant" &&
+      action !== "kubernetes.break_glass.deny"
     )
       continue;
     const payload = payloadObject(row.payload);
@@ -328,7 +338,12 @@ export function pendingBreakGlassRequests(
   const byTarget = new Map<string, BreakGlassRequest>();
   for (const row of rows) {
     const action = nonempty(row.action);
-    if (action !== "github.break_glass.request" && action !== "azure.break_glass.request") continue;
+    if (
+      action !== "github.break_glass.request" &&
+      action !== "azure.break_glass.request" &&
+      action !== "kubernetes.break_glass.request"
+    )
+      continue;
     if (nonempty(row.status) !== "started") continue;
     const eventId = nonempty(row.event_id);
     const invocationId = nonempty(row.invocation_id);
@@ -337,10 +352,16 @@ export function pendingBreakGlassRequests(
     const repoOwner = nonempty(row.repo_owner);
     const repoName = nonempty(row.repo_name);
     const repo = [repoOwner, repoName].filter(Boolean).join("/");
-    const kind = action === "azure.break_glass.request" ? "azure" : "git";
+    const kind =
+      action === "azure.break_glass.request"
+        ? "azure"
+        : action === "kubernetes.break_glass.request"
+          ? "kubernetes"
+          : "git";
     if (kind === "git" && (!repo || grantedRepos.has(repo))) continue;
     const payload = payloadObject(row.payload);
-    const target = kind === "azure" ? "azure-personal" : repo;
+    const target =
+      kind === "azure" ? "azure-personal" : kind === "kubernetes" ? "kubernetes-break-glass" : repo;
     const request: BreakGlassRequest = {
       eventId,
       invocationId,

@@ -466,7 +466,7 @@ func (s *appServer) loadBreakGlassRequest(ctx context.Context, sessionID, reques
 
 func isBreakGlassRequestAction(action string) bool {
 	switch strings.TrimSpace(action) {
-	case "github.break_glass.request", "azure.break_glass.request":
+	case "github.break_glass.request", "azure.break_glass.request", "kubernetes.break_glass.request":
 		return true
 	default:
 		return false
@@ -475,7 +475,9 @@ func isBreakGlassRequestAction(action string) bool {
 
 func isBreakGlassDecisionAction(action string) bool {
 	switch strings.TrimSpace(action) {
-	case "github.break_glass.grant", "github.break_glass.deny", "azure.break_glass.grant", "azure.break_glass.deny":
+	case "github.break_glass.grant", "github.break_glass.deny",
+		"azure.break_glass.grant", "azure.break_glass.deny",
+		"kubernetes.break_glass.grant", "kubernetes.break_glass.deny":
 		return true
 	default:
 		return false
@@ -509,6 +511,10 @@ func (s *appServer) appendBreakGlassDeny(ctx context.Context, request pgstore.Co
 		action = "azure.break_glass.deny"
 		targetKind = "azure_mcp"
 		targetRef = "azure-personal"
+	} else if request.Action == "kubernetes.break_glass.request" {
+		action = "kubernetes.break_glass.deny"
+		targetKind = "kubernetes_mcp"
+		targetRef = "kubernetes-break-glass"
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"request_event_id": request.EventID,
@@ -625,6 +631,37 @@ func (s *appServer) appendBreakGlassGrantForRequest(ctx context.Context, request
 			}
 		}
 		return row, expiresAt, agentNotification, nil
+	case "kubernetes.break_glass.request":
+		var payload struct {
+			Reason     string   `json:"reason"`
+			Operations []string `json:"operations"`
+		}
+		_ = json.Unmarshal(request.Payload, &payload)
+		row, expiresAt, err := s.appendKubernetesBreakGlassGrant(ctx, kubernetesBreakGlassGrantInput{
+			SessionID:      request.SessionID,
+			OwnerEmail:     request.OwnerEmail,
+			TTLSeconds:     0,
+			Operations:     payload.Operations,
+			RequestEventID: request.EventID,
+			Reason:         firstNonEmptyControlAction(strings.TrimSpace(body.Note), strings.TrimSpace(payload.Reason)),
+			ApprovedBy:     approvedBy,
+		})
+		agentNotification := map[string]any{"delivered": false}
+		if err != nil {
+			return row, expiresAt, agentNotification, err
+		}
+		if notifyResp, status, detail := s.enqueueKubernetesBreakGlassApprovalTurn(ctx, row, expiresAt); status != 0 {
+			agentNotification["error"] = strings.TrimSpace(detail)
+			recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "notify_error")
+			slog.Warn("kubernetes break-glass approval grant persisted but agent activation turn failed",
+				"session_id", request.SessionID, "grant_event_id", row.EventID, "status", status, "detail", detail)
+		} else {
+			agentNotification["delivered"] = true
+			if turnID := turnIDFromEnqueueResponse(notifyResp); turnID != "" {
+				agentNotification["turn_id"] = turnID
+			}
+		}
+		return row, expiresAt, agentNotification, nil
 	default:
 		return pgstore.ControlActionEvent{}, time.Time{}, nil, invalidBreakGlassRequest(errors.New("unsupported break-glass request"))
 	}
@@ -645,6 +682,16 @@ type gitBreakGlassGrantInput struct {
 }
 
 type azureBreakGlassGrantInput struct {
+	SessionID      string
+	OwnerEmail     string
+	TTLSeconds     int
+	Operations     []string
+	RequestEventID string
+	Reason         string
+	ApprovedBy     string
+}
+
+type kubernetesBreakGlassGrantInput struct {
 	SessionID      string
 	OwnerEmail     string
 	TTLSeconds     int
@@ -866,6 +913,95 @@ func azureBreakGlassApprovalPrompt(grant pgstore.ControlActionEvent, expiresAt t
 	return strings.Join(lines, "\n")
 }
 
+func (s *appServer) appendKubernetesBreakGlassGrant(ctx context.Context, in kubernetesBreakGlassGrantInput) (pgstore.ControlActionEvent, time.Time, error) {
+	ttl := in.TTLSeconds
+	if ttl <= 0 {
+		ttl = 3600
+	}
+	if ttl > 24*3600 {
+		ttl = 24 * 3600
+	}
+	operations := normalizeKubernetesBreakGlassOperations(in.Operations)
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(ttl) * time.Second)
+	payload, _ := json.Marshal(map[string]any{
+		"approved_by":      strings.TrimSpace(in.ApprovedBy),
+		"expires_at":       expiresAt.Format(time.RFC3339),
+		"ttl_seconds":      ttl,
+		"operations":       operations,
+		"request_event_id": strings.TrimSpace(in.RequestEventID),
+		"reason":           strings.TrimSpace(in.Reason),
+	})
+	event := pgstore.ControlActionEvent{
+		EventID:       "tank-kubernetes-break-glass-grant-" + in.SessionID + "-" + randomHex(12),
+		InvocationID:  "tank-kubernetes-break-glass-grant-" + randomHex(12),
+		OwnerEmail:    in.OwnerEmail,
+		SessionScope:  s.sessionScope,
+		SessionID:     in.SessionID,
+		SourceService: "tank-operator",
+		SourceTool:    "kubernetes_break_glass_approval",
+		Action:        "kubernetes.break_glass.grant",
+		Status:        "succeeded",
+		TargetKind:    "kubernetes_mcp",
+		TargetRef:     "kubernetes-break-glass",
+		Payload:       payload,
+	}
+	row, err := s.controlActions.Append(ctx, event)
+	return row, expiresAt, err
+}
+
+const (
+	kubernetesMCPBreakGlassServerName = "kubernetes-break-glass"
+	kubernetesMCPBreakGlassServerURL  = "http://127.0.0.1:9993/"
+)
+
+func (s *appServer) enqueueKubernetesBreakGlassApprovalTurn(ctx context.Context, grant pgstore.ControlActionEvent, expiresAt time.Time) (map[string]any, int, string) {
+	if s == nil || s.sessionBus == nil || s.mgr == nil {
+		return nil, http.StatusServiceUnavailable, "session turn enqueue unavailable"
+	}
+	sessionID := strings.TrimSpace(grant.SessionID)
+	ownerEmail := strings.TrimSpace(grant.OwnerEmail)
+	if sessionID == "" || ownerEmail == "" {
+		return nil, http.StatusBadRequest, "grant missing session or owner"
+	}
+	seed := controlActionPayloadString(grant.Payload, "request_event_id")
+	if seed == "" {
+		seed = grant.EventID
+	}
+	seed = sessionID + ":kubernetes:" + seed
+	return s.enqueueSDKTurn(ctx, ownerEmail, sessionID, sdkTurnRequest{
+		ClientNonce:     gitBreakGlassApprovalTurnNonce(seed),
+		RequireNonce:    true,
+		Prompt:          kubernetesBreakGlassApprovalPrompt(grant, expiresAt),
+		DisplayText:     kubernetesBreakGlassApprovalDisplayText(grant, expiresAt),
+		Source:          string(conversation.TurnSubmittedSourceBreakGlassApproval),
+		CreatedAt:       time.Now().UTC(),
+		AuthorKind:      string(conversation.AuthorKindSystem),
+		MCPActivateName: kubernetesMCPBreakGlassServerName,
+		MCPActivateURL:  kubernetesMCPBreakGlassServerURL,
+	})
+}
+
+func kubernetesBreakGlassApprovalDisplayText(_ pgstore.ControlActionEvent, expiresAt time.Time) string {
+	expiry := ""
+	if !expiresAt.IsZero() {
+		expiry = " The grant expires at " + expiresAt.UTC().Format(time.RFC3339) + "."
+	}
+	return "Kubernetes break-glass approved: the kubernetes-break-glass MCP tools are now available for this session." + expiry
+}
+
+func kubernetesBreakGlassApprovalPrompt(grant pgstore.ControlActionEvent, expiresAt time.Time) string {
+	lines := []string{
+		"System message: Your Kubernetes break-glass request was approved by the user.",
+		kubernetesBreakGlassApprovalDisplayText(grant, expiresAt),
+		"The kubernetes-break-glass tools are now active in your MCP registry — call them directly; no further request is needed. They re-lock automatically when the grant expires.",
+	}
+	if reason := controlActionPayloadString(grant.Payload, "reason"); reason != "" {
+		lines = append(lines, "Approval reason: "+reason)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // splitRepoSlug parses a trimmed "owner/name" GitHub slug.
 func splitRepoSlug(repo string) (string, string, bool) {
 	owner, name, ok := strings.Cut(strings.TrimSpace(repo), "/")
@@ -1000,6 +1136,58 @@ func (s *appServer) handleInternalGetAzureBreakGlassGrant(w http.ResponseWriter,
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"active": false, "resource": "azure-personal", "session_id": sessionID})
+}
+
+// handleInternalGetKubernetesBreakGlassGrant returns the active Kubernetes MCP
+// break-glass grant for a session, if any. The mcp-auth-proxy and/or a future
+// locked k8s MCP can call this before serving mutating Kubernetes tools.
+func (s *appServer) handleInternalGetKubernetesBreakGlassGrant(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/kubernetes-break-glass/grant")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	for _, row := range rows {
+		if row.Action != "kubernetes.break_glass.grant" || row.Status != "succeeded" {
+			continue
+		}
+		var payload struct {
+			ExpiresAt  string   `json:"expires_at"`
+			Operations []string `json:"operations"`
+			Reason     string   `json:"reason"`
+		}
+		_ = json.Unmarshal(row.Payload, &payload)
+		expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(payload.ExpiresAt))
+		if err != nil || !expiresAt.After(now) {
+			continue
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"active":        true,
+			"event_id":      row.EventID,
+			"resource":      "kubernetes-break-glass",
+			"expires_at":    expiresAt.UTC().Format(time.RFC3339),
+			"operations":    normalizeKubernetesBreakGlassOperations(payload.Operations),
+			"reason":        payload.Reason,
+			"session_id":    sessionID,
+			"session_scope": s.sessionScope,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"active": false, "resource": "kubernetes-break-glass", "session_id": sessionID})
 }
 
 func (s *appServer) handleApprovePRLaneRequest(w http.ResponseWriter, r *http.Request) {
@@ -1789,6 +1977,26 @@ func normalizeAzureBreakGlassOperations(in []string) []string {
 	return out
 }
 
+// normalizeKubernetesBreakGlassOperations bounds the Kubernetes grant operation
+// set. Kubernetes mutation is exposed as an all-or-nothing break-glass MCP for
+// now; narrower namespace/resource/verb scopes can fit beside this field later.
+func normalizeKubernetesBreakGlassOperations(in []string) []string {
+	allowed := map[string]bool{"use_kubernetes_break_glass_mcp": true}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range in {
+		op := strings.TrimSpace(raw)
+		if allowed[op] && !seen[op] {
+			out = append(out, op)
+			seen[op] = true
+		}
+	}
+	if len(out) == 0 {
+		out = []string{"use_kubernetes_break_glass_mcp"}
+	}
+	return out
+}
+
 func normalizeRepoScope(scope repoScope, fallbackRepo string) (repoScope, error) {
 	kind := strings.TrimSpace(scope.Kind)
 	switch kind {
@@ -2005,6 +2213,10 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		"azure.break_glass.grant",
 		"azure.break_glass.deny",
 		"azure.break_glass.use",
+		"kubernetes.break_glass.request",
+		"kubernetes.break_glass.grant",
+		"kubernetes.break_glass.deny",
+		"kubernetes.break_glass.use",
 		testSlotModelRequestAction,
 		testSlotModelGrantAction:
 	default:
