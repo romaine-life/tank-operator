@@ -119,5 +119,16 @@ func (s *appServer) handleInternalProviderFatal(w http.ResponseWriter, r *http.R
 	providerFatalReportTotal.WithLabelValues(provider, "ok").Inc()
 	slog.Warn("session marked Failed by runner provider-fatal report",
 		"session_id", sessionID, "provider", provider, "reason", reason, "pod", caller.PodName)
+
+	// Reap the pod so a crash-looping runner actually stops. The durable
+	// terminal is already recorded above and the row stays Failed (ReapPod does
+	// not mark it deleted). Best-effort: if the delete fails, the restart-budget
+	// backstop in the K8s watch reaps a still-looping pod.
+	if err := s.mgr.ReapPod(r.Context(), caller.Email, sessionID); err != nil {
+		slog.Warn("provider-fatal pod reap failed",
+			"session_id", sessionID, "provider", provider, "error", err)
+	} else {
+		sessionPodReapedTotal.WithLabelValues("provider_fatal").Inc()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

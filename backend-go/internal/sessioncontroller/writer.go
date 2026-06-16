@@ -151,21 +151,42 @@ type rowColumnChanges struct {
 	activityLastOrderKey string
 	compactionCount      *int64 // nil means leave unchanged
 	userMessageCount     *int64 // nil means leave unchanged
+	// guardNotTerminal makes the row UPDATE additionally require
+	// terminating_at IS NULL, so a non-terminal pod-state transition
+	// (scheduled/ready/not-ready) cannot resurrect a session that
+	// provider-fatal or pod-terminating already marked terminal. Without it a
+	// doomed container that briefly passes its readiness probe between crashes
+	// flips the row back to Active (the session 979 status flapping).
+	guardNotTerminal bool
 }
 
 func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
 	switch event.Type {
 	case EventTypePodScheduled:
-		return rowColumnChanges{status: "Pending"}, true
+		return rowColumnChanges{status: "Pending", guardNotTerminal: true}, true
 	case EventTypePodReady:
 		readyAt := parsePayloadTime(event.Payload, "ready_at")
-		return rowColumnChanges{status: "Active", readyAt: readyAt}, true
+		return rowColumnChanges{status: "Active", readyAt: readyAt, guardNotTerminal: true}, true
 	case EventTypePodNotReady:
-		return rowColumnChanges{status: "Pending"}, true
+		return rowColumnChanges{status: "Pending", guardNotTerminal: true}, true
 	case EventTypePodFailed:
+		// A pod_failed (CrashLoopBackOff / nonzero exit) is NOT marked
+		// terminal: a transient crash that recovers may legitimately return to
+		// Active. The orchestrator restart-budget backstop converts a
+		// persistent runner crash-loop into a provider_fatal (below), which IS
+		// terminal.
 		return rowColumnChanges{status: "Failed"}, true
 	case EventTypeProviderFatal:
-		return rowColumnChanges{status: "Failed"}, true
+		// Terminal: provider-fatal is the runner (or the crash-loop backstop)
+		// asserting the session cannot continue. Stamp terminating_at so it is
+		// sticky — a later ready observation cannot flip it back to Active —
+		// matching pod-terminating; the pod is then reaped.
+		at := parseRFC3339(event.OccurredAt)
+		if at == nil {
+			now := time.Now().UTC()
+			at = &now
+		}
+		return rowColumnChanges{status: "Failed", terminatingAt: at}, true
 	case EventTypePodTerminating:
 		terminatingAt := parseRFC3339(event.OccurredAt)
 		return rowColumnChanges{status: "Failed", terminatingAt: terminatingAt}, true
@@ -273,6 +294,13 @@ func (w *RowWriter) applyRowColumnChanges(ctx context.Context, event Event, c ro
 		"updated_at = now()",
 	)
 	where := " WHERE email = $1 AND session_scope = $2 AND session_id = $3"
+	if c.guardNotTerminal {
+		// Don't resurrect a terminally-Failed session: a non-terminal pod-state
+		// transition (scheduled/ready/not-ready) applies only while
+		// terminating_at is unset. Kills the crash-loop status flapping where a
+		// doomed-but-briefly-ready container flipped the row back to Active.
+		where += " AND terminating_at IS NULL"
+	}
 	if c.activitySummary != nil {
 		// Stale-write guard for the activity summary. Refreshes are
 		// concurrent by design (per-event persister workers on two

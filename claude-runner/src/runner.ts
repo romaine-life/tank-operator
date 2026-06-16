@@ -65,6 +65,7 @@ import {
 } from "./sessionCommands.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
+import { reportProviderFatal } from "../../runner-shared/providerFatal.js";
 import {
   backgroundTaskWakeTotal,
   commandsConsumedTotal,
@@ -86,6 +87,7 @@ import {
   scheduledWakeupRegisterTotal,
   toolPermissionDeniedTotal,
   unmappedProviderEventTotal,
+  unrecoverableExitTotal,
   terminalPublishDeferredTotal,
   inputReplyRecoveryTotal,
   askUserQuestionDismissedTotal,
@@ -238,6 +240,19 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
     return "auth";
   }
   return "other";
+}
+
+// isConversationNotFoundMessage detects the Claude SDK resume failure where the
+// on-disk conversation transcript for the resumed provider-session id no longer
+// exists — e.g. the runner container restarted and the transcript (which lives
+// on the container-ephemeral filesystem, NOT on a mounted volume, by design —
+// there is no per-session PVC) was wiped. The SDK surfaces this only as a
+// thrown Error whose message is "No conversation found with session ID: <uuid>"
+// with no structured error code, so a signature match is the only available
+// discriminator. It is isolated here (and unit-tested) so a future SDK error
+// class can replace the match without touching run()'s terminal control flow.
+export function isConversationNotFoundMessage(message: string): boolean {
+  return /no conversation found with session id/i.test(String(message ?? ""));
 }
 
 // classifyApiRetryError maps a Claude SDK system/api_retry frame's `error`
@@ -666,6 +681,13 @@ type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
 //     (server-side allowlist)
 const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_EFFORT: EffortLevel = "high";
+const CLAUDE_PROVIDER = "claude";
+// Process exit code for the unrecoverable-session terminal path: run() reports
+// session.provider_fatal then exits with this code instead of the normal
+// exit(1)-to-restart. Distinct from 1 so a terminated container's exit code
+// names the cause in `tank_session_container_terminations_total`; the
+// authoritative terminal signal is the provider-fatal POST, this is secondary.
+const UNRECOVERABLE_EXIT_CODE = 3;
 const TANK_MCP_SERVER_NAME = "tank";
 const TANK_ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const TANK_ASK_USER_QUESTION_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_ASK_USER_QUESTION_TOOL}`;
@@ -998,6 +1020,12 @@ export class Runner {
   private readonly firedBackgroundTaskWakes = new Set<string>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
+  // activeResumeID is the provider-session id the live sdkQuery was built to
+  // RESUME (null when it was a fresh `continue:true` boot, not a resume). It
+  // scopes the unrecoverable-resume classifier: a "No conversation found"
+  // thrown by a resume is terminal (the transcript is gone for good), whereas
+  // the same SDK message on a non-resume boot is not the resume-lost case.
+  private activeResumeID: string | null = null;
   private tankAskUserQuestionSequence = 0;
   // Model + effort are pinned from the first submit_turn that arrives, with
   // the DEFAULT_* fallbacks above for empty fields. The SDK's Options object
@@ -1087,6 +1115,11 @@ export class Runner {
     };
     signal.addEventListener("abort", onAbort, { once: true });
     this.runSignal = signal;
+    // Captured in the catch so the fatal-exit block below can pick the terminal
+    // path: an unrecoverable provider-session resume reports
+    // session.provider_fatal and exits terminally instead of the normal
+    // exit(1)-to-restart (which would crash-loop on the same dead resume).
+    let unrecoverableResumeErr: unknown = null;
     try {
       // Block until the first submit_turn arrives (ensureSdkQuery resolves
       // sdkReady after pinning options and constructing query()), or until
@@ -1130,7 +1163,14 @@ export class Runner {
     } catch (err) {
       console.error("SDK query exited with error:", err);
       providerErrorTotal.labels("query").inc();
-      await this.failActiveCommandTurn(err);
+      if (this.isUnrecoverableResumeFailure(err)) {
+        unrecoverableResumeErr = err;
+        // Resolve the active turn durably with the honest reason (not the
+        // generic provider_failure) so the transcript names the real cause.
+        await this.failActiveCommandTurn(err, "provider_session_lost");
+      } else {
+        await this.failActiveCommandTurn(err);
+      }
     } finally {
       signal.removeEventListener("abort", onAbort);
       stopConsumer();
@@ -1141,6 +1181,18 @@ export class Runner {
       this.userQueue.close();
     }
     if (!signal.aborted) {
+      if (unrecoverableResumeErr !== null) {
+        // Terminal: a container restart cannot recover this session — the SDK
+        // conversation transcript for the resumed provider-session is gone
+        // (container-ephemeral, wiped by the restart). The normal
+        // exit(1)-to-restart would resume the same dead id and crash-loop
+        // forever, so instead mark the whole session durably Failed via
+        // session.provider_fatal and exit terminally; the orchestrator reaps
+        // the pod so the kubelet stops restarting it. See
+        // docs/features/agent-runners/contract.md → "Failure And Recovery".
+        await this.reportUnrecoverableResume(unrecoverableResumeErr);
+        return;
+      }
       // Issue #1078 item 5: the SDK query loop is dead but the open NATS
       // socket would keep Node alive — a permanently inert runner whose
       // consumers are stopped and whose sdkQuery is never rebuilt; every
@@ -1158,8 +1210,47 @@ export class Runner {
     }
   }
 
-  // exitProcess is a seam for tests; production always process.exit(1)s.
+  // exitProcess is a seam for tests; production process.exit()s with the given
+  // code (1 = restart-and-resume; UNRECOVERABLE_EXIT_CODE = terminal, do not
+  // resume).
   exitProcess: (code: number) => void = (code) => process.exit(code);
+
+  // isUnrecoverableResumeFailure is true when the live query was built to
+  // RESUME a provider-session and the SDK threw the conversation-not-found
+  // signature: the on-disk transcript for that id is gone (wiped by a container
+  // restart) and every future restart would resume the same dead id. Terminal
+  // for the session, not a transient query death.
+  private isUnrecoverableResumeFailure(err: unknown): boolean {
+    if (!this.activeResumeID) return false;
+    const message = err instanceof Error ? err.message : String(err);
+    return isConversationNotFoundMessage(message);
+  }
+
+  // reportUnrecoverableResume marks the session durably Failed via
+  // session.provider_fatal (the loud, terminal session-level banner) and exits
+  // terminally. It deliberately does NOT take the exit(1)-to-restart path: a
+  // restart would resume the same gone transcript and crash-loop. The
+  // orchestrator reaps the pod on the provider-fatal report; its restart-budget
+  // backstop is the safety net if this report never lands.
+  private async reportUnrecoverableResume(err: unknown): Promise<void> {
+    const message = err instanceof Error ? err.message : String(err);
+    unrecoverableExitTotal.labels("provider_session_lost").inc();
+    console.error(
+      "claude-runner: provider session unrecoverable (conversation transcript gone after restart); reporting provider-fatal and exiting terminally",
+    );
+    try {
+      await reportProviderFatal(this.cfg, {
+        provider: CLAUDE_PROVIDER,
+        reason: "provider_session_lost",
+        exitCode: UNRECOVERABLE_EXIT_CODE,
+        message: message.slice(0, 500),
+      });
+    } catch (reportErr) {
+      unrecoverableExitTotal.labels("report_failed").inc();
+      console.error("provider-fatal report failed:", reportErr);
+    }
+    this.exitProcess(UNRECOVERABLE_EXIT_CODE);
+  }
 
   private async drainTurnsForFatalExit(): Promise<void> {
     const turns = [this.activeTurn, ...this.pendingTurns];
@@ -1230,6 +1321,10 @@ export class Runner {
   ): void {
     this.pinnedModel = model;
     this.pinnedEffort = effort;
+    // Latch whether this query is a RESUME (vs a fresh continue:true boot) so
+    // the unrecoverable-resume classifier can tell a "conversation not found"
+    // thrown by a doomed resume from the same message on a non-resume start.
+    this.activeResumeID = providerSessionID || null;
     optionsPinnedTotal.labels(model, effort).inc();
     console.log(
       JSON.stringify({
@@ -3174,7 +3269,10 @@ export class Runner {
     }
   }
 
-  private async failActiveCommandTurn(err: unknown): Promise<void> {
+  private async failActiveCommandTurn(
+    err: unknown,
+    reason: "provider_failure" | "provider_session_lost" = "provider_failure",
+  ): Promise<void> {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
     if (!turn?.commandRecord) return;
     if (!turn.terminalEmitted) {
@@ -3182,8 +3280,14 @@ export class Runner {
       // Classify the provider failure before it becomes an opaque
       // turn.failed terminal. `thinking_block_modified` is the regression
       // sentinel for the extended-thinking resume bug (session 340); it
-      // must stay at zero after the SDK ^0.3.158 bump.
-      providerFailureClassTotal.labels(classifyProviderFailure(message)).inc();
+      // must stay at zero after the SDK ^0.3.158 bump. provider_session_lost
+      // is a LOCAL resume failure (the transcript is gone), not an upstream
+      // Anthropic signature, so it is counted by
+      // tank_runner_unrecoverable_exit_total instead and must not inflate the
+      // provider-signature classifier.
+      if (reason === "provider_failure") {
+        providerFailureClassTotal.labels(classifyProviderFailure(message)).inc();
+      }
       await this.publishTurnTerminalOrDefer(
         turn,
         turnEvent({
@@ -3192,7 +3296,7 @@ export class Runner {
           clientNonce: turn.clientNonce,
           source: "claude",
           type: "turn.failed",
-          reason: "provider_failure",
+          reason,
           error: message,
         }),
         "turn.failed",

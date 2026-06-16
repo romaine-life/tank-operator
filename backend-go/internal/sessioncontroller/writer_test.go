@@ -20,15 +20,17 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 		wantTerm       bool
 		wantSummary    bool
 		wantCompaction bool
+		wantGuard      bool
 	}{
 		{
-			name:       "pod_scheduled → status Pending",
+			name:       "pod_scheduled → status Pending (guarded against terminal)",
 			event:      Event{Type: EventTypePodScheduled},
 			wantOK:     true,
 			wantStatus: "Pending",
+			wantGuard:  true,
 		},
 		{
-			name: "pod_ready → status Active + ready_at",
+			name: "pod_ready → status Active + ready_at (guarded against terminal)",
 			event: Event{
 				Type:    EventTypePodReady,
 				Payload: map[string]any{"ready_at": "2026-05-18T04:30:00Z"},
@@ -36,15 +38,19 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 			wantOK:     true,
 			wantStatus: "Active",
 			wantReady:  true,
+			wantGuard:  true,
 		},
 		{
-			name:       "pod_not_ready → status Pending",
+			name:       "pod_not_ready → status Pending (guarded against terminal)",
 			event:      Event{Type: EventTypePodNotReady},
 			wantOK:     true,
 			wantStatus: "Pending",
+			wantGuard:  true,
 		},
 		{
-			name:       "pod_failed → status Failed",
+			// pod_failed is NOT terminal (a transient crash may recover), so it
+			// is NOT guarded — it can still flip back to Active on recovery.
+			name:       "pod_failed → status Failed (not terminal, not guarded)",
 			event:      Event{Type: EventTypePodFailed},
 			wantOK:     true,
 			wantStatus: "Failed",
@@ -53,6 +59,19 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 			name: "pod_terminating → status Failed + terminating_at",
 			event: Event{
 				Type:       EventTypePodTerminating,
+				OccurredAt: "2026-05-18T04:30:00Z",
+			},
+			wantOK:     true,
+			wantStatus: "Failed",
+			wantTerm:   true,
+		},
+		{
+			// provider_fatal is terminal AND sticky: status Failed plus
+			// terminating_at, so a later ready observation cannot resurrect a
+			// session the runner (or the crash-loop backstop) declared dead.
+			name: "provider_fatal → status Failed + terminating_at (sticky)",
+			event: Event{
+				Type:       EventTypeProviderFatal,
 				OccurredAt: "2026-05-18T04:30:00Z",
 			},
 			wantOK:     true,
@@ -130,6 +149,9 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 			}
 			if (got.compactionCount != nil) != tc.wantCompaction {
 				t.Fatalf("compactionCount set = %v, want %v", got.compactionCount != nil, tc.wantCompaction)
+			}
+			if got.guardNotTerminal != tc.wantGuard {
+				t.Fatalf("guardNotTerminal = %v, want %v", got.guardNotTerminal, tc.wantGuard)
 			}
 		})
 	}

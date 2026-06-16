@@ -30,6 +30,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -48,6 +49,7 @@ type K8sWatchMetrics interface {
 	RecordLag(seconds float64)
 	RecordLeaderStatus(isLeader bool)
 	RecordContainerTermination(container, reason string, exitCode int32)
+	RecordPodReaped(reason string)
 }
 
 type noopK8sWatchMetrics struct{}
@@ -56,6 +58,7 @@ func (noopK8sWatchMetrics) RecordTransition(_ string)                       {}
 func (noopK8sWatchMetrics) RecordLag(_ float64)                             {}
 func (noopK8sWatchMetrics) RecordLeaderStatus(_ bool)                       {}
 func (noopK8sWatchMetrics) RecordContainerTermination(_, _ string, _ int32) {}
+func (noopK8sWatchMetrics) RecordPodReaped(_ string)                        {}
 
 // K8sWatchConfig wires the watch loop with everything it needs to
 // produce durable rows + NATS payloads. Namespace is the sessions
@@ -77,6 +80,13 @@ type K8sWatchConfig struct {
 	LeaseDuration  time.Duration
 	RenewDeadline  time.Duration
 	RetryPeriod    time.Duration
+	// CrashloopRestartBudget is the number of agent-runner-container restarts a
+	// session pod may accumulate while in CrashLoopBackOff before the watch
+	// reaps it (marking the session provider_fatal{reason:"runner_crashloop"}).
+	// Zero applies defaultCrashloopRestartBudget. This backstop guarantees no
+	// session-pod container crash-loops unbounded, catching unrecoverable loops
+	// the runner never classified.
+	CrashloopRestartBudget int32
 	// SkipLeaderElection runs the watch without a lease — only for
 	// single-replica local dev and unit tests. In production the
 	// orchestrator runs with replicas=2 and the lease is required.
@@ -165,7 +175,11 @@ func RunK8sWatch(ctx context.Context, cfg K8sWatchConfig) error {
 // Called from OnStartedLeading (or directly when SkipLeaderElection is
 // true).
 func runK8sWatchLeader(ctx context.Context, cfg K8sWatchConfig) error {
-	tracker := newTransitionTracker(cfg.Writer, cfg.Metrics, cfg.Scope)
+	namespace := cfg.Namespace
+	reap := func(rctx context.Context, pod *corev1.Pod) error {
+		return cfg.K8s.CoreV1().Pods(namespace).Delete(rctx, pod.Name, metav1.DeleteOptions{})
+	}
+	tracker := newTransitionTracker(cfg.Writer, cfg.Metrics, cfg.Scope, reap, cfg.CrashloopRestartBudget)
 	factory := informers.NewSharedInformerFactoryWithOptions(
 		cfg.K8s,
 		cfg.ResyncPeriod,
@@ -244,6 +258,9 @@ func applyK8sWatchDefaults(cfg K8sWatchConfig) K8sWatchConfig {
 	if cfg.Metrics == nil {
 		cfg.Metrics = noopK8sWatchMetrics{}
 	}
+	if cfg.CrashloopRestartBudget <= 0 {
+		cfg.CrashloopRestartBudget = defaultCrashloopRestartBudget
+	}
 	return cfg
 }
 
@@ -257,9 +274,16 @@ type transitionTracker struct {
 	writer  *RowWriter
 	metrics K8sWatchMetrics
 	scope   string
+	// reap deletes a session pod to stop a crash-loop the runner cannot escape.
+	// Nil disables the restart-budget backstop (tests that don't exercise it).
+	reap            func(context.Context, *corev1.Pod) error
+	crashloopBudget int32
 
 	mu   sync.Mutex
 	last map[types.UID]podState
+	// crashloopReaped marks pods the backstop already reaped so it fires at most
+	// once per pod (cleared when the informer reports the pod deleted).
+	crashloopReaped map[types.UID]struct{}
 }
 
 type podState struct {
@@ -278,15 +302,21 @@ type containerTermination struct {
 	finishedAt   string
 }
 
-func newTransitionTracker(writer *RowWriter, metrics K8sWatchMetrics, scope string) *transitionTracker {
+func newTransitionTracker(writer *RowWriter, metrics K8sWatchMetrics, scope string, reap func(context.Context, *corev1.Pod) error, crashloopBudget int32) *transitionTracker {
 	if metrics == nil {
 		metrics = noopK8sWatchMetrics{}
 	}
+	if crashloopBudget <= 0 {
+		crashloopBudget = defaultCrashloopRestartBudget
+	}
 	return &transitionTracker{
-		writer:  writer,
-		metrics: metrics,
-		scope:   scope,
-		last:    make(map[types.UID]podState),
+		writer:          writer,
+		metrics:         metrics,
+		scope:           scope,
+		reap:            reap,
+		crashloopBudget: crashloopBudget,
+		last:            make(map[types.UID]podState),
+		crashloopReaped: make(map[types.UID]struct{}),
 	}
 }
 
@@ -310,12 +340,19 @@ func (t *transitionTracker) handleUpsert(ctx context.Context, oldPod, newPod *co
 	// reflects the live state. Idempotent via event_id.
 	if !hadPrev {
 		t.recordContainerTerminations(newPod, curr, nil)
+		if t.maybeBackstopCrashloop(ctx, owner, sessionID, newPod, curr) {
+			return
+		}
 		t.emit(ctx, scheduledEvent(t.scope, owner, sessionID, newPod))
 		t.emitCurrentConditions(ctx, owner, sessionID, newPod, curr)
 		return
 	}
 
 	t.recordContainerTerminations(newPod, curr, prev.terminations)
+
+	if t.maybeBackstopCrashloop(ctx, owner, sessionID, newPod, curr) {
+		return
+	}
 
 	// Transitions:
 	if !prev.terminating && curr.terminating {
@@ -356,6 +393,104 @@ func (t *transitionTracker) recordContainerTerminations(pod *corev1.Pod, curr po
 	}
 }
 
+// defaultCrashloopRestartBudget is the agent-runner restart count, while in
+// CrashLoopBackOff, at which the watch gives up and reaps the pod. Sized above a
+// couple of transient restarts (a brief NATS/provider blip that self-heals on
+// restart-and-resume) but low enough that a genuinely unrecoverable loop — e.g.
+// session 979's resume-on-a-gone-transcript — converges to a terminal Failed in
+// well under a minute of backoff instead of looping until the ~24h idle reaper.
+const defaultCrashloopRestartBudget int32 = 5
+
+// maybeBackstopCrashloop reaps a session pod whose agent-runner container is
+// stuck in CrashLoopBackOff past the restart budget, after marking the session
+// provider_fatal{reason:"runner_crashloop"}. This is the defense-in-depth that
+// guarantees no session-pod container crash-loops unbounded: it catches
+// unrecoverable loops the runner never classified (boot crashes, segfaults, an
+// SDK shape the runner's own provider-fatal path missed), complementing the
+// runner's explicit report. Fires at most once per pod. Returns true when it
+// reaped (the caller then skips the normal transition emits for this event).
+func (t *transitionTracker) maybeBackstopCrashloop(ctx context.Context, owner, sessionID string, pod *corev1.Pod, curr podState) bool {
+	if t.reap == nil {
+		return false
+	}
+	// Already being deleted — e.g. the runner's own provider-fatal report
+	// already reaped it, or a user/idle delete is in flight. Nothing to do.
+	if curr.terminating {
+		return false
+	}
+	restarts, looping := runnerCrashLoop(pod)
+	if !looping || restarts < t.crashloopBudget {
+		return false
+	}
+	t.mu.Lock()
+	if _, done := t.crashloopReaped[pod.UID]; done {
+		t.mu.Unlock()
+		return false
+	}
+	t.crashloopReaped[pod.UID] = struct{}{}
+	t.mu.Unlock()
+
+	slog.Warn("sessioncontroller k8s-watch: reaping crash-looping session pod (restart budget exceeded)",
+		"session_id", sessionID,
+		"pod", pod.Name,
+		"restart_count", restarts,
+		"budget", t.crashloopBudget,
+	)
+	// Durable terminal first (sticky Failed via terminating_at), then stop the
+	// pod so the kubelet's restartPolicy=Always loop ends.
+	t.emit(ctx, crashloopFatalEvent(t.scope, owner, sessionID, pod, restarts))
+	if err := t.reap(ctx, pod); err != nil {
+		slog.Warn("sessioncontroller k8s-watch: crash-loop pod reap failed",
+			"session_id", sessionID, "pod", pod.Name, "error", err)
+		return true
+	}
+	t.metrics.RecordPodReaped("runner_crashloop")
+	return true
+}
+
+// runnerCrashLoop reports the agent-runner container's restart count and whether
+// it is currently in CrashLoopBackOff. Only the runner container counts — a
+// sidecar restart is a different concern, and repeated OOMKills already have
+// their own alert (TankSessionContainerOOMKilled).
+func runnerCrashLoop(pod *corev1.Pod) (int32, bool) {
+	if pod == nil {
+		return 0, false
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if !isAgentRunnerContainer(cs.Name) {
+			continue
+		}
+		looping := cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff"
+		return cs.RestartCount, looping
+	}
+	return 0, false
+}
+
+func isAgentRunnerContainer(name string) bool {
+	return strings.HasSuffix(strings.TrimSpace(name), "-runner")
+}
+
+// crashloopFatalEvent is the backstop's provider-fatal transition. It reuses
+// EventTypeProviderFatal so it shares the durable Failed + sticky terminating_at
+// behavior with a runner-reported provider-fatal; the reason distinguishes the
+// orchestrator-detected loop from the runner's own classification.
+func crashloopFatalEvent(scope, owner, sessionID string, pod *corev1.Pod, restartCount int32) Event {
+	return Event{
+		Email:        owner,
+		SessionScope: scope,
+		SessionID:    sessionID,
+		Type:         EventTypeProviderFatal,
+		OccurredAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		Payload: map[string]any{
+			"status":        "Failed",
+			"pod_name":      pod.Name,
+			"pod_uid":       string(pod.UID),
+			"reason":        "runner_crashloop",
+			"restart_count": restartCount,
+		},
+	}
+}
+
 func (t *transitionTracker) emitCurrentConditions(ctx context.Context, owner, sessionID string, pod *corev1.Pod, curr podState) {
 	if curr.terminating {
 		t.emit(ctx, terminatingEvent(t.scope, owner, sessionID, pod))
@@ -387,6 +522,7 @@ func (t *transitionTracker) handleDelete(_ context.Context, pod *corev1.Pod) {
 	}
 	t.mu.Lock()
 	delete(t.last, pod.UID)
+	delete(t.crashloopReaped, pod.UID)
 	t.mu.Unlock()
 }
 

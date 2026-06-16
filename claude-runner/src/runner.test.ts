@@ -13,6 +13,7 @@ import {
   claudeRestartClosureEvent,
   classifyProviderFailure,
   dispatch,
+  isConversationNotFoundMessage,
   logUnhandledSdkMessage,
   pickContextWindowFromModelUsage,
   Runner,
@@ -2280,4 +2281,154 @@ test("claudeRestartClosureEvent closes an orphaned task honestly and determinist
   const second = claudeRestartClosureEvent(cfg, task);
   assert.equal(first.event_id, second.event_id);
   assert.ok(String(first.event_id ?? "").length > 0);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Unrecoverable provider-session resume → loud, terminal session.provider_fatal
+//
+// When the runner container restarts, the SDK conversation transcript (on the
+// container-ephemeral filesystem — no per-session PVC, by design) is gone, so
+// query({ resume }) throws "No conversation found with session ID: <uuid>".
+// Before this fix the runner treated that like any transient query death
+// (exit(1)-to-restart) and crash-looped forever (session 979, 2026-06-16):
+// only a transient-looking turn.failed{provider_failure}, a flapping session
+// status, and no alert. Now it resolves the active turn with the honest reason,
+// reports session.provider_fatal (the loud terminal banner), and exits
+// terminally instead of restarting. The orchestrator reaps the pod on the
+// report. Contract: docs/features/agent-runners/contract.md → "Failure And
+// Recovery" ("Provider failures must become durable failure events instead of
+// silent strandings").
+// ───────────────────────────────────────────────────────────────────────────
+
+test("isConversationNotFoundMessage matches the SDK resume-not-found signature only", () => {
+  assert.equal(
+    isConversationNotFoundMessage(
+      "No conversation found with session ID: bdbca9e6-ee03-4ad7-8334-edc536bdfc3f",
+    ),
+    true,
+  );
+  // Case-insensitive: the only available discriminator is the message text.
+  assert.equal(
+    isConversationNotFoundMessage("no conversation found with session id: x"),
+    true,
+  );
+  assert.equal(isConversationNotFoundMessage("API Error: 529 overloaded"), false);
+  assert.equal(isConversationNotFoundMessage(""), false);
+});
+
+test("isUnrecoverableResumeFailure fires only for a resume, not a fresh continue boot", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    activeResumeID: string | null;
+    isUnrecoverableResumeFailure: (err: unknown) => boolean;
+  };
+  const notFound = new Error(
+    "No conversation found with session ID: bdbca9e6-ee03-4ad7-8334-edc536bdfc3f",
+  );
+
+  // Fresh boot (continue:true, no resume id): the same message is NOT the
+  // resume-lost case — a brand-new session that simply has no transcript yet
+  // must not be declared terminally dead.
+  runner.activeResumeID = null;
+  assert.equal(runner.isUnrecoverableResumeFailure(notFound), false);
+
+  // Resume boot: a conversation-not-found throw is terminal for the session.
+  runner.activeResumeID = "bdbca9e6-ee03-4ad7-8334-edc536bdfc3f";
+  assert.equal(runner.isUnrecoverableResumeFailure(notFound), true);
+
+  // Resume boot but a different (transient) error stays on the normal
+  // restart-and-retry path.
+  assert.equal(
+    runner.isUnrecoverableResumeFailure(new Error("API Error: 529 overloaded")),
+    false,
+  );
+});
+
+test("failActiveCommandTurn emits the honest provider_session_lost reason", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    failActiveCommandTurn: (err: unknown, reason?: string) => Promise<void>;
+  };
+  r.activeTurn = {
+    turnID: "turn_resume-lost",
+    clientNonce: "resume-lost",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+    commandRecord: { id: "submit-1", type: "submit_turn" },
+    stopCommandHeartbeat: () => {},
+  };
+
+  await r.failActiveCommandTurn(
+    new Error("No conversation found with session ID: x"),
+    "provider_session_lost",
+  );
+
+  assert.equal(harness.events.length, 1, "exactly one durable terminal");
+  assert.equal(harness.events[0]!.type, "turn.failed");
+  assert.equal(
+    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
+    "provider_session_lost",
+    "the transcript names the real cause, not the generic provider_failure",
+  );
+});
+
+test("reportUnrecoverableResume POSTs session.provider_fatal and exits terminally", async () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "claude-runner-fatal-"));
+  const tokenPath = path.join(tmp, "token");
+  writeFileSync(tokenPath, "fatal-token\n", "utf8");
+  const fetchCalls: Array<{
+    url: string;
+    init?: RequestInit;
+    body: Record<string, unknown>;
+  }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchCalls.push({
+      url: String(url),
+      init,
+      body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    });
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+  try {
+    const runner = new Runner({
+      ...runnerConfig(),
+      operatorInternalURL: "http://operator.internal",
+      operatorTokenPath: tokenPath,
+    }) as unknown as {
+      reportUnrecoverableResume: (err: unknown) => Promise<void>;
+      exitProcess: (code: number) => void;
+    };
+    const exits: number[] = [];
+    runner.exitProcess = (code: number) => exits.push(code);
+
+    await runner.reportUnrecoverableResume(
+      new Error("No conversation found with session ID: bdbca9e6"),
+    );
+
+    assert.equal(fetchCalls.length, 1, "exactly one provider-fatal report");
+    assert.equal(
+      fetchCalls[0]!.url,
+      "http://operator.internal/api/internal/sessions/63/provider-fatal",
+    );
+    assert.equal(fetchCalls[0]!.init?.method, "POST");
+    assert.equal(
+      fetchCalls[0]!.init?.headers instanceof Headers
+        ? fetchCalls[0]!.init.headers.get("Authorization")
+        : (fetchCalls[0]!.init?.headers as Record<string, string>)?.Authorization,
+      "Bearer fatal-token",
+    );
+    assert.equal(fetchCalls[0]!.body.provider, "claude");
+    assert.equal(fetchCalls[0]!.body.reason, "provider_session_lost");
+    assert.equal(fetchCalls[0]!.body.exit_code, 3);
+    assert.match(
+      String(fetchCalls[0]!.body.message ?? ""),
+      /No conversation found/,
+    );
+    assert.deepEqual(exits, [3], "exits terminally with the unrecoverable code");
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
