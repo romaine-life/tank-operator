@@ -764,6 +764,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert names == [
         "read_transcript",
         "publish_current_head",
+        "watch_current_session_pr",
         "request_pr_lane",
         "create_pr_lane",
         "merge_current_session_pr",
@@ -773,25 +774,27 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     ]
     publish = augmented["result"]["tools"][1]
     assert publish["inputSchema"]["properties"]["repo_path"]["type"] == "string"
-    pr_lane = augmented["result"]["tools"][2]
+    watch = augmented["result"]["tools"][2]
+    assert watch["inputSchema"]["properties"]["pr_number"]["type"] == "integer"
+    pr_lane = augmented["result"]["tools"][3]
     assert pr_lane["inputSchema"]["required"] == ["repo_scope", "reason"]
     assert "repo_scope" in pr_lane["inputSchema"]["properties"]
     assert "branch_scope" in pr_lane["inputSchema"]["properties"]
     assert "lane_names" not in pr_lane["inputSchema"]["properties"]
     assert "requested_count" not in pr_lane["inputSchema"]["properties"]
     assert "pull request" in pr_lane["description"]
-    create_lane = augmented["result"]["tools"][3]
+    create_lane = augmented["result"]["tools"][4]
     assert create_lane["inputSchema"]["required"] == ["request_event_id"]
-    merge = augmented["result"]["tools"][4]
+    merge = augmented["result"]["tools"][5]
     assert "pr_number" in merge["inputSchema"]["properties"]
     assert "session branch" in merge["description"]
-    rename = augmented["result"]["tools"][5]
+    rename = augmented["result"]["tools"][6]
     assert rename["inputSchema"]["required"] == ["title"]
-    update_body = augmented["result"]["tools"][6]
+    update_body = augmented["result"]["tools"][7]
     assert update_body["inputSchema"]["required"] == ["body"]
     assert "body" in update_body["inputSchema"]["properties"]
     assert "Feature Contracts" in update_body["description"]
-    break_glass = augmented["result"]["tools"][7]
+    break_glass = augmented["result"]["tools"][8]
     assert "approval URL" in break_glass["description"]
     assert break_glass["inputSchema"]["required"] == ["repo_scope", "branch_scope", "reason"]
     assert "token" not in break_glass["inputSchema"]["properties"]

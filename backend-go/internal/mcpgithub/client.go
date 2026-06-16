@@ -170,6 +170,162 @@ func (c *Client) ListRepos(ctx context.Context, userEmail string) ([]Repo, error
 	return c.callListInstallationRepos(ctx, token)
 }
 
+// MarkPRReady converts a draft PR to ready-for-review on-behalf-of userEmail.
+// GitHub rejects merging a draft, so the human-merge path marks ready first.
+func (c *Client) MarkPRReady(ctx context.Context, userEmail, owner, name string, number int) error {
+	if c == nil {
+		return errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return errors.New("mcpgithub: user email is empty")
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	_, err = c.callTool(ctx, token, "mark_pull_request_ready_for_review", map[string]any{
+		"owner": owner, "name": name, "number": number,
+	})
+	return err
+}
+
+// MergePR merges a PR via mcp-github's merge_pull_request on-behalf-of
+// userEmail. GitHub itself enforces the green/mergeable gate (an unmergeable PR
+// is rejected), so this is the authoritative merge. Returns the merge commit
+// SHA when available.
+func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod string) (string, error) {
+	if c == nil {
+		return "", errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return "", errors.New("mcpgithub: user email is empty")
+	}
+	if strings.TrimSpace(mergeMethod) == "" {
+		mergeMethod = "squash"
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return "", fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	res, err := c.callTool(ctx, token, "merge_pull_request", map[string]any{
+		"owner": owner, "name": name, "number": number, "merge_method": mergeMethod,
+	})
+	if err != nil {
+		return "", err
+	}
+	return mergeCommitFromResult(res), nil
+}
+
+// callTool issues a single MCP JSON-RPC tools/call and returns the decoded
+// result object, surfacing JSON-RPC and tool-level (isError) errors. Tolerates
+// bare-JSON or SSE framing like callListInstallationRepos.
+func (c *Client) callTool(ctx context.Context, token, name string, args map[string]any) (map[string]any, error) {
+	rpc := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  map[string]any{"name": name, "arguments": args},
+	}
+	body, err := json.Marshal(rpc)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.mcpURL+"/", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mcp-github returned %d for %s", resp.StatusCode, name)
+	}
+	return parseToolResult(resp.Body)
+}
+
+func parseToolResult(reader interface {
+	Read(p []byte) (int, error)
+}) (map[string]any, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 1<<16), 1<<22)
+	var rpcRaw []byte
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] == '{' {
+			rpcRaw = append([]byte{}, line...)
+			break
+		}
+		if bytes.HasPrefix(line, []byte("data:")) {
+			data := bytes.TrimSpace(line[len("data:"):])
+			if len(data) > 0 && data[0] == '{' {
+				rpcRaw = append([]byte{}, data...)
+				break
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(rpcRaw) == 0 {
+		return nil, errors.New("mcp-github: empty response")
+	}
+	var rpc struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rpcRaw, &rpc); err != nil {
+		return nil, err
+	}
+	if rpc.Error != nil {
+		return nil, fmt.Errorf("mcp-github: %s", rpc.Error.Message)
+	}
+	if rpc.Result == nil {
+		return nil, errors.New("mcp-github: missing result")
+	}
+	if isErr, _ := rpc.Result["isError"].(bool); isErr {
+		return nil, fmt.Errorf("mcp-github tool error: %s", toolResultText(rpc.Result))
+	}
+	return rpc.Result, nil
+}
+
+func toolResultText(result map[string]any) string {
+	content, _ := result["content"].([]any)
+	for _, item := range content {
+		if m, ok := item.(map[string]any); ok {
+			if text, _ := m["text"].(string); text != "" {
+				return text
+			}
+		}
+	}
+	return "unknown tool error"
+}
+
+func mergeCommitFromResult(result map[string]any) string {
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if sha, _ := sc["sha"].(string); sha != "" {
+		return sha
+	}
+	if sha, _ := sc["merge_commit_sha"].(string); sha != "" {
+		return sha
+	}
+	return ""
+}
+
 // tokenFor returns a cached or freshly-minted service JWT for the
 // caller's email. Single-flighted per email so a burst of concurrent
 // picker opens collapses to one exchange.

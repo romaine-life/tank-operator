@@ -2021,6 +2021,42 @@ var schemaMigrations = []migration{
 	{ID: "0164", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_turn_directory
 		ON session_transcript_rows (tank_session_id, row_cursor)
 		WHERE row_kind = 'turn_activity'`},
+
+	// session_ci_watches - durable per-session GitHub PR CI/mergeability watch
+	// (docs/event-driven-rollout.md). One row per (session, PR). The status
+	// column drives three consumers: the webhook receiver wakes the agent on a
+	// red/conflict transition, the idle reaper keeps a 'watching' session alive
+	// so that wake can land, and the human merge surface renders live PR state.
+	{ID: "0165", SQL: `CREATE TABLE IF NOT EXISTS session_ci_watches (
+		watch_id        text PRIMARY KEY,
+		session_scope   text NOT NULL,
+		session_id      text NOT NULL,
+		tank_session_id text NOT NULL,
+		owner_email     text NOT NULL,
+		pr_owner        text NOT NULL,
+		pr_name         text NOT NULL,
+		pr_number       integer NOT NULL,
+		head_sha        text NOT NULL DEFAULT '',
+		status          text NOT NULL,
+		required_checks jsonb NOT NULL DEFAULT '[]'::jsonb,
+		mergeable_state text NOT NULL DEFAULT '',
+		check_state     text NOT NULL DEFAULT '',
+		detail          text NOT NULL DEFAULT '',
+		pr_url          text NOT NULL DEFAULT '',
+		merge_commit    text NOT NULL DEFAULT '',
+		registered_at   timestamptz NOT NULL,
+		last_event_at   timestamptz,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		updated_at      timestamptz NOT NULL DEFAULT now(),
+		CHECK (status IN ('watching', 'ready', 'failed', 'conflict', 'merged', 'superseded', 'cancelled'))
+	)`},
+	{ID: "0166", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_ci_watches_pr
+		ON session_ci_watches (tank_session_id, pr_owner, pr_name, pr_number)`},
+	{ID: "0167", SQL: `CREATE INDEX IF NOT EXISTS session_ci_watches_lookup
+		ON session_ci_watches (pr_owner, pr_name, pr_number)`},
+	{ID: "0168", SQL: `CREATE INDEX IF NOT EXISTS session_ci_watches_active
+		ON session_ci_watches (session_scope, status, updated_at)
+		WHERE status IN ('watching', 'ready')`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration
