@@ -1,0 +1,156 @@
+package main
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+)
+
+type ciWatchStatusCall struct {
+	watchID string
+	status  pgstore.CIWatchStatus
+}
+
+type fakeCIWatchStore struct {
+	registerCalls []pgstore.RegisterCIWatchRequest
+	registerErr   error
+
+	getByPRResult     pgstore.CIWatch
+	getByPRErr        error
+	updateStatusCalls []ciWatchStatusCall
+	markMergedCalls   []string
+}
+
+func (s *fakeCIWatchStore) Register(_ context.Context, req pgstore.RegisterCIWatchRequest) (pgstore.CIWatch, error) {
+	if s.registerErr != nil {
+		return pgstore.CIWatch{}, s.registerErr
+	}
+	s.registerCalls = append(s.registerCalls, req)
+	return pgstore.CIWatch{
+		WatchID:    "ciwatch_test",
+		Status:     pgstore.CIWatchWatching,
+		SessionID:  req.SessionID,
+		OwnerEmail: req.OwnerEmail,
+		PROwner:    req.PROwner,
+		PRName:     req.PRName,
+		PRNumber:   req.PRNumber,
+		HeadSHA:    req.HeadSHA,
+	}, nil
+}
+
+func (s *fakeCIWatchStore) UpdateStatus(_ context.Context, watchID string, status pgstore.CIWatchStatus, _ string) (pgstore.CIWatch, error) {
+	s.updateStatusCalls = append(s.updateStatusCalls, ciWatchStatusCall{watchID: watchID, status: status})
+	return pgstore.CIWatch{}, nil
+}
+
+func (s *fakeCIWatchStore) Get(_ context.Context, _ string) (pgstore.CIWatch, error) {
+	return pgstore.CIWatch{}, nil
+}
+
+func (s *fakeCIWatchStore) GetByPR(_ context.Context, _, _ string, _ int) (pgstore.CIWatch, error) {
+	return s.getByPRResult, s.getByPRErr
+}
+
+func (s *fakeCIWatchStore) GetLatestForSession(_ context.Context, _, _ string) (pgstore.CIWatch, error) {
+	return s.getByPRResult, s.getByPRErr
+}
+
+func (s *fakeCIWatchStore) MarkMerged(_ context.Context, watchID, _ string) (pgstore.CIWatch, error) {
+	s.markMergedCalls = append(s.markMergedCalls, watchID)
+	return pgstore.CIWatch{}, nil
+}
+
+func (s *fakeCIWatchStore) HasActiveForSession(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func ciWatchTestServer(t *testing.T, store ciWatchStore) *appServer {
+	t.Helper()
+	app := testTurnsApp(
+		t,
+		&recordingSessionBus{},
+		sdkSessionPod("session-47", "47", "owner@example.test", sessionmodel.ClaudeGUIMode, "claude-runner"),
+	)
+	app.verifier = auth.NewVerifier(testJWT(t))
+	app.sessionScope = "tank-operator-slot-3"
+	app.ciWatches = store
+	return app
+}
+
+func TestHandleInternalRegisterCIWatchRegistersWithServiceActor(t *testing.T) {
+	store := &fakeCIWatchStore{}
+	app := ciWatchTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/ci-watches", strings.NewReader(`{
+		"pr_owner": "romaine-life",
+		"pr_name": "tank-operator",
+		"pr_number": 1234,
+		"head_sha": "abc123",
+		"mergeable_state": "clean",
+		"check_state": "pending",
+		"detail": "CI in progress",
+		"pr_url": "https://github.com/romaine-life/tank-operator/pull/1234"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterCIWatch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.registerCalls) != 1 {
+		t.Fatalf("register calls = %d, want 1", len(store.registerCalls))
+	}
+	got := store.registerCalls[0]
+	// The owner is taken from the service token's actor_email, the session from
+	// the path - never the request body.
+	if got.OwnerEmail != "owner@example.test" || got.SessionID != "47" {
+		t.Fatalf("owner/session = (%q,%q), want (owner@example.test,47)", got.OwnerEmail, got.SessionID)
+	}
+	if got.PROwner != "romaine-life" || got.PRName != "tank-operator" || got.PRNumber != 1234 || got.HeadSHA != "abc123" {
+		t.Fatalf("pr fields = %#v", got)
+	}
+}
+
+func TestHandleInternalRegisterCIWatchRejectsNonService(t *testing.T) {
+	store := &fakeCIWatchStore{}
+	app := ciWatchTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/ci-watches", strings.NewReader(`{"pr_owner":"o","pr_name":"r","pr_number":1}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "", "user@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterCIWatch(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 for role=user", rec.Code)
+	}
+	if len(store.registerCalls) != 0 {
+		t.Fatalf("store was called for a rejected caller")
+	}
+}
+
+func TestHandleInternalRegisterCIWatchRejectsBadBody(t *testing.T) {
+	store := &fakeCIWatchStore{}
+	app := ciWatchTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/ci-watches", strings.NewReader(`not json`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterCIWatch(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for invalid JSON", rec.Code)
+	}
+	if len(store.registerCalls) != 0 {
+		t.Fatalf("store was called on an invalid body")
+	}
+}

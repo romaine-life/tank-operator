@@ -246,12 +246,15 @@ func main() {
 	var backgroundTaskWakeStore *pgstore.BackgroundTaskWakeStore
 	var controlActionStore *pgstore.ControlActionStore
 	var pendingLaunchStore *pgstore.PendingLaunchStore
+	var ciWatchStore *pgstore.CIWatchStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
 		backgroundTaskWakeStore = pgstore.NewBackgroundTaskWakeStore(pgPool, sessionScope)
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
+		ciWatchStore = pgstore.NewCIWatchStore(pgPool, sessionScope)
 	}
+	githubWebhookSecret := strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET"))
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
 	// NATS session bus (per-email subject), replacing the prior
@@ -617,6 +620,8 @@ func main() {
 		glimmung:                 buildGlimmungClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
+		ciWatches:                ciWatchStore,
+		githubWebhookSecret:      githubWebhookSecret,
 		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
 		deploymentVersions:       deploymentVersionStore,

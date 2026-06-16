@@ -100,6 +100,7 @@ _TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
 _TANK_MERGE_TOOL = "merge_current_session_pr"
 _TANK_RENAME_PR_TOOL = "rename_current_session_pr"
 _TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
+_TANK_WATCH_PR_TOOL = "watch_current_session_pr"
 _GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
@@ -484,6 +485,7 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     has_merge = any(isinstance(tool, dict) and tool.get("name") == _TANK_MERGE_TOOL for tool in tools)
     has_rename_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_RENAME_PR_TOOL for tool in tools)
     has_update_pr_body = any(isinstance(tool, dict) and tool.get("name") == _TANK_UPDATE_PR_BODY_TOOL for tool in tools)
+    has_watch_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_WATCH_PR_TOOL for tool in tools)
     changed = False
     for tool in tools:
         if isinstance(tool, dict) and tool.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
@@ -515,6 +517,38 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         "source": {
                             "type": "string",
                             "description": "Caller source such as post-commit or agent.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    if not has_watch_pr:
+        tools.append(
+            {
+                "name": _TANK_WATCH_PR_TOOL,
+                "description": (
+                    "Hand off CI/mergeability watching for the current session's "
+                    "governed PR to Tank. Performs the authoritative GitHub read "
+                    "(resolving GitHub's asynchronous mergeable_state and reading the "
+                    "check rollup) so you do not poll check status yourself. Returns "
+                    "'conflict' or 'failed' to fix now, or 'watching'/'ready'."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Optional GitHub slug, for example romaine-life/tank-operator.",
+                        },
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional absolute or /workspace-relative path to the repo.",
+                        },
+                        "pr_number": {
+                            "type": "integer",
+                            "description": "Optional PR number; defaults to the open governed PR for the current session branch.",
                         },
                     },
                     "additionalProperties": False,
@@ -2248,6 +2282,168 @@ async def _handle_tank_publish_tool(
             -32011,
             str(exc),
             {"tool": _TANK_PUBLISH_TOOL, "invocation_id": invocation_id},
+        )
+
+
+async def _handle_tank_watch_pr_tool(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    arguments: dict,
+) -> web.Response:
+    invocation_id = f"tank-watch-pr-{uuid4().hex}"
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for Tank PR watch")
+        repo_path = _repo_path_from_arguments(arguments)
+        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
+        if not git_dir:
+            raise ValueError(f"{repo_path} is not a git repository")
+        branch = await _git_output(repo_path, "branch", "--show-current")
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
+        owner, repo = slug
+        requested_repo = str(arguments.get("repo") or "").strip()
+        if requested_repo and requested_repo != f"{owner}/{repo}":
+            raise ValueError(f"repo argument {requested_repo!r} does not match origin {owner}/{repo}")
+
+        service_token = await auth_romaine_provider.token()
+        github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
+
+        # Resolve the PR number: explicit arg, else the open PR for this branch.
+        raw_pr_number = arguments.get("pr_number")
+        try:
+            pr_number = int(raw_pr_number) if raw_pr_number is not None else 0
+        except (TypeError, ValueError):
+            raise ValueError("pr_number must be an integer")
+        if pr_number <= 0:
+            list_status, list_body = await _github_api_json(
+                http,
+                github_token,
+                "GET",
+                f"/repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=open",
+            )
+            if list_status >= 400 or not isinstance(list_body, list) or not list_body:
+                raise ValueError(f"no open PR found for {owner}:{branch}; pass pr_number explicitly")
+            first = list_body[0] if isinstance(list_body[0], dict) else {}
+            pr_number = int(first.get("number") or 0)
+            if pr_number <= 0:
+                raise ValueError(f"could not resolve PR number for {owner}:{branch}")
+
+        # Authoritative mergeability read. GitHub computes mergeable_state
+        # asynchronously, so the value is null/'unknown' right after a push; poll
+        # until it resolves. This is the fix for the "reports it's good while the
+        # PR actually has a conflict" failure (docs/event-driven-rollout.md).
+        mergeable = None
+        mergeable_state = ""
+        head_sha = ""
+        pr_url = ""
+        for _attempt in range(6):
+            detail_status, detail_body = await _github_api_json(
+                http,
+                github_token,
+                "GET",
+                f"/repos/{owner}/{repo}/pulls/{pr_number}",
+            )
+            if detail_status >= 400 or not isinstance(detail_body, dict):
+                raise RuntimeError(f"could not read PR #{pr_number}: HTTP {detail_status}")
+            mergeable = detail_body.get("mergeable")
+            mergeable_state = str(detail_body.get("mergeable_state") or "")
+            head = detail_body.get("head")
+            head_sha = str(head.get("sha") or "") if isinstance(head, dict) else ""
+            pr_url = str(detail_body.get("html_url") or "")
+            if mergeable is not None and mergeable_state and mergeable_state != "unknown":
+                break
+            await asyncio.sleep(1.5)
+
+        # Reduce the check rollup for the resolved head SHA to pass/fail/pending.
+        check_state = "pending"
+        failing: list[str] = []
+        if head_sha:
+            runs_status, runs_body = await _github_api_json(
+                http,
+                github_token,
+                "GET",
+                f"/repos/{owner}/{repo}/commits/{head_sha}/check-runs",
+            )
+            if runs_status < 400 and isinstance(runs_body, dict):
+                runs = runs_body.get("check_runs")
+                if isinstance(runs, list):
+                    any_incomplete = False
+                    for run in runs:
+                        if not isinstance(run, dict):
+                            continue
+                        if str(run.get("status") or "") != "completed":
+                            any_incomplete = True
+                            continue
+                        if str(run.get("conclusion") or "") in {"failure", "cancelled", "timed_out", "action_required", "stale"}:
+                            failing.append(str(run.get("name") or "check"))
+                    if failing:
+                        check_state = "failure"
+                    elif any_incomplete:
+                        check_state = "pending"
+                    else:
+                        check_state = "success"
+
+        # Classify into the small, unambiguous set the rollout skill acts on.
+        if mergeable_state in {"dirty", "behind"}:
+            state = "conflict"
+            detail = f"PR #{pr_number} needs a rebase onto its base (mergeable_state={mergeable_state})."
+        elif failing:
+            state = "failed"
+            detail = f"Required checks failed: {', '.join(failing[:8])}."
+        elif mergeable is True and mergeable_state == "clean" and check_state == "success":
+            state = "ready"
+            detail = f"PR #{pr_number} is green and mergeable, awaiting human merge in Tank."
+        else:
+            state = "watching"
+            detail = f"CI in progress (mergeable_state={mergeable_state or 'unknown'}, checks={check_state})."
+
+        # Register a durable watch only for the genuinely-pending case. 'conflict'
+        # and 'failed' are returned for the agent to fix now; 'ready' needs no wait.
+        if state == "watching":
+            headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+            watch_url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/ci-watches"
+            watch_payload = {
+                "pr_owner": owner,
+                "pr_name": repo,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "mergeable_state": mergeable_state,
+                "check_state": check_state,
+                "detail": detail,
+                "pr_url": pr_url,
+            }
+            async with http.post(watch_url, headers=headers, json=watch_payload) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    raise RuntimeError(f"could not register CI watch: HTTP {resp.status}: {body[:300]}")
+
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": f"{state}: {detail}"}],
+                "structuredContent": {
+                    "repo": f"{owner}/{repo}",
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "pr_url": pr_url,
+                    "state": state,
+                    "mergeable_state": mergeable_state,
+                    "check_state": check_state,
+                    "failing_checks": failing,
+                },
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank watch_current_session_pr failed", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32011,
+            str(exc),
+            {"tool": _TANK_WATCH_PR_TOOL, "invocation_id": invocation_id},
         )
 
 
@@ -4373,6 +4569,7 @@ def _make_handler(
                 _TANK_MERGE_TOOL,
                 _TANK_RENAME_PR_TOOL,
                 _TANK_UPDATE_PR_BODY_TOOL,
+                _TANK_WATCH_PR_TOOL,
             }:
                 arguments = params.get("arguments") or {}
                 if not isinstance(arguments, dict):
@@ -4390,6 +4587,8 @@ def _make_handler(
                     return await _handle_tank_rename_pr_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_UPDATE_PR_BODY_TOOL:
                     return await _handle_tank_update_pr_body_tool(http, tank_publish_provider, request_id, arguments)
+                if params.get("name") == _TANK_WATCH_PR_TOOL:
+                    return await _handle_tank_watch_pr_tool(http, tank_publish_provider, request_id, arguments)
                 return await _handle_tank_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
 
         # azure-personal break-glass is independent of restricted-git mode:

@@ -932,6 +932,12 @@ func (s *Store) ClaimIdleForReap(ctx context.Context, cutoff time.Time, limit in
 						AND p.session_id = c.session_id
 						AND p.status IN ('awaiting_bytes', 'ready', 'claiming')
 				)
+				AND NOT EXISTS (
+					SELECT 1 FROM session_ci_watches cw
+					WHERE cw.session_scope = c.session_scope
+						AND cw.session_id = c.session_id
+						AND cw.status = 'watching'
+				)
 			ORDER BY c.updated_at ASC
 			LIMIT $3
 			FOR UPDATE SKIP LOCKED

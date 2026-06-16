@@ -1,0 +1,57 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+)
+
+// handleInternalRegisterCIWatch registers (or refreshes) a GitHub PR
+// CI/mergeability watch for the session. The Tank watch_current_session_pr tool
+// calls this at agent hand-off, after it has performed the authoritative GitHub
+// read (resolving the async mergeable_state). The durable row drives the
+// webhook receiver, the idle reaper, and the human merge surface. See
+// docs/event-driven-rollout.md.
+func (s *appServer) handleInternalRegisterCIWatch(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/ci-watches")
+	if user == nil {
+		return
+	}
+	if s.ciWatches == nil {
+		writeError(w, http.StatusServiceUnavailable, "ci watch store unavailable")
+		return
+	}
+	sessionID := r.PathValue("session_id")
+	var body struct {
+		PROwner        string `json:"pr_owner"`
+		PRName         string `json:"pr_name"`
+		PRNumber       int    `json:"pr_number"`
+		HeadSHA        string `json:"head_sha"`
+		MergeableState string `json:"mergeable_state"`
+		CheckState     string `json:"check_state"`
+		Detail         string `json:"detail"`
+		PRURL          string `json:"pr_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	watch, err := s.ciWatches.Register(r.Context(), pgstore.RegisterCIWatchRequest{
+		SessionID:      sessionID,
+		OwnerEmail:     user.ActorEmail,
+		PROwner:        body.PROwner,
+		PRName:         body.PRName,
+		PRNumber:       body.PRNumber,
+		HeadSHA:        body.HeadSHA,
+		MergeableState: body.MergeableState,
+		CheckState:     body.CheckState,
+		Detail:         body.Detail,
+		PRURL:          body.PRURL,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, watch)
+}

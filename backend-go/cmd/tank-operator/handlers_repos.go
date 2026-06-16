@@ -467,4 +467,6 @@ func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 // Production wires *mcpgithub.Client directly via main.go.
 type AppServerMCPGitHub interface {
 	ListRepos(ctx context.Context, userEmail string) ([]mcpgithub.Repo, error)
+	MarkPRReady(ctx context.Context, userEmail, owner, name string, number int) error
+	MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod string) (string, error)
 }

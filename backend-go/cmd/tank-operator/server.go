@@ -121,6 +121,17 @@ type appServer struct {
 	// turn boundary instead of holding process-local timers in a session pod.
 	scheduledWakeups scheduledWakeupStore
 
+	// ciWatches is the durable backend-owned store of per-session GitHub PR
+	// CI/mergeability watches (docs/event-driven-rollout.md): the watch tool
+	// registers a row at agent hand-off, the webhook receiver transitions it and
+	// wakes the agent on red/conflict, the idle reaper keeps a 'watching' session
+	// alive, and the human merge surface renders it.
+	ciWatches ciWatchStore
+
+	// githubWebhookSecret verifies X-Hub-Signature-256 on the public
+	// POST /webhooks/github route. Empty -> the receiver fails closed.
+	githubWebhookSecret string
+
 	// backgroundTaskWakes is the durable backend-owned store for "a Claude
 	// background task finished while the session was idle" wakes. The runner
 	// registers the natural terminal; the orchestrator claims due rows and
@@ -215,6 +226,21 @@ type scheduledWakeupStore interface {
 	ReleaseRetainingAttempt(context.Context, string) error
 	ScheduledDueCount(context.Context, time.Time) (int, error)
 	CancelPendingForSession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
+}
+
+// ciWatchStore is the durable per-session GitHub PR CI/mergeability watch store
+// (docs/event-driven-rollout.md). Register lands a watch at agent hand-off;
+// UpdateStatus transitions it from the webhook receiver and the human merge
+// surface; HasActiveForSession is the idle-reaper gate that keeps a 'watching'
+// session alive so a red/conflict wake can land.
+type ciWatchStore interface {
+	Register(context.Context, pgstore.RegisterCIWatchRequest) (pgstore.CIWatch, error)
+	UpdateStatus(context.Context, string, pgstore.CIWatchStatus, string) (pgstore.CIWatch, error)
+	Get(context.Context, string) (pgstore.CIWatch, error)
+	GetByPR(context.Context, string, string, int) (pgstore.CIWatch, error)
+	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)
+	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
+	HasActiveForSession(context.Context, string, string) (bool, error)
 }
 
 type pendingLaunchStore interface {
@@ -418,6 +444,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-state", s.handleSetTestState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/return", s.handleReturnTestSlot)
 	mux.HandleFunc("POST /api/sessions/{session_id}/rollout-state", s.handleSetRolloutState)
+	mux.HandleFunc("POST /api/sessions/{session_id}/merge-pr", s.handleMergeSessionPR)
 	mux.HandleFunc("POST /api/sessions/{session_id}/save-credentials", s.handleSaveCredentials)
 	mux.HandleFunc("POST /api/sessions/{session_id}/paste-image", s.handlePasteImage)
 	mux.HandleFunc("POST /api/sessions/{session_id}/messages", s.handleSendMessage)
@@ -510,6 +537,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/ci-watches", s.handleInternalRegisterCIWatch)
+	// Public inbound GitHub webhook; authenticated by HMAC inside the handler.
+	mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes/cancel", s.handleInternalCancelBackgroundTaskWake)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/background-tasks/unresolved", s.handleInternalUnresolvedBackgroundTasks)

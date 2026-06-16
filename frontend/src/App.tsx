@@ -2506,6 +2506,7 @@ interface ComposerToolButtonsProps {
   pullRequest: {
     latestUrl?: string;
     linkedUrl?: string;
+    sessionId?: string | null;
   };
   slash: {
     disabled?: boolean;
@@ -2534,6 +2535,7 @@ interface ComposerToolButtonsProps {
 function PullRequestMenuButton({
   latestUrl,
   linkedUrl,
+  sessionId,
 }: ComposerToolButtonsProps["pullRequest"]) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -2591,6 +2593,42 @@ function PullRequestMenuButton({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
+
+  const [mergeState, setMergeState] = useState<
+    "idle" | "merging" | "merged" | "error"
+  >("idle");
+  const [mergeError, setMergeError] = useState("");
+  const doMerge = useCallback(async () => {
+    if (!sessionId || mergeState === "merging" || mergeState === "merged") return;
+    setMergeState("merging");
+    setMergeError("");
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/merge-pr`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      );
+      if (!res.ok) {
+        let detail = `merge_failed_${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // keep the status-derived detail when the body is not JSON
+        }
+        setMergeState("error");
+        setMergeError(detail);
+        return;
+      }
+      setMergeState("merged");
+    } catch (err) {
+      setMergeState("error");
+      setMergeError(err instanceof Error ? err.message : "merge failed");
+    }
+  }, [sessionId, mergeState]);
 
   const latest = latestUrl?.trim() ?? "";
   const linked = linkedUrl?.trim() ?? "";
@@ -2663,6 +2701,27 @@ function PullRequestMenuButton({
             {!hasLinks && (
               <div className="run-slash-empty">No pull request linked yet</div>
             )}
+            {hasLinks && sessionId ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="run-pr-menu-item"
+                disabled={mergeState === "merging" || mergeState === "merged"}
+                onClick={doMerge}
+                title="Merge this PR in Tank (GitHub enforces the green/mergeable gate)"
+              >
+                <span className="run-pr-menu-name">
+                  {mergeState === "merged"
+                    ? "Merged ✓"
+                    : mergeState === "merging"
+                      ? "Merging…"
+                      : "Merge in Tank"}
+                </span>
+                {mergeState === "error" && mergeError ? (
+                  <span className="run-slash-desc">{mergeError}</span>
+                ) : null}
+              </button>
+            ) : null}
           </div>,
           document.body,
         )}
@@ -23820,6 +23879,7 @@ function ChatPane({
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
                   linkedUrl: linkedPullRequestURL,
+                  sessionId: session.id,
                 }}
                 slash={{
                   title: "Show slash commands",
