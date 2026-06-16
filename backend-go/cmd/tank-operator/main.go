@@ -24,6 +24,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
 	"github.com/romaine-life/tank-operator/backend-go/internal/avataruploads"
+	"github.com/romaine-life/tank-operator/backend-go/internal/azurepersonal"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversationreadstate"
 	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
@@ -61,6 +62,31 @@ func buildMCPGitHubClient() *mcpgithub.Client {
 		ExchangeURL:  envDefault("MCP_GITHUB_EXCHANGE_URL", mcpgithub.DefaultExchangeURL),
 		MCPGitHubURL: envDefault("MCP_GITHUB_URL", mcpgithub.DefaultMCPGitHubURL),
 		SATokenPath:  saPath,
+	})
+}
+
+// buildAzurePersonalClient wires the azure-personal internal client used to fire
+// /internal/grant-activated when an azure break-glass grant goes active. Returns
+// a true-nil AzurePersonalNotifier (and logs) when the auth.romaine.life-audience
+// projected SA token isn't mounted — the trigger then no-ops and the agent still
+// gets the approval turn. Returning the interface type (not *Client) avoids Go's
+// typed-nil gotcha so s.azurePersonal == nil is honest. Endpoint overrides
+// (AZURE_PERSONAL_INTERNAL_URL, AZURE_PERSONAL_EXCHANGE_URL,
+// AZURE_PERSONAL_SA_TOKEN_PATH) let tests point at fakes.
+func buildAzurePersonalClient() AzurePersonalNotifier {
+	saPath := strings.TrimSpace(os.Getenv("AZURE_PERSONAL_SA_TOKEN_PATH"))
+	if saPath == "" {
+		saPath = azurepersonal.DefaultSATokenPath
+	}
+	if _, err := os.Stat(saPath); err != nil {
+		slog.Warn("azure-personal grant-activated trigger disabled (auth-romaine projected SA token volume not mounted)",
+			"path", saPath, "error", err)
+		return nil
+	}
+	return azurepersonal.NewClient(azurepersonal.Options{
+		BaseURL:     envDefault("AZURE_PERSONAL_INTERNAL_URL", azurepersonal.DefaultBaseURL),
+		ExchangeURL: envDefault("AZURE_PERSONAL_EXCHANGE_URL", azurepersonal.DefaultExchangeURL),
+		SATokenPath: saPath,
 	})
 }
 
@@ -618,6 +644,7 @@ func main() {
 		turnActivity:             newTurnActivityCache(),
 		mcpGitHub:                buildMCPGitHubClient(),
 		glimmung:                 buildGlimmungClient(),
+		azurePersonal:            buildAzurePersonalClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
 		ciWatches:                ciWatchStore,

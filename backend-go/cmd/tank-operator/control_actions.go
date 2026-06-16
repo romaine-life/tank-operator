@@ -832,6 +832,10 @@ func (s *appServer) enqueueAzureBreakGlassApprovalTurn(ctx context.Context, gran
 	if sessionID == "" || ownerEmail == "" {
 		return nil, http.StatusBadRequest, "grant missing session or owner"
 	}
+	// Fire the live tool-surfacing trigger (best-effort, async) alongside the
+	// approval turn: azure-personal pushes tools/list_changed on the session's
+	// stream so the tools appear without the agent re-handshaking.
+	s.notifyAzureGrantActivated(sessionID)
 	seed := controlActionPayloadString(grant.Payload, "request_event_id")
 	if seed == "" {
 		seed = grant.EventID
@@ -850,6 +854,39 @@ func (s *appServer) enqueueAzureBreakGlassApprovalTurn(ctx context.Context, gran
 		MCPActivateName: azureMCPBreakGlassServerName,
 		MCPActivateURL:  azureMCPBreakGlassServerURL,
 	})
+}
+
+// AzurePersonalNotifier triggers mcp-azure-personal's live tool-surfacing on an
+// azure break-glass grant. Satisfied by *azurepersonal.Client; an interface so
+// tests can stub it.
+type AzurePersonalNotifier interface {
+	NotifyGrantActivated(ctx context.Context, sessionID string) error
+}
+
+// notifyAzureGrantActivated fires mcp-azure-personal's /internal/grant-activated
+// out-of-band so the session's azure tools surface live (the tools/list_changed
+// path). Best-effort + async: the agent still receives the approval turn; this
+// only removes the need to re-handshake, and a slow/down azure-personal must
+// never delay or fail the grant.
+func (s *appServer) notifyAzureGrantActivated(sessionID string) {
+	if s == nil || s.azurePersonal == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := s.azurePersonal.NotifyGrantActivated(ctx, sessionID); err != nil {
+			recordAzureGrantActivated("error")
+			slog.Warn("azure grant-activated notify failed",
+				"session_id", sessionID, "error", err.Error())
+			return
+		}
+		recordAzureGrantActivated("ok")
+	}()
 }
 
 func azureBreakGlassApprovalDisplayText(_ pgstore.ControlActionEvent, expiresAt time.Time) string {
