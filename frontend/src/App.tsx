@@ -66,6 +66,7 @@ import {
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { AdminBreakGlassTokenPanel } from "./AdminBreakGlassTokenPanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -16144,6 +16145,7 @@ function RunSettingsPanel({
               </div>
             </section>
             <AdminBreakGlassPanel />
+            <AdminBreakGlassTokenPanel sessionScope={adminControls.reportScope} />
           </>
         ) : adminView === "hidden-transcripts" ? (
           <>

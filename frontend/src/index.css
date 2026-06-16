@@ -6538,6 +6538,53 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
+.break-glass-token {
+  gap: var(--space-3);
+}
+
+.break-glass-token-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle, var(--border, rgba(255, 255, 255, 0.14)));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-raised, rgba(255, 255, 255, 0.04));
+  color: inherit;
+  font: inherit;
+}
+
+.break-glass-token-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.break-glass-token-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.break-glass-token-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.break-glass-token-value {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle, var(--border, rgba(255, 255, 255, 0.14)));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.25));
+  color: inherit;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
 .admin-break-glass {
   gap: var(--space-3);
 }
