@@ -358,6 +358,18 @@ Contract impact:
   reminder-only guidance.
 - Commit publication, CI state, PR creation, and mergeability are durable
   `control_action_events`, so the UI can show PR/commit evidence after reload.
+- Control-action ledger writes (`POST /api/internal/sessions/{id}/control-actions`)
+  are authorized solely off the caller's **verified per-session service-principal
+  subject** — `svc:tank:<id>` for production sessions, `svc:tank:slot-<n>-session-<id>`
+  for test-slot sessions — which auth.romaine.life mints from the pod's
+  `tank-operator/session-id` annotation (the same identity `nats-auth-callout`
+  trusts). The subject is scope-bound to the backend (`localSessionScope`), so a
+  production identity cannot write a slot session's ledger or vice versa. A
+  caller-asserted request header is never an authorization input: requiring one
+  (#1207) silently 403'd every already-running session pod and froze the ledger
+  system-wide on 2026-06-16 — the `TankControlActionAuthorizationDenied` alert
+  (`result="forbidden"`) and the `check-control-action-authz` guard exist so that
+  regression cannot recur silently.
 - The governed PR's title, body, and merge are mutated only through Tank MCP
   tools — `rename_current_session_pr`, `update_current_session_pr_body`, and
   `merge_current_session_pr` — each recorded as a `github.pull_request.*`

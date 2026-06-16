@@ -197,9 +197,8 @@ func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T
 		"payload": {"head_sha": "abc123"}
 	}`))
 	req.SetPathValue("session_id", "47")
+	// No X-Tank-Caller-* headers: the verified slot subject is the sole authz input.
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
-	req.Header.Set(callerSessionIDHeader, "47")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -225,7 +224,96 @@ func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T
 	}
 }
 
-func TestHandleInternalAppendControlActionRejectsMissingCallerSession(t *testing.T) {
+func TestHandleInternalAppendControlActionAcceptsProductionSessionSubjectWithoutHeaders(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	app.sessionScope = prodSessionScope // default-scope (production) backend
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_prod_ci",
+		"invocation_id": "ctrl_prod",
+		"source_service": "mcp-tank-operator",
+		"source_tool": "publish_current_head",
+		"action": "github.commit.ci",
+		"status": "succeeded",
+		"target_kind": "github_commit",
+		"target_ref": "https://github.com/romaine-life/tank-operator/commit/abc123",
+		"result_sha": "abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	// Verified production subject, no X-Tank-Caller-* headers. This is exactly the
+	// path the #1207 header requirement wrongly rejected, freezing the ledger.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsProductionSubjectOnSlotScope(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store) // slot-3 backend
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_xscope",
+		"invocation_id": "ctrl_xscope",
+		"source_service": "mcp-tank-operator",
+		"source_tool": "publish_current_head",
+		"action": "github.commit.ci",
+		"status": "succeeded",
+		"target_kind": "github_commit",
+		"target_ref": "https://github.com/romaine-life/tank-operator/commit/abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	// A production subject (svc:tank:47) must not authorize writes on a slot backend,
+	// even for the same session id — scope is bound to the verified subject, not a header.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsSlotSubjectOnProductionScope(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	app.sessionScope = prodSessionScope // default-scope (production) backend
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_xscope2",
+		"invocation_id": "ctrl_xscope2",
+		"source_service": "mcp-tank-operator",
+		"source_tool": "publish_current_head",
+		"action": "github.commit.ci",
+		"status": "succeeded",
+		"target_kind": "github_commit",
+		"target_ref": "https://github.com/romaine-life/tank-operator/commit/abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	// A slot subject must not authorize writes on the production backend.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsNonSessionPrincipal(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
@@ -252,7 +340,7 @@ func TestHandleInternalAppendControlActionRejectsMissingCallerSession(t *testing
 	}
 }
 
-func TestHandleInternalAppendControlActionRejectsMismatchedCallerSession(t *testing.T) {
+func TestHandleInternalAppendControlActionRejectsMismatchedSessionSubject(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
@@ -267,8 +355,6 @@ func TestHandleInternalAppendControlActionRejectsMismatchedCallerSession(t *test
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:95"))
-	req.Header.Set(callerSessionIDHeader, "95")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -281,7 +367,7 @@ func TestHandleInternalAppendControlActionRejectsMismatchedCallerSession(t *test
 	}
 }
 
-func TestHandleInternalAppendControlActionRejectsSpoofedCallerHeaders(t *testing.T) {
+func TestHandleInternalAppendControlActionIgnoresSpoofedCallerHeaders(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
@@ -296,8 +382,9 @@ func TestHandleInternalAppendControlActionRejectsSpoofedCallerHeaders(t *testing
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank-operator:orchestrator-slot-3"))
-	req.Header.Set(callerSessionIDHeader, "47")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
+	// Spoofed caller headers must not grant access — they are not an authz input.
+	req.Header.Set("X-Tank-Caller-Session-Id", "47")
+	req.Header.Set("X-Tank-Caller-Session-Scope", "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -325,8 +412,6 @@ func TestHandleInternalAppendControlActionRejectsUnsupportedActionBeforeStore(t 
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
-	req.Header.Set(callerSessionIDHeader, "47")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -443,8 +528,6 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
 			req.SetPathValue("session_id", "47")
 			req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
-			req.Header.Set(callerSessionIDHeader, "47")
-			req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 			rec := httptest.NewRecorder()
 
 			app.handleInternalAppendControlAction(rec, req)

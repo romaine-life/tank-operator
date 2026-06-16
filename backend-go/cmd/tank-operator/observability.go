@@ -1265,7 +1265,7 @@ func controlActionStatusLabel(status string) string {
 
 func controlActionResultLabel(result string) string {
 	switch result {
-	case "ok", "bad_request", "denied", "not_found", "store_unavailable", "store_error":
+	case "ok", "bad_request", "forbidden", "denied", "not_found", "store_unavailable", "store_error":
 		return result
 	default:
 		return "other"

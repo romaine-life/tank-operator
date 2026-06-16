@@ -122,7 +122,7 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
-	if !s.internalCallerMatchesSession(r, user, sessionID) {
+	if !s.internalCallerMatchesSession(user, sessionID) {
 		recordControlActionEvent("", "", "", "", "forbidden")
 		writeError(w, http.StatusForbidden, "control action writes require caller session identity to match the target session")
 		return
@@ -150,36 +150,42 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusCreated, controlActionToJSON(row, true))
 }
 
-func (s *appServer) internalCallerMatchesSession(r *http.Request, user *auth.User, sessionID string) bool {
-	if user == nil || !s.serviceSubjectMatchesSession(user.Sub, sessionID) {
-		return false
-	}
-	callerID := strings.TrimSpace(r.Header.Get(callerSessionIDHeader))
-	if callerID == "" || callerID != strings.TrimSpace(sessionID) {
-		return false
-	}
-	callerScope := normalizeSessionScope(r.Header.Get(callerSessionScopeHeader))
-	return callerScope == s.localSessionScope()
+// internalCallerMatchesSession authorizes a session-scoped internal write by the
+// caller's *verified* per-session service identity. The service-principal subject
+// is minted by auth.romaine.life from the pod's tank-operator/session-id annotation
+// (the same identity nats-auth-callout trusts) and is unforgeable, so it is the sole
+// authorization factor: a caller may write only its own session's ledger, on the
+// backend whose scope its subject encodes. Caller-asserted request headers are not
+// an authorization input — a self-reported session id adds nothing over the verified
+// subject, and requiring one stranded every already-running session pod (the #1207
+// regression that silently froze the control-action ledger on 2026-06-16).
+func (s *appServer) internalCallerMatchesSession(user *auth.User, sessionID string) bool {
+	return user != nil && s.serviceSubjectMatchesSession(user.Sub, sessionID)
 }
 
+// serviceSubjectMatchesSession reports whether the verified service-principal subject
+// is this session's own identity *on this backend's scope*. Production sessions carry
+// subject "svc:tank:<id>" and are valid only on the default-scope backend; test-slot
+// sessions carry "svc:tank:slot-<n>-session-<id>" and are valid only on that slot's
+// backend. Binding scope to the subject (not a caller header) keeps production and
+// slot identities from crossing scopes even though session ids overlap.
 func (s *appServer) serviceSubjectMatchesSession(sub, sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return false
 	}
-	sub = strings.TrimSpace(sub)
-	for _, prefix := range []string{"svc:tank:", "tank:"} {
-		if strings.HasPrefix(sub, prefix) {
-			value := strings.TrimSpace(strings.TrimPrefix(sub, prefix))
-			if value == sessionID {
-				return true
-			}
-			if slotValue := slotServiceSubjectValue(s.localSessionScope(), sessionID); slotValue != "" && value == slotValue {
-				return true
-			}
-		}
+	const subjectPrefix = "svc:tank:"
+	value, ok := strings.CutPrefix(strings.TrimSpace(sub), subjectPrefix)
+	if !ok {
+		return false
 	}
-	return false
+	value = strings.TrimSpace(value)
+	if slotValue := slotServiceSubjectValue(s.localSessionScope(), sessionID); slotValue != "" {
+		// Slot backend: only the matching slot-scoped subject is this session.
+		return value == slotValue
+	}
+	// Default-scope backend: only the plain per-session subject is this session.
+	return s.localSessionScope() == prodSessionScope && value == sessionID
 }
 
 func slotServiceSubjectValue(scope, sessionID string) string {
