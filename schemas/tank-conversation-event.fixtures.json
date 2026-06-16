@@ -808,6 +808,39 @@
           }
         }
       }
+    },
+    {
+      "name": "ci status updated",
+      "event": {
+        "event_id": "ci-status:romaine-life/tank-operator:7:ready:1768179853000000000",
+        "uuid": "ci-status:romaine-life/tank-operator:7:ready:1768179853000000000",
+        "order_key": "1768179853000-00000015-ci-status:romaine-life/tank-operator:7",
+        "sequence": 15,
+        "conversation_id": "63",
+        "session_id": "63",
+        "timeline_id": "ci-status:romaine-life/tank-operator:7",
+        "client_nonce": "ci-status-ci-status:romaine-life/tank-operator:7",
+        "actor": "system",
+        "source": "tank",
+        "type": "ci_status.updated",
+        "created_at": "2026-05-12T00:00:15.000Z",
+        "written_at": "2026-05-12T00:00:15.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "claude"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "ci_status",
+          "repo": "romaine-life/tank-operator",
+          "pr_number": 7,
+          "pr_url": "https://github.com/romaine-life/tank-operator/pull/7",
+          "head_sha": "abc1234",
+          "state": "ready",
+          "merge_commit": "",
+          "detail": "All required checks passed."
+        }
+      }
     }
   ]
 }

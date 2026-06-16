@@ -42,6 +42,7 @@ export const TANK_EVENT_TYPES = [
   "shell_task.updated",
   "shell_task.exited",
   "scheduled_wakeup.updated",
+  "ci_status.updated",
   "turn.awaiting_input",
   "turn.awaiting_input.invocation",
 ];
