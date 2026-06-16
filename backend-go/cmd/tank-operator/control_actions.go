@@ -955,6 +955,189 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, map[string]any{"active": false, "repo": repo, "session_id": sessionID})
 }
 
+func (s *appServer) handleAdminGrantGitBreakGlass(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if s.controlActions == nil {
+		recordControlActionEvent("", "", "", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if sessionScope != s.localSessionScope() {
+		writeError(w, http.StatusBadRequest, "break-glass grants must be issued from the target session scope")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	info, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	var body struct {
+		Repo           string      `json:"repo"`
+		RepoScope      repoScope   `json:"repo_scope"`
+		BranchScope    branchScope `json:"branch_scope"`
+		TTLSeconds     int         `json:"ttl_seconds"`
+		Operations     []string    `json:"operations"`
+		RequestEventID string      `json:"request_event_id"`
+		Reason         string      `json:"reason"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	repoScope, err := normalizeRepoScope(body.RepoScope, body.Repo)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	branchScope, err := normalizeBranchScope(body.BranchScope, sessionID, singleRepoName(repoScopeRepos(repoScope), repoScope.Kind == "all_repos"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	repos := repoScopeRepos(repoScope)
+	allRepos := repoScope.Kind == "all_repos"
+	row, expiresAt, err := s.appendGitBreakGlassGrant(r.Context(), gitBreakGlassGrantInput{
+		SessionID:      sessionID,
+		OwnerEmail:     info.Owner,
+		RepoOwner:      singleRepoOwner(repos, allRepos),
+		RepoName:       singleRepoName(repos, allRepos),
+		RepoScope:      repoScope,
+		BranchScope:    branchScope,
+		TTLSeconds:     body.TTLSeconds,
+		Operations:     body.Operations,
+		RequestEventID: body.RequestEventID,
+		Reason:         body.Reason,
+		ApprovedBy:     user.Email,
+	})
+	if err != nil {
+		recordControlActionEvent("tank-operator", "git_break_glass_approval", "github.break_glass.grant", "succeeded", "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	agentNotification := map[string]any{"delivered": false}
+	if notifyResp, status, detail := s.enqueueGitBreakGlassApprovalTurn(r.Context(), row, expiresAt); status != 0 {
+		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "notify_error")
+		slog.Warn("admin git break-glass grant persisted but agent notification turn failed",
+			"session_id", sessionID, "grant_event_id", row.EventID, "status", status, "detail", detail)
+		writeError(w, http.StatusInternalServerError, "git break-glass grant persisted but agent notification failed: "+strings.TrimSpace(detail))
+		return
+	} else {
+		agentNotification["delivered"] = true
+		if turnID := turnIDFromEnqueueResponse(notifyResp); turnID != "" {
+			agentNotification["turn_id"] = turnID
+		}
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"active":             true,
+		"event_id":           row.EventID,
+		"repo":               strings.Trim(strings.TrimSpace(row.RepoOwner+"/"+row.RepoName), "/"),
+		"repo_scope":         repoScope,
+		"branch_scope":       branchScope,
+		"expires_at":         expiresAt.Format(time.RFC3339),
+		"operations":         normalizeBreakGlassOperations(body.Operations),
+		"session_id":         sessionID,
+		"session_scope":      sessionScope,
+		"owner_email":        info.Owner,
+		"agent_notification": agentNotification,
+	})
+}
+
+func (s *appServer) handleAdminGrantAzureBreakGlass(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if s.controlActions == nil {
+		recordControlActionEvent("", "", "", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if sessionScope != s.localSessionScope() {
+		writeError(w, http.StatusBadRequest, "break-glass grants must be issued from the target session scope")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	info, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	var body struct {
+		TTLSeconds     int      `json:"ttl_seconds"`
+		Operations     []string `json:"operations"`
+		RequestEventID string   `json:"request_event_id"`
+		Reason         string   `json:"reason"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	row, expiresAt, err := s.appendAzureBreakGlassGrant(r.Context(), azureBreakGlassGrantInput{
+		SessionID:      sessionID,
+		OwnerEmail:     info.Owner,
+		TTLSeconds:     body.TTLSeconds,
+		Operations:     body.Operations,
+		RequestEventID: body.RequestEventID,
+		Reason:         body.Reason,
+		ApprovedBy:     user.Email,
+	})
+	if err != nil {
+		recordControlActionEvent("tank-operator", "azure_break_glass_approval", "azure.break_glass.grant", "succeeded", "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	agentNotification := map[string]any{"delivered": false}
+	if notifyResp, status, detail := s.enqueueAzureBreakGlassApprovalTurn(r.Context(), row, expiresAt); status != 0 {
+		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "notify_error")
+		slog.Warn("admin azure break-glass grant persisted but agent activation turn failed",
+			"session_id", sessionID, "grant_event_id", row.EventID, "status", status, "detail", detail)
+	} else {
+		agentNotification["delivered"] = true
+		if turnID := turnIDFromEnqueueResponse(notifyResp); turnID != "" {
+			agentNotification["turn_id"] = turnID
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"active":             true,
+		"event_id":           row.EventID,
+		"resource":           "azure-personal",
+		"expires_at":         expiresAt.Format(time.RFC3339),
+		"operations":         normalizeAzureBreakGlassOperations(body.Operations),
+		"session_id":         sessionID,
+		"session_scope":      sessionScope,
+		"owner_email":        info.Owner,
+		"agent_notification": agentNotification,
+	})
+}
+
 // handleInternalGetAzureBreakGlassGrant returns the active azure-personal MCP
 // break-glass grant for a session, if any. mcp-azure-personal calls this on
 // every tool list/call (short-cached) to decide whether to serve azure tools.
