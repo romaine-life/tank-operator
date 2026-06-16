@@ -1649,7 +1649,7 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	out["turnTerminalAt"] = terminal.Time
 	out["turnTerminalEventId"] = terminal.SourceEventID
 	out["turnTerminalOrderKey"] = terminal.OrderKey
-	if transcriptMapString(entry, "metaKind") != "turn_usage" {
+	if terminalUsageAppliesToEntry(entry, terminal) {
 		if terminal.Usage != nil {
 			out["turnUsage"] = terminal.Usage
 		}
@@ -1658,6 +1658,16 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 		}
 	}
 	return out
+}
+
+func terminalUsageAppliesToEntry(entry map[string]any, terminal turnTerminalProjection) bool {
+	if transcriptMapString(entry, "metaKind") == "turn_usage" {
+		return false
+	}
+	if len(terminal.FinalAnswerIDs) > 0 {
+		return terminal.FinalAnswerIDs[transcriptMapString(entry, "id")]
+	}
+	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "assistant"
 }
 
 func compactProjectedTranscript(entries []map[string]any, activeTurnID string, runStatus string, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool, wakeParents map[string]string) transcriptProjection {

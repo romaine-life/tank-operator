@@ -51,6 +51,10 @@ Use the MCP hot-swap tool for the changed artifact:
 
 - frontend/static change: `apply_test_slot_hot_swap` with
   `artifact_kind: "static"` -- see "Frontend (static) hot-swap" below.
+- backend/orchestrator change: `apply_test_slot_hot_swap` with
+  `artifact_kind: "backend"` -- Glimmung builds the Go backend, streams the
+  binary into the slot app pods, SIGHUPs the supervisor, and health-gates
+  `/healthz`.
 - runner change: `apply_test_slot_hot_swap` with the runner `artifact_kind`
   (`agent_runner` | `codex_runner`).
 - ConfigMap/chart/session-launcher change: patch or redeploy the slot resource
@@ -102,3 +106,22 @@ Verify (history is recorded automatically):
 
 Runner artifacts use the same tool (`artifact_kind` = `agent_runner` |
 `codex_runner`).
+
+## Backend hot-swap
+
+Use `apply_test_slot_hot_swap` with `artifact_kind: "backend"`. The registered
+backend contract supplies `build_command`, `artifact`, `target`,
+`pod_selector: app.kubernetes.io/name=tank-operator`, `container:
+tank-operator`, `builder_image: golang:1.26-alpine`, `health_path: /healthz`,
+and `health_port: 8000`. Read it live with
+`get_test_slot_hot_swap_contract(project: "tank-operator")` before applying.
+
+```
+apply_test_slot_hot_swap(
+  project: "tank-operator",
+  artifact_kind: "backend",
+  git_ref: "<your pushed branch HEAD>",
+  validation_target: "existing_session",
+  slot_name: "tank-operator-slot-N",
+)
+```

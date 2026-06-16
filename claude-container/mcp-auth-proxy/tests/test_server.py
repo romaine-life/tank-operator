@@ -14,6 +14,12 @@ from mcp_auth_proxy.server import (
     LISTENERS,
     _MAX_UPSTREAM_ATTEMPTS,
     AuthRomaineServiceProvider,
+    AZURE_MCP_PORT,
+    GITHUB_MCP_PORT,
+    GLIMMUNG_MCP_PORT,
+    GRAFANA_MCP_PORT,
+    JWT_BEARER_PORTS,
+    TANK_OPERATOR_MCP_PORT,
     SPIRELENS_MCP_PORT,
     _append_ci_reminder,
     _append_tank_publish_tool,
@@ -30,6 +36,7 @@ from mcp_auth_proxy.server import (
     _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
     _handle_tank_azure_break_glass_tool,
+    _handle_query_tank_db_tool,
     _handle_tank_create_pr_lane_tool,
     _handle_tank_merge_tool,
     _handle_tank_rename_pr_tool,
@@ -40,10 +47,28 @@ from mcp_auth_proxy.server import (
     _make_handler,
     _mint_github_installation_token,
     _parse_mcp_tool_call,
+    _post_tank_control_action,
     _push_head_with_token,
     _repo_slug_from_remote,
     _watch_published_commit,
 )
+
+
+def test_tank_operator_uses_jwt_bearer_not_sa_token() -> None:
+    # mcp-tank-operator lost its kube-rbac-proxy sidecar (mcp-tank-operator#31),
+    # so the only thing that ever consumed the SA-token bearer is gone and its
+    # Authorization bearer must be the auth.romaine.life JWT. mcp-github and the
+    # SpireLens host verify the JWT directly, so they share the set.
+    assert TANK_OPERATOR_MCP_PORT in JWT_BEARER_PORTS
+    assert GITHUB_MCP_PORT in JWT_BEARER_PORTS
+    assert SPIRELENS_MCP_PORT in JWT_BEARER_PORTS
+
+
+def test_kube_rbac_proxy_upstreams_keep_sa_token_bearer() -> None:
+    # Every other in-cluster MCP still sits behind a kube-rbac-proxy that
+    # TokenReviews the SA-token bearer, so they must NOT be on the JWT bearer.
+    for port in (AZURE_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT):
+        assert port not in JWT_BEARER_PORTS
 
 
 class _FakeResponse:
@@ -803,35 +828,25 @@ def test_hot_swap_tool_schema_gets_repo_path_for_tank_gate() -> None:
 
 
 def test_break_glass_approval_url_carries_request_context() -> None:
-    url = _break_glass_approval_url(
-        "95",
-        {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
-        {"kind": "named", "branches": ["repair"]},
-        "need to repair a branch conflict",
-        "agent",
-    )
+    url = _break_glass_approval_url("95", "request-123")
 
-    assert url.startswith("https://auth.romaine.life/admin?")
-    assert "intent=git-break-glass" in url
-    assert "session_id=95" in url
-    assert "session_scope=default" in url
+    assert url == "https://tank.romaine.life/sessions/95/break-glass/request-123"
     query = parse_qs(urlparse(url).query)
-    assert json.loads(query["repo_scope"][0]) == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
-    assert json.loads(query["branch_scope"][0]) == {"kind": "named", "branches": ["repair"]}
-    assert "reason=need+to+repair+a+branch+conflict" in url
+    assert "repo_scope" not in query
+    assert "branch_scope" not in query
+    assert "reason" not in query
 
 
-def test_break_glass_approval_url_carries_slot_scope() -> None:
-    url = _break_glass_approval_url(
-        "95",
-        {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
-        {"kind": "unlimited"},
-        "",
-        "agent",
-        session_scope="tank-operator-slot-6",
+def test_break_glass_approval_url_carries_slot_scope(monkeypatch) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server.TANK_UI_HOST", "https://tank.romaine.life")
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_SCOPE", "tank-operator-slot-2")
+
+    url = _break_glass_approval_url("slot/session", "request-123")
+
+    assert (
+        url
+        == "https://tank-operator-slot-2.tank.dev.romaine.life/sessions/slot%2Fsession/break-glass/request-123"
     )
-
-    assert "session_scope=tank-operator-slot-6" in url
 
 
 def test_break_glass_mcp_lists_no_tools_before_activation(monkeypatch, tmp_path) -> None:
@@ -946,32 +961,36 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     )
 
     payload = json.loads(response.text)
-    assert payload["result"]["structuredContent"]["approval_url"].startswith("https://auth.romaine.life/admin?")
+    structured = payload["result"]["structuredContent"]
+    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95/break-glass/")
     assert payload["result"]["structuredContent"]["privileged_tools_visible"] is False
     recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
     assert recorded["action"] == "github.break_glass.request"
+    assert recorded["event_id"] == structured["request_event_id"]
     assert recorded["source_tool"] == "request_git_break_glass"
     assert recorded["target_ref"] == "https://github.com/romaine-life/tank-operator"
     assert recorded["payload"]["reason"] == "need branch repair"
+    assert recorded["payload"]["approval_url"] == structured["approval_url"]
+    assert recorded["payload"]["request_event_id"] == recorded["event_id"]
     assert recorded["payload"]["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
     assert recorded["payload"]["branch_scope"] == {"kind": "unlimited"}
+    parsed_approval = urlparse(structured["approval_url"])
+    approval_query = parse_qs(parsed_approval.query)
+    assert parsed_approval.path.startswith("/sessions/95/break-glass/")
+    assert "repo_scope" not in approval_query
+    assert "branch_scope" not in approval_query
+    assert "reason" not in approval_query
     assert recorded_call["headers"]["Authorization"] == "Bearer service-token"
 
 
 def test_azure_break_glass_approval_url_carries_intent_without_repo() -> None:
-    url = _azure_break_glass_approval_url(
-        "95",
-        "inspect the session_events ledger",
-        "agent",
-    )
+    url = _azure_break_glass_approval_url("95", "request-abc")
 
-    assert url.startswith("https://auth.romaine.life/admin?")
-    assert "intent=azure-break-glass" in url
-    assert "session_id=95" in url
-    assert "session_scope=default" in url
+    assert url == "https://tank.romaine.life/sessions/95/break-glass/request-abc"
+    assert "intent=azure-break-glass" not in url
     assert "repo=" not in url
-    assert "reason=inspect+the+session_events+ledger" in url
+    assert "reason=" not in url
 
 
 def test_append_azure_break_glass_tool_adds_request_tool() -> None:
@@ -980,13 +999,60 @@ def test_append_azure_break_glass_tool_adds_request_tool() -> None:
     augmented = json.loads(_append_azure_break_glass_tool(raw))
 
     names = [tool["name"] for tool in augmented["result"]["tools"]]
-    assert names == ["read_transcript", "request_azure_break_glass"]
-    tool = augmented["result"]["tools"][1]
-    assert "locked by default" in tool["description"]
-    assert "token" not in tool["inputSchema"]["properties"]
-    # Idempotent: a second pass must not duplicate the tool.
+    assert names[0] == "read_transcript"
+    assert "request_azure_break_glass" in names
+    azure_tool = next(t for t in augmented["result"]["tools"] if t["name"] == "request_azure_break_glass")
+    assert "locked by default" in azure_tool["description"]
+    assert "token" not in azure_tool["inputSchema"]["properties"]
+    # Idempotent: a second pass must not duplicate any tool.
     again = json.loads(_append_azure_break_glass_tool(json.dumps(augmented).encode()))
     assert [t["name"] for t in again["result"]["tools"]] == names
+
+
+def test_query_tank_db_tool_injected_only_for_non_restricted(monkeypatch) -> None:
+    raw = b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"read_transcript"}]}}'
+
+    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", False)
+    non_restricted = json.loads(_append_azure_break_glass_tool(raw))
+    nr_names = [t["name"] for t in non_restricted["result"]["tools"]]
+    assert "query_tank_db" in nr_names
+    qtool = next(t for t in non_restricted["result"]["tools"] if t["name"] == "query_tank_db")
+    assert "READ-ONLY" in qtool["description"]
+    assert qtool["inputSchema"]["required"] == ["sql"]
+
+    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", True)
+    restricted = json.loads(_append_azure_break_glass_tool(raw))
+    assert "query_tank_db" not in [t["name"] for t in restricted["result"]["tools"]]
+
+
+def test_handle_query_tank_db_tool_runs_read_query(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b"{}"),
+        post_response=_FakeRawResponse(
+            200, b'{"columns":["id","status"],"rows":[["1","ok"]],"row_count":1,"truncated":false}'
+        ),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_query_tank_db_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            7,
+            {"sql": "SELECT id, status FROM session_events LIMIT 1"},
+        )
+    )
+
+    payload = json.loads(response.text)["result"]
+    structured = payload["structuredContent"]
+    assert structured["columns"] == ["id", "status"]
+    assert structured["rows"] == [["1", "ok"]]
+    assert "id\tstatus" in payload["content"][0]["text"]
+    grant_posts = [
+        c for c in http.calls
+        if c.get("method") == "POST" and "/db-read-query" in c.get("url", "")
+    ]
+    assert grant_posts and grant_posts[0]["json"]["sql"].startswith("SELECT id, status")
 
 
 def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatch) -> None:
@@ -1015,16 +1081,18 @@ def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatc
     assert structured["resource"] == "azure-personal"
     assert structured["status"] == "approval_required"
     assert structured["privileged_tools_visible"] is False
-    assert structured["approval_url"].startswith("https://auth.romaine.life/admin?")
-    assert "intent=azure-break-glass" in structured["approval_url"]
+    assert structured["approval_url"].startswith("https://tank.romaine.life/sessions/95/break-glass/")
     assert "token" not in structured
     recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
     assert recorded["action"] == "azure.break_glass.request"
+    assert recorded["event_id"] == structured["request_event_id"]
     assert recorded["source_tool"] == "request_azure_break_glass"
     assert recorded["target_kind"] == "azure_mcp"
     assert recorded["target_ref"] == "azure-personal"
     assert recorded["payload"]["reason"] == "inspect ledger"
+    assert recorded["payload"]["approval_url"] == structured["approval_url"]
+    assert recorded["payload"]["request_event_id"] == recorded["event_id"]
 
 
 def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
@@ -1145,9 +1213,11 @@ def test_tank_break_glass_tool_records_all_repo_branch_scope(monkeypatch) -> Non
     assert recorded["target_ref"] == "tank://session/95/git-break-glass/all-repos"
     assert recorded["payload"]["repo_scope"] == {"kind": "all_repos"}
     assert recorded["payload"]["branch_scope"] == {"kind": "named", "branches": ["branch-a", "branch-b"]}
-    query = parse_qs(urlparse(recorded["payload"]["approval_url"]).query)
-    assert json.loads(query["repo_scope"][0]) == {"kind": "all_repos"}
-    assert json.loads(query["branch_scope"][0]) == {"kind": "named", "branches": ["branch-a", "branch-b"]}
+    parsed_approval = urlparse(recorded["payload"]["approval_url"])
+    query = parse_qs(parsed_approval.query)
+    assert parsed_approval.path == f"/sessions/95/break-glass/{recorded['event_id']}"
+    assert "repo_scope" not in query
+    assert "branch_scope" not in query
 
 
 def test_tank_pr_lane_tool_records_approval_request(monkeypatch) -> None:
@@ -1715,6 +1785,38 @@ def test_handler_forwards_static_caller_context_headers() -> None:
     assert headers["X-Tank-Caller-Session-Id"] == "709"
     assert headers["X-Tank-Caller-Session-Scope"] == "default"
     assert headers["X-Tank-Origin-Session-Avatar-Id"] == "jp1-grant"
+
+
+def test_post_tank_control_action_adds_caller_session_headers(monkeypatch) -> None:
+    async def run() -> list[dict]:
+        http = _FakeHTTP(_FakeResponse(201, {"ok": True}))
+        await _post_tank_control_action(
+            http,
+            {"Authorization": "Bearer service-token", "Content-Type": "application/json"},
+            {
+                "event_id": "ctrl-1",
+                "invocation_id": "inv-1",
+                "source_service": "mcp-github",
+                "source_tool": "request_git_break_glass",
+                "action": "github.break_glass.request",
+                "status": "started",
+                "target_kind": "github_repository",
+                "target_ref": "https://github.com/romaine-life/auth",
+            },
+        )
+        return http.calls
+
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "954")
+    monkeypatch.setattr("mcp_auth_proxy.server.SESSION_SCOPE", "tank-operator-slot-2")
+
+    calls = asyncio.run(run())
+    assert len(calls) == 1
+    headers = calls[0]["headers"]
+    assert headers["Authorization"] == "Bearer service-token"
+    assert headers["X-Tank-Caller-System"] == "tank-operator"
+    assert headers["X-Tank-Caller-Kind"] == "session"
+    assert headers["X-Tank-Caller-Session-Id"] == "954"
+    assert headers["X-Tank-Caller-Session-Scope"] == "tank-operator-slot-2"
 
 
 async def _run_proxy_against_upstream(status_sequence: list[int], success_body: bytes = b'{"ok":true}') -> tuple[int, str, int]:

@@ -136,6 +136,50 @@ func TestProjectTurnPagesFinalAnswerIsServerOwnedAcrossPages(t *testing.T) {
 	}
 }
 
+func TestProjectTurnPagesFinalAnswerCarriesTerminalUsage(t *testing.T) {
+	finalID := "turn-1:item:final"
+	usage := map[string]any{
+		"input_tokens":                3560,
+		"cache_creation_input_tokens": 40842,
+		"cache_read_input_tokens":     21303,
+		"output_tokens":               1498,
+	}
+	observation := map[string]any{
+		"usage_source":       "claude.result",
+		"terminal_had_usage": true,
+	}
+	terminalPayload := projectionFinalAnswerPayload(finalID)
+	terminalPayload["usage"] = usage
+	terminalPayload["usage_observation"] = observation
+
+	proj := projectTurnPages("turn-1", []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "summarize the bears wikipedia article for me",
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("final", "00000003", "item.completed", "assistant", "claude", "turn-1", finalID, map[string]any{
+			"kind": "message",
+			"text": "Here is the summary.",
+		}),
+		projectionTestEvent("terminal", "00000004", "turn.completed", "runner", "claude", "turn-1", "", terminalPayload),
+	})
+
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("final answer entries = %#v, want one", proj.FinalAnswerEntries)
+	}
+	final := proj.FinalAnswerEntries[0]
+	if got := transcriptAnyMap(final["turnUsage"]); got == nil {
+		t.Fatalf("final answer missing turnUsage: %#v", final)
+	} else if got["cache_read_input_tokens"] != usage["cache_read_input_tokens"] {
+		t.Fatalf("final answer turnUsage = %#v, want %#v", got, usage)
+	}
+	if got := transcriptAnyMap(final["usageObservation"]); got == nil {
+		t.Fatalf("final answer missing usageObservation: %#v", final)
+	} else if got["usage_source"] != observation["usage_source"] {
+		t.Fatalf("final answer usageObservation = %#v, want %#v", got, observation)
+	}
+}
+
 func TestProjectTurnPagesCompletedTurnFallsBackToLastAssistantAsFinalAnswer(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -284,6 +328,45 @@ func TestProjectTurnPagesIncludesUserContextOutsidePageBody(t *testing.T) {
 	for _, entry := range proj.Pages[0].Entries {
 		if entry["kind"] == "message" && entry["role"] == "user" {
 			t.Fatalf("human user message leaked into activity page body: %#v", proj.Pages[0].Entries)
+		}
+	}
+}
+
+func TestProjectTurnPagesIncludesSystemContextForBackgroundWake(t *testing.T) {
+	const prompt = "A background task you started earlier has finished while this session was idle.\n\nTask id: task-ci\nFinal status: completed\n\nReview the task's output and continue from the result."
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "00000001", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{
+			"status":  "submitted",
+			"source":  "background-task",
+			"task_id": "task-ci",
+			"prompt":  prompt,
+		}),
+		projectionTestEvent("wake-tool", "00000002", "item.completed", "tool", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:tool", map[string]any{
+			"kind": "tool_result", "name": "Bash", "output": "ok",
+		}),
+	}
+
+	proj := projectTurnPages("turn_bgtask-task-ci", events)
+	if proj.TurnContext == nil {
+		t.Fatalf("TurnContext = nil, want projected system wake prompt")
+	}
+	if got := transcriptMapString(proj.TurnContext, "id"); got != "wake-submitted:turn_context" {
+		t.Fatalf("TurnContext id = %q, want wake-submitted:turn_context: %#v", got, proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "text"); got != prompt {
+		t.Fatalf("TurnContext text = %q, want wake prompt", got)
+	}
+	if got := transcriptMapString(proj.TurnContext, "authorKind"); got != "system" {
+		t.Fatalf("TurnContext authorKind = %q, want system: %#v", got, proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "turnContextSource"); got != "background-task" {
+		t.Fatalf("TurnContext source = %q, want background-task: %#v", got, proj.TurnContext)
+	}
+	for _, page := range proj.Pages {
+		for _, entry := range page.Entries {
+			if entry["kind"] == "message" && entry["role"] == "user" {
+				t.Fatalf("background wake prompt leaked into activity page body as a user message: %#v", page.Entries)
+			}
 		}
 	}
 }

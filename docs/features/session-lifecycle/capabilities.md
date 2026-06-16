@@ -377,28 +377,31 @@ Open hardening:
 - Break-glass does not advertise privileged Git options in the normal MCP tool
   list. The visible normal-mode surface is the narrow
   `request_git_break_glass` request tool, which records the request and returns
-  an auth.romaine.life approval URL without minting or revealing a token. Grants
-  are stored as `github.break_glass.grant` control-action events with repo,
-  operation, and TTL scope. Once an active grant exists, calling
+  a Tank approval URL (`/sessions/{id}?break_glass_request={event_id}`) without
+  minting or revealing a token. Grants are stored as
+  `github.break_glass.grant` control-action events with repo, operation, request
+  event id, and TTL scope. Denials are stored as `github.break_glass.deny`.
+  Once an active grant exists, calling
   `request_git_break_glass` again activates a separate `tank-git-break-glass`
   MCP server for the session/repo and writes runtime MCP config for Codex and
   Claude. That privileged server lists no tools before activation, rechecks the
   grant on every list/call, and records token/push use as
-  `github.break_glass.token` or `github.break_glass.push`. The auth.romaine.life
-  console approves by calling Tank's internal grant endpoint. When that grant is
+  `github.break_glass.token` or `github.break_glass.push`. Tank's browser UI
+  renders the approval panel and writes the grant or denial. auth.romaine.life
+  only authenticates the admin JWT that Tank verifies. When a grant is
   persisted, Tank starts a system-authored follow-up turn telling the agent the
   user approved the request and to call `request_git_break_glass` again to
   activate the privileged MCP server.
-- Break-glass approval chip + link (added 2026-06-14). A started
+- Break-glass approval chip + panel (added 2026-06-14). A started
   `github.break_glass.request` with no unexpired grant for its repo is surfaced
   as a "chip": the composer pull-request button turns amber with an alert dot,
-  and its popup menu exposes an "Approve break glass" entry. That entry is a
-  link to the request's `payload.approval_url` (the auth.romaine.life admin page
-  carrying the repo / session / reason), opened in a new tab, so the operator
-  inspects exactly what the agent requested and grants there. The grant itself
-  happens on the approval page via the existing internal grant endpoint — the UI
-  never POSTs a grant. The chip surfaces the pending request via
-  `pendingBreakGlassRequests` (frontend, reading `payload.approval_url`). The
+  and its popup menu exposes an "Approve break glass" entry linking to the Tank
+  session deep link. The composer also renders `BreakGlassApprovalIndicator`;
+  if the URL carries `break_glass_request`, the pane fetches that exact request
+  from Tank (`GET /api/sessions/{id}/break-glass-requests/{event_id}`) so an
+  admin can approve another user's request without relying on the owner's
+  control-action list. Approve/deny POST to
+  `/api/sessions/{id}/break-glass-requests/{event_id}/{approve|deny}`. The
   same popup also separates the two PR links the UI already tracked: the latest
   PR the agent opened (control-action git activity) and the PR explicitly linked
   via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
@@ -438,9 +441,9 @@ Contract impact:
 - The visible normal-mode surface is the narrow `request_azure_break_glass`
   tool (proxy-injected into the mcp-tank-operator surface, independent of
   restricted-git). For **restricted** sessions it records an
-  `azure.break_glass.request` control-action event and returns an
-  `auth.romaine.life/admin?intent=azure-break-glass` approval URL without
-  granting access or revealing a token.
+  `azure.break_glass.request` control-action event and returns the same Tank
+  approval deep-link shape (`/sessions/{id}?break_glass_request={event_id}`)
+  without granting access or revealing a token.
 - **Non-restricted (trusted) sessions are pre-approved for Azure.** When the
   agent calls `request_azure_break_glass`, the proxy self-approves by POSTing the
   grant endpoint directly (no human approval), so the existing B-auto activation
@@ -451,9 +454,8 @@ Contract impact:
   (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
   same `control_action_events` ledger as git break-glass. They are not
   repo-scoped: a grant authorizes the whole azure-personal MCP for the session.
-- After an admin approves, the auth.romaine.life console POSTs the grant to
-  Tank's internal `POST /api/internal/sessions/{id}/azure-break-glass/grants`;
-  `mcp-azure-personal` reads it through
+  Denials are stored as `azure.break_glass.deny`.
+- After an admin approves in Tank, `mcp-azure-personal` reads the grant through
   `GET /api/internal/sessions/{id}/azure-break-glass/grant` (short-cached) on
   every list/call, so expiry re-locks automatically. Each privileged call is
   recorded as `azure.break_glass.use`. All three actions increment
@@ -477,9 +479,9 @@ Open hardening:
   retired, so its subject was dropped from the RoleBinding and no exemption is
   configured. `breakGlass.exemptSubjects` remains for any future unattended
   automation that legitimately needs Azure without a per-session grant.
-- Until the auth.romaine.life `intent=azure-break-glass` approval card exists,
-  operators can create the grant by POSTing Tank's internal endpoint directly,
-  the same fallback git break-glass uses today.
+- Tank owns the public azure break-glass approval panel and approve/deny API;
+  auth.romaine.life remains the identity provider for the admin JWT, not the
+  approval workflow owner.
 
 ## Non-Restricted Session Full Git Access
 
@@ -507,6 +509,13 @@ Contract impact:
   the request path, requesting the App's full permission set. It grants nothing
   the session cannot already mint through the MCP tool surface; it removes the
   manual step.
+- `gh` is durable the same way: the session image bakes a `gh` wrapper at
+  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that, for
+  non-restricted sessions, mints a fresh token (scoped to the `/workspace` repos
+  plus any `--repo`/`-R` arg) and execs the real gh — so `gh` never needs a
+  manual re-auth. Restricted sessions pass straight through (gh stays
+  unauthenticated; the governed path owns credentials). See
+  `session-images/gh-tank-wrapper.sh`.
 - `repo-cloner` only scrubs the cloned repo's local `credential.helper` in
   restricted mode. In non-restricted mode the clone keeps no local override, so
   it inherits the global auto-minting helper. (An empty local `credential.helper`
@@ -524,3 +533,40 @@ Evidence:
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
   (`TestGitCredentialTankHelperMintsToken`) covers the helper's mint request
   shape, SSE reply parsing, and non-github bail.
+
+## Non-Restricted Session Read-Only DB Access
+
+Status: complete
+
+Intent:
+Give non-restricted (trusted) sessions arbitrary READ-ONLY SQL against the
+tank-operator Postgres DB for diagnostics (the `session_events` ledger,
+`profiles`, `session_registry`, `control_action_events`, …) — the durable-ledger
+query path `docs/diagnostic-discipline.md` calls for — without putting DB
+credentials in the session pod.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- The mcp-auth-proxy injects a `query_tank_db` MCP tool into the
+  mcp-tank-operator surface **only for non-restricted sessions**
+  (`not RESTRICTED_GIT_ENABLED`). It calls Tank's internal
+  `POST /api/internal/sessions/{id}/db-read-query`.
+- The endpoint runs the SQL under the orchestrator pool in a **read-only
+  transaction** with a `statement_timeout` and a row cap, and refuses
+  restricted-git sessions (`podRestrictedGit`). Writes/DDL are rejected by the
+  read-only tx; the Flexible-Server admin is not a filesystem superuser, so the
+  blast radius is "read the app's own data" — acceptable for the trusted owner's
+  non-restricted sessions, and unavailable to restricted/test sessions.
+- No DB credential ever lands in a session pod; the orchestrator (the DB's AAD
+  admin) proxies the read. (Full `psql` CLI with a dedicated read-only role +
+  KV password is a heavier optional follow-up.)
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_query_tank_db_tool_injected_only_for_non_restricted`,
+  `test_handle_query_tank_db_tool_runs_read_query`).
+- `backend-go/cmd/tank-operator/handlers_db_read_query_test.go`
+  (`TestDBReadQuery_RestrictedRefused`, `TestDBReadQuery_NonRestrictedRequiresPool`).

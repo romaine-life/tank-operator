@@ -81,7 +81,7 @@ TANK_OPERATOR_INTERNAL_URL = (
     os.environ.get("TANK_OPERATOR_INTERNAL_URL")
     or "http://tank-operator.tank-operator.svc.cluster.local"
 ).rstrip("/")
-TANK_UI_HOST = (os.environ.get("TANK_UI_HOST") or "https://tank.romaine.life").rstrip("/")
+TANK_UI_HOST = (os.environ.get("TANK_UI_HOST") or "").rstrip("/")
 WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE", "/workspace")).resolve()
 MCP_GITHUB_INTERNAL_URL = (
     os.environ.get("MCP_GITHUB_URL") or "http://mcp-github.mcp-github.svc:80"
@@ -93,6 +93,8 @@ _GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?(?
 _TANK_PUBLISH_TOOL = "publish_current_head"
 _TANK_BREAK_GLASS_TOOL = "request_git_break_glass"
 _TANK_AZURE_BREAK_GLASS_TOOL = "request_azure_break_glass"
+# Read-only SQL against the tank-operator DB, for NON-restricted sessions only.
+_TANK_DB_QUERY_TOOL = "query_tank_db"
 _TANK_PR_LANE_TOOL = "request_pr_lane"
 _TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
 _TANK_MERGE_TOOL = "merge_current_session_pr"
@@ -109,7 +111,6 @@ _BREAK_GLASS_MCP_PORT = 9999
 # mcp-azure-personal still re-checks the grant on every call.
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
-_AUTH_ROMAINE_BREAK_GLASS_URL = os.environ.get("AUTH_ROMAINE_BREAK_GLASS_URL") or "https://auth.romaine.life/admin"
 _GITHUB_WRITE_TOOL_DENYLIST = {
     "mint_clone_token",
     "create_pull_request",
@@ -809,37 +810,71 @@ def _append_azure_break_glass_tool_to_json(value) -> bool:
     tools = result.setdefault("tools", [])
     if not isinstance(tools, list):
         return False
-    if any(isinstance(tool, dict) and tool.get("name") == _TANK_AZURE_BREAK_GLASS_TOOL for tool in tools):
-        return False
-    tools.append(
-        {
-            "name": _TANK_AZURE_BREAK_GLASS_TOOL,
-            "description": (
-                "Record a request for break-glass access to the azure-personal MCP "
-                "(Postgres, Key Vault, Cosmos, ARM/AKS) and return a human approval "
-                "URL. The azure-personal MCP is locked by default and normal feature "
-                "work never needs it. This tool does not grant access or reveal a "
-                "token. After an admin approves, the azure-personal tools become "
-                "available for the session until the grant expires; reload the MCP "
-                "registry to see them."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Short reason azure access is needed and why no governed path suffices.",
+    existing = {tool.get("name") for tool in tools if isinstance(tool, dict)}
+    changed = False
+    if _TANK_AZURE_BREAK_GLASS_TOOL not in existing:
+        tools.append(
+            {
+                "name": _TANK_AZURE_BREAK_GLASS_TOOL,
+                "description": (
+                    "Record a request for break-glass access to the azure-personal MCP "
+                    "(Postgres, Key Vault, Cosmos, ARM/AKS) and return a human approval "
+                    "URL. The azure-personal MCP is locked by default and normal feature "
+                    "work never needs it. This tool does not grant access or reveal a "
+                    "token. After an admin approves, the azure-personal tools become "
+                    "available for the session until the grant expires; reload the MCP "
+                    "registry to see them."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Short reason azure access is needed and why no governed path suffices.",
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Caller source such as agent.",
+                        },
                     },
-                    "source": {
-                        "type": "string",
-                        "description": "Caller source such as agent.",
-                    },
+                    "additionalProperties": False,
                 },
-                "additionalProperties": False,
-            },
-        }
-    )
-    return True
+            }
+        )
+        changed = True
+    # query_tank_db: read-only SQL against the tank-operator DB, surfaced only to
+    # NON-restricted (trusted) sessions. Read-only is enforced server-side.
+    if not RESTRICTED_GIT_ENABLED and _TANK_DB_QUERY_TOOL not in existing:
+        tools.append(
+            {
+                "name": _TANK_DB_QUERY_TOOL,
+                "description": (
+                    "Run a READ-ONLY SQL query against the tank-operator Postgres "
+                    "database (session_events, profiles, session_registry, "
+                    "control_action_events, etc.) for diagnostics. Read-only is "
+                    "enforced server-side (read-only transaction + statement timeout + "
+                    "row cap); writes and DDL are rejected. Available only in "
+                    "non-restricted (trusted) sessions."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {
+                            "type": "string",
+                            "description": "A single read-only SQL statement (SELECT/WITH/EXPLAIN/SHOW).",
+                        },
+                        "max_rows": {
+                            "type": "integer",
+                            "description": "Max rows to return (default 200, cap 2000).",
+                        },
+                    },
+                    "required": ["sql"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    return changed
 
 
 def _augment_glimmung_hot_swap_tool_schema(tool: dict) -> bool:
@@ -986,7 +1021,9 @@ async def _record_github_tool_activity(
 
 async def _post_tank_control_action(http: ClientSession, headers: dict[str, str], payload: dict) -> None:
     url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/control-actions"
-    async with http.post(url, headers=headers, json=payload) as resp:
+    request_headers = dict(headers)
+    request_headers.update(_tank_caller_session_headers())
+    async with http.post(url, headers=request_headers, json=payload) as resp:
         if resp.status >= 400:
             text = await resp.text()
             log.warning("failed to record GitHub MCP activity in Tank: status=%d body=%s", resp.status, text[:500])
@@ -994,10 +1031,25 @@ async def _post_tank_control_action(http: ClientSession, headers: dict[str, str]
 
 async def _post_tank_pull_request_link(http: ClientSession, headers: dict[str, str], pr_url: str) -> None:
     url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pull-request-link"
-    async with http.post(url, headers=headers, json={"url": pr_url}) as resp:
+    request_headers = dict(headers)
+    request_headers.update(_tank_caller_session_headers())
+    async with http.post(url, headers=request_headers, json={"url": pr_url}) as resp:
         if resp.status >= 400:
             text = await resp.text()
             log.warning("failed to update Tank pull request link: status=%d body=%s", resp.status, text[:500])
+
+
+def _tank_caller_session_headers() -> dict[str, str]:
+    if not ORIGIN_SESSION_ID:
+        return {}
+    headers = {
+        CALLER_SYSTEM_FORWARD_HEADER: "tank-operator",
+        CALLER_KIND_FORWARD_HEADER: "session",
+        CALLER_SESSION_ID_FORWARD_HEADER: ORIGIN_SESSION_ID,
+    }
+    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
+    headers[CALLER_SESSION_SCOPE_FORWARD_HEADER] = scope
+    return headers
 
 
 async def _post_tank_hot_swap_verify(http: ClientSession, service_token: str, payload: dict) -> dict:
@@ -1464,54 +1516,27 @@ async def _verify_github_hot_swap_head(
     }
 
 
-def _break_glass_approval_url(
-    session_id: str,
-    repo_scope: dict,
-    branch_scope: dict,
-    reason: str,
-    source: str,
-    *,
-    session_scope: str | None = None,
-) -> str:
-    scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
-    params = {
-        "intent": "git-break-glass",
-        "session_id": session_id,
-        "session_scope": scope,
-        "repo_scope": json.dumps(repo_scope, separators=(",", ":")),
-        "branch_scope": json.dumps(branch_scope, separators=(",", ":")),
-        "source": source,
-    }
-    if reason:
-        params["reason"] = reason
-    separator = "&" if "?" in _AUTH_ROMAINE_BREAK_GLASS_URL else "?"
-    return f"{_AUTH_ROMAINE_BREAK_GLASS_URL}{separator}{urlencode(params)}"
+def _tank_ui_host() -> str:
+    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "").strip()
+    if re.fullmatch(r"tank-operator-slot-[0-9]+", scope) and (
+        not TANK_UI_HOST or TANK_UI_HOST == "https://tank.romaine.life"
+    ):
+        return f"https://{scope}.tank.dev.romaine.life"
+    if TANK_UI_HOST:
+        return TANK_UI_HOST
+    return "https://tank.romaine.life"
 
 
-def _azure_break_glass_approval_url(
-    session_id: str,
-    reason: str,
-    source: str,
-    session_scope: str | None = None,
-) -> str:
-    # Mirrors _break_glass_approval_url. azure-personal break-glass is not
-    # repo-scoped, so there is no repo param; the auth.romaine.life admin
-    # console keys its approval card on intent=azure-break-glass.
-    scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
-    params = {
-        "intent": "azure-break-glass",
-        "session_id": session_id,
-        "session_scope": scope,
-        "source": source,
-    }
-    if reason:
-        params["reason"] = reason
-    separator = "&" if "?" in _AUTH_ROMAINE_BREAK_GLASS_URL else "?"
-    return f"{_AUTH_ROMAINE_BREAK_GLASS_URL}{separator}{urlencode(params)}"
+def _break_glass_approval_url(session_id: str, request_event_id: str) -> str:
+    return f"{_tank_ui_host()}/sessions/{quote(session_id, safe='')}/break-glass/{quote(request_event_id, safe='')}"
+
+
+def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> str:
+    return _break_glass_approval_url(session_id, request_event_id)
 
 
 def _pr_lane_approval_url(session_id: str, request_event_id: str) -> str:
-    return f"{TANK_UI_HOST}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
+    return f"{_tank_ui_host()}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
 
 
 async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_slug: str = "") -> dict | None:
@@ -3031,13 +3056,8 @@ async def _handle_tank_break_glass_tool(
         if grant and not _grant_covers_branch_scope(grant, branch_scope):
             grant = None
         activation = _activate_break_glass_mcp_config(repo_slug, grant) if grant else None
-        approval_url = _break_glass_approval_url(
-            ORIGIN_SESSION_ID,
-            repo_scope,
-            branch_scope,
-            reason,
-            source,
-        )
+        event_id = f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
+        approval_url = _break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         target_ref = f"https://github.com/{repo_slug}"
         if repo_scope.get("kind") == "all_repos":
             target_ref = f"tank://session/{ORIGIN_SESSION_ID}/git-break-glass/all-repos"
@@ -3047,7 +3067,7 @@ async def _handle_tank_break_glass_tool(
             http,
             {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
             {
-                "event_id": f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "event_id": event_id,
                 "invocation_id": invocation_id,
                 "source_service": "mcp-tank-operator",
                 "source_tool": _TANK_BREAK_GLASS_TOOL,
@@ -3059,6 +3079,7 @@ async def _handle_tank_break_glass_tool(
                 "repo_name": repo,
                 "payload": {
                     "approval_url": approval_url,
+                    "request_event_id": event_id,
                     "reason": reason,
                     "source": source,
                     "repo_scope": repo_scope,
@@ -3077,6 +3098,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "request_event_id": event_id,
                 "status": "approved",
                 "approval_url": approval_url,
                 "privileged_tools_visible": True,
@@ -3093,6 +3115,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
                 "privileged_tools_visible": False,
@@ -3120,13 +3143,12 @@ async def _handle_tank_azure_break_glass_tool(
     request_id: object,
     arguments: dict,
 ) -> web.Response:
-    # Records the request and returns an auth.romaine.life approval URL; it never
-    # mints or reveals a token, and it no longer writes any MCP config. Surfacing
-    # is now automatic (B-auto): on approval the orchestrator enqueues an approval
-    # turn carrying the azure-personal MCP-activation payload, and the pod-side
-    # runner adds the server + rebuilds at the next idle boundary — so the tools
-    # appear without a second call to this tool. mcp-azure-personal re-checks the
-    # grant on every call, so it stays the real boundary.
+    # Mirrors _handle_tank_break_glass_tool. Records the request and returns a
+    # Tank approval URL; it never mints or reveals a token, and it no longer
+    # writes any MCP config. Surfacing is automatic: on approval Tank enqueues an
+    # approval turn carrying the azure-personal MCP-activation payload, and the
+    # runner adds the server at the next idle boundary. mcp-azure-personal
+    # re-checks the grant on every call, so it stays the real boundary.
     invocation_id = f"tank-azure-break-glass-{uuid4().hex}"
     try:
         if not ORIGIN_SESSION_ID:
@@ -3137,17 +3159,18 @@ async def _handle_tank_azure_break_glass_tool(
         source = str(arguments.get("source") or "agent").strip() or "agent"
         service_token = await auth_romaine_provider.token()
         grant = await _active_azure_break_glass_grant(http, service_token)
+        event_id = f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
         if grant is None and not RESTRICTED_GIT_ENABLED:
             # Non-restricted (trusted) sessions are pre-approved for azure-personal:
             # self-approve now (no human break-glass) so the B-auto activation turn
             # surfaces the tools. Restricted sessions fall through to the approval URL.
             grant = await _auto_grant_azure_break_glass(http, service_token, reason)
-        approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, reason, source)
+        approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         await _post_tank_control_action(
             http,
             {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
             {
-                "event_id": f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "event_id": event_id,
                 "invocation_id": invocation_id,
                 "source_service": "mcp-tank-operator",
                 "source_tool": _TANK_AZURE_BREAK_GLASS_TOOL,
@@ -3157,6 +3180,7 @@ async def _handle_tank_azure_break_glass_tool(
                 "target_ref": "azure-personal",
                 "payload": {
                     "approval_url": approval_url,
+                    "request_event_id": event_id,
                     "reason": reason,
                     "source": source,
                 },
@@ -3173,6 +3197,7 @@ async def _handle_tank_azure_break_glass_tool(
             structured = {
                 "resource": "azure-personal",
                 "status": "approved",
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "expires_at": grant.get("expires_at"),
                 "privileged_tools_visible": True,
@@ -3188,6 +3213,7 @@ async def _handle_tank_azure_break_glass_tool(
             )
             structured = {
                 "resource": "azure-personal",
+                "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
                 "privileged_tools_visible": False,
@@ -3207,6 +3233,65 @@ async def _handle_tank_azure_break_glass_tool(
             str(exc),
             {"tool": _TANK_AZURE_BREAK_GLASS_TOOL, "invocation_id": invocation_id},
         )
+
+
+async def _handle_query_tank_db_tool(http, provider, request_id, arguments) -> web.Response:
+    # Run a read-only SQL query against the tank-operator DB for a non-restricted
+    # session via Tank's internal read-query endpoint (read-only enforced there).
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for query_tank_db")
+        sql = str(arguments.get("sql") or "").strip()
+        if not sql:
+            return _mcp_error_response(request_id, -32602, "sql is required")
+        payload = {"sql": sql}
+        max_rows = arguments.get("max_rows")
+        if isinstance(max_rows, int) and max_rows > 0:
+            payload["max_rows"] = max_rows
+        service_token = await provider.token()
+        url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/db-read-query"
+        async with http.post(
+            url,
+            headers={"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
+            json=payload,
+        ) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                return _mcp_error_response(
+                    request_id, -32011, f"query_tank_db failed: HTTP {resp.status}: {text[:500]}"
+                )
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return _mcp_error_response(request_id, -32011, "query_tank_db returned invalid JSON")
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": _render_query_tank_db_text(data)}],
+                "structuredContent": data,
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank query_tank_db failed", exc_info=True)
+        return _mcp_error_response(request_id, -32011, str(exc))
+
+
+def _render_query_tank_db_text(data) -> str:
+    if not isinstance(data, dict):
+        return str(data)
+    if data.get("error"):
+        return f"SQL error: {data['error']}"
+    cols = data.get("columns") or []
+    rows = data.get("rows") or []
+    lines = ["\t".join(str(c) for c in cols)]
+    for row in rows:
+        lines.append("\t".join("" if v is None else str(v) for v in (row or [])))
+    footer = f"({data.get('row_count', len(rows))} rows"
+    if data.get("truncated"):
+        footer += ", truncated"
+    footer += ")"
+    lines.append(footer)
+    return "\n".join(lines)
 
 
 async def _handle_tank_pr_lane_tool(
@@ -3953,6 +4038,15 @@ TANK_OPERATOR_MCP_PORT = 9996
 SPIRELENS_MCP_PORT = 9997
 GRAFANA_MCP_PORT = 9998
 
+# Upstreams whose Authorization bearer is the auth.romaine.life service JWT
+# (not the pod SA token). mcp-github / SpireLens verify the JWT directly;
+# mcp-tank-operator joined this set once its kube-rbac-proxy sidecar — the only
+# thing that consumed the SA-token bearer — was removed (mcp-tank-operator#31),
+# leaving the JWT (also forwarded in X-Auth-Romaine-Token) as its sole identity.
+# Every other in-cluster MCP still sits behind a kube-rbac-proxy that
+# TokenReviews the SA-token bearer, so they stay on ServiceAccountTokenProvider.
+JWT_BEARER_PORTS = frozenset({GITHUB_MCP_PORT, SPIRELENS_MCP_PORT, TANK_OPERATOR_MCP_PORT})
+
 # Optional tailnet upstream: the SpireLens game-host MCP (spire-lens-mcp's
 # server.py --transport http). Unlike the in-cluster .svc upstreams below it
 # lives on the Tailscale tailnet (tag:spirelens-host), so its requests are
@@ -4336,6 +4430,16 @@ def _make_handler(
                     return _mcp_error_response(request_id, -32602, "arguments must be an object")
                 record_proxy_request(mcp_label, 200)
                 return await _handle_tank_azure_break_glass_tool(http, azure_break_glass_provider, request_id, arguments)
+            if (
+                not RESTRICTED_GIT_ENABLED
+                and method == "tools/call"
+                and params.get("name") == _TANK_DB_QUERY_TOOL
+            ):
+                arguments = params.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    return _mcp_error_response(request_id, -32602, "arguments must be an object")
+                record_proxy_request(mcp_label, 200)
+                return await _handle_query_tank_db_tool(http, azure_break_glass_provider, request_id, arguments)
 
         if glimmung_hot_swap_provider is not None and parsed_method is not None:
             method, params, request_id = parsed_method
@@ -4572,25 +4676,39 @@ async def run() -> None:
             # RFC 7591 Dynamic Client Registration â€” also intercepted so the
             # SDK gets a JSON 404 rather than an upstream plain-text one.
             app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
-            if port in (GITHUB_MCP_PORT, SPIRELENS_MCP_PORT):
-                # Both authenticate with the auth.romaine.life service JWT as
+            if port in JWT_BEARER_PORTS:
+                # These authenticate with the auth.romaine.life service JWT as
                 # the bearer. mcp-github verifies it against the IdP's JWKS and
                 # resolves the caller's GitHub App installation by calling
                 # tank-operator's /api/internal/github/installation with the
                 # same bearer forwarded; the SpireLens game-host MCP validates
-                # it directly with --auth-mode jwt.
+                # it directly with --auth-mode jwt. mcp-tank-operator no longer
+                # runs a kube-rbac-proxy sidecar (its per-caller RBAC allowlist
+                # was removed in mcp-tank-operator#31): authorization is the
+                # auth.romaine.life JWT, validated by the orchestrator, so there
+                # is no SA token for a transport gate to TokenReview and the
+                # bearer is the JWT here too. The JWT also still rides the
+                # X-Auth-Romaine-Token side header below — that, not
+                # Authorization, is the identity contract its
+                # CallerIdentityMiddleware reads.
                 token_provider = auth_romaine_provider
             else:
                 token_provider = ServiceAccountTokenProvider()
 
             # mcp-tank-operator, mcp-glimmung, mcp-grafana, and mcp-azure-personal
             # gate their tool surface on the caller's auth.romaine.life service
-            # JWT (read from X-Auth-Romaine-Token because Authorization carries
-            # the SA token kube-rbac-proxy validates in front of each). Inject
-            # the header so the upstreams can attribute and authorize every call
-            # to the originating session/user. For mcp-azure-personal this JWT,
-            # plus the caller-session headers below, is what lets the server look
-            # up the session's break-glass grant and refuse without one.
+            # JWT, read from X-Auth-Romaine-Token. For mcp-glimmung, mcp-grafana,
+            # and mcp-azure-personal the Authorization bearer carries the SA token
+            # their kube-rbac-proxy sidecar TokenReviews in front of each, so the
+            # JWT has to ride this side header. mcp-tank-operator has no such
+            # sidecar (removed in mcp-tank-operator#31) and already takes the JWT
+            # as its bearer above; the side header stays its identity contract
+            # (CallerIdentityMiddleware reads X-Auth-Romaine-Token, not
+            # Authorization). Inject the header so the upstreams can attribute and
+            # authorize every call to the originating session/user. For
+            # mcp-azure-personal this JWT, plus the caller-session headers below,
+            # is what lets the server look up the session's break-glass grant and
+            # refuse without one.
             extra_header_provider = None
             if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT, AZURE_MCP_PORT):
                 async def _provide_auth_romaine_header(

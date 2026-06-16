@@ -17,7 +17,7 @@ resurrection or preservation of in-flight agent work after the pod is gone.
 
 Tank sessions should behave like durable conversations with live event
 delivery layered on top. Browser tabs are clients, pod-side runners are
-producers, the Cosmos `session-events` ledger is the replay source of truth,
+producers, the Postgres `session_events` ledger is the replay source of truth,
 NATS JetStream is the durable live work fabric, and React renders a projection
 of Tank conversation events. Provider-specific events are inputs to adapters;
 they are not UI state.
@@ -393,9 +393,14 @@ shows a page selector (disabled at a single-page boundary) and lets the reader
 move between sealed activity pages and question pages. Sealing is a durable
 `order_key`-range concept so deep links and reloads are stable. The
 endpoint also returns `turn_context`, a server-projected copy of the initiating
-durable user message when the turn has one. This context is not an activity
-page entry; it gives `/sessions/{id}/turns/{n}` an orienting prompt header on
-every selected page while the canonical message remains the main transcript row.
+instruction for the turn. Human turns source it from the durable
+`user_message.created` row. Backend-owned continuations that intentionally do
+not create a main-transcript user row, such as background-task wakes, source it
+from the durable `turn.submitted.payload.prompt` and mark it system-authored.
+This context is not an activity page entry; it gives
+`/sessions/{id}/turns/{n}` an orienting prompt header on every selected page
+while the canonical user message, when one exists, remains the main transcript
+row.
 The
 `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
 counter and `TankTurnActiveWithDurableTerminal` alert guard against a regression
@@ -757,8 +762,9 @@ session is no longer `Active`; otherwise it writes a normal `turn.submitted`
 boundary event without a synthetic `user_message.created` prompt and publishes
 `submit_turn` with `source=background-task`. The `turn.submitted` event remains
 `source=tank` per the event schema and carries `payload.source=background-task`
-as provenance plus `payload.prompt` as the existing system-user wake text for
-Turn activity projection. The wake turn is a continuation mechanic inside the
+as provenance plus `payload.prompt` as the existing system-authored wake text
+for Turn activity projection and Turn-page prompt context. The wake turn is a
+continuation mechanic inside the
 simulated turn: its activity shell stays in the Turns view, not the settled main
 transcript, and its wake prompt is folded into the originating Turn activity as
 an `authorKind=system` user-side message. The earlier turn that parked on the still

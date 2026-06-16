@@ -84,6 +84,43 @@ Evidence:
 - Frontend tests guard that Glimmung launch uses `test_slot_defaults`, not the
   browser's local default session mode.
 
+## Settings Admin Break Glass Token
+
+Status: active
+
+Intent:
+Let a Tank admin mint, from Settings -> Admin -> Break glass, the
+auth.romaine.life `role=service` JWT a stuck session's agent would normally
+receive, and copy it straight into that agent's chat. This is the direct
+credential path for when the request/approve/activate break-glass flow (or
+hot-swap validation) is unavailable, so an admin can unblock an agent without
+the agent self-activating.
+
+Affected contracts:
+- App Chrome
+- Auth And Streams
+- Session Lifecycle
+
+Contract impact:
+- The surface is admin-gated by `/api/auth/me.is_admin`; the backend re-checks
+  admin power and resolves the target session's owner before minting.
+- The token is obtained through the orchestrator's existing on-behalf-of
+  exchange (`/api/auth/exchange/k8s`, `actor_email` = the session owner) — the
+  same call a session pod's mcp-auth-proxy makes. It is a `role=service` token
+  with the TTL auth.romaine.life sets (~15 min); Tank neither extends nor
+  persists it.
+- The minted token is never stored: only an `auth.break_glass.token`
+  control-action audit row (minter, owner, session, expiry) is written.
+- The browser shows the raw token once for copy and labels it as a live
+  credential.
+
+Evidence:
+- Backend tests cover admin-only access, target-owner scoping, and that the
+  audit row records the mint without persisting the token
+  (`auth_break_glass_token_test.go`).
+- The mint reuses the proven exchange path in `internal/mcpgithub`
+  (`MintActorToken`), exercised by the repo-picker on-behalf-of flow.
+
 ## Shells Menu
 
 Status: active

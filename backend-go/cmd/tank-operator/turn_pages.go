@@ -889,7 +889,44 @@ func projectTurnContextEntry(turnID string, events []map[string]any) map[string]
 		entry["turnContext"] = true
 		return entry
 	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if transcriptString(event, "type") != "turn.submitted" ||
+			transcriptString(event, "turn_id") != turnID ||
+			transcriptPayloadString(event, "source") != "background-task" {
+			continue
+		}
+		entry := projectSystemSubmittedTurnContextEvent(event)
+		if entry == nil {
+			return nil
+		}
+		return entry
+	}
 	return nil
+}
+
+func projectSystemSubmittedTurnContextEvent(event map[string]any) map[string]any {
+	text := strings.TrimSpace(transcriptPayloadString(event, "prompt"))
+	turnID := transcriptString(event, "turn_id")
+	clientNonce := transcriptString(event, "client_nonce")
+	eventID := transcriptString(event, "event_id")
+	if text == "" || turnID == "" || clientNonce == "" || eventID == "" {
+		return nil
+	}
+	return map[string]any{
+		"id":                eventID + ":turn_context",
+		"kind":              "message",
+		"role":              "user",
+		"authorKind":        "system",
+		"text":              text,
+		"turnId":            turnID,
+		"clientNonce":       clientNonce,
+		"time":              transcriptString(event, "created_at"),
+		"sourceEventId":     eventID,
+		"orderKey":          transcriptString(event, "order_key"),
+		"turnContext":       true,
+		"turnContextSource": transcriptPayloadString(event, "source"),
+		"display":           map[string]any{"kind": "plain"},
+	}
 }
 
 func defaultTurnActivityPageNumber(projection turnPagesProjection) int {

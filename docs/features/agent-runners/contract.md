@@ -114,6 +114,29 @@ the rest of the product reconstruct what happened.
   provider item IDs.
 - Provider failures must become durable failure events instead of silent
   strandings.
+- A runner-process restart that cannot recover the provider session is terminal
+  for the session, not a transient query death. When the SDK cannot resume the
+  conversation because its on-disk transcript was wiped by the container restart
+  ("No conversation found with session ID"), the runner resolves the active turn
+  with `turn.failed{reason:"provider_session_lost"}`, reports
+  `session.provider_fatal{reason:"provider_session_lost"}` (the durable
+  session-level Failed banner), and exits terminally — never the exit(1)-restart
+  loop, which would resume the same gone transcript and crash-loop. The
+  orchestrator reaps the pod on the report so the kubelet stops restarting it.
+  Degrading into a silent CrashLoopBackOff is the session-979 regression
+  (2026-06-16) this closes.
+- No session-pod runner container crash-loops unbounded. The orchestrator K8s
+  watch reaps a pod whose agent-runner container stays in CrashLoopBackOff past
+  the restart budget (`CrashloopRestartBudget`, default 5), marking the session
+  `session.provider_fatal{reason:"runner_crashloop"}`. This backstops loops the
+  runner never classified (boot crashes, an SDK shape its own terminal path
+  missed).
+- A terminal session failure is sticky. Once `session.provider_fatal` or
+  pod-terminating marks the row Failed (stamping `terminating_at`), a later
+  pod-ready observation must not flip it back to Active — otherwise a
+  doomed-but-briefly-ready container makes a dead session read Active (the 979
+  status flapping). A transient `pod_failed` (a CrashLoopBackOff that may still
+  recover) is deliberately NOT sticky.
 - A mid-session model/effort re-pin that fails provider resume (for example a
   cross-model thinking-block rejection) must resolve the turn with a durable
   `turn.failed`, never a silent stranding; the failure class stays visible in
@@ -163,6 +186,15 @@ the rest of the product reconstruct what happened.
   (plus the `tank_background_task_wakes_due` gauge). A task-lifecycle terminal
   that the runner logs as `sdk_task_lifecycle_unbound` while wake registrations
   stay flat is the detection-regressed signature.
+- The unrecoverable-resume terminal is counted on both sides so the crash-loop
+  cannot silently return: the runner's
+  `tank_runner_unrecoverable_exit_total{reason}` (`provider_session_lost`,
+  `report_failed`) and the orchestrator's `tank_session_pod_reaped_total{reason}`
+  (`provider_fatal`, `runner_crashloop`). A `reason="error"` container crash loop
+  is alerted (`TankSessionContainerCrashLooping`) and the provider-fatal terminal
+  is alerted (`TankSessionProviderFatal`); a crash-loop rate with no matching
+  pod-reaped increment is the regression signature (the loop is no longer being
+  converted to a terminal Failed).
 
 ## Acceptance Checks
 

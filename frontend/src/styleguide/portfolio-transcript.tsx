@@ -59,6 +59,7 @@ const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
 
 function TranscriptMessage({
   variant,
+  authorKind,
   highlighted,
   ownedByActivity,
   showAssistantAvatar = !ownedByActivity,
@@ -66,6 +67,7 @@ function TranscriptMessage({
   children,
 }: {
   variant: "assistant" | "user" | "system";
+  authorKind?: "system";
   highlighted?: boolean;
   ownedByActivity?: boolean;
   showAssistantAvatar?: boolean;
@@ -104,11 +106,12 @@ function TranscriptMessage({
       data-variant={variant}
       data-role={variant}
       data-compact={compact ? "true" : undefined}
+      data-author-kind={authorKind}
       data-owner={ownedByActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
       data-inline-footer={inlineFooter ? "true" : undefined}
       data-design-component="TranscriptMessage"
-      data-design-state={highlighted ? "highlighted" : variant}
+      data-design-state={highlighted ? "highlighted" : authorKind ?? variant}
       data-inspectable
     >
       {variant === "assistant" && avatar && showAssistantAvatar && (
@@ -117,8 +120,16 @@ function TranscriptMessage({
         </span>
       )}
       {variant === "user" && (
-        <span className="run-msg-avatar" aria-hidden="true">
-          <span className="avatar">NG</span>
+        <span
+          className="run-msg-avatar"
+          data-author-kind={authorKind}
+          aria-hidden="true"
+        >
+          {authorKind === "system" ? (
+            <CheckCircle2Icon size={16} strokeWidth={2.1} />
+          ) : (
+            <span className="avatar">NG</span>
+          )}
         </span>
       )}
       {variant === "system" && (
@@ -407,6 +418,25 @@ function TurnPromptStateSpecimens() {
             The collapsed preview stays visible while section controls live on
             the divider.
           </span>
+        </TranscriptMessage>
+      </div>
+      <div
+        className="run-turn-view-context"
+        aria-label="System-authored turn prompt"
+        data-collapsed="false"
+        data-context-loaded="true"
+        data-design-component="TurnPromptContext"
+        data-design-state="system-background-wake-context"
+        data-inspectable
+      >
+        <TranscriptMessage variant="user" authorKind="system" ownedByActivity>
+          <p style={{ margin: 0 }}>
+            Background task finished - agent re-invoked
+          </p>
+          <p style={{ margin: "6px 0 0" }}>
+            Task task-ci: Tank re-invoked the agent to pick up the result and
+            report the outcome.
+          </p>
         </TranscriptMessage>
       </div>
       <div
