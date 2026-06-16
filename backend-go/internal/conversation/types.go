@@ -937,6 +937,7 @@ func validEventType(eventType EventType) bool {
 		EventShellTaskUpdated,
 		EventShellTaskExited,
 		EventScheduledWakeupUpdated,
+		EventCIStatusUpdated,
 		EventTurnAwaitingInput,
 		EventTurnAwaitingInputInvocation:
 		return true

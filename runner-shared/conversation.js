@@ -185,6 +185,13 @@ function isValidEventByType(event) {
         hasStrings(event, ["timeline_id", "client_nonce"]) &&
         isScheduledWakeupPayload(event.payload)
       );
+    case "ci_status.updated":
+      return (
+        event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["timeline_id", "client_nonce"]) &&
+        isCIStatusPayload(event.payload)
+      );
     case "turn.awaiting_input":
       return (
         event.actor === "runner" &&
@@ -387,6 +394,26 @@ function isScheduledWakeupPayload(payload) {
     ].includes(payload.status) &&
     typeof payload.due_at === "string" &&
     payload.due_at.length > 0
+  );
+}
+
+function isCIStatusPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    payload.kind === "ci_status" &&
+    typeof payload.repo === "string" &&
+    payload.repo.length > 0 &&
+    typeof payload.pr_number === "number" &&
+    [
+      "watching",
+      "ready",
+      "failed",
+      "conflict",
+      "merged",
+      "superseded",
+      "cancelled",
+    ].includes(payload.state)
   );
 }
 
