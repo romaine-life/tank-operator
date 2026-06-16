@@ -281,9 +281,13 @@ KV-published client ID) are migrating into their respective MCP repos â€”
 `romaine-life/mcp-azure-personal/infra/` is the first; `mcp-tank-operator` and
 `mcp-auth` still live in `infra/mcp.tf` here pending the same migration. The
 cross-MCP `mcp-tenant-id` KV secret stays here as a shared convenience.
-Inbound auth: claude-session SA token validated via TokenReview +
-SubjectAccessReview against the synthetic
-`mcp.tank-operator.io/servers/<name>` resource. Currently:
+Inbound auth (most servers): the calling session pod's SA token validated via
+TokenReview + SubjectAccessReview against the synthetic
+`mcp.tank-operator.io/servers/<name>` resource, fronted by a `kube-rbac-proxy`
+sidecar. **Exception — `mcp-tank-operator`:** as of mcp-tank-operator#31 it runs
+no kube-rbac-proxy sidecar and no per-caller RBAC allowlist; authorization is
+solely the auth.romaine.life service JWT (forwarded in `X-Auth-Romaine-Token`,
+validated by the orchestrator and scoped to `actor_email`). Currently:
 
 - `romaine-life/mcp-azure-personal` â€” first-party personal Azure MCP server and chart; runtime naming is `mcp-azure-personal` / `azure-personal`
 - `romaine-life/mcp-github` â€” custom GitHub-App-backed

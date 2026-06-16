@@ -440,10 +440,16 @@ Enforcement is in the server we own, not the sidecar:
 Contract impact:
 - The visible normal-mode surface is the narrow `request_azure_break_glass`
   tool (proxy-injected into the mcp-tank-operator surface, independent of
-  restricted-git). It records an `azure.break_glass.request` control-action
-  event and returns the same Tank approval deep-link shape
-  (`/sessions/{id}?break_glass_request={event_id}`) without granting access or
-  revealing a token.
+  restricted-git). For **restricted** sessions it records an
+  `azure.break_glass.request` control-action event and returns the same Tank
+  approval deep-link shape (`/sessions/{id}?break_glass_request={event_id}`)
+  without granting access or revealing a token.
+- **Non-restricted (trusted) sessions are pre-approved for Azure.** When the
+  agent calls `request_azure_break_glass`, the proxy self-approves by POSTing the
+  grant endpoint directly (no human approval), so the existing B-auto activation
+  turn surfaces the tools. It only fires when the agent actually requests Azure
+  (no per-session noise), and restricted/test sessions keep the approval-URL
+  flow. See `_auto_grant_azure_break_glass` in mcp-auth-proxy.
 - Grants are stored as `azure.break_glass.grant` control-action events
   (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
   same `control_action_events` ledger as git break-glass. They are not
@@ -503,6 +509,13 @@ Contract impact:
   the request path, requesting the App's full permission set. It grants nothing
   the session cannot already mint through the MCP tool surface; it removes the
   manual step.
+- `gh` is durable the same way: the session image bakes a `gh` wrapper at
+  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that, for
+  non-restricted sessions, mints a fresh token (scoped to the `/workspace` repos
+  plus any `--repo`/`-R` arg) and execs the real gh — so `gh` never needs a
+  manual re-auth. Restricted sessions pass straight through (gh stays
+  unauthenticated; the governed path owns credentials). See
+  `session-images/gh-tank-wrapper.sh`.
 - `repo-cloner` only scrubs the cloned repo's local `credential.helper` in
   restricted mode. In non-restricted mode the clone keeps no local override, so
   it inherits the global auto-minting helper. (An empty local `credential.helper`
@@ -520,3 +533,40 @@ Evidence:
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
   (`TestGitCredentialTankHelperMintsToken`) covers the helper's mint request
   shape, SSE reply parsing, and non-github bail.
+
+## Non-Restricted Session Read-Only DB Access
+
+Status: complete
+
+Intent:
+Give non-restricted (trusted) sessions arbitrary READ-ONLY SQL against the
+tank-operator Postgres DB for diagnostics (the `session_events` ledger,
+`profiles`, `session_registry`, `control_action_events`, …) — the durable-ledger
+query path `docs/diagnostic-discipline.md` calls for — without putting DB
+credentials in the session pod.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- The mcp-auth-proxy injects a `query_tank_db` MCP tool into the
+  mcp-tank-operator surface **only for non-restricted sessions**
+  (`not RESTRICTED_GIT_ENABLED`). It calls Tank's internal
+  `POST /api/internal/sessions/{id}/db-read-query`.
+- The endpoint runs the SQL under the orchestrator pool in a **read-only
+  transaction** with a `statement_timeout` and a row cap, and refuses
+  restricted-git sessions (`podRestrictedGit`). Writes/DDL are rejected by the
+  read-only tx; the Flexible-Server admin is not a filesystem superuser, so the
+  blast radius is "read the app's own data" — acceptable for the trusted owner's
+  non-restricted sessions, and unavailable to restricted/test sessions.
+- No DB credential ever lands in a session pod; the orchestrator (the DB's AAD
+  admin) proxies the read. (Full `psql` CLI with a dedicated read-only role +
+  KV password is a heavier optional follow-up.)
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_query_tank_db_tool_injected_only_for_non_restricted`,
+  `test_handle_query_tank_db_tool_runs_read_query`).
+- `backend-go/cmd/tank-operator/handlers_db_read_query_test.go`
+  (`TestDBReadQuery_RestrictedRefused`, `TestDBReadQuery_NonRestrictedRequiresPool`).
