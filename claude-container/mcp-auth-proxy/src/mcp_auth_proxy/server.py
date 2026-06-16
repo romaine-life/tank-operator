@@ -81,7 +81,7 @@ TANK_OPERATOR_INTERNAL_URL = (
     os.environ.get("TANK_OPERATOR_INTERNAL_URL")
     or "http://tank-operator.tank-operator.svc.cluster.local"
 ).rstrip("/")
-TANK_UI_HOST = (os.environ.get("TANK_UI_HOST") or "https://tank.romaine.life").rstrip("/")
+TANK_UI_HOST = (os.environ.get("TANK_UI_HOST") or "").rstrip("/")
 WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE", "/workspace")).resolve()
 MCP_GITHUB_INTERNAL_URL = (
     os.environ.get("MCP_GITHUB_URL") or "http://mcp-github.mcp-github.svc:80"
@@ -1516,8 +1516,17 @@ async def _verify_github_hot_swap_head(
     }
 
 
+def _tank_ui_host() -> str:
+    if TANK_UI_HOST:
+        return TANK_UI_HOST
+    scope = (SESSION_SCOPE or ORIGIN_SESSION_SCOPE or "").strip()
+    if re.fullmatch(r"tank-operator-slot-[0-9]+", scope):
+        return f"https://{scope}.tank.dev.romaine.life"
+    return "https://tank.romaine.life"
+
+
 def _break_glass_approval_url(session_id: str, request_event_id: str) -> str:
-    return f"{TANK_UI_HOST}/sessions/{quote(session_id, safe='')}?{urlencode({'break_glass_request': request_event_id})}"
+    return f"{_tank_ui_host()}/sessions/{quote(session_id, safe='')}?{urlencode({'break_glass_request': request_event_id})}"
 
 
 def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> str:
@@ -1525,7 +1534,7 @@ def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> s
 
 
 def _pr_lane_approval_url(session_id: str, request_event_id: str) -> str:
-    return f"{TANK_UI_HOST}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
+    return f"{_tank_ui_host()}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
 
 
 async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_slug: str = "") -> dict | None:

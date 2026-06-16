@@ -838,10 +838,16 @@ def test_break_glass_approval_url_carries_request_context() -> None:
     assert "reason" not in query
 
 
-def test_break_glass_approval_url_carries_slot_scope() -> None:
+def test_break_glass_approval_url_carries_slot_scope(monkeypatch) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server.TANK_UI_HOST", "")
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_SCOPE", "tank-operator-slot-2")
+
     url = _break_glass_approval_url("slot/session", "request-123")
 
-    assert url == "https://tank.romaine.life/sessions/slot%2Fsession?break_glass_request=request-123"
+    assert (
+        url
+        == "https://tank-operator-slot-2.tank.dev.romaine.life/sessions/slot%2Fsession?break_glass_request=request-123"
+    )
 
 
 def test_break_glass_mcp_lists_no_tools_before_activation(monkeypatch, tmp_path) -> None:
