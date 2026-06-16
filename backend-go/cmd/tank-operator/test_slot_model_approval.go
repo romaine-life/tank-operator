@@ -152,8 +152,16 @@ func (s *appServer) appendTestSlotModelApprovalRequest(ctx context.Context, owne
 }
 
 func testSlotModelApprovalURL(approval testSlotModelApproval, sessionScope string) string {
-	base := strings.TrimRight(envDefault("TANK_UI_HOST", "https://tank.romaine.life"), "/")
+	base := tankUIHostForSessionScope(sessionScope)
 	return base + "/sessions/" + url.PathEscape(approval.SessionID) + "/test-slot-model/" + url.PathEscape(approval.EventID)
+}
+
+func tankUIHostForSessionScope(sessionScope string) string {
+	scope := normalizeSessionScope(sessionScope)
+	if scope != prodSessionScope {
+		return "https://" + scope + ".tank.dev.romaine.life"
+	}
+	return strings.TrimRight(envDefault("TANK_UI_HOST", "https://tank.romaine.life"), "/")
 }
 
 func testSlotModelTargetRef(sessionScope string, approval testSlotModelApproval) string {

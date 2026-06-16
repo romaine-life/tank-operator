@@ -9967,6 +9967,100 @@ function TestSlotModelApprovalPage({
   );
 }
 
+function StandaloneTestSlotModelApprovalSurface({
+  sessionId,
+  requestId,
+}: {
+  sessionId: string;
+  requestId: string;
+}) {
+  const [rows, setRows] = useState<ControlActionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyEventId, setBusyEventId] = useState<string | null>(null);
+
+  const fetchRequest = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/test-slot-model-requests/${encodeURIComponent(requestId)}`,
+      );
+      if (!res.ok) throw new Error(`request lookup failed: ${res.status}`);
+      const body = (await res.json()) as TestSlotModelRequestLookupResponse;
+      setRows(
+        [body.request, body.decision].filter(
+          (row): row is ControlActionRow => Boolean(row?.event_id),
+        ),
+      );
+      setError(null);
+    } catch (err) {
+      setRows([]);
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [requestId, sessionId]);
+
+  useEffect(() => {
+    void fetchRequest();
+  }, [fetchRequest]);
+
+  const approveRequest = useCallback(
+    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+      setBusyEventId(request.eventId);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note }),
+          },
+        );
+        if (!res.ok) throw new Error(`approval failed: ${res.status}`);
+        await fetchRequest();
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusyEventId(null);
+      }
+    },
+    [fetchRequest, sessionId],
+  );
+
+  if (loading) {
+    return (
+      <div className="break-glass-page">
+        <section className="break-glass-page-main">
+          <div className="run-shell-loading" role="status">
+            <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+            <span>Loading request...</span>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {error && (
+        <div className="run-error" role="alert">
+          {error}
+        </div>
+      )}
+      <TestSlotModelApprovalPage
+        sessionId={sessionId}
+        requestId={requestId}
+        rows={rows}
+        busyEventId={busyEventId}
+        onApprove={(request, note) => {
+          void approveRequest(request, note);
+        }}
+      />
+    </>
+  );
+}
+
 function BreakGlassRequestPage({
   sessionId,
   requestId,
@@ -26600,6 +26694,17 @@ function AuthenticatedApp() {
     active == null
       ? null
       : (sessions.find((session) => session.id === active) ?? null);
+  const standaloneSessionRoute =
+    active == null ? readSessionRouteFromPath() : null;
+  const standaloneTestSlotModelRoute =
+    standaloneSessionRoute?.tab === "test-slot-model" &&
+    standaloneSessionRoute.sessionId &&
+    standaloneSessionRoute.testSlotModelRequestId
+      ? {
+          sessionId: standaloneSessionRoute.sessionId,
+          requestId: standaloneSessionRoute.testSlotModelRequestId,
+        }
+      : null;
   const activeConnectionLabel =
     activeWorkspaceSession == null
       ? null
@@ -27023,7 +27128,21 @@ function AuthenticatedApp() {
 
       <main className="workspace">
         {workspaceTitleChrome}
-        {active == null ? (
+        {standaloneTestSlotModelRoute ? (
+          <WorkspaceShell
+            className="run-panel-home"
+            bodyAriaLabel="Test-slot model approval"
+            title={<WorkspaceTitleSpacer />}
+            body={
+              <StandaloneTestSlotModelApprovalSurface
+                sessionId={standaloneTestSlotModelRoute.sessionId}
+                requestId={standaloneTestSlotModelRoute.requestId}
+              />
+            }
+            composer={null}
+            composerVisible={false}
+          />
+        ) : active == null ? (
           // Pre-session "home" state. Same workspace scaffold as an active
           // session — same body/composer column and same composer footer at
           // the same y-coordinate — with the header strip restored so the

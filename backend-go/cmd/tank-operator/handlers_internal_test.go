@@ -807,7 +807,7 @@ func TestHandleInternalCreateSessionInTestSlotBlocksExpensiveModelWithApprovalUR
 		t.Fatalf("body = %#v", body)
 	}
 	approvalURL, _ := body["approval_url"].(string)
-	if !strings.HasPrefix(approvalURL, "https://tank.romaine.life/sessions/origin-77/test-slot-model/tank-test-slot-model-request-origin-77-") ||
+	if !strings.HasPrefix(approvalURL, "https://tank-operator-slot-2.tank.dev.romaine.life/sessions/origin-77/test-slot-model/tank-test-slot-model-request-origin-77-") ||
 		strings.Contains(approvalURL, "auth.romaine.life") ||
 		strings.Contains(approvalURL, "model=claude-opus-4-8") {
 		t.Fatalf("approval_url = %q", approvalURL)
