@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CI Watch Webhook Reconcile Shape</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172126;
+      --muted: #536168;
+      --line: #9aa8ae;
+      --panel: #ffffff;
+      --band: #eef4f5;
+      --edge: #cbd6da;
+      --trigger: #d8eef7;
+      --compute: #e9f4df;
+      --pending: #fff3cc;
+      --wake: #f8d9d4;
+      --ready: #dcebe0;
+      --shadow: rgba(30, 47, 55, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: #f7fafb;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0 48px;
+    }
+
+    header {
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      max-width: 820px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .diagram {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--edge);
+      background: var(--panel);
+      box-shadow: 0 18px 50px var(--shadow);
+      border-radius: 8px;
+    }
+
+    .lane-labels {
+      display: grid;
+      grid-template-columns: 0.9fr 1.4fr 1.4fr 1fr;
+      gap: 18px;
+      padding: 18px 22px 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 0.9fr 1.4fr 1.4fr 1fr;
+      gap: 18px;
+      padding: 18px 22px 22px;
+      min-height: 630px;
+    }
+
+    .lane {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .lane.reconcile {
+      background: linear-gradient(180deg, rgba(238, 244, 245, 0.8), rgba(238, 244, 245, 0));
+      border-radius: 8px;
+      padding: 12px;
+      margin: -12px 0 0;
+    }
+
+    .node {
+      border: 1px solid var(--edge);
+      background: #fff;
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 86px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      position: relative;
+    }
+
+    .node strong {
+      display: block;
+      font-size: 16px;
+      line-height: 1.2;
+      margin-bottom: 6px;
+    }
+
+    .node span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .trigger { background: var(--trigger); }
+    .compute { background: var(--compute); }
+    .pending { background: var(--pending); }
+    .wake { background: var(--wake); }
+    .ready { background: var(--ready); }
+
+    .connector {
+      height: 28px;
+      position: relative;
+    }
+
+    .connector::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 0;
+      bottom: 0;
+      border-left: 2px solid var(--line);
+    }
+
+    .connector::after {
+      content: "";
+      position: absolute;
+      left: calc(50% - 5px);
+      bottom: 0;
+      width: 10px;
+      height: 10px;
+      border-right: 2px solid var(--line);
+      border-bottom: 2px solid var(--line);
+      transform: rotate(45deg);
+      background: transparent;
+    }
+
+    .decision {
+      min-height: 112px;
+      border-style: dashed;
+    }
+
+    .outcomes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .callout {
+      margin-top: 18px;
+      padding: 16px 18px;
+      border-left: 4px solid #2d6f82;
+      background: #edf7f4;
+      border-radius: 0 8px 8px 0;
+      color: #223338;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border: 1px solid var(--edge);
+      border-radius: 3px;
+      display: inline-block;
+    }
+
+    .mobile-note {
+      display: none;
+      color: var(--muted);
+      font-size: 13px;
+      margin: 10px 0 0;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: min(100vw - 24px, 680px);
+        padding-top: 22px;
+      }
+
+      .lane-labels {
+        display: none;
+      }
+
+      .flow {
+        grid-template-columns: 1fr;
+        min-height: 0;
+      }
+
+      .lane.reconcile {
+        margin: 0;
+      }
+
+      .outcomes {
+        grid-template-columns: 1fr;
+      }
+
+      .mobile-note {
+        display: block;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>CI Watch Webhook Reconcile Shape</h1>
+      <p class="lede">
+        Webhooks are edge triggers. The backend does one authoritative reconcile for
+        the watched PR head, transitions only on aggregate evidence, and treats
+        GitHub's calculating mergeability state as pending instead of polling inside
+        the webhook handler.
+      </p>
+      <p class="mobile-note">On narrow screens, lanes are stacked in execution order.</p>
+    </header>
+
+    <section class="diagram" aria-label="Flowchart for webhook-driven CI watch reconciliation">
+      <div class="lane-labels" aria-hidden="true">
+        <div>Agent handoff</div>
+        <div>Webhook trigger</div>
+        <div>Aggregate reconcile</div>
+        <div>Terminal action</div>
+      </div>
+
+      <div class="flow">
+        <div class="lane">
+          <div class="node trigger">
+            <strong>watch_current_session_pr</strong>
+            <span>Registers session_ci_watches for the current PR head SHA.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node">
+            <strong>Agent stops</strong>
+            <span>Session sleeps while Tank waits for repo events.</span>
+          </div>
+        </div>
+
+        <div class="lane">
+          <div class="node trigger">
+            <strong>GitHub webhook arrives</strong>
+            <span>check_run, check_suite, workflow_run, status, or pull_request.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node">
+            <strong>Authenticate and route</strong>
+            <span>Verify HMAC, map repo plus PR number to the durable watch.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node pending">
+            <strong>Drop non-actionable events</strong>
+            <span>No watch, terminal watch, or stale event head SHA.</span>
+          </div>
+        </div>
+
+        <div class="lane reconcile">
+          <div class="node compute">
+            <strong>Read aggregate CI evidence</strong>
+            <span>Latest check run per name, combined status, and path-filtered prior-green evidence.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node compute">
+            <strong>Read PR mergeability once</strong>
+            <span>Use GitHub's PR state to detect dirty or behind. Draft is not a conflict.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node decision">
+            <strong>Classify the aggregate</strong>
+            <span>
+              failed checks -> red;
+              dirty or behind -> conflict;
+              CI satisfied plus clean -> ready;
+              missing checks or UNKNOWN mergeability -> pending.
+            </span>
+          </div>
+          <div class="callout">
+            <strong>No CI polling loop</strong>
+            GitHub's UNKNOWN or REST mergeable=null means "calculation not ready".
+            The handler refreshes the watch detail and waits for another event or a
+            deferred backstop instead of spinning.
+          </div>
+        </div>
+
+        <div class="lane">
+          <div class="outcomes">
+            <div class="node wake">
+              <strong>Red</strong>
+              <span>Mark failed and wake the session to fix CI.</span>
+            </div>
+            <div class="node wake">
+              <strong>Conflict</strong>
+              <span>Mark conflict and wake the session to rebase or resolve.</span>
+            </div>
+            <div class="node ready">
+              <strong>Ready</strong>
+              <span>Mark ready for human merge or orchestration auto-merge.</span>
+            </div>
+            <div class="node pending">
+              <strong>Pending</strong>
+              <span>Refresh last_event_at and keep watching.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="legend" aria-label="Legend">
+      <span><i class="swatch trigger"></i> trigger or registration</span>
+      <span><i class="swatch compute"></i> authoritative read</span>
+      <span><i class="swatch ready"></i> ready outcome</span>
+      <span><i class="swatch wake"></i> agent wake outcome</span>
+      <span><i class="swatch pending"></i> pending or ignored outcome</span>
+    </div>
+  </main>
+</body>
+</html>
