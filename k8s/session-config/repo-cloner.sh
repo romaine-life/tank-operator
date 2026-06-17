@@ -3,7 +3,10 @@ set -euo pipefail
 
 WORKSPACE="${WORKSPACE:-/workspace}"
 REPOS_JSON="${TANK_REPOS_JSON:-[]}"
-REPO_BASES_JSON="${TANK_REPO_BASES_JSON:-{}}"
+REPO_BASES_JSON="${TANK_REPO_BASES_JSON:-}"
+if [ -z "$REPO_BASES_JSON" ]; then
+  REPO_BASES_JSON="{}"
+fi
 AUTH_TOKEN_PATH="${AUTH_ROMAINE_TOKEN_PATH:-/var/run/secrets/auth.romaine.life/token}"
 AUTH_EXCHANGE_URL="${AUTH_ROMAINE_EXCHANGE_URL:-https://auth.romaine.life/api/auth/exchange/k8s}"
 MCP_GITHUB_URL="${MCP_GITHUB_URL:-http://mcp-github.mcp-github.svc:80}"
