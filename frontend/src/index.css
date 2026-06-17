@@ -9393,11 +9393,11 @@ button:disabled {
   flex: 0 0 auto;
 }
 
-.run-approval-action-btn.has-alert {
+.run-break-glass-action-btn.has-alert {
   color: #f0b429;
 }
 
-.run-approval-action-btn.has-alert:hover {
+.run-break-glass-action-btn.has-alert:hover {
   color: #fbd457;
   background: rgba(240, 180, 41, 0.16);
 }
