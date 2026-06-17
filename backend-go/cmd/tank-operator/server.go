@@ -504,6 +504,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/scheduled-wakeups/cancel", s.handleCancelScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
 	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests/{request_event_id}", s.handleGetBreakGlassRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/batch/approve", s.handleApproveBreakGlassRequestsBatch)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/approve", s.handleApproveBreakGlassRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/deny", s.handleDenyBreakGlassRequest)
 	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}", s.handleGetTestSlotModelApprovalRequest)

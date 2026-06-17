@@ -1865,6 +1865,104 @@ func TestHandleApproveAzureBreakGlassRequestActivatesMcpViaApprovalTurn(t *testi
 	}
 }
 
+func TestHandleApproveBreakGlassRequestsBatchStartsSingleApprovalTurn(t *testing.T) {
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				EventID:      "git-request-1",
+				InvocationID: "invocation-git",
+				OwnerEmail:   "owner@example.test",
+				SessionScope: "tank-operator-slot-3",
+				SessionID:    "47",
+				Action:       "github.break_glass.request",
+				Status:       "started",
+				TargetKind:   "github_repository",
+				TargetRef:    "https://github.com/romaine-life/tank-operator",
+				RepoOwner:    "romaine-life",
+				RepoName:     "tank-operator",
+				Payload: []byte(`{
+					"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+					"branch_scope": {"kind":"unlimited"},
+					"operations": ["mint_full_git_token"],
+					"reason": "repair branch"
+				}`),
+			},
+			{
+				EventID:      "azure-request-1",
+				InvocationID: "invocation-azure",
+				OwnerEmail:   "owner@example.test",
+				SessionScope: "tank-operator-slot-3",
+				SessionID:    "47",
+				Action:       "azure.break_glass.request",
+				Status:       "started",
+				TargetKind:   "azure_mcp",
+				TargetRef:    "azure-personal",
+				Payload: []byte(`{
+					"operations": ["use_azure_personal_mcp"],
+					"reason": "inspect session_events ledger"
+				}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/break-glass-requests/batch/approve", strings.NewReader(`{
+		"requests": [
+			{"event_id": "git-request-1"},
+			{"event_id": "azure-request-1"}
+		]
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveBreakGlassRequestsBatch(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 2 {
+		t.Fatalf("append calls = %d, want 2", len(store.appendCalls))
+	}
+	if store.appendCalls[0].Action != "github.break_glass.grant" || store.appendCalls[1].Action != "azure.break_glass.grant" {
+		t.Fatalf("grant actions = %s, %s", store.appendCalls[0].Action, store.appendCalls[1].Action)
+	}
+	bus := app.sessionBus.(*recordingSessionBus)
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	command := bus.commands[0]
+	if command.Type != "submit_turn" || command.Source != "break-glass-approval" {
+		t.Fatalf("command type/source = %s/%s", command.Type, command.Source)
+	}
+	if command.MCPActivateName != "azure-personal" || command.MCPActivateURL != "http://127.0.0.1:9991/" {
+		t.Fatalf("mcp activation = %q/%q", command.MCPActivateName, command.MCPActivateURL)
+	}
+	for _, want := range []string{
+		"2 break-glass requests were approved",
+		"GitHub break-glass grant",
+		"Azure break-glass grant",
+		"request_git_break_glass",
+		"azure-personal tools",
+	} {
+		if !strings.Contains(command.Prompt, want) {
+			t.Fatalf("prompt missing %q: %q", want, command.Prompt)
+		}
+	}
+	var body struct {
+		ApprovedCount     int `json:"approved_count"`
+		AgentNotification struct {
+			Delivered bool   `json:"delivered"`
+			TurnID    string `json:"turn_id"`
+		} `json:"agent_notification"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.ApprovedCount != 2 || !body.AgentNotification.Delivered || body.AgentNotification.TurnID == "" {
+		t.Fatalf("response = %#v", body)
+	}
+}
+
 func TestHandleBreakGlassRequestReturnsAlreadyDecided(t *testing.T) {
 	store := &fakeControlActionStore{
 		getRow: pgstore.ControlActionEvent{
