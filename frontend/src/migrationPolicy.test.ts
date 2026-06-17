@@ -992,6 +992,13 @@ test("break-glass composer action owns approval links and quick approval", () =>
   expect(appSource).toMatch(/quickApproveBreakGlassMenuItem/);
   expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
+  expect(appSource.includes("function PRLaneApprovalIndicator")).toBe(false);
+  expect(appSource.includes("<PRLaneApprovalIndicator")).toBe(false);
+  expect(appSource).toMatch(/type BreakGlassApprovalMenuKind = "github" \| "azure" \| "model" \| "pr-lane";/);
+  expect(appSource).toMatch(/pendingPRLaneRequests\(controlActionRows\)/);
+  expect(appSource).toMatch(/prLaneApprovalMenuItems\(sessionId, prLaneRequests\)/);
+  expect(appSource).toMatch(/onApprovePRLane/);
+  expect(indexCssSource.includes(".pr-lane-approval")).toBe(false);
   expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
   expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
   expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
