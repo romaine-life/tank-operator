@@ -1,7 +1,22 @@
 # Event-Driven Rollout: CI Watch, Auto-Merge, and Synthetic Completion Records
 
-Status: **proposed (design)**. No code yet. This doc is the full plan; implementation
-is staged in [Phased delivery](#phased-delivery), each stage coherent on its own.
+Status: **shipped** (phases 1–4; see
+[CI-watch capabilities](features/ci-watch/capabilities.md)). Stage-5 hardening (the
+stall alert / dead-man's timer) remains deferred. This doc is the original design;
+[Phased delivery](#phased-delivery) tracks what landed.
+
+> **Deployment wiring (required — the webhook half is inert without it).** The receiver
+> fails closed when its secret is empty, so production must have BOTH:
+> 1. `GITHUB_WEBHOOK_SECRET` mirrored from KV `tank-operator-github-webhook-secret` via
+>    `k8s/templates/externalsecret-github-webhook.yaml` (the secret value is seeded
+>    out-of-band in KV), and
+> 2. a webhook on the **tank-operator-host** GitHub App →
+>    `https://tank.romaine.life/webhooks/github` (content-type `application/json`, the
+>    same secret, events: `pull_request` / `check_suite` / `check_run` / `workflow_run`).
+>
+> One app-level webhook covers every governed repo (reverse lookup is by
+> `(owner, name, pr)`). Both pieces were missing at first ship (2026-06-17), so every
+> "watching" session slept through its CI — confirmed by an empty `tank_ci_webhooks_total`.
 
 Extends [tank-conversation-protocol.md](tank-conversation-protocol.md),
 [scheduled-turn-continuity.md](scheduled-turn-continuity.md), and the

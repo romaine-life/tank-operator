@@ -378,6 +378,16 @@ externalSecret:
     # Key inside the K8s Secret. The proxy mounts this as
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
+  # HMAC secret for the inbound GitHub CI-watch webhook (POST /webhooks/github).
+  # The orchestrator reads it as GITHUB_WEBHOOK_SECRET and rejects every delivery
+  # when empty (fail-closed), so a watched PR's CI never wakes its session until
+  # this is set. Seeded out-of-band: the SAME value must be configured as the
+  # webhook secret on the tank-operator-host GitHub App. Production only — test
+  # slots receive no deliveries, so the deployment env reference is optional.
+  githubWebhook:
+    secretName: github-webhook-secret
+    secretKey: secret
+    kvKey: tank-operator-github-webhook-secret
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

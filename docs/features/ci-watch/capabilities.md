@@ -29,6 +29,12 @@ and [../README.md](../README.md) for how capability ledgers are used.
 - **Durable source:** `POST /webhooks/github` (HMAC-verified) → `session_ci_watches`
   reverse lookup → wake. Stale deliveries (superseded head SHA) and duplicates
   (already-terminal watch) are dropped.
+- **Deployment:** delivery requires `GITHUB_WEBHOOK_SECRET` (KV
+  `tank-operator-github-webhook-secret` → `externalsecret-github-webhook.yaml`) AND a
+  webhook on the tank-operator-host GitHub App pointed at
+  `https://tank.romaine.life/webhooks/github`. With either missing the receiver fails
+  closed and sessions sleep through CI (the 2026-06-17 "watching" stall, diagnosed via
+  an empty `tank_ci_webhooks_total`).
 
 ## ci-watch-reaper-protection
 
