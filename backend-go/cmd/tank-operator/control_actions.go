@@ -1191,7 +1191,23 @@ func (s *appServer) handleInternalGetAzureBreakGlassGrant(w http.ResponseWriter,
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
-	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	// azure-personal calls this endpoint as its OWN service principal — not as
+	// the session owner — so the grant lookup must be scoped to the SESSION's
+	// owner (the grant is recorded under the owner's email), not the caller's
+	// identity. Without this, azure-personal never sees a user's grant and the
+	// azure MCP stays locked for every session. (The git equivalent is called by
+	// the session pod itself, whose identity already IS the owner, so it can use
+	// the caller's actor_email directly.) Fail closed: if the session/owner can't
+	// be resolved, report no active grant.
+	ownerEmail := ""
+	if info, infoErr := s.mgr.GetByID(r.Context(), sessionID); infoErr == nil {
+		ownerEmail = strings.TrimSpace(info.Owner)
+	}
+	if ownerEmail == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false, "resource": "azure-personal", "session_id": sessionID})
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), ownerEmail, s.sessionScope, sessionID, 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

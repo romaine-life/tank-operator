@@ -1965,6 +1965,57 @@ func TestHandleInternalGetAzureBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	}
 }
 
+func TestHandleInternalGetAzureBreakGlassGrantScopesLookupToSessionOwner(t *testing.T) {
+	// Regression: azure-personal calls this endpoint as its OWN service
+	// principal, whose actor_email is NOT the session owner. The grant is
+	// recorded under the owner, so the lookup must resolve the session owner
+	// (owner@example.test for session 47, seeded by controlActionTestServer) and
+	// query by that — not by the caller's actor_email. Before the fix the gate
+	// never saw the grant and the azure MCP stayed locked for every session.
+	payload, _ := json.Marshal(map[string]any{
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		"operations": []string{"use_azure_personal_mcp"},
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:    "azure-grant-1",
+			Action:     "azure.break_glass.grant",
+			Status:     "succeeded",
+			TargetKind: "azure_mcp",
+			TargetRef:  "azure-personal",
+			Payload:    payload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/azure-break-glass/grant", nil)
+	req.SetPathValue("session_id", "47")
+	// Caller actor_email is the azure-personal service principal — deliberately
+	// NOT the session owner.
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "mcp-azure-personal@service.romaine.life", "mcp-azure-personal@service.romaine.life"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetAzureBreakGlassGrant(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != true {
+		t.Fatalf("expected active grant for non-owner service caller, body = %#v", body)
+	}
+	// The fix: the lookup is scoped to the SESSION OWNER, not the caller's
+	// actor_email (which here is mcp-azure-personal@service.romaine.life).
+	if store.listOwner != "owner@example.test" {
+		t.Fatalf("grant lookup owner = %q, want session owner owner@example.test", store.listOwner)
+	}
+	if store.listSession != "47" {
+		t.Fatalf("grant lookup session = %q, want 47", store.listSession)
+	}
+}
+
 func TestHandleInternalGetAzureBreakGlassGrantInactiveWithoutGrant(t *testing.T) {
 	// An expired grant must not count as active.
 	expiredPayload, _ := json.Marshal(map[string]any{
