@@ -156,10 +156,14 @@ func classifyCIWatchState(watch pgstore.CIWatch, state mcpgithub.PullRequestStat
 		result.Detail = repoPR + " needs a rebase onto its base (mergeable_state=" + mergeableState + ")."
 		return result
 	}
-	if len(state.FailingChecks) > 0 {
+	// Wake on failure only once the checks have settled (nothing still running),
+	// so the agent gets the full red set in one wake instead of one wake per
+	// failing check as they conclude. A red that appears while others are still
+	// in-flight stays 'watching' until the rest settle. (Q1.)
+	if state.AllChecksSettled && len(state.FailingChecks) > 0 {
 		result.Status = pgstore.CIWatchFailed
 		result.FailingChecks = append([]string(nil), state.FailingChecks...)
-		result.Detail = "Required checks failed: " + strings.Join(firstStringsMain(state.FailingChecks, 8), ", ") + "."
+		result.Detail = "CI failed on " + repoPR + ": " + strings.Join(firstStringsMain(state.FailingChecks, 8), ", ") + "."
 		return result
 	}
 	if state.Mergeable != nil && *state.Mergeable && mergeableState == "clean" && checkState == "success" {

@@ -131,8 +131,9 @@ func TestHandleGitHubWebhookWakesOnRed(t *testing.T) {
 	}}
 	app := webhookTestApp(t, fake)
 	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
-		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc",
+		Mergeable: &mergeable, MergeableState: "unstable", HeadSHA: "abc",
 		CheckState: "failure", CIStatus: "failed", FailingChecks: []string{"build"},
+		AllChecksSettled: true,
 	}}
 	rec := postWebhook(t, app, "check_suite", redCheckSuiteBody, signWebhook("topsecret", redCheckSuiteBody))
 	if rec.Code != http.StatusOK {
@@ -142,6 +143,34 @@ func TestHandleGitHubWebhookWakesOnRed(t *testing.T) {
 	// path regardless of enqueue outcome in the test harness.
 	if len(fake.updateObservationCalls) != 1 || fake.updateObservationCalls[0].req.Status != pgstore.CIWatchFailed {
 		t.Fatalf("updateObservation calls = %+v, want one CIWatchFailed", fake.updateObservationCalls)
+	}
+}
+
+func TestHandleGitHubWebhookHoldsFailureUntilChecksSettle(t *testing.T) {
+	// A check has already failed, but another is still running. We must NOT wake
+	// yet: wake once on the full failure set when everything has settled, not
+	// once per red as checks conclude. (Q1.)
+	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+	}}
+	app := webhookTestApp(t, fake)
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		MergeableState: "unstable", HeadSHA: "abc",
+		CheckState: "failure", CIStatus: "failed",
+		FailingChecks: []string{"build: failure"}, PendingChecks: []string{"test"},
+		AllChecksSettled: false,
+	}}
+	rec := postWebhook(t, app, "check_run", greenCheckRunBody, signWebhook("topsecret", greenCheckRunBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fake.updateStatusCalls) != 0 {
+		t.Fatalf("woke before checks settled: %+v", fake.updateStatusCalls)
+	}
+	if len(fake.updateObservationCalls) != 1 || fake.updateObservationCalls[0].req.Status != pgstore.CIWatchWatching {
+		t.Fatalf("unsettled failure should stay watching, got %+v", fake.updateObservationCalls)
 	}
 }
 
