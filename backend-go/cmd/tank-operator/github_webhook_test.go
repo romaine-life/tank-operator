@@ -109,6 +109,7 @@ func postWebhook(t *testing.T, app *appServer, event, body, sig string) *httptes
 }
 
 const redCheckSuiteBody = `{"action":"completed","repository":{"owner":{"login":"romaine-life"},"name":"tank-operator"},"check_suite":{"conclusion":"failure","head_sha":"abc","pull_requests":[{"number":1234}]}}`
+const greenCheckRunBody = `{"action":"completed","repository":{"owner":{"login":"romaine-life"},"name":"tank-operator"},"check_run":{"name":"check-pr-body","conclusion":"success","head_sha":"abc","pull_requests":[{"number":1234}]}}`
 
 func TestHandleGitHubWebhookRejectsBadSignature(t *testing.T) {
 	app := webhookTestApp(t, &fakeCIWatchStore{})
@@ -149,6 +150,43 @@ func TestHandleGitHubWebhookStaleSHAIgnored(t *testing.T) {
 	}
 	if len(fake.updateStatusCalls) != 0 {
 		t.Fatalf("stale-SHA delivery acted: %+v", fake.updateStatusCalls)
+	}
+}
+
+func TestHandleGitHubWebhookSuccessDoesNotReadyPendingWatch(t *testing.T) {
+	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+		MergeableState: "unstable", CheckState: "pending",
+	}}
+	app := webhookTestApp(t, fake)
+	rec := postWebhook(t, app, "check_run", greenCheckRunBody, signWebhook("topsecret", greenCheckRunBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fake.updateStatusCalls) != 0 {
+		t.Fatalf("single successful check marked pending watch ready: %+v", fake.updateStatusCalls)
+	}
+	if len(fake.markMergedCalls) != 0 {
+		t.Fatalf("single successful check merged pending watch: %+v", fake.markMergedCalls)
+	}
+}
+
+func TestHandleGitHubWebhookSuccessCanReadyStoredGreenWatch(t *testing.T) {
+	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+		MergeableState: "clean", CheckState: "success",
+	}}
+	app := webhookTestApp(t, fake)
+	rec := postWebhook(t, app, "check_run", greenCheckRunBody, signWebhook("topsecret", greenCheckRunBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fake.updateStatusCalls) != 1 || fake.updateStatusCalls[0].status != pgstore.CIWatchReady {
+		t.Fatalf("updateStatus calls = %+v, want one CIWatchReady", fake.updateStatusCalls)
 	}
 }
 

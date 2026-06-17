@@ -240,9 +240,25 @@ func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
+	// A successful check_run/check_suite/workflow_run is only proof that one
+	// GitHub object completed, not that the PR's required-check aggregate is
+	// green and mergeable. The authoritative aggregate is captured by
+	// watch_current_session_pr when it registers/refreshes the row. If the row
+	// still says pending/unstable, keep watching so a later red/conflict delivery
+	// can wake the agent instead of being coalesced behind a false "ready".
+	if sig.kind == "green" && !ciWatchStoredGreen(watch) {
+		recordCIWebhook(eventType, "green_not_ready")
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	recordCIWebhook(eventType, "acted")
 	s.applyCIWebhookSignal(ctx, watch, sig)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func ciWatchStoredGreen(watch pgstore.CIWatch) bool {
+	return strings.EqualFold(strings.TrimSpace(watch.CheckState), "success") &&
+		strings.EqualFold(strings.TrimSpace(watch.MergeableState), "clean")
 }
 
 func (s *appServer) applyCIWebhookSignal(ctx context.Context, watch pgstore.CIWatch, sig ciWebhookSignal) {
