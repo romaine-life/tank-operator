@@ -43,6 +43,10 @@ const ignoredRelativePaths = new Set([
   "docs/tank-conversation-protocol.md",
   "backend-go/cmd/tank-operator/server_static_test.go",
   "frontend/src/migrationPolicy.test.ts",
+  // Route tests carry the retired break-glass URLs as negative assertions:
+  // `/sessions/:id/break-glass/:event` must parse as null and
+  // `/settings/admin/break-glass` must fall back to Admin Controls.
+  "frontend/src/appRoutes.test.ts",
   // The observability test asserts /debug/vars returns 404 (the negative
   // confirmation that the route is gone). Excluded so the migration
   // guard doesn't fire on its own enforcement.
@@ -129,11 +133,10 @@ const blocked = [
     pattern: /optionsOverrideIgnoredTotal|tank_runner_options_override_ignored_total/,
   },
   { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
-  // Break-glass approvals are still available through the admin/deep-link
-  // flow, but the composer approval chip was retired on 2026-06-17. Block
-  // the old row-to-chip reducer, menu symbols, settings shortcut, and CSS
-  // hook so persisted break-glass control-action rows cannot reappear as a
-  // composer chip.
+  // Break-glass browser approval UI was retired on 2026-06-17. Backend
+  // control-action rows and MCP grant checks remain, but App Chrome must not
+  // expose a composer chip, admin settings panel, direct approval page, query
+  // param, or CSS surface for that flow.
   { name: "retired composer break-glass pending reducer", pattern: /\bpendingBreakGlassRequests\b/ },
   { name: "retired composer break-glass menu button", pattern: /\bBreakGlassApprovalMenuButton\b/ },
   { name: "retired composer break-glass menu item", pattern: /\bBreakGlassApprovalMenuItem\b/ },
@@ -150,6 +153,31 @@ const blocked = [
     pattern: /type\s+ApprovalMenuKind\s*=[^;\n]*(?:["']github["']|["']azure["'])/,
   },
   { name: "retired composer break-glass prop", pattern: /\bbreakGlass=\{\{/ },
+  { name: "retired break-glass admin panel", pattern: /\bAdminBreakGlassPanel\b/ },
+  { name: "retired break-glass request page", pattern: /\bBreakGlassRequestPage\b/ },
+  { name: "retired break-glass route reader", pattern: /\breadBreakGlassRequestRoute\b/ },
+  { name: "retired break-glass request id state", pattern: /\bbreakGlassRequestId\b/ },
+  { name: "retired break-glass busy state", pattern: /\bbreakGlassApprovalBusyId\b/ },
+  { name: "retired focused break-glass rows", pattern: /\bfocusedBreakGlassRows\b/ },
+  { name: "retired break-glass decision poster", pattern: /\bpostBreakGlassDecision\b/ },
+  { name: "retired break-glass action rows", pattern: /\bbreakGlassActionRows\b/ },
+  { name: "retired break-glass query param", pattern: /\bbreak_glass_request\b/ },
+  {
+    name: "retired break-glass settings route setter",
+    pattern: /setSettingsRoute\(\s*["']admin["']\s*,\s*["']break-glass["']\s*\)/,
+  },
+  {
+    name: "retired break-glass route parser",
+    pattern: /parts\[[^\]]+\]\s*===\s*["']break-glass["']/,
+  },
+  {
+    name: "retired break-glass route type",
+    pattern: /\|\s*["']break-glass["']/,
+  },
+  {
+    name: "retired break-glass CSS surface",
+    pattern: /\.(?:admin-)?break-glass[-\w]*/,
+  },
   // tank-operator#83 — sidebar session-list moved from wake-and-refetch
   // polling onto a durable typed-event ledger + cursor-resumable SSE.
   // Block reintroduction of every name that participated in the prior

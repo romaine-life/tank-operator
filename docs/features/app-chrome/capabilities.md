@@ -84,35 +84,32 @@ Evidence:
 - Frontend tests guard that Glimmung launch uses `test_slot_defaults`, not the
   browser's local default session mode.
 
-## Settings Admin Break Glass
+## Settings Admin Privileged Access
 
-Status: active
+Status: retired
 
 Intent:
-Let Tank admins issue short-lived, audited emergency grants for stuck sessions
-from Settings -> Admin -> Break glass without exposing raw provider tokens in
-the browser.
+Remove browser chrome for break-glass request review and emergency grant
+creation. Tank may keep audited backend request/grant records, but App Chrome
+must not expose a Settings admin break-glass panel, shield shortcut, or
+URL-addressable approval screen.
 
 Affected contracts:
 - App Chrome
-- Auth And Streams
 - Session Lifecycle
 
 Contract impact:
-- The browser route is admin-gated by `/api/auth/me.is_admin` and the backend
-  re-checks admin power before granting.
-- Grants are durable `control_action_events` rows scoped to the target session
-  owner, session id, and session scope.
-- GitHub and Azure grants reuse the same runner notification and MCP activation
-  paths as auth.romaine.life approval cards; the UI does not mint raw GitHub or
-  Azure secrets.
-- Agent-selection grants are limited to test-slot model approval and retain the
-  existing low-cost baseline enforcement.
+- `/settings/admin/break-glass` falls back to the Admin Controls view instead
+  of opening a grant/review panel.
+- `/sessions/{id}/break-glass/{event_id}` is not a session route.
+- The composer approval menu is reserved for non-break-glass queues such as
+  test-slot model and governed PR-lane approvals.
 
 Evidence:
-- Backend tests cover admin-only grant access and target-owner scoping.
-- Frontend route tests pin `/settings/admin/break-glass` as a URL-addressable
-  Settings admin surface.
+- Frontend route tests assert the old session break-glass route is invalid and
+  the old settings route resolves to Admin Controls.
+- `migrationPolicy.test.ts` and `scripts/check-removed-chat-runtime.mjs` block
+  the retired frontend route, page, menu, CSS, and query-param symbols.
 
 ## Shells Menu
 

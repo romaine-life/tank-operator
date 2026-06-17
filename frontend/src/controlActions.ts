@@ -128,23 +128,23 @@ function actionTitle(action: string | undefined): string {
     case "github.commit.ci":
       return "GitHub CI";
     case "github.break_glass.request":
-      return "GitHub break-glass request";
+      return "GitHub privileged access request";
     case "github.break_glass.grant":
-      return "GitHub break-glass grant";
+      return "GitHub privileged access grant";
     case "github.break_glass.deny":
-      return "GitHub break-glass denied";
+      return "GitHub privileged access denied";
     case "github.break_glass.token":
-      return "GitHub break-glass token";
+      return "GitHub privileged access token";
     case "github.break_glass.push":
-      return "GitHub break-glass push";
+      return "GitHub privileged access push";
     case "azure.break_glass.request":
-      return "Azure break-glass request";
+      return "Azure privileged access request";
     case "azure.break_glass.grant":
-      return "Azure break-glass grant";
+      return "Azure privileged access grant";
     case "azure.break_glass.deny":
-      return "Azure break-glass denied";
+      return "Azure privileged access denied";
     case "azure.break_glass.use":
-      return "Azure break-glass use";
+      return "Azure privileged access use";
     case "tank.test_slot_model.request":
       return "Test-slot model request";
     case "tank.test_slot_model.grant":

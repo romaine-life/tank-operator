@@ -66,7 +66,6 @@ import {
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
-import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -157,7 +156,6 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SettingsIcon,
-  ShieldAlertIcon,
   SquareTerminalIcon,
   SquareIcon,
   SquarePenIcon,
@@ -1742,20 +1740,6 @@ interface AdminHiddenSessionsBody {
   sessions?: AdminHiddenSession[];
 }
 
-type AdminBreakGlassFilter = "pending" | "recent" | "all";
-
-interface AdminBreakGlassListItem {
-  pending?: boolean;
-  request: ControlActionRow;
-  decision?: ControlActionRow;
-}
-
-interface AdminBreakGlassListBody {
-  session_scope?: string;
-  status?: AdminBreakGlassFilter;
-  requests?: AdminBreakGlassListItem[];
-}
-
 type ApprovalMenuKind = "model" | "pr-lane";
 
 interface ApprovalMenuItem {
@@ -1960,7 +1944,6 @@ function sessionRouteUrl(
   pageNumber?: number | null,
   filePath?: string | null,
   fileLine?: number | null,
-  breakGlassRequestId?: string | null,
   testSlotModelRequestId?: string | null,
 ): string {
   return buildSessionRouteUrl(
@@ -1972,7 +1955,6 @@ function sessionRouteUrl(
     pageNumber,
     filePath,
     fileLine,
-    breakGlassRequestId,
     testSlotModelRequestId,
   );
 }
@@ -2175,18 +2157,8 @@ function testSlotModelRequestUrl(sessionId: string, requestEventId: string): str
     null,
     null,
     null,
-    null,
     requestEventId,
   );
-}
-
-function readBreakGlassRequestRoute(): string | null {
-  const route = readSessionRouteFromPath();
-  if (route?.tab === "break-glass" && route.breakGlassRequestId) {
-    return route.breakGlassRequestId;
-  }
-  const params = new URLSearchParams(window.location.search);
-  return params.get("break_glass_request");
 }
 
 function readTestSlotModelRequestRoute(): string | null {
@@ -2197,12 +2169,12 @@ function readTestSlotModelRequestRoute(): string | null {
   return null;
 }
 
-type BreakGlassRequestLookupResponse = {
+type ControlActionRequestLookupResponse = {
   request?: ControlActionRow;
   decision?: ControlActionRow;
 };
 
-type TestSlotModelRequestLookupResponse = BreakGlassRequestLookupResponse;
+type TestSlotModelRequestLookupResponse = ControlActionRequestLookupResponse;
 type ApprovalRequestRef = { eventId: string };
 
 function approvalNotificationTurnId(body: unknown): string {
@@ -2837,7 +2809,7 @@ function ApprovalMenuButton({
             ref={popoverRef}
             className="run-pr-menu-popover"
             role="menu"
-            aria-label="Break-glass approvals"
+            aria-label="Approvals"
             style={
               anchor
                 ? { right: anchor.right, bottom: anchor.bottom }
@@ -5387,7 +5359,6 @@ type RunTab =
   | "files"
   | "session-data"
   | "pull-requests"
-  | "break-glass"
   | "test-slot-model"
   | "settings"
   | "help"
@@ -8873,8 +8844,6 @@ function summarizeGitAction(action: string | undefined): string {
       return "committed";
     case "github.commit.ci":
       return "CI";
-    case "github.break_glass.request":
-      return "break-glass";
     default:
       return "touched";
   }
@@ -10093,9 +10062,6 @@ function BackgroundMeta({
   );
 }
 
-type BreakGlassRepoScopeKind = "current_repo" | "repos" | "all_repos";
-type BreakGlassBranchScopeKind = "named" | "count" | "unlimited";
-
 function TestSlotModelApprovalPage({
   sessionId,
   requestId,
@@ -10123,16 +10089,16 @@ function TestSlotModelApprovalPage({
       rows.find(
         (row) =>
           row.action === "tank.test_slot_model.grant" &&
-          nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId,
+          nonemptyAdminValue(controlActionPayload(row).request_event_id) === requestId,
       ),
     [requestId, rows],
   );
   const payload = useMemo(
-    () => (request ? adminBreakGlassPayload(request) : {}),
+    () => (request ? controlActionPayload(request) : {}),
     [request],
   );
   const decisionPayload = useMemo(
-    () => (decision ? adminBreakGlassPayload(decision) : {}),
+    () => (decision ? controlActionPayload(decision) : {}),
     [decision],
   );
   const [note, setNote] = useState("");
@@ -10147,24 +10113,24 @@ function TestSlotModelApprovalPage({
   const lowEffort = nonemptyAdminValue(payload.low_effort) ?? "unknown";
 
   return (
-    <div className="break-glass-page">
-      <section className="break-glass-page-main">
-        <div className="break-glass-page-head">
-          <div className="break-glass-page-title">
+    <div className="approval-page">
+      <section className="approval-page-main">
+        <div className="approval-page-head">
+          <div className="approval-page-title">
             <FlaskConicalIcon aria-hidden="true" />
             <div>
               <h2>Test-slot model approval</h2>
               <p>{requestId ?? "Request"}</p>
             </div>
           </div>
-          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : "pending"}`}>
+          <span className={`approval-status is-${status === "approved" ? "approved" : "pending"}`}>
             {status}
           </span>
         </div>
 
         {request ? (
           <>
-            <dl className="break-glass-facts">
+            <dl className="approval-facts">
               <div>
                 <dt>Session</dt>
                 <dd>{sessionId}</dd>
@@ -10182,7 +10148,7 @@ function TestSlotModelApprovalPage({
                 <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
               </div>
             </dl>
-            <div className="break-glass-scope-grid">
+            <div className="approval-scope-grid">
               <div className="test-slot-model-pair">
                 <span>Requested</span>
                 <strong>{model}</strong>
@@ -10194,10 +10160,10 @@ function TestSlotModelApprovalPage({
                 <small>{lowEffort}</small>
               </div>
             </div>
-            <div className="break-glass-reason">
+            <div className="approval-reason">
               {nonemptyAdminValue(payload.reason) ?? "Non-low-cost model or effort requested"}
             </div>
-            <label className="break-glass-note">
+            <label className="approval-note">
               <span>Decision note</span>
               <textarea
                 value={note}
@@ -10207,7 +10173,7 @@ function TestSlotModelApprovalPage({
               />
             </label>
             {decision && (
-              <div className="admin-break-glass-decision">
+              <div className="approval-decision">
                 <span>
                   Approved by {nonemptyAdminValue(decisionPayload.approved_by) ?? "unknown"}
                   {nonemptyAdminValue(decisionPayload.expires_at)
@@ -10217,7 +10183,7 @@ function TestSlotModelApprovalPage({
                 <span>{formatToolFullTime(decision.created_at)}</span>
               </div>
             )}
-            <div className="break-glass-actions">
+            <div className="approval-actions">
               <button
                 type="button"
                 className="run-settings-test-btn"
@@ -10230,7 +10196,7 @@ function TestSlotModelApprovalPage({
             </div>
           </>
         ) : (
-          <div className="break-glass-empty">Request not found</div>
+          <div className="approval-empty">Request not found</div>
         )}
       </section>
     </div>
@@ -10300,8 +10266,8 @@ function StandaloneTestSlotModelApprovalSurface({
 
   if (loading) {
     return (
-      <div className="break-glass-page">
-        <section className="break-glass-page-main">
+      <div className="approval-page">
+        <section className="approval-page-main">
           <div className="run-shell-loading" role="status">
             <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
             <span>Loading request...</span>
@@ -10331,302 +10297,6 @@ function StandaloneTestSlotModelApprovalSurface({
   );
 }
 
-function BreakGlassRequestPage({
-  sessionId,
-  requestId,
-  rows,
-  busyEventId,
-  onDecision,
-}: {
-  sessionId: string;
-  requestId: string | null;
-  rows: ControlActionRow[];
-  busyEventId: string | null;
-  onDecision: (
-    request: ApprovalRequestRef,
-    decision: "approve" | "deny",
-    body?: Record<string, unknown>,
-  ) => void;
-}) {
-  const request = useMemo(
-    () =>
-      rows.find(
-        (row) =>
-          nonemptyAdminValue(row.event_id) === requestId &&
-          (row.action === "github.break_glass.request" ||
-            row.action === "azure.break_glass.request"),
-      ),
-    [requestId, rows],
-  );
-  const decision = useMemo(
-    () =>
-      rows.find((row) => {
-        if (
-          row.action !== "github.break_glass.grant" &&
-          row.action !== "github.break_glass.deny" &&
-          row.action !== "azure.break_glass.grant" &&
-          row.action !== "azure.break_glass.deny"
-        )
-          return false;
-        return nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId;
-      }),
-    [requestId, rows],
-  );
-  const requestPayload = useMemo(
-    () => (request ? adminBreakGlassPayload(request) : {}),
-    [request],
-  );
-  const repoScope = useMemo(
-    () => adminBreakGlassPayloadObject(requestPayload.repo_scope),
-    [requestPayload],
-  );
-  const branchScope = useMemo(
-    () => adminBreakGlassPayloadObject(requestPayload.branch_scope),
-    [requestPayload],
-  );
-  const defaultRepo = request ? adminBreakGlassTarget(request) : "";
-  const [repoKind, setRepoKind] = useState<BreakGlassRepoScopeKind>("current_repo");
-  const [repoText, setRepoText] = useState(defaultRepo);
-  const [branchKind, setBranchKind] = useState<BreakGlassBranchScopeKind>("unlimited");
-  const [branchText, setBranchText] = useState("");
-  const [branchCount, setBranchCount] = useState("10");
-  const [note, setNote] = useState("");
-
-  useEffect(() => {
-    const nextRepoKind =
-      nonemptyAdminValue(repoScope.kind) === "all_repos"
-        ? "all_repos"
-        : nonemptyAdminValue(repoScope.kind) === "repos"
-          ? "repos"
-          : "current_repo";
-    const repoValues =
-      nextRepoKind === "repos"
-        ? adminBreakGlassStringList(repoScope.repos)
-        : [nonemptyAdminValue(repoScope.repo) ?? defaultRepo].filter(Boolean);
-    const nextBranchKind =
-      nonemptyAdminValue(branchScope.kind) === "named"
-        ? "named"
-        : nonemptyAdminValue(branchScope.kind) === "count"
-          ? "count"
-          : "unlimited";
-    setRepoKind(nextRepoKind);
-    setRepoText(repoValues.join("\n"));
-    setBranchKind(nextBranchKind);
-    setBranchText(adminBreakGlassStringList(branchScope.branches).join("\n"));
-    setBranchCount(
-      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
-        ? String(branchScope.count)
-        : "10",
-    );
-    setNote("");
-  }, [branchScope, defaultRepo, repoScope, requestId]);
-
-  const pending = Boolean(request && !decision && request.status === "started");
-  const busy = Boolean(requestId && busyEventId === requestId);
-  const kind = request?.action === "azure.break_glass.request" ? "azure" : "git";
-  const approvalTitle = request
-    ? `${adminBreakGlassKind(request)} approval`
-    : "Break glass approval";
-  const accessType = request ? adminBreakGlassAccessType(request) : "";
-  const target = request ? adminBreakGlassTarget(request) : requestId ?? "Request";
-  const status = !request ? "loading" : decision ? adminBreakGlassStatusLabel(adminBreakGlassStatus({ request, decision, pending: false })) : pending ? "pending" : "closed";
-  const repoValues = splitBreakGlassScopeValues(repoText);
-  const branchValues = splitBreakGlassScopeValues(branchText);
-  const approveBody = (): Record<string, unknown> => {
-    const body: Record<string, unknown> = { note };
-    if (kind === "git") {
-      body.repo_scope =
-        repoKind === "all_repos"
-          ? { kind: "all_repos" }
-          : repoKind === "repos"
-            ? { kind: "repos", repos: repoValues }
-            : { kind: "current_repo", repo: repoValues[0] ?? defaultRepo };
-      body.branch_scope =
-        branchKind === "unlimited"
-          ? { kind: "unlimited" }
-          : branchKind === "count"
-            ? { kind: "count", count: Math.max(1, Number(branchCount) || 1) }
-            : { kind: "named", branches: branchValues };
-    }
-    return body;
-  };
-  const approveDisabled =
-    !requestId ||
-    !pending ||
-    busy ||
-    (kind === "git" &&
-      ((repoKind !== "all_repos" && repoValues.length === 0) ||
-        (branchKind === "named" && branchValues.length === 0)));
-
-  return (
-    <div className="break-glass-page">
-      <section className="break-glass-page-main">
-        <div className="break-glass-page-head">
-          <div className="break-glass-page-title">
-            <ShieldAlertIcon aria-hidden="true" />
-            <div>
-              <h2>{approvalTitle}</h2>
-              <p className="break-glass-page-subtitle">
-                {accessType && <span>{accessType}</span>}
-                <code>{target}</code>
-              </p>
-            </div>
-          </div>
-          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : status === "denied" ? "denied" : "pending"}`}>
-            {status}
-          </span>
-        </div>
-
-        {request ? (
-          <>
-            <dl className="break-glass-facts">
-              <div>
-                <dt>Type</dt>
-                <dd>{adminBreakGlassKind(request)}</dd>
-              </div>
-              <div>
-                <dt>Target</dt>
-                <dd>{adminBreakGlassTarget(request)}</dd>
-              </div>
-              <div>
-                <dt>Session</dt>
-                <dd>{sessionId}</dd>
-              </div>
-              <div>
-                <dt>Requester</dt>
-                <dd>{nonemptyAdminValue(request.owner_email) ?? "unknown"}</dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>{nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service) ?? "unknown"}</dd>
-              </div>
-              <div>
-                <dt>Created</dt>
-                <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
-              </div>
-            </dl>
-            <div className="break-glass-reason">
-              {adminBreakGlassReason(request)}
-            </div>
-            {kind === "git" && (
-              <div className="break-glass-scope-grid">
-                <label>
-                  <span>Repository scope</span>
-                  <select
-                    value={repoKind}
-                    onChange={(event) => setRepoKind(event.target.value as BreakGlassRepoScopeKind)}
-                    disabled={!pending || busy}
-                  >
-                    <option value="current_repo">Current repository</option>
-                    <option value="repos">Selected repositories</option>
-                    <option value="all_repos">All repositories</option>
-                  </select>
-                </label>
-                {repoKind !== "all_repos" && (
-                  <label>
-                    <span>Repositories</span>
-                    <textarea
-                      value={repoText}
-                      onChange={(event) => setRepoText(event.target.value)}
-                      disabled={!pending || busy}
-                      rows={repoKind === "repos" ? 4 : 2}
-                    />
-                  </label>
-                )}
-                <label>
-                  <span>Branch scope</span>
-                  <select
-                    value={branchKind}
-                    onChange={(event) => setBranchKind(event.target.value as BreakGlassBranchScopeKind)}
-                    disabled={!pending || busy}
-                  >
-                    <option value="unlimited">All branches</option>
-                    <option value="named">Named branches</option>
-                    <option value="count">Branch count</option>
-                  </select>
-                </label>
-                {branchKind === "named" && (
-                  <label>
-                    <span>Branches</span>
-                    <textarea
-                      value={branchText}
-                      onChange={(event) => setBranchText(event.target.value)}
-                      disabled={!pending || busy}
-                      rows={4}
-                    />
-                  </label>
-                )}
-                {branchKind === "count" && (
-                  <label>
-                    <span>Count</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={50}
-                      value={branchCount}
-                      onChange={(event) => setBranchCount(event.target.value)}
-                      disabled={!pending || busy}
-                    />
-                  </label>
-                )}
-              </div>
-            )}
-            <label className="break-glass-note">
-              <span>Decision note</span>
-              <textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                disabled={!pending || busy}
-                rows={3}
-              />
-            </label>
-            {decision && (
-              <div className="admin-break-glass-decision">
-                <span>{adminBreakGlassDecisionSummary(decision)}</span>
-                <span>{formatToolFullTime(decision.created_at)}</span>
-              </div>
-            )}
-            <div className="break-glass-actions">
-              <button
-                type="button"
-                className="run-settings-test-btn"
-                disabled={approveDisabled}
-                onClick={() => requestId && onDecision({ eventId: requestId }, "approve", approveBody())}
-              >
-                <CheckIcon aria-hidden="true" />
-                <span>Approve</span>
-              </button>
-              <button
-                type="button"
-                className="run-settings-test-btn"
-                disabled={!requestId || !pending || busy}
-                onClick={() => requestId && onDecision({ eventId: requestId }, "deny", { note })}
-              >
-                <XIcon aria-hidden="true" />
-                <span>Deny</span>
-              </button>
-            </div>
-          </>
-        ) : (
-          <div className="break-glass-empty">Request not found</div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function splitBreakGlassScopeValues(value: string): string[] {
-  const seen = new Set<string>();
-  return value
-    .split(/[\n,]+/)
-    .map((part) => part.trim())
-    .filter((part) => {
-      if (!part || seen.has(part)) return false;
-      seen.add(part);
-      return true;
-    });
-}
-
 function pendingTestSlotModelApprovalMenuItems(
   sessionId: string,
   rows: ControlActionRow[],
@@ -10635,7 +10305,7 @@ function pendingTestSlotModelApprovalMenuItems(
   for (const row of rows) {
     if (row.action !== "tank.test_slot_model.grant") continue;
     const requestEventId = nonemptyAdminValue(
-      adminBreakGlassPayload(row).request_event_id,
+      controlActionPayload(row).request_event_id,
     );
     if (requestEventId) resolvedRequests.add(requestEventId);
   }
@@ -10650,7 +10320,7 @@ function pendingTestSlotModelApprovalMenuItems(
       ) {
         return [];
       }
-      const payload = adminBreakGlassPayload(row);
+      const payload = controlActionPayload(row);
       const model = nonemptyAdminValue(payload.model) ?? "unknown model";
       const effort = nonemptyAdminValue(payload.effort) ?? "unknown effort";
       return [{
@@ -12896,7 +12566,6 @@ type AutoFollowApprovalTurnCandidate = {
 };
 
 const AUTO_FOLLOW_APPROVAL_SUBMITTED_SOURCES = new Set([
-  "break-glass-approval",
   "test-slot-model-approval",
 ]);
 
@@ -15246,345 +14915,14 @@ export function RunMessages({
   );
 }
 
-function AdminBreakGlassPanel() {
-  const [filter, setFilter] = useState<AdminBreakGlassFilter>("pending");
-  const [items, setItems] = useState<AdminBreakGlassListItem[]>([]);
-  const [sessionScope, setSessionScope] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState("");
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ status: filter, limit: "100" });
-      const res = await authedFetch(`/api/admin/break-glass-requests?${params}`);
-      if (!res.ok) {
-        throw new Error(`break-glass requests returned ${res.status}`);
-      }
-      const body = (await res.json()) as AdminBreakGlassListBody;
-      setItems(Array.isArray(body.requests) ? body.requests : []);
-      setSessionScope(body.session_scope ?? "");
-      setError(null);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [filter]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const decide = useCallback(
-    async (item: AdminBreakGlassListItem, decision: "approve" | "deny") => {
-      const sessionID = nonemptyAdminValue(item.request.session_id);
-      const eventID = nonemptyAdminValue(item.request.event_id);
-      if (!sessionID || !eventID || !item.pending) return;
-      const note =
-        decision === "deny"
-          ? window.prompt("Deny note", "")?.trim()
-          : "";
-      if (decision === "deny" && note === undefined) return;
-      setBusyId(`${decision}:${eventID}`);
-      try {
-        const res = await authedFetch(
-          `/api/sessions/${encodeURIComponent(sessionID)}/break-glass-requests/${encodeURIComponent(eventID)}/${decision}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ note: note ?? "" }),
-          },
-        );
-        if (!res.ok) {
-          throw new Error(`break-glass ${decision} returned ${res.status}`);
-        }
-        await refresh();
-      } catch (err) {
-        setError(errorMessage(err));
-      } finally {
-        setBusyId("");
-      }
-    },
-    [refresh],
-  );
-
-  return (
-    <div className="run-settings-diagnostics admin-break-glass">
-      <div className="run-settings-diagnostics-head">
-        <span className="run-settings-link-label">
-          <ShieldAlertIcon className="run-settings-link-icon" aria-hidden="true" />
-          <span>Break glass</span>
-        </span>
-        <button
-          type="button"
-          className="run-settings-icon-btn"
-          onClick={() => void refresh()}
-          disabled={loading}
-          aria-label="Refresh break-glass requests"
-          title="Refresh"
-        >
-          <RotateCcwIcon
-            aria-hidden="true"
-            className={loading ? "cluster-health-spin" : undefined}
-          />
-        </button>
-      </div>
-      <div className="admin-break-glass-toolbar">
-        {(["pending", "recent", "all"] as AdminBreakGlassFilter[]).map((nextFilter) => (
-          <button
-            key={nextFilter}
-            type="button"
-            className={`admin-break-glass-filter${filter === nextFilter ? " is-active" : ""}`}
-            onClick={() => setFilter(nextFilter)}
-            disabled={loading && filter === nextFilter}
-          >
-            {adminBreakGlassFilterLabel(nextFilter)}
-          </button>
-        ))}
-        {sessionScope && (
-          <span className="admin-break-glass-scope">{sessionScope}</span>
-        )}
-      </div>
-      {error && (
-        <div className="run-settings-observability-note" role="status">
-          {error}
-        </div>
-      )}
-      <div className="admin-break-glass-list">
-        {items.length > 0 ? (
-          items.map((item) => (
-            <AdminBreakGlassRow
-              key={adminBreakGlassItemKey(item)}
-              item={item}
-              busyId={busyId}
-              onDecision={decide}
-            />
-          ))
-        ) : (
-          <div className="admin-break-glass-empty">
-            {loading ? "Loading requests..." : "No break-glass requests"}
-          </div>
-        )}
-      </div>
-    </div>
-  );
+function controlActionPayload(row: ControlActionRow): Record<string, unknown> {
+  return controlActionPayloadObject(row.payload);
 }
 
-function AdminBreakGlassRow({
-  item,
-  busyId,
-  onDecision,
-}: {
-  item: AdminBreakGlassListItem;
-  busyId: string;
-  onDecision: (item: AdminBreakGlassListItem, decision: "approve" | "deny") => void;
-}) {
-  const request = item.request;
-  const decision = item.decision;
-  const sessionID = nonemptyAdminValue(request.session_id);
-  const eventID = nonemptyAdminValue(request.event_id);
-  const pending = item.pending === true;
-  const status = adminBreakGlassStatus(item);
-  const target = adminBreakGlassTarget(request);
-  const scope = adminBreakGlassScope(request);
-  const detail = [
-    nonemptyAdminValue(request.owner_email),
-    sessionID ? `session ${sessionID}` : "",
-    nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service),
-    formatToolFullTime(request.created_at),
-  ].filter(Boolean);
-  const sessionHref = sessionID ? `/sessions/${encodeURIComponent(sessionID)}` : "";
-  const focusedHref =
-    sessionID && eventID
-      ? `/sessions/${encodeURIComponent(sessionID)}/break-glass/${encodeURIComponent(eventID)}`
-      : "";
-
-  return (
-    <article className={`admin-break-glass-row is-${status}`}>
-      <div className="admin-break-glass-row-head">
-        <div className="admin-break-glass-title">
-          <span className="admin-break-glass-kind">
-            {adminBreakGlassKind(request)}
-          </span>
-          <span className="admin-break-glass-target" title={target}>
-            {target}
-          </span>
-        </div>
-        <span className={`admin-break-glass-status is-${status}`}>
-          {adminBreakGlassStatusLabel(status)}
-        </span>
-      </div>
-      <div className="admin-break-glass-reason">
-        {adminBreakGlassReason(request)}
-      </div>
-      <div className="admin-break-glass-meta">
-        {detail.map((part) => (
-          <span key={part}>{part}</span>
-        ))}
-      </div>
-      {scope && <div className="admin-break-glass-scope-line">{scope}</div>}
-      {decision && (
-        <div className="admin-break-glass-decision">
-          <span>{adminBreakGlassDecisionSummary(decision)}</span>
-          <span>{formatToolFullTime(decision.created_at)}</span>
-        </div>
-      )}
-      <div className="admin-break-glass-actions">
-        {sessionHref && (
-          <a className="run-settings-test-btn" href={sessionHref}>
-            Open session
-          </a>
-        )}
-        {focusedHref && (
-          <a className="run-settings-test-btn" href={focusedHref}>
-            Focus request
-          </a>
-        )}
-        <button
-          type="button"
-          className="run-settings-test-btn"
-          disabled={!pending || busyId === `approve:${eventID}`}
-          onClick={() => onDecision(item, "approve")}
-        >
-          <CheckIcon aria-hidden="true" />
-          <span>Approve</span>
-        </button>
-        <button
-          type="button"
-          className="run-settings-test-btn"
-          disabled={!pending || busyId === `deny:${eventID}`}
-          onClick={() => onDecision(item, "deny")}
-        >
-          <XIcon aria-hidden="true" />
-          <span>Deny</span>
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function adminBreakGlassFilterLabel(filter: AdminBreakGlassFilter): string {
-  switch (filter) {
-    case "pending":
-      return "Pending";
-    case "recent":
-      return "Recent";
-    case "all":
-      return "All";
-  }
-}
-
-function adminBreakGlassItemKey(item: AdminBreakGlassListItem): string {
-  return [
-    nonemptyAdminValue(item.request.session_id),
-    nonemptyAdminValue(item.request.event_id),
-    nonemptyAdminValue(item.decision?.event_id),
-  ].filter(Boolean).join(":");
-}
-
-function adminBreakGlassStatus(
-  item: AdminBreakGlassListItem,
-): "pending" | "approved" | "denied" {
-  if (item.pending) return "pending";
-  const action = nonemptyAdminValue(item.decision?.action);
-  return action?.endsWith(".deny") ? "denied" : "approved";
-}
-
-function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): string {
-  switch (status) {
-    case "pending":
-      return "pending";
-    case "approved":
-      return "approved";
-    case "denied":
-      return "denied";
-  }
-}
-
-function adminBreakGlassKind(row: ControlActionRow): string {
-  if (row.action === "azure.break_glass.request") return "Azure break glass";
-  return adminBreakGlassIncludesWorkflows(row)
-    ? "GitHub workflows break glass"
-    : "GitHub break glass";
-}
-
-function adminBreakGlassAccessType(row: ControlActionRow): string {
-  if (row.action === "azure.break_glass.request") return "Azure personal MCP access";
-  return adminBreakGlassIncludesWorkflows(row)
-    ? "GitHub workflow-file write access"
-    : "GitHub write access";
-}
-
-function adminBreakGlassTarget(row: ControlActionRow): string {
-  if (row.action === "azure.break_glass.request") return "azure-personal";
-  const repo = [nonemptyAdminValue(row.repo_owner), nonemptyAdminValue(row.repo_name)]
-    .filter(Boolean)
-    .join("/");
-  return repo || nonemptyAdminValue(row.target_ref) || "GitHub";
-}
-
-function adminBreakGlassReason(row: ControlActionRow): string {
-  return nonemptyAdminValue(adminBreakGlassPayload(row).reason) || "No reason provided";
-}
-
-function adminBreakGlassScope(row: ControlActionRow): string {
-  const payload = adminBreakGlassPayload(row);
-  const repoScope = adminBreakGlassPayloadObject(payload.repo_scope);
-  const branchScope = adminBreakGlassPayloadObject(payload.branch_scope);
-  const repos = adminBreakGlassStringList(repoScope.repos);
-  const branches = adminBreakGlassStringList(branchScope.branches);
-  const parts = [
-    adminScopeLabel("repos", nonemptyAdminValue(repoScope.kind), repos),
-    adminScopeLabel("branches", nonemptyAdminValue(branchScope.kind), branches),
-    adminBreakGlassIncludesWorkflows(row) ? "workflows: write" : "",
-  ].filter(Boolean);
-  return parts.join(" / ");
-}
-
-function adminBreakGlassIncludesWorkflows(row: ControlActionRow): boolean {
-  const payload = adminBreakGlassPayload(row);
-  const operations = adminBreakGlassStringList(payload.operations);
-  return payload.workflows === true || operations.includes("workflows");
-}
-
-function adminScopeLabel(
-  label: string,
-  kind: string | undefined,
-  values: string[],
-): string {
-  if (kind === "all_repos") return "all repos";
-  if (kind === "unlimited") return "all branches";
-  if (kind === "count") return `${label}: count`;
-  if (values.length > 0) return `${label}: ${values.join(", ")}`;
-  return "";
-}
-
-function adminBreakGlassDecisionSummary(row: ControlActionRow): string {
-  const payload = adminBreakGlassPayload(row);
-  const actor = nonemptyAdminValue(payload.approved_by) ?? nonemptyAdminValue(payload.denied_by);
-  const label = row.action?.endsWith(".deny") ? "Denied" : "Approved";
-  return actor ? `${label} by ${actor}` : label;
-}
-
-function adminBreakGlassPayload(row: ControlActionRow): Record<string, unknown> {
-  return adminBreakGlassPayloadObject(row.payload);
-}
-
-function adminBreakGlassPayloadObject(value: unknown): Record<string, unknown> {
+function controlActionPayloadObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function adminBreakGlassStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.flatMap((item) => {
-        const text = nonemptyAdminValue(item);
-        return text ? [text] : [];
-      })
-    : [];
 }
 
 function nonemptyAdminValue(value: unknown): string | undefined {
@@ -16308,7 +15646,6 @@ function RunSettingsPanel({
     settingsTab === "admin" &&
     showAdminTab &&
     (adminView === "avatars" ||
-      adminView === "break-glass" ||
       adminView === "report" ||
       adminView === "hidden-transcripts" ||
       adminView === "observability")
@@ -16378,31 +15715,6 @@ function RunSettingsPanel({
                 onCatalogChanged={adminControls.onAvatarCatalogChanged}
               />
             </DesktopOnly>
-          </>
-        ) : adminView === "break-glass" ? (
-          <>
-            <section className="run-settings-section">
-              <div className="run-settings-admin-heading">
-                <button
-                  type="button"
-                  className="run-settings-back-btn"
-                  onClick={() => setSettingsRoute("admin", "controls")}
-                >
-                  <ArrowLeftIcon aria-hidden="true" />
-                  <span>Admin</span>
-                </button>
-                <h2 className="run-settings-title">Break glass</h2>
-              </div>
-            </section>
-            <section className="run-settings-section">
-              <AdminBreakGlassPanel />
-            </section>
-            <section className="run-settings-section">
-              <AdminBreakGlassGrantPanel
-                initialSessionId={session?.id}
-                sessionScope={adminControls.reportScope}
-              />
-            </section>
           </>
         ) : adminView === "report" ? (
           <>
@@ -16538,20 +15850,6 @@ function RunSettingsPanel({
               <button
                 type="button"
                 className="run-settings-link"
-                onClick={() => setSettingsRoute("admin", "break-glass")}
-              >
-                <span className="run-settings-link-label">
-                  <ShieldAlertIcon
-                    className="run-settings-link-icon"
-                    aria-hidden="true"
-                  />
-                  <span>Break glass</span>
-                </span>
-                <span className="run-settings-scope-value">Grant</span>
-              </button>
-              <button
-                type="button"
-                className="run-settings-link"
                 onClick={() => setSettingsRoute("admin", "report")}
               >
                 <span className="run-settings-link-label">
@@ -16562,20 +15860,6 @@ function RunSettingsPanel({
                   <span>Session repo report</span>
                 </span>
                 <span className="run-settings-scope-value">Draft</span>
-              </button>
-              <button
-                type="button"
-                className="run-settings-link"
-                onClick={() => setSettingsRoute("admin", "break-glass")}
-              >
-                <span className="run-settings-link-label">
-                  <ShieldAlertIcon
-                    className="run-settings-link-icon"
-                    aria-hidden="true"
-                  />
-                  <span>Break glass</span>
-                </span>
-                <span className="run-settings-scope-value">Review</span>
               </button>
               <button
                 type="button"
@@ -17147,24 +16431,15 @@ function ChatPane({
   const [controlActionRows, setControlActionRows] = useState<
     ControlActionRow[]
   >([]);
-  const [focusedBreakGlassRows, setFocusedBreakGlassRows] = useState<
-    ControlActionRow[]
-  >([]);
   const [focusedTestSlotModelRows, setFocusedTestSlotModelRows] = useState<
     ControlActionRow[]
   >([]);
   const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
     string | null
   >(null);
-  const [breakGlassApprovalBusyId, setBreakGlassApprovalBusyId] = useState<
-    string | null
-  >(null);
   const [testSlotModelApprovalBusyId, setTestSlotModelApprovalBusyId] = useState<
     string | null
   >(null);
-  const [activeBreakGlassRequestId, setActiveBreakGlassRequestId] = useState<
-    string | null
-  >(() => readBreakGlassRequestRoute());
   const [activeTestSlotModelRequestId, setActiveTestSlotModelRequestId] =
     useState<string | null>(() => readTestSlotModelRequestRoute());
   // Background (run_in_background) shell tasks come from the durable session-level
@@ -17278,14 +16553,12 @@ function ChatPane({
     if (publicView) {
       setControlActionEntries([]);
       setControlActionRows([]);
-      setFocusedBreakGlassRows([]);
       setFocusedTestSlotModelRows([]);
       return;
     }
     if (readOnly) {
       setControlActionEntries([]);
       setControlActionRows([]);
-      setFocusedBreakGlassRows([]);
       setFocusedTestSlotModelRows([]);
       return;
     }
@@ -17302,32 +16575,6 @@ function ChatPane({
     );
   }, [
     fetchPaneResource,
-    publicView,
-    readOnly,
-    scopedSessionPathForPane,
-    session.id,
-  ]);
-  const fetchFocusedBreakGlassRequest = useCallback(async () => {
-    if (publicView || readOnly || !activeBreakGlassRequestId) {
-      setFocusedBreakGlassRows([]);
-      return;
-    }
-    const res = await authedFetch(
-      scopedSessionPathForPane(
-        `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(activeBreakGlassRequestId)}`,
-      ),
-    );
-    if (!res.ok) {
-      setFocusedBreakGlassRows([]);
-      return;
-    }
-    const body = (await res.json()) as BreakGlassRequestLookupResponse;
-    const rows = [body.request, body.decision].filter(
-      (row): row is ControlActionRow => Boolean(row?.event_id),
-    );
-    setFocusedBreakGlassRows(rows);
-  }, [
-    activeBreakGlassRequestId,
     publicView,
     readOnly,
     scopedSessionPathForPane,
@@ -17359,10 +16606,6 @@ function ChatPane({
     scopedSessionPathForPane,
     session.id,
   ]);
-  const breakGlassActionRows = useMemo(
-    () => [...controlActionRows, ...focusedBreakGlassRows],
-    [controlActionRows, focusedBreakGlassRows],
-  );
   const testSlotModelActionRows = useMemo(
     () => [...controlActionRows, ...focusedTestSlotModelRows],
     [controlActionRows, focusedTestSlotModelRows],
@@ -17426,45 +16669,6 @@ function ChatPane({
     },
     [
       fetchControlActionEntries,
-      publicView,
-      readOnly,
-      scopedSessionPathForPane,
-      session.id,
-    ],
-  );
-  const postBreakGlassDecision = useCallback(
-    async (
-      request: ApprovalRequestRef,
-      decision: "approve" | "deny",
-      body: Record<string, unknown> = {},
-    ) => {
-      if (publicView || readOnly) return;
-      setBreakGlassApprovalBusyId(request.eventId);
-      try {
-        const res = await authedFetch(
-          scopedSessionPathForPane(
-            `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(request.eventId)}/${decision}`,
-          ),
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          },
-        );
-        const responseBody = await res.json().catch(() => null);
-        if (decision === "approve") {
-          const turnId = approvalNotificationTurnId(responseBody);
-          if (turnId) setPendingApprovalTurnOpenId(turnId);
-        }
-        await fetchControlActionEntries();
-        await fetchFocusedBreakGlassRequest();
-      } finally {
-        setBreakGlassApprovalBusyId(null);
-      }
-    },
-    [
-      fetchControlActionEntries,
-      fetchFocusedBreakGlassRequest,
       publicView,
       readOnly,
       scopedSessionPathForPane,
@@ -19027,15 +18231,6 @@ function ChatPane({
     }
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
-    const routedBreakGlassRequestId = readBreakGlassRequestRoute();
-    if (routedBreakGlassRequestId) {
-      setActiveBreakGlassRequestId(routedBreakGlassRequestId);
-      setActiveTab("break-glass");
-      setPendingRouteTurnNumber(null);
-      setPendingTurnViewRouteAnchor(null);
-      setSelectedTurnNumberAnchor(null);
-      return;
-    }
     const routedTestSlotModelRequestId = readTestSlotModelRequestRoute();
     if (routedTestSlotModelRequestId) {
       setActiveTestSlotModelRequestId(routedTestSlotModelRequestId);
@@ -19081,14 +18276,6 @@ function ChatPane({
     }
     if (route.tab === "pull-requests") {
       setActiveTab("pull-requests");
-      setPendingRouteTurnNumber(null);
-      setPendingTurnViewRouteAnchor(null);
-      setSelectedTurnNumberAnchor(null);
-      return;
-    }
-    if (route.tab === "break-glass") {
-      setActiveBreakGlassRequestId(route.breakGlassRequestId);
-      setActiveTab("break-glass");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -21545,7 +20732,6 @@ function ChatPane({
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
       setControlActionRows([]);
-      setFocusedBreakGlassRows([]);
       setFocusedTestSlotModelRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
@@ -21557,9 +20743,6 @@ function ChatPane({
           setControlActionEntries([]);
           setControlActionRows([]);
         }
-      });
-      void fetchFocusedBreakGlassRequest().catch(() => {
-        if (!cancelled) setFocusedBreakGlassRows([]);
       });
       void fetchFocusedTestSlotModelRequest().catch(() => {
         if (!cancelled) setFocusedTestSlotModelRows([]);
@@ -21577,7 +20760,6 @@ function ChatPane({
   }, [
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
-    fetchFocusedBreakGlassRequest,
     fetchFocusedTestSlotModelRequest,
     publicView,
     readOnly,
@@ -21984,26 +21166,11 @@ function ChatPane({
       replaceSessionRoute(session.id, "session-data");
     } else if (activeTab === "pull-requests") {
       replaceSessionRoute(session.id, "pull-requests");
-    } else if (activeTab === "break-glass") {
-      const next = activeBreakGlassRequestId
-        ? sessionRouteUrl(
-            session.id,
-            "break-glass",
-            null,
-            null,
-            null,
-            null,
-            null,
-            activeBreakGlassRequestId,
-          )
-        : sessionRouteUrl(session.id);
-      if (next !== window.location.href) window.history.replaceState({}, "", next);
     } else if (activeTab === "test-slot-model") {
       const next = activeTestSlotModelRequestId
         ? sessionRouteUrl(
             session.id,
             "test-slot-model",
-            null,
             null,
             null,
             null,
@@ -22032,7 +21199,6 @@ function ChatPane({
   }, [
     activeTab,
     adminView,
-    activeBreakGlassRequestId,
     activeTestSlotModelRequestId,
     effectivePendingScrollMessageId,
     publicView,
@@ -22184,7 +21350,6 @@ function ChatPane({
       return;
     if (
       activeTab !== "turns" &&
-      activeTab !== "break-glass" &&
       activeTab !== "test-slot-model"
     )
       return;
@@ -23598,16 +22763,6 @@ function ChatPane({
                 pullRequests={agentGitActivity.pullRequests}
                 commits={agentGitActivity.commits}
               />
-            ) : activeTab === "break-glass" ? (
-              <BreakGlassRequestPage
-                sessionId={session.id}
-                requestId={activeBreakGlassRequestId}
-                rows={breakGlassActionRows}
-                busyEventId={breakGlassApprovalBusyId}
-                onDecision={(request, decision, body) => {
-                  void postBreakGlassDecision(request, decision, body);
-                }}
-              />
             ) : activeTab === "test-slot-model" ? (
               <TestSlotModelApprovalPage
                 sessionId={session.id}
@@ -24164,9 +23319,7 @@ function ChatPane({
                 approvals={{
                   items: approvalMenuItems,
                   approvingId:
-                    breakGlassApprovalBusyId ??
-                    testSlotModelApprovalBusyId ??
-                    prLaneApprovalBusyId,
+                    testSlotModelApprovalBusyId ?? prLaneApprovalBusyId,
                   onQuickApprove:
                     publicView || readOnly ? undefined : quickApproveApprovalMenuItem,
                   onApprovePRLane:

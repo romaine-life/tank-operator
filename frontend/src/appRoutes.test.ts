@@ -21,7 +21,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -37,7 +36,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -52,7 +50,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -68,7 +65,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -87,7 +83,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -105,7 +100,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -121,26 +115,11 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
-  expect(readSessionRouteFromPathname("/sessions/s-1/break-glass/request%201")).toEqual({
-    sessionId: "s-1",
-    tab: "break-glass",
-    turnNumber: null,
-    turnSegmentPresent: false,
-    pageNumber: null,
-    pageSegmentPresent: false,
-    staticPath: null,
-    filePath: null,
-    fileLine: null,
-    breakGlassRequestId: "request 1",
-    testSlotModelRequestId: null,
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
+  expect(readSessionRouteFromPathname("/sessions/s-1/break-glass/request%201")).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/test-slot-model/request%201")).toEqual({
     sessionId: "s-1",
     tab: "test-slot-model",
@@ -151,7 +130,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: "request 1",
     settingsTab: "preferences",
     adminView: "controls",
@@ -168,7 +146,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -183,7 +160,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -198,7 +174,6 @@ test("session routes parse only session-scoped pages", () => {
     staticPath: null,
     filePath: "src/App.tsx",
     fileLine: 42,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -220,7 +195,6 @@ test("session routes parse the sandboxed static-page subroute", () => {
     staticPath: "diagram.html",
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -263,8 +237,7 @@ test("session route urls broadcast only session-owned pages", () => {
   expect(buildSessionRouteUrl(current, "s 1", "turns")).toBe("https://tank.example.test/sessions/s%201");
   expect(buildSessionRouteUrl(current, "s 1", "session-data")).toBe("https://tank.example.test/sessions/s%201/session-data");
   expect(buildSessionRouteUrl(current, "s 1", "pull-requests")).toBe("https://tank.example.test/sessions/s%201/pull-requests");
-  expect(buildSessionRouteUrl(current, "s 1", "break-glass", null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/break-glass/request%201");
-  expect(buildSessionRouteUrl(current, "s 1", "test-slot-model", null, null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/test-slot-model/request%201");
+  expect(buildSessionRouteUrl(current, "s 1", "test-slot-model", null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/test-slot-model/request%201");
   expect(buildSessionRouteUrl(current, "s 1", "files")).toBe("https://tank.example.test/sessions/s%201/files");
   expect(buildSessionRouteUrl(current, "s 1", "background")).toBe("https://tank.example.test/sessions/s%201/background");
 });
@@ -280,7 +253,6 @@ test("turn routes carry an optional page ordinal", () => {
     staticPath: null,
     filePath: null,
     fileLine: null,
-    breakGlassRequestId: null,
     testSlotModelRequestId: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -336,7 +308,7 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
   expect(readAppRouteFromPathname("/settings/admin/break-glass")).toEqual({
         tab: "settings",
         settingsTab: "admin",
-        adminView: "break-glass",
+        adminView: "controls",
       });
   expect(readAppRouteFromPathname("/settings/admin/hidden-transcripts")).toEqual({
         tab: "settings",
@@ -354,7 +326,6 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
         adminView: "controls",
       });
   expect(buildAppRouteUrl(current, "settings", "admin", "observability")).toBe("https://tank.example.test/settings/admin/observability");
-  expect(buildAppRouteUrl(current, "settings", "admin", "break-glass")).toBe("https://tank.example.test/settings/admin/break-glass");
   expect(buildAppRouteUrl(current, "settings", "admin", "version")).toBe("https://tank.example.test/settings/admin/version");
   expect(buildAppRouteUrl(current, "settings", "admin", "hidden-transcripts")).toBe("https://tank.example.test/settings/admin/hidden-transcripts");
   expect(buildAppRouteUrl(current, "help")).toBe("https://tank.example.test/help");

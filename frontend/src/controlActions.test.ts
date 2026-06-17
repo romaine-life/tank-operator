@@ -148,7 +148,7 @@ describe("controlActionRowsToEntries", () => {
     expect(entries[0]?.taskStatus).toBe("completed");
   });
 
-  test("labels azure break-glass events", () => {
+  test("labels azure privileged-access events", () => {
     const entries = controlActionRowsToEntries([
       {
         event_id: "azure-req-1",
@@ -168,8 +168,8 @@ describe("controlActionRowsToEntries", () => {
       },
     ]);
 
-    expect(entries[0]?.taskSummary).toBe("Azure break-glass request");
-    expect(entries[1]?.taskSummary).toBe("Azure break-glass grant");
+    expect(entries[0]?.taskSummary).toBe("Azure privileged access request");
+    expect(entries[1]?.taskSummary).toBe("Azure privileged access grant");
   });
 
   test("labels test-slot model approval events", () => {

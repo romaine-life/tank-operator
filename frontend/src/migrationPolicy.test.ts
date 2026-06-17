@@ -16,6 +16,7 @@ function cssRule(source: string, selector: string): string {
 
 const appSource = readSource("./App.tsx");
 const appRoutesSource = readSource("./appRoutes.ts");
+const controlActionsSource = readSource("./controlActions.ts");
 const authSource = readSource("./auth.ts");
 const conversationReducerSource = readSource("./conversationReducer.ts");
 const conversationProjectionSource = readSource("./conversationProjection.ts");
@@ -1031,7 +1032,7 @@ test("home splash test action stays disabled on the splash page", () => {
         )).toBe(false);
 });
 
-test("composer approval action excludes break-glass request chips", () => {
+test("composer approval action excludes retired break-glass UI", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
   // The PR control is a self-contained popup menu, not a single hard-coded link.
   expect(appSource).toMatch(/function PullRequestMenuButton\(/);
@@ -1048,12 +1049,21 @@ test("composer approval action excludes break-glass request chips", () => {
   // The retired single-URL link shape must not come back.
   expect(appSource.includes("aria-label=\"Pull request link unavailable\"")).toBe(false);
   expect(appSource.includes("aria-label=\"Open pull request in new tab\"")).toBe(false);
-  // Break-glass approval stays a Tank-owned deep link and Tank-owned decision
-  // endpoint for explicit admin flows, but it must not feed the composer chip.
-  expect(appSource).toMatch(/"break-glass"/);
-  expect(appSource).toMatch(/<BreakGlassRequestPage/);
   expect(appSource).toMatch(/Quick approve/);
   expect(appSource.includes('appRouteUrl("settings", "admin", "break-glass")')).toBe(false);
+  expect(appSource.includes('setSettingsRoute("admin", "break-glass")')).toBe(false);
+  expect(appSource.includes('<BreakGlassRequestPage')).toBe(false);
+  expect(appSource.includes('function BreakGlassRequestPage')).toBe(false);
+  expect(appSource.includes("readBreakGlassRequestRoute")).toBe(false);
+  expect(appSource.includes("break_glass_request")).toBe(false);
+  expect(appSource.includes("/break-glass-requests/")).toBe(false);
+  expect(appSource.includes("/api/admin/break-glass-requests")).toBe(false);
+  expect(appSource.includes("break-glass-page")).toBe(false);
+  expect(indexCssSource.includes(".break-glass")).toBe(false);
+  expect(indexCssSource.includes(".admin-break-glass")).toBe(false);
+  expect(appRoutesSource.includes('| "break-glass"')).toBe(false);
+  expect(appRoutesSource.includes('case "break-glass"')).toBe(false);
+  expect(appRoutesSource.includes('parts[2] === "break-glass"')).toBe(false);
   expect(appSource).toMatch(/quickApproveApprovalMenuItem/);
   expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
@@ -1065,11 +1075,14 @@ test("composer approval action excludes break-glass request chips", () => {
   expect(appSource).toMatch(/prLaneApprovalMenuItems\(sessionId, prLaneRequests\)/);
   expect(appSource).toMatch(/onApprovePRLane/);
   expect(indexCssSource.includes(".pr-lane-approval")).toBe(false);
-  expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
   expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
   expect(appSource.includes("pendingBreakGlassRequests")).toBe(false);
-  expect(appSource.includes("GitHub break glass")).toBe(true);
-  expect(appSource.includes("Azure break glass")).toBe(true);
+  expect(appSource.includes("GitHub break glass")).toBe(false);
+  expect(appSource.includes("Azure break glass")).toBe(false);
+  expect(controlActionsSource.includes("GitHub break-glass")).toBe(false);
+  expect(controlActionsSource.includes("Azure break-glass")).toBe(false);
+  expect(controlActionsSource.includes("GitHub privileged access request")).toBe(true);
+  expect(controlActionsSource.includes("Azure privileged access request")).toBe(true);
   expect(appSource).toMatch(/function approvalMenuItemsForSession\(/);
   expect(appSource.includes("request.approvalUrl")).toBe(false);
   expect(appSource.includes("auth.romaine.life/admin")).toBe(false);
