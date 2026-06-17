@@ -62,7 +62,17 @@ func (s *fakeCIWatchStore) UpdateStatus(_ context.Context, watchID string, statu
 
 func (s *fakeCIWatchStore) UpdateObservation(_ context.Context, req pgstore.UpdateCIWatchObservationRequest) (pgstore.CIWatch, error) {
 	s.updateObservationCalls = append(s.updateObservationCalls, ciWatchObservationCall{req: req})
-	w := s.getByPRResult
+	current := s.getByPRResult
+	// Emulate the store's conditional write: only a row still in 'watching' (on
+	// the head the observation was based on) can be updated.
+	if current.Status != "" && current.Status != pgstore.CIWatchWatching {
+		return pgstore.CIWatch{}, pgstore.ErrCIWatchObservationStale
+	}
+	if req.ExpectedHeadSHA != "" && strings.TrimSpace(current.HeadSHA) != "" &&
+		strings.TrimSpace(current.HeadSHA) != strings.TrimSpace(req.ExpectedHeadSHA) {
+		return pgstore.CIWatch{}, pgstore.ErrCIWatchObservationStale
+	}
+	w := current
 	w.WatchID = req.WatchID
 	if w.WatchID == "" {
 		w.WatchID = "ciwatch_test"
@@ -283,6 +293,43 @@ func TestHandleInternalRegisterPRReadinessResolvesBranchInBackend(t *testing.T) 
 	}
 	if body["state"] != "ready" || body["pr_number"] != float64(1234) {
 		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestApplyResolvedCIWatchStateSkipsSideEffectsOnLostRace(t *testing.T) {
+	// We read a 'watching' row and computed a terminal result, but a concurrent
+	// reconcile already moved the row out of 'watching'. The conditional write
+	// matches no row, so we must not fire side effects (no second wake / no
+	// re-ready) and must not surface an error.
+	mergeable := true
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchFailed,
+	}}
+	app := ciWatchTestServer(t, store)
+
+	read := pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+	}
+	state := mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc",
+		CheckState: "success", CIStatus: "succeeded",
+	}
+	result, err := app.applyResolvedCIWatchState(context.Background(), read, state, ciWatchReconcileWebhook, 0)
+	if err != nil {
+		t.Fatalf("lost-race observation should not error, got %v", err)
+	}
+	if result.Status != pgstore.CIWatchReady {
+		t.Fatalf("classify result = %q, want ready", result.Status)
+	}
+	if len(store.updateStatusCalls) != 0 {
+		t.Fatalf("side effects fired on a lost race: updateStatus=%+v", store.updateStatusCalls)
+	}
+	if store.getByPRResult.Status != pgstore.CIWatchFailed {
+		t.Fatalf("losing observation clobbered the row to %q, want it left failed", store.getByPRResult.Status)
 	}
 }
 

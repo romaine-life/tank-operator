@@ -86,14 +86,25 @@ type RegisterCIWatchRequest struct {
 // the backend reducer. It refreshes the durable watch without changing watch
 // identity, so every event source re-enters the same state machine.
 type UpdateCIWatchObservationRequest struct {
-	WatchID        string
-	Status         CIWatchStatus
-	HeadSHA        string
-	MergeableState string
-	CheckState     string
-	Detail         string
-	PRURL          string
+	WatchID string
+	// ExpectedHeadSHA is the head_sha the reducer read this observation against.
+	// The write is gated on it (plus status='watching'), so a stale or losing
+	// concurrent reconcile cannot clobber a watch that was already terminalized
+	// or re-headed by a re-publish. Empty skips the head gate.
+	ExpectedHeadSHA string
+	Status          CIWatchStatus
+	HeadSHA         string
+	MergeableState  string
+	CheckState      string
+	Detail          string
+	PRURL           string
 }
+
+// ErrCIWatchObservationStale signals that UpdateObservation matched no row: the
+// watch had already moved out of the 'watching' state the reducer read (a
+// concurrent winning transition) or was re-headed by a re-publish. Callers must
+// treat it as "another writer owns this transition" and not re-fire side effects.
+var ErrCIWatchObservationStale = errors.New("pgstore: ci watch observation did not match its watching row")
 
 type CIWatchStore struct {
 	pool  *pgxpool.Pool
@@ -204,6 +215,11 @@ func (s *CIWatchStore) UpdateObservation(ctx context.Context, req UpdateCIWatchO
 	if status == "" {
 		status = CIWatchWatching
 	}
+	// Single atomic conditional UPDATE: it only applies while the row is still in
+	// the 'watching' state (and on the head) the reducer read. The first
+	// transition out of 'watching' wins; a stale or losing concurrent reconcile
+	// matches no row and cannot clobber a terminalized or re-headed watch.
+	// expected_head_sha ($8) is enforced only when supplied.
 	const q = `
 		UPDATE session_ci_watches
 		SET status = $2,
@@ -215,8 +231,10 @@ func (s *CIWatchStore) UpdateObservation(ctx context.Context, req UpdateCIWatchO
 			last_event_at = now(),
 			updated_at = now()
 		WHERE watch_id = $1
+			AND status = 'watching'
+			AND ($8 = '' OR head_sha = $8)
 		RETURNING ` + ciWatchColumns
-	return scanCIWatch(s.pool.QueryRow(ctx, q,
+	w, err := scanCIWatch(s.pool.QueryRow(ctx, q,
 		strings.TrimSpace(req.WatchID),
 		string(status),
 		strings.TrimSpace(req.HeadSHA),
@@ -224,7 +242,12 @@ func (s *CIWatchStore) UpdateObservation(ctx context.Context, req UpdateCIWatchO
 		strings.TrimSpace(req.CheckState),
 		strings.TrimSpace(req.Detail),
 		strings.TrimSpace(req.PRURL),
+		strings.TrimSpace(req.ExpectedHeadSHA),
 	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CIWatch{}, ErrCIWatchObservationStale
+	}
+	return w, err
 }
 
 // Get returns a single watch by id.

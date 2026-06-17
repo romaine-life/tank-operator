@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -67,14 +68,22 @@ func (s *appServer) applyResolvedCIWatchState(ctx context.Context, watch pgstore
 	}
 	result := classifyCIWatchState(watch, state)
 	updated, err := s.ciWatches.UpdateObservation(ctx, pgstore.UpdateCIWatchObservationRequest{
-		WatchID:        watch.WatchID,
-		Status:         result.Status,
-		HeadSHA:        result.HeadSHA,
-		MergeableState: result.MergeableState,
-		CheckState:     result.CheckState,
-		Detail:         result.Detail,
-		PRURL:          result.PRURL,
+		WatchID:         watch.WatchID,
+		ExpectedHeadSHA: watch.HeadSHA,
+		Status:          result.Status,
+		HeadSHA:         result.HeadSHA,
+		MergeableState:  result.MergeableState,
+		CheckState:      result.CheckState,
+		Detail:          result.Detail,
+		PRURL:           result.PRURL,
 	})
+	if errors.Is(err, pgstore.ErrCIWatchObservationStale) {
+		// A concurrent reconcile already moved this watch out of the 'watching'
+		// state we read (or a re-publish re-headed it). That winner owns the
+		// side effects; re-firing them would double-wake or resurrect a terminal
+		// row, so we stop here without surfacing an error.
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
