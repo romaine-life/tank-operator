@@ -12367,6 +12367,17 @@ type TurnActivityLoadStateByTurn = Record<
   TurnActivityLoadState | undefined
 >;
 
+function turnActivityLoadStatusMetricCode(
+  status: TurnActivityLoadState["status"] | undefined,
+): number {
+  if (status == null) return 0;
+  if (status === "unloaded") return 1;
+  if (status === "loading") return 2;
+  if (status === "loaded") return 3;
+  if (status === "error") return 4;
+  return -1;
+}
+
 type ActivityRefreshProblem = TurnActivityLoadProblem;
 
 type TurnActivityLoadResult = {
@@ -13684,6 +13695,8 @@ function RunTurnActivityScreen({
   originSessionAvatarByID,
   sessionId,
   sessionMode,
+  activityLoadingTelemetrySource,
+  activityLoadingPreviousSessionId,
   showThinking,
   autoExpandTools,
   showTimestamps,
@@ -13711,6 +13724,8 @@ function RunTurnActivityScreen({
   originSessionAvatarByID?: (sessionId: string) => AgentAvatar | null;
   sessionId: string;
   sessionMode: string;
+  activityLoadingTelemetrySource: string;
+  activityLoadingPreviousSessionId?: string | null;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
@@ -13828,6 +13843,74 @@ function RunTurnActivityScreen({
     (selectedLoadState == null ||
       selectedLoadState.status === "unloaded" ||
       selectedLoadState.status === "loading");
+  const selectedTurnIdForTelemetry = selected?.turnId ?? "";
+  const selectedLoadStatus = selectedLoadState?.status;
+  const selectedLoadingReason = selectedLoadStatus ?? "absent";
+  const selectedHasTurnActivityShell = Boolean(selected?.shell);
+  const selectedTurnActivityChildCount =
+    selected?.shell?.activity?.childCount ?? 0;
+  const selectedDurableActiveTurnActivityShell =
+    selected?.shell != null
+      ? turnActivityShellIsDurablyActive(selected.shell.activity)
+      : false;
+  const selectedActivityLoadingTelemetryKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!showActivityLoading || !selectedTurnIdForTelemetry) {
+      selectedActivityLoadingTelemetryKeyRef.current = null;
+      return;
+    }
+    const event =
+      selectedLoadStatus == null || selectedLoadStatus === "unloaded"
+        ? "turn-activity-selected-loading-stranded"
+        : selectedLoadStatus === "loading"
+          ? "turn-activity-selected-loading-slow"
+          : null;
+    if (!event) return;
+    const key = [
+      event,
+      selectedTurnIdForTelemetry,
+      selectedLoadingReason,
+      selectedHasTurnActivityShell ? "shell" : "no-shell",
+      selectedTurnActivityChildCount,
+      selectedDurableActiveTurnActivityShell ? "durable-active" : "inactive",
+    ].join(":");
+    if (selectedActivityLoadingTelemetryKeyRef.current === key) return;
+    const timer = window.setTimeout(() => {
+      selectedActivityLoadingTelemetryKeyRef.current = key;
+      logChatScrollEvent(event, {
+        surface: "session",
+        sessionId,
+        sessionMode,
+        previousSessionId: activityLoadingPreviousSessionId ?? undefined,
+        source: activityLoadingTelemetrySource,
+        reason: selectedLoadingReason,
+        key: selectedTurnIdForTelemetry,
+        status: turnActivityLoadStatusMetricCode(selectedLoadStatus),
+        entries: detailEntries.length,
+        groups: detailGroups.length,
+        activityEntries: selectedTurnActivityChildCount,
+        turnActivityShells: selectedHasTurnActivityShell ? 1 : 0,
+        durableActiveTurnActivityShells: selectedDurableActiveTurnActivityShell
+          ? 1
+          : 0,
+      });
+    }, TURN_ACTIVITY_STUCK_THRESHOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    detailEntries.length,
+    detailGroups.length,
+    activityLoadingPreviousSessionId,
+    activityLoadingTelemetrySource,
+    selectedDurableActiveTurnActivityShell,
+    selectedHasTurnActivityShell,
+    selectedLoadStatus,
+    selectedLoadingReason,
+    selectedTurnActivityChildCount,
+    selectedTurnIdForTelemetry,
+    sessionId,
+    sessionMode,
+    showActivityLoading,
+  ]);
   const selectedThinkingStatus =
     selected?.shell?.activity?.status === "needs_input"
       ? "needs_input"
@@ -17938,6 +18021,8 @@ function ChatPane({
   } | null>(null);
   const terminalCorrelationReportedRef = useRef<Set<string>>(new Set());
   const queuedFollowupBlockedReportedRef = useRef<string | null>(null);
+  const [activityLoadingSessionSwitchTelemetry, setActivityLoadingSessionSwitchTelemetry] =
+    useState<{ previousSessionId: string; changedAt: number } | null>(null);
   // Mirror of the durable activity summary's active turn. The main transcript
   // no longer reduces raw item events in the browser; projected row updates and
   // session activity summaries own visible run state.
@@ -20005,6 +20090,15 @@ function ChatPane({
   // When the session id changes, reset transcript state and allow the
   // history sync to run again. The replay paths repopulate from backend.
   useLayoutEffect(() => {
+    const previousSessionId = sessionIdRef.current;
+    if (previousSessionId && previousSessionId !== session.id) {
+      setActivityLoadingSessionSwitchTelemetry({
+        previousSessionId,
+        changedAt: Date.now(),
+      });
+    } else {
+      setActivityLoadingSessionSwitchTelemetry(null);
+    }
     sessionIdRef.current = session.id;
     wasVisibleRef.current = visible;
     resetSdkTimelineBootstrapState("session-change", {
@@ -20023,6 +20117,16 @@ function ChatPane({
     // passive timeline bootstrap effects can start.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
+  useEffect(() => {
+    if (!activityLoadingSessionSwitchTelemetry) return;
+    const observed = activityLoadingSessionSwitchTelemetry;
+    const timer = window.setTimeout(() => {
+      setActivityLoadingSessionSwitchTelemetry((current) =>
+        current === observed ? null : current,
+      );
+    }, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [activityLoadingSessionSwitchTelemetry]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
   // Ctrl/⌘+Enter submits. Implemented by intercepting at capture phase
@@ -23327,6 +23431,15 @@ function ChatPane({
                   originSessionAvatarByID={originSessionAvatarByID}
                   sessionId={session.id}
                   sessionMode={session.mode}
+                  activityLoadingTelemetrySource={
+                    activityLoadingSessionSwitchTelemetry
+                      ? "session-switch"
+                      : "turns-selected"
+                  }
+                  activityLoadingPreviousSessionId={
+                    activityLoadingSessionSwitchTelemetry?.previousSessionId ??
+                    null
+                  }
                   showThinking={runPrefs.showThinking}
                   autoExpandTools={runPrefs.autoExpandTools}
                   showTimestamps={runPrefs.showTimestamps}

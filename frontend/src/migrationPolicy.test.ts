@@ -88,6 +88,7 @@ const chatScrollMetricsHandlerSource = readSource(
 );
 const appConfigMapSource = readSource("../../k8s/templates/app-configmap.yaml");
 const appDeploymentSource = readSource("../../k8s/templates/deployment.yaml");
+const observabilitySource = readSource("../../k8s/templates/observability.yaml");
 const tankServerGoSource = readSource(
   "../../backend-go/cmd/tank-operator/server.go",
 );
@@ -549,6 +550,40 @@ test("historical transcript bootstrap requires server-projected turn activity", 
         )).toBe(true);
   expect(appSource).toMatch(/\/api\/public\/message-links\/\$\{encodeURIComponent\(publicShareTokenValue\)\}\/turns\/\$\{encodeURIComponent\(turnId\)\}\/activity/);
   expect(appSource.includes('kind !== "turn_activity"')).toBe(true);
+});
+
+test("selected turn activity spinner render emits bounded diagnostics", () => {
+  expect(appSource.includes("turnActivityLoadStatusMetricCode")).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-loading-stranded"')).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-loading-slow"')).toBe(true);
+  expect(appSource.includes("window.setTimeout")).toBe(true);
+  expect(appSource.includes("TURN_ACTIVITY_STUCK_THRESHOLD_MS")).toBe(true);
+  expect(appSource.includes("activityLoadingSessionSwitchTelemetry")).toBe(true);
+  expect(appSource.includes("activityLoadingTelemetrySource")).toBe(true);
+  expect(appSource.includes("activityLoadingPreviousSessionId")).toBe(true);
+  expect(appSource.includes('"session-switch"')).toBe(true);
+  expect(appSource.includes('"turns-selected"')).toBe(true);
+  expect(appSource.includes("previousSessionId: activityLoadingPreviousSessionId")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("previousSessionId?: string")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("PreviousSessionID")).toBe(true);
+  expect(appSource.includes("reason: selectedLoadingReason")).toBe(true);
+  expect(appSource.includes("key: selectedTurnIdForTelemetry")).toBe(true);
+  expect(appSource.includes(
+          "status: turnActivityLoadStatusMetricCode(selectedLoadStatus)",
+        )).toBe(true);
+  expect(appSource.includes("activityEntries: selectedTurnActivityChildCount")).toBe(true);
+  expect(appSource.includes("durableActiveTurnActivityShells")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-loading-stranded"',
+        )).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-loading-slow"',
+        )).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedLoadingStranded")).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedLoadingSlow")).toBe(true);
+  expect(observabilitySource.includes(
+          'tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-stranded",surface="session"}',
+        )).toBe(true);
 });
 
 test("public message links render a read-only unauthenticated transcript shell", () => {
@@ -1363,7 +1398,9 @@ test("mounted chat reactivation resets local timeline state before bootstrap", (
   expect(appSource.includes("reduceTimelineBootstrap")).toBe(true);
   expect(appSource.includes("scrollToLatestOnReady: !hasExplicitTarget")).toBe(true);
   expect(appSource.includes('requestScrollToLatest("auto", source)')).toBe(true);
-  expect(appSource).toMatch(/useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/);
+  expect(appSource).toMatch(
+    /useLayoutEffect\(\(\) => \{[\s\S]{0,500}const previousSessionId = sessionIdRef\.current;[\s\S]{0,500}setActivityLoadingSessionSwitchTelemetry[\s\S]{0,500}sessionIdRef\.current = session\.id;[\s\S]{0,500}resetSdkTimelineBootstrapState\("session-change"/,
+  );
   expect(appSource).toMatch(/if \(timelineBootstrap\.status !== "idle"\) return;/);
 });
 
