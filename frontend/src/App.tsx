@@ -464,6 +464,7 @@ type TurnActivitySummary = {
   startOrderKey?: string;
   endOrderKey?: string;
   sourceEventId?: string;
+  submittedSource?: string;
   turnUsage?: unknown;
   usageObservation?: unknown;
   // The model/effort this turn ran on (carried on the shell's activity summary
@@ -2216,6 +2217,20 @@ type BreakGlassRequestLookupResponse = {
 };
 
 type TestSlotModelRequestLookupResponse = BreakGlassRequestLookupResponse;
+
+function approvalNotificationTurnId(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const notification = (body as Record<string, unknown>).agent_notification;
+  if (
+    !notification ||
+    typeof notification !== "object" ||
+    Array.isArray(notification)
+  )
+    return "";
+  const record = notification as Record<string, unknown>;
+  if (record.delivered !== true) return "";
+  return typeof record.turn_id === "string" ? record.turn_id.trim() : "";
+}
 
 // Deep link to a specific message inside a session. Read by
 // readInitialMessageId() on cold start so we can scroll the active
@@ -6468,6 +6483,7 @@ function normalizeTurnActivitySummary(
     startOrderKey: stringRecordValue(record, "startOrderKey"),
     endOrderKey: stringRecordValue(record, "endOrderKey"),
     sourceEventId: stringRecordValue(record, "sourceEventId"),
+    submittedSource: stringRecordValue(record, "submittedSource") || undefined,
     turnUsage: record.turnUsage,
     usageObservation: record.usageObservation,
     model: stringRecordValue(record, "model") || undefined,
@@ -12887,6 +12903,28 @@ export function mergeTurnDirectoryWithLiveShells(
   });
 }
 
+type AutoFollowApprovalTurnCandidate = {
+  turnId?: string;
+  shell?: { activity?: { submittedSource?: string } };
+};
+
+const AUTO_FOLLOW_APPROVAL_SUBMITTED_SOURCES = new Set([
+  "break-glass-approval",
+  "test-slot-model-approval",
+]);
+
+export function latestAutoFollowApprovalTurnId(
+  turns: AutoFollowApprovalTurnCandidate[],
+): string | null {
+  const latest = turns[turns.length - 1];
+  const turnId = latest?.turnId?.trim() ?? "";
+  if (!turnId) return null;
+  const submittedSource = latest.shell?.activity?.submittedSource?.trim() ?? "";
+  return AUTO_FOLLOW_APPROVAL_SUBMITTED_SOURCES.has(submittedSource)
+    ? turnId
+    : null;
+}
+
 export function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
@@ -16991,6 +17029,11 @@ function ChatPane({
     turnId: string;
     turnNumber: number;
   } | null>(null);
+  const [pendingApprovalTurnOpenId, setPendingApprovalTurnOpenId] = useState<
+    string | null
+  >(null);
+  const approvalAutoFollowPrimedRef = useRef(false);
+  const approvalAutoFollowKnownTurnIdsRef = useRef<Set<string>>(new Set());
   // The route now carries a durable per-session turn NUMBER, not a turn_id. It
   // is resolved to a turn_id server-side (or from the loaded window) into
   // selectedTurnId; until then it stays pending so the URL isn't overwritten.
@@ -17332,7 +17375,7 @@ function ChatPane({
       if (publicView || readOnly) return;
       setBreakGlassApprovalBusyId(request.eventId);
       try {
-        await authedFetch(
+        const res = await authedFetch(
           scopedSessionPathForPane(
             `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(request.eventId)}/${decision}`,
           ),
@@ -17342,6 +17385,11 @@ function ChatPane({
             body: JSON.stringify(body),
           },
         );
+        const responseBody = await res.json().catch(() => null);
+        if (decision === "approve") {
+          const turnId = approvalNotificationTurnId(responseBody);
+          if (turnId) setPendingApprovalTurnOpenId(turnId);
+        }
         await fetchControlActionEntries();
         await fetchFocusedBreakGlassRequest();
       } finally {
@@ -17362,7 +17410,7 @@ function ChatPane({
       if (publicView || readOnly) return;
       setTestSlotModelApprovalBusyId(request.eventId);
       try {
-        await authedFetch(
+        const res = await authedFetch(
           scopedSessionPathForPane(
             `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
           ),
@@ -17372,6 +17420,9 @@ function ChatPane({
             body: JSON.stringify({ note }),
           },
         );
+        const responseBody = await res.json().catch(() => null);
+        const turnId = approvalNotificationTurnId(responseBody);
+        if (turnId) setPendingApprovalTurnOpenId(turnId);
         await fetchControlActionEntries();
         await fetchFocusedTestSlotModelRequest();
       } finally {
@@ -17884,6 +17935,9 @@ function ChatPane({
     setTurnDirectoryStatus("idle");
     setTurnDirectoryTruncated(false);
     turnDirectoryTurnIdsRef.current = new Set();
+    setPendingApprovalTurnOpenId(null);
+    approvalAutoFollowPrimedRef.current = false;
+    approvalAutoFollowKnownTurnIdsRef.current = new Set();
   }, [session.id]);
   // Load the directory when the pane becomes visible (open / tab switch /
   // session change). The new-turn refetch effect lives lower, after
@@ -21552,6 +21606,8 @@ function ChatPane({
   const activeTurnViewId =
     turnViewItems.find((turn) => turn.active)?.turnId ?? null;
   const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
+  const latestApprovalAutoFollowTurnId =
+    latestAutoFollowApprovalTurnId(turnViewItems);
   const selectedTurnExists =
     selectedTurnId != null &&
     turnViewItems.some((turn) => turn.turnId === selectedTurnId);
@@ -22012,6 +22068,43 @@ function ChatPane({
       startTurnActivityLoad,
     ],
   );
+  useEffect(() => {
+    if (!pendingApprovalTurnOpenId) return;
+    if (!turnViewItems.some((turn) => turn.turnId === pendingApprovalTurnOpenId))
+      return;
+    openTurnPage(pendingApprovalTurnOpenId, {
+      anchor: "bottom",
+      resetPage: true,
+    });
+    setPendingApprovalTurnOpenId(null);
+  }, [openTurnPage, pendingApprovalTurnOpenId, turnViewItems]);
+  useEffect(() => {
+    if (turnDirectoryStatus !== "ready") return;
+    const currentTurnIds = new Set(turnViewItems.map((turn) => turn.turnId));
+    const target = latestApprovalAutoFollowTurnId;
+    const wasKnown = target
+      ? approvalAutoFollowKnownTurnIdsRef.current.has(target)
+      : false;
+    const wasPrimed = approvalAutoFollowPrimedRef.current;
+    approvalAutoFollowKnownTurnIdsRef.current = currentTurnIds;
+    approvalAutoFollowPrimedRef.current = true;
+    if (!wasPrimed || !target || wasKnown || pendingApprovalTurnOpenId === target)
+      return;
+    if (
+      activeTab !== "turns" &&
+      activeTab !== "break-glass" &&
+      activeTab !== "test-slot-model"
+    )
+      return;
+    openTurnPage(target, { anchor: "bottom", resetPage: true });
+  }, [
+    activeTab,
+    latestApprovalAutoFollowTurnId,
+    openTurnPage,
+    pendingApprovalTurnOpenId,
+    turnDirectoryStatus,
+    turnViewItems,
+  ]);
 
   // T opens the turn-detail view from the focused transcript; Escape returns
   // from Turns to the transcript. The T side uses the same "highlighted
