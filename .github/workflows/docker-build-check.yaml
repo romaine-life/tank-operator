@@ -176,6 +176,40 @@ jobs:
           cache-from: type=registry,ref=${{ matrix.cache-ref }}
           cache-to: type=registry,ref=${{ matrix.cache-ref }},mode=max
 
+      - name: Tag app image by CI run lookup
+        # Glimmung test-slot deploys resolve a verified git ref to this unique
+        # CI-run lookup tag. The canonical app image remains the fingerprint
+        # tag built or reused above; this ACR-side import only gives the run a
+        # deterministic lookup handle without reintroducing raw commit SHA
+        # image tags.
+        if: matrix.name == 'app' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          LOOKUP_REF: ${{ inputs.git_ref || github.ref }}
+        run: |
+          set -euo pipefail
+          src='${{ steps.fingerprint.outputs.proof_tag }}'
+
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if [[ -z "${PR_NUMBER}" ]]; then
+              echo "::error::pull_request event did not provide a PR number"
+              exit 1
+            fi
+            lookup_tag="ci-pr-${PR_NUMBER}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}"
+          else
+            short_ref_hash="$(printf '%s' "${LOOKUP_REF}" | sha256sum | cut -c1-12)"
+            lookup_tag="ci-ref-${short_ref_hash}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}"
+          fi
+
+          az acr import --name romainecr \
+            --source "romainecr.azurecr.io/${{ matrix.image-repo }}:${src}" \
+            --image "${{ matrix.image-repo }}:${lookup_tag}" --force
+          echo "Tagged romainecr.azurecr.io/${{ matrix.image-repo }}:${lookup_tag} -> ${src}"
+
       - name: Build image without pushing
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         uses: docker/build-push-action@v6

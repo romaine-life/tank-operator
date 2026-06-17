@@ -236,8 +236,8 @@ That proof-image path is the input for slot deploys:
 
 - Use Glimmung `deploy_image_to_test_slot` to deploy the CI-built image for a
   pushed ref into a checked-out slot. Glimmung resolves the ref to the
-  fingerprint tag CI produced; the registry contract is not a commit-SHA image
-  alias.
+  app image's CI-run lookup tag, which points at the fingerprint tag CI
+  produced; the registry contract is not a raw commit-SHA image alias.
 - Use PR CI proof images to prove buildability and prime ACR for slot
   validation and merge/deploy.
 - Use `session-images-build.yml` when newly-created Tank session pods must boot
