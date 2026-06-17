@@ -226,6 +226,12 @@ gate for branches. For normal same-repo PRs it logs into ACR, computes each
 repo-owned image fingerprint, reuses an existing proof image when present, and
 pushes the missing proof image to ACR.
 
+Authenticated image-build workflows use the ACR registry cache as the canonical
+BuildKit cache. Do not add a second `type=gha,mode=max` export to those paths:
+large session-image layers make GitHub Actions cache export dominate the job
+after the proof image is already built and pushed. Fork PRs that cannot log into
+ACR may still use GHA cache because it is their only cache backend.
+
 That proof-image path is separate from hot-swap and session-image repointing:
 
 - Use hot-swap for the fast inner loop against already-running slot pods.
