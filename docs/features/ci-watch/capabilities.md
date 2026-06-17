@@ -50,6 +50,18 @@ and [../README.md](../README.md) for how capability ledgers are used.
   session may reap, and the human merges independently.
 - **Durable source:** `ClaimIdleForReap` `NOT EXISTS (session_ci_watches ... status='watching')`.
 
+## test-slot-ci-gate
+
+- **Status:** shipped
+- **Intent:** Glimmung test-slot deployment still requires a governed publish record for
+  the exact branch/commit, but it no longer trusts a separate CI/mergeability
+  observer. `/api/internal/sessions/{id}/hot-swap/verify` resolves the open PR for
+  the governed branch and runs the same backend CI/mergeability reducer used by
+  `watch_current_session_pr`.
+- **Durable source:** publish proof remains the control-action ledger
+  (`github.commit.push` / `github.break_glass.push`); CI and mergeability are live
+  reducer output from GitHub PR state.
+
 ## ci-status-record
 
 - **Status:** shipped (event + webhook merge path); in-Tank merge surface in progress

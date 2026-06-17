@@ -14,20 +14,21 @@ import (
 )
 
 type fakeMCPGitHub struct {
-	mergeCommit       string
-	mergeErr          error
-	markReadyErr      error
-	createBranchErr   error
-	createPRErr       error
-	prState           mcpgithub.PullRequestState
-	prStateErr        error
-	resolvePRCalls    int
-	mergeCalls        int
-	mergeWithHeadSHA  string
-	createBranchCalls []string
-	createPRCalls     []string
-	createPRNumber    int
-	createPRURL       string
+	mergeCommit        string
+	mergeErr           error
+	markReadyErr       error
+	createBranchErr    error
+	createPRErr        error
+	prState            mcpgithub.PullRequestState
+	prStateErr         error
+	resolvePRCalls     int
+	resolveOpenPRCalls int
+	mergeCalls         int
+	mergeWithHeadSHA   string
+	createBranchCalls  []string
+	createPRCalls      []string
+	createPRNumber     int
+	createPRURL        string
 }
 
 func (f *fakeMCPGitHub) ListRepos(_ context.Context, _ string) ([]mcpgithub.Repo, error) {
@@ -72,6 +73,19 @@ func (f *fakeMCPGitHub) CreatePullRequest(_ context.Context, _, owner, name, tit
 
 func (f *fakeMCPGitHub) ResolvePullRequestState(_ context.Context, _ string, owner, name string, number int) (mcpgithub.PullRequestState, error) {
 	f.resolvePRCalls++
+	return f.resolvePullRequestState(owner, name, number)
+}
+
+func (f *fakeMCPGitHub) ResolveOpenPullRequestState(_ context.Context, _ string, owner, name, _ string, _ string) (mcpgithub.PullRequestState, error) {
+	f.resolveOpenPRCalls++
+	number := f.prState.PR.Number
+	if number == 0 {
+		number = 99
+	}
+	return f.resolvePullRequestState(owner, name, number)
+}
+
+func (f *fakeMCPGitHub) resolvePullRequestState(owner, name string, number int) (mcpgithub.PullRequestState, error) {
 	if f.prStateErr != nil {
 		return mcpgithub.PullRequestState{}, f.prStateErr
 	}

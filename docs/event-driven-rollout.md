@@ -270,8 +270,10 @@ invoked by the agent. The auto-merge needs a **server-side (Go) equivalent in th
 orchestrator** that reuses the existing governance gates:
 
 - verify against the durable ledger via the internal `/api/internal/sessions/{id}/hot-swap/verify`
-  endpoint (already server-side),
-- re-verify live GitHub head + mergeability + checks,
+  endpoint (already server-side); this still proves the exact commit was
+  governed/pushed, while CI + mergeability are read through the same backend
+  reducer used by `watch_current_session_pr`,
+- re-verify live GitHub head + mergeability + checks through that reducer,
 - mark the draft PR ready (`markPullRequestReadyForReview`) — session PRs start as
   drafts (`repo-cloner`); the agent's `watch_current_session_pr` handoff is the
   readiness signal,
@@ -364,6 +366,7 @@ Two layers, both off data we already hold:
 | `ci_status.updated` event type | `conversation/types.go`, `builders.go` | additive event (display-only) |
 | `source=ci-failure` / `ci-conflict` | `enqueueSDKTurn` callers | additive turn source |
 | server-side governed merge | orchestrator (Go) reusing hot-swap/verify + mcp-github token | new internal path |
+| test-slot deployment gate | `/api/internal/sessions/{id}/hot-swap/verify` reusing backend reducer for CI/mergeability | shared enforcement path |
 | `watch_current_session_pr` tool | `mcp-auth-proxy/.../server.py` | new governed tool |
 | ring on `ci_status.updated` | `frontend/src/sessionActivity.ts`, `conversationReducer.ts`, `App.tsx` | additive UI |
 | reaper excludes active watch | `sessionregistry.ClaimIdleForReap` | predicate change |
@@ -445,7 +448,9 @@ Each stage is independently shippable and coherent.
 3. **Shipped:** red/conflict reducer output calls `enqueueSDKTurn`.
 4. **Shipped:** green reducer output marks the watch ready, or auto-merges an
    orchestration phase; merged PR webhooks emit `ci_status.updated`.
-5. **Remaining hardening:** broader observability/alerts and a durable stuck-watch
+5. **Shipped:** the Glimmung test-slot/hot-swap gate keeps publish proof in the
+   governed ledger but uses the same backend reducer for CI and mergeability.
+6. **Remaining hardening:** broader observability/alerts and a durable stuck-watch
    backstop.
 
 ## Open questions

@@ -102,6 +102,39 @@ func (c *Client) ResolvePullRequestState(ctx context.Context, userEmail, owner, 
 	if err != nil {
 		return PullRequestState{}, err
 	}
+	return c.resolvePullRequestStateWithToken(ctx, githubToken, owner, name, number)
+}
+
+// ResolveOpenPullRequestState resolves the open PR for owner:branch, then reads
+// the same live PR/CI state ResolvePullRequestState returns. Test-slot deploy
+// gates use this so they do not run a separate CI/mergeability algorithm.
+func (c *Client) ResolveOpenPullRequestState(ctx context.Context, userEmail, owner, name, headOwner, branch string) (PullRequestState, error) {
+	if c == nil {
+		return PullRequestState{}, errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return PullRequestState{}, errors.New("mcpgithub: user email is empty")
+	}
+	if strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" || strings.TrimSpace(headOwner) == "" || strings.TrimSpace(branch) == "" {
+		return PullRequestState{}, errors.New("mcpgithub: missing PR branch coordinates")
+	}
+	serviceToken, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return PullRequestState{}, fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	githubToken, err := c.mintGitHubToken(ctx, serviceToken, owner+"/"+name)
+	if err != nil {
+		return PullRequestState{}, err
+	}
+	pr, err := c.githubOpenPullRequestForBranch(ctx, githubToken, owner, name, headOwner, branch)
+	if err != nil {
+		return PullRequestState{}, err
+	}
+	return c.resolvePullRequestStateWithToken(ctx, githubToken, owner, name, pr.Number)
+}
+
+func (c *Client) resolvePullRequestStateWithToken(ctx context.Context, githubToken, owner, name string, number int) (PullRequestState, error) {
 	pr, err := c.githubPullRequest(ctx, githubToken, owner, name, number)
 	if err != nil {
 		return PullRequestState{}, err
@@ -177,6 +210,26 @@ func (c *Client) githubPullRequest(ctx context.Context, token, owner, name strin
 		return PullRequestDetail{}, fmt.Errorf("read PR #%d: GitHub returned %d", number, status)
 	}
 	return pr, nil
+}
+
+func (c *Client) githubOpenPullRequestForBranch(ctx context.Context, token, owner, name, headOwner, branch string) (PullRequestDetail, error) {
+	var prs []PullRequestDetail
+	head := url.QueryEscape(strings.TrimSpace(headOwner) + ":" + strings.TrimSpace(branch))
+	path := githubRepoPath(owner, name, "/pulls?head="+head+"&state=open&per_page=2")
+	status, err := c.githubRESTJSON(ctx, token, http.MethodGet, path, &prs)
+	if err != nil {
+		return PullRequestDetail{}, fmt.Errorf("list PRs for %s:%s: %w", headOwner, branch, err)
+	}
+	if status >= 400 {
+		return PullRequestDetail{}, fmt.Errorf("list PRs for %s:%s: GitHub returned %d", headOwner, branch, status)
+	}
+	if len(prs) == 0 {
+		return PullRequestDetail{}, fmt.Errorf("no open PR exists for %s:%s", headOwner, branch)
+	}
+	if prs[0].Number <= 0 {
+		return PullRequestDetail{}, fmt.Errorf("open PR for %s:%s did not include a PR number", headOwner, branch)
+	}
+	return prs[0], nil
 }
 
 func (c *Client) resolveCIState(ctx context.Context, token, owner, name, sha string, prNumber int, branch string) (string, string, map[string]any) {

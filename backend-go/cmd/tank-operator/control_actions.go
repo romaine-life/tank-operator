@@ -58,9 +58,12 @@ type hotSwapVerificationResponse struct {
 	Branch           string   `json:"branch"`
 	SHA              string   `json:"sha"`
 	PRNumber         *int     `json:"pr_number,omitempty"`
+	PRURL            string   `json:"pr_url,omitempty"`
 	PublishVerified  bool     `json:"publish_verified"`
 	CIVerified       bool     `json:"ci_verified"`
 	MergeVerified    bool     `json:"merge_verified"`
+	CheckState       string   `json:"check_state,omitempty"`
+	MergeableState   string   `json:"mergeable_state,omitempty"`
 	ValidationTarget string   `json:"validation_target,omitempty"`
 	SourceTool       string   `json:"source_tool,omitempty"`
 }
@@ -1577,6 +1580,11 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 		return
 	}
 	resp := evaluateHotSwapVerification(rows, owner, name, branch, sha)
+	if s.mcpGitHub != nil {
+		resp = evaluateHotSwapPublishVerification(rows, owner, name, branch, sha)
+		s.applyHotSwapPRVerification(r.Context(), &resp, user.ActorEmail, owner, name, branch, sha)
+		resp.Allowed = resp.PublishVerified && resp.CIVerified && resp.MergeVerified && len(resp.Reasons) == 0
+	}
 	resp.Repo = repo
 	resp.Branch = branch
 	resp.SHA = sha
@@ -1987,6 +1995,101 @@ func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo,
 	}
 	resp.Allowed = resp.PublishVerified && resp.CIVerified && resp.MergeVerified
 	return resp
+}
+
+func evaluateHotSwapPublishVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) hotSwapVerificationResponse {
+	resp := hotSwapVerificationResponse{}
+	sawPublish := false
+	for _, row := range rows {
+		if row.RepoOwner != owner || row.RepoName != repo || !strings.EqualFold(row.ResultSHA, sha) {
+			continue
+		}
+		switch row.Action {
+		case "github.commit.push", "github.break_glass.push":
+			if sawPublish {
+				continue
+			}
+			if controlActionPayloadString(row.Payload, "branch") != branch {
+				continue
+			}
+			sawPublish = true
+			if row.Status == "succeeded" {
+				resp.PublishVerified = true
+			} else {
+				resp.Reasons = append(resp.Reasons, "latest governed publish for this commit has not succeeded")
+			}
+		}
+	}
+	if !sawPublish {
+		resp.Reasons = append(resp.Reasons, "no governed publish record exists for this commit on this branch")
+	}
+	return resp
+}
+
+func (s *appServer) applyHotSwapPRVerification(ctx context.Context, resp *hotSwapVerificationResponse, ownerEmail, owner, repo, branch, sha string) {
+	state, err := s.mcpGitHub.ResolveOpenPullRequestState(ctx, ownerEmail, owner, repo, owner, branch)
+	if err != nil {
+		resp.Reasons = append(resp.Reasons, "live PR state unavailable: "+err.Error())
+		return
+	}
+	if state.PR.Number > 0 {
+		prNumber := state.PR.Number
+		resp.PRNumber = &prNumber
+	}
+	resp.PRURL = strings.TrimSpace(state.HTMLURL)
+	watch := pgstore.CIWatch{
+		OwnerEmail: ownerEmail,
+		PROwner:    owner,
+		PRName:     repo,
+		PRNumber:   state.PR.Number,
+		HeadSHA:    sha,
+		PRURL:      state.HTMLURL,
+	}
+	result := classifyCIWatchState(watch, state)
+	resp.CheckState = result.CheckState
+	resp.MergeableState = result.MergeableState
+
+	headOK := strings.EqualFold(strings.TrimSpace(result.HeadSHA), sha)
+	if !headOK {
+		resp.Reasons = append(resp.Reasons, "open PR head is "+shortSHAForMessage(result.HeadSHA)+", not requested SHA "+shortSHAForMessage(sha))
+	}
+
+	if state.CIStatus == "succeeded" && strings.EqualFold(result.CheckState, "success") && len(result.FailingChecks) == 0 {
+		resp.CIVerified = true
+	} else {
+		detail := strings.TrimSpace(result.Detail)
+		if detail == "" {
+			detail = strings.TrimSpace(state.CIError)
+		}
+		if detail == "" {
+			detail = "checks are pending"
+		}
+		resp.Reasons = append(resp.Reasons, "CI for "+shortSHAForMessage(sha)+" is not green: "+detail)
+	}
+
+	if state.Mergeable != nil && *state.Mergeable && strings.EqualFold(result.MergeableState, "clean") {
+		resp.MergeVerified = true
+	} else {
+		stateText := strings.TrimSpace(result.MergeableState)
+		if stateText == "" {
+			stateText = "unknown"
+		}
+		resp.Reasons = append(resp.Reasons, "PR #"+strconv.Itoa(state.PR.Number)+" is not confirmed mergeable/current: "+stateText)
+	}
+	if result.Status == pgstore.CIWatchMerged {
+		resp.Reasons = append(resp.Reasons, "PR #"+strconv.Itoa(state.PR.Number)+" is already merged")
+	}
+}
+
+func shortSHAForMessage(sha string) string {
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return "unknown"
+	}
+	if len(sha) <= 12 {
+		return sha
+	}
+	return sha[:12]
 }
 
 func controlActionPayloadString(payload json.RawMessage, key string) string {
