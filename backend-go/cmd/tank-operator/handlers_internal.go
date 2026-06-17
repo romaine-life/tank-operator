@@ -176,7 +176,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
-	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
+	capabilities, status, detail := validateServiceCreateSessionCapabilities(mode, body.Capabilities)
 	if status != 0 {
 		writeError(w, status, detail)
 		return

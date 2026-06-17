@@ -54,11 +54,12 @@ func (s *appServer) spawnPhaseSpoke(ctx context.Context, orch pgstore.Orchestrat
 	requestedAt := launchAt.Add(2 * time.Millisecond).Format(time.RFC3339Nano)
 
 	info, err := s.mgr.Create(ctx, sessions.CreateOptions{
-		Owner:       owner,
-		Mode:        orchestrationSpokeMode,
-		Repos:       repos,
-		Name:        &name,
-		RequestedAt: requestedAt,
+		Owner:        owner,
+		Mode:         orchestrationSpokeMode,
+		Repos:        repos,
+		Capabilities: []string{sessionmodel.SessionCapabilityRestrictedGit},
+		Name:         &name,
+		RequestedAt:  requestedAt,
 	})
 	if err != nil {
 		return "", fmt.Errorf("create spoke session: %w", err)

@@ -351,6 +351,15 @@ Affected contracts:
 Contract impact:
 - `repo-cloner` prepares the governed branch and draft PR before the repo is
   marked cloned.
+- Service-principal session creation (`spawn_run_session`,
+  `spawn_test_slot_session`, and the backing `/api/internal/sessions` route)
+  defaults every repo-capable session into `restricted_git`, even when the
+  agent omits `capabilities` or supplies only unrelated capabilities. Direct
+  orchestration phase spokes do the same before calling the session manager.
+  Agents that need privileged Git use the audited Git break-glass request/grant
+  flow inside a governed session instead of spawning an unrestricted child
+  session. The browser splash's human opt-out remains a deliberate
+  create-time exception and is surfaced in the session bar as unrestricted Git.
 - The user-facing sandbox has no normal direct-push path. The `pre-push` hook
   fails loudly, and the localhost GitHub MCP proxy denies write-capable
   `mint_clone_token` and file/PR write tools in restricted mode (a read-only

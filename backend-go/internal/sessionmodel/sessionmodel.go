@@ -45,8 +45,10 @@ const (
 	SessionCapabilitySpireLensMCP = "spirelens_mcp"
 	// SessionCapabilityRestrictedGit opts a pod into the experimental
 	// governed Git surface: Tank-owned session branches, guarded MCP writes,
-	// post-commit publishing, and PR lane approvals. Sessions without this
-	// capability keep the historical direct Git/GitHub behavior.
+	// post-commit publishing, and PR lane approvals. Service-created
+	// repo-capable sessions are defaulted into this capability by the
+	// orchestrator; sessions without it are the explicit unrestricted
+	// exception and keep the historical direct Git/GitHub behavior.
 	SessionCapabilityRestrictedGit = "restricted_git"
 	DefaultSpireLensMCPPort        = 15527
 	DefaultSpireLensTailscaleTag   = "tag:spirelens-orchestrator"

@@ -90,6 +90,32 @@ func TestValidateCreateSessionCapabilitiesRestrictsRestrictedGitToRepoModes(t *t
 	}
 }
 
+func TestValidateServiceCreateSessionCapabilitiesDefaultsRestrictedGitForRepoModes(t *testing.T) {
+	capabilities, status, detail := validateServiceCreateSessionCapabilities(sessionmodel.CodexGUIMode, nil)
+	if status != 0 || detail != "" {
+		t.Fatalf("repo-capable service create status=%d detail=%q", status, detail)
+	}
+	if !slices.Equal(capabilities, []string{sessionmodel.SessionCapabilityRestrictedGit}) {
+		t.Fatalf("capabilities = %#v, want restricted git default", capabilities)
+	}
+
+	capabilities, status, detail = validateServiceCreateSessionCapabilities(sessionmodel.ClaudeGUIMode, []string{sessionmodel.SessionCapabilitySpireLensMCP})
+	if status != 0 || detail != "" {
+		t.Fatalf("repo-capable service create with spirelens status=%d detail=%q", status, detail)
+	}
+	if !slices.Equal(capabilities, []string{sessionmodel.SessionCapabilitySpireLensMCP, sessionmodel.SessionCapabilityRestrictedGit}) {
+		t.Fatalf("capabilities = %#v, want spirelens plus restricted git", capabilities)
+	}
+
+	capabilities, status, detail = validateServiceCreateSessionCapabilities(sessionmodel.ClaudeCLIMode, nil)
+	if status != 0 || detail != "" {
+		t.Fatalf("terminal service create status=%d detail=%q", status, detail)
+	}
+	if len(capabilities) != 0 {
+		t.Fatalf("terminal capabilities = %#v, want none", capabilities)
+	}
+}
+
 func TestHandleInternalSessionRunOptions(t *testing.T) {
 	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
 	if err != nil {

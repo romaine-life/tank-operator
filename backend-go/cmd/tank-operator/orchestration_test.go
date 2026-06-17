@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
@@ -232,6 +234,36 @@ func (r *recordingSpawner) count(key string) int {
 func newTestEngine(store orchestrationStore, spawn phaseSpokeSpawnFunc) *orchestrationEngine {
 	e := newOrchestrationEngine(store, spawn)
 	return e
+}
+
+func TestSpawnPhaseSpokeDefaultsToRestrictedGit(t *testing.T) {
+	app := testTurnsApp(t, &recordingSessionBus{})
+	spokeID, err := app.spawnPhaseSpoke(context.Background(), pgstore.Orchestration{
+		OwnerEmail: "owner@example.test",
+		RepoOwner:  "romaine-life",
+		RepoName:   "tank-operator",
+	}, pgstore.OrchestrationPhase{
+		PhaseID: "phase-a",
+		Key:     "implementation",
+		Brief:   "implement the phase",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spokeID == "" {
+		t.Fatal("spawned spoke id is empty")
+	}
+
+	pods, err := app.k8s.CoreV1().Pods(app.namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods.Items) != 1 {
+		t.Fatalf("pods = %d, want 1", len(pods.Items))
+	}
+	if got, want := pods.Items[0].Annotations["tank-operator/capabilities"], `["restricted_git"]`; got != want {
+		t.Fatalf("pod capabilities annotation = %q, want %q", got, want)
+	}
 }
 
 // TestAdvanceOnMergeSpawnsNextReadyPhase: merging A's PR marks A merged and
