@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,104 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
+
+func TestHandleListOrchestrationsReturnsCurrentOwnerRuns(t *testing.T) {
+	store := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "root", status: pgstore.PhaseRunning, target: pgstore.PhaseTargetIntegration, spoke: "spoke-root"},
+		phaseSpec{key: "after", status: pgstore.PhasePending, target: pgstore.PhaseTargetMain},
+	)
+	app := &appServer{
+		verifier:          auth.NewVerifier(testJWT(t)),
+		orchestrationRuns: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/orchestrations", nil)
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleListOrchestrations(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Orchestrations []struct {
+			ID         string `json:"id"`
+			Repo       string `json:"repo"`
+			State      string `json:"state"`
+			PhaseCount int    `json:"phase_count"`
+		} `json:"orchestrations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.Orchestrations) != 1 {
+		t.Fatalf("orchestrations=%#v, want one", body.Orchestrations)
+	}
+	got := body.Orchestrations[0]
+	if got.ID != "orch-1" || got.Repo != "romaine-life/tank-operator" || got.State != "running" || got.PhaseCount != 2 {
+		t.Fatalf("run = %#v, want orch-1 romaine-life/tank-operator running phase_count=2", got)
+	}
+}
+
+func TestHandleGetOrchestrationReturnsRunWithPhases(t *testing.T) {
+	store := newFakeOrchStore(pgstore.OrchestrationAwaitingReview,
+		phaseSpec{key: "root", status: pgstore.PhaseMerged, target: pgstore.PhaseTargetIntegration, spoke: "spoke-root"},
+	)
+	app := &appServer{
+		verifier:          auth.NewVerifier(testJWT(t)),
+		orchestrationRuns: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/orchestrations/orch-1", nil)
+	req.SetPathValue("orchestration_id", "orch-1")
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleGetOrchestration(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Orchestration struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"orchestration"`
+		Phases []struct {
+			Key            string `json:"key"`
+			Status         string `json:"status"`
+			SpokeSessionID string `json:"spoke_session_id"`
+		} `json:"phases"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Orchestration.ID != "orch-1" || body.Orchestration.State != "awaiting_review" {
+		t.Fatalf("orchestration = %#v", body.Orchestration)
+	}
+	if len(body.Phases) != 1 || body.Phases[0].Key != "root" || body.Phases[0].Status != "merged" || body.Phases[0].SpokeSessionID != "spoke-root" {
+		t.Fatalf("phases = %#v", body.Phases)
+	}
+}
+
+func TestHandleGetOrchestrationHidesOtherOwnersRun(t *testing.T) {
+	store := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "root", status: pgstore.PhaseRunning},
+	)
+	app := &appServer{
+		verifier:          auth.NewVerifier(testJWT(t)),
+		orchestrationRuns: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/orchestrations/orch-1", nil)
+	req.SetPathValue("orchestration_id", "orch-1")
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "", "nelson@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleGetOrchestration(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
 
 func TestHandleCreateOrchestrationApprovesAndDispatchesRoots(t *testing.T) {
 	store := &fakeOrchStore{}

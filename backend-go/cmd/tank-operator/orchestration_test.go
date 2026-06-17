@@ -145,6 +145,15 @@ func (s *fakeOrchStore) GetWithPhases(_ context.Context, _ string) (pgstore.Orch
 	return s.orch, out, nil
 }
 
+func (s *fakeOrchStore) ListByOwner(_ context.Context, ownerEmail string) ([]pgstore.Orchestration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.orch.OwnerEmail != ownerEmail {
+		return nil, nil
+	}
+	return []pgstore.Orchestration{s.orch}, nil
+}
+
 func (s *fakeOrchStore) GetPhase(_ context.Context, phaseID string) (pgstore.OrchestrationPhase, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
