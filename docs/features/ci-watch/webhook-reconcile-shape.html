@@ -5,75 +5,76 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CI Watch Webhook Reconcile Shape</title>
 </head>
-<body style="margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#172126;background:#eef4f5;line-height:1.45;">
-  <main style="width:min(1180px, calc(100vw - 32px));margin:0 auto;padding:32px 0 48px;">
+<body style="margin:0;font-family:Arial,Helvetica,sans-serif;color:#172126;background:#eef4f5;line-height:1.45;">
+  <main style="max-width:1180px;margin:0 auto;padding:32px 16px 48px;">
     <header style="margin-bottom:24px;">
-      <h1 style="margin:0 0 8px;font-size:clamp(28px,4vw,44px);line-height:1.05;letter-spacing:0;">CI Watch Webhook Reconcile Shape</h1>
+      <h1 style="margin:0 0 8px;font-size:36px;line-height:1.1;">CI Watch Webhook Reconcile Shape</h1>
       <p style="max-width:860px;margin:0;color:#536168;font-size:17px;">Webhooks are edge triggers. The backend does one authoritative reconcile for the watched PR head and transitions only on aggregate evidence. Polling is constrained to two explicit places: a bounded mergeability retry where GitHub reports UNKNOWN, and the current publish observer/backstop. The webhook handler itself does not spin.</p>
-      <nav aria-label="CI watch diagram pages" style="display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0;">
-        <a href="./webhook-reconcile-shape.html" aria-current="page" style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #9aa8ae;border-radius:8px;padding:7px 11px;background:#eef4f5;color:#172126;font-size:13px;font-weight:700;text-decoration:none;">Overview</a>
-        <a href="./webhook-reconcile-agent-handoff.html" style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;text-decoration:none;">Agent handoff</a>
-        <a href="./webhook-reconcile-webhook-trigger.html" style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;text-decoration:none;">Webhook trigger</a>
-        <a href="./webhook-reconcile-aggregate-reconcile.html" style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;text-decoration:none;">Aggregate reconcile</a>
-        <a href="./webhook-reconcile-terminal-action.html" style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;text-decoration:none;">Terminal action</a>
-      </nav>
+      <div aria-label="CI watch diagram pages" style="display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0;">
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #9aa8ae;border-radius:8px;padding:7px 11px;background:#eef4f5;color:#172126;font-size:13px;font-weight:700;">Overview</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Agent handoff</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Webhook trigger</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Aggregate reconcile</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Terminal action</span>
+      </div>
+      <p style="margin:12px 0 0;color:#536168;font-size:13px;">Tank renders each HTML file as an isolated sandboxed page. Open lane files directly from the file list or from chat links outside this preview; in-page navigation is intentionally plain text.</p>
     </header>
 
-    <section aria-label="Flowchart for webhook-driven CI watch reconciliation" style="position:relative;overflow:hidden;border:1px solid #c7d3d7;background:#ffffff;box-shadow:0 18px 50px rgba(30,47,55,0.10);border-radius:8px;">
+    <section aria-label="Flowchart for webhook-driven CI watch reconciliation" style="border:1px solid #c7d3d7;background:#ffffff;border-radius:8px;box-shadow:0 18px 50px rgba(30,47,55,0.10);">
       <div aria-hidden="true" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px;padding:18px 22px 0;color:#536168;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">
-        <div><a href="./webhook-reconcile-agent-handoff.html" style="color:#536168;text-decoration:none;">Agent handoff</a></div><div><a href="./webhook-reconcile-webhook-trigger.html" style="color:#536168;text-decoration:none;">Webhook trigger</a></div><div><a href="./webhook-reconcile-aggregate-reconcile.html" style="color:#536168;text-decoration:none;">Aggregate reconcile</a></div><div><a href="./webhook-reconcile-terminal-action.html" style="color:#536168;text-decoration:none;">Terminal action</a></div>
+        <div style="color:#536168;">Agent handoff</div><div style="color:#536168;">Webhook trigger</div><div style="color:#536168;">Aggregate reconcile</div><div style="color:#536168;">Terminal action</div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px;padding:18px 22px 22px;">
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0;">
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#d8eef7;">
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#d8eef7;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">watch_current_session_pr</strong>
             <span style="color:#536168;font-size:13px;">Registers the PR handoff after the initial authoritative read.</span>
           </div>
-          <div aria-hidden="true" style="height:28px;display:flex;justify-content:center;align-items:stretch;"><div style="width:2px;background:#9aa8ae;"></div></div>
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#f4e4c8;">
+          <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f4e4c8;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Bounded mergeability retry</strong>
             <span style="color:#536168;font-size:13px;">GET the PR; if mergeable is null or UNKNOWN, sleep about 1.5 seconds and retry, currently up to 6 reads.</span>
           </div>
-          <div aria-hidden="true" style="height:28px;display:flex;justify-content:center;align-items:stretch;"><div style="width:2px;background:#9aa8ae;"></div></div>
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#eadff4;">
+          <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#eadff4;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">session_ci_watches row</strong>
             <span style="color:#536168;font-size:13px;">Persistent handoff state the backend can find after the agent sleeps.</span>
             <div aria-label="Key session_ci_watches fields" style="display:grid;grid-template-columns:max-content 1fr;gap:4px 10px;margin-top:8px;color:#536168;font-size:12px;"><b style="color:#172126;font-weight:700;">repo/pr</b><span>owner, repo, pull number</span><b style="color:#172126;font-weight:700;">head_sha</b><span>current watched commit</span><b style="color:#172126;font-weight:700;">status</b><span>watching, ready, failed, conflict</span><b style="color:#172126;font-weight:700;">last_event_at</b><span>latest reconciled webhook</span></div>
           </div>
-          <div aria-hidden="true" style="height:28px;display:flex;justify-content:center;align-items:stretch;"><div style="width:2px;background:#9aa8ae;"></div></div>
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#ffffff;">
+          <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#ffffff;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Agent stops</strong>
             <span style="color:#536168;font-size:13px;">Session sleeps while Tank waits for repo events.</span>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0;">
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#d8eef7;">
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#d8eef7;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">GitHub webhook arrives</strong>
             <span style="color:#536168;font-size:13px;">check_run, check_suite, workflow_run, status, or pull_request.</span>
           </div>
-          <div aria-hidden="true" style="height:28px;display:flex;justify-content:center;align-items:stretch;"><div style="width:2px;background:#9aa8ae;"></div></div>
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#ffffff;">
+          <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#ffffff;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Authenticate and route</strong>
             <span style="color:#536168;font-size:13px;">Verify HMAC, then look up session_ci_watches by repo plus PR number.</span>
           </div>
-          <div aria-hidden="true" style="height:28px;display:flex;justify-content:center;align-items:stretch;"><div style="width:2px;background:#9aa8ae;"></div></div>
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#fff3cc;">
+          <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#fff3cc;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Drop non-actionable events</strong>
             <span style="color:#536168;font-size:13px;">No watch, terminal watch, or stale event head SHA.</span>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0;background:linear-gradient(180deg,rgba(238,244,245,0.9),rgba(238,244,245,0));border-radius:8px;padding:12px;">
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#e9f4df;">
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#e9f4df;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Read aggregate CI evidence</strong>
             <span style="color:#536168;font-size:13px;">Latest check run per name, combined status, and path-filtered prior-green evidence.</span>
           </div>
-          <div aria-hidden="true" style="height:28px;display:flex;justify-content:center;align-items:stretch;"><div style="width:2px;background:#9aa8ae;"></div></div>
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#e9f4df;">
+          <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#e9f4df;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Read PR mergeability</strong>
             <span style="color:#536168;font-size:13px;">Use GitHub's PR state to detect dirty or behind. UNKNOWN remains pending; draft is not a conflict.</span>
           </div>
-          <div aria-hidden="true" style="height:28px;display:flex;justify-content:center;align-items:stretch;"><div style="width:2px;background:#9aa8ae;"></div></div>
-          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#ffffff;border-style:dashed;min-height:112px;">
+          <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
+          <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#ffffff;border-style:dashed;min-height:112px;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Classify the aggregate</strong>
             <span style="color:#536168;font-size:13px;">failed checks -> red; dirty or behind -> conflict; CI satisfied plus clean -> ready; missing checks or UNKNOWN mergeability -> pending.</span>
           </div>
@@ -88,19 +89,19 @@
         </div>
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0;">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
-            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#f8d9d4;">
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f8d9d4;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Red</strong>
             <span style="color:#536168;font-size:13px;">Set watch status=failed and wake the session to fix CI.</span>
           </div>
-            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#f8d9d4;">
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f8d9d4;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Conflict</strong>
             <span style="color:#536168;font-size:13px;">Set watch status=conflict and wake the session to rebase or resolve.</span>
           </div>
-            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#dcebe0;">
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#dcebe0;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Ready</strong>
             <span style="color:#536168;font-size:13px;">Set watch status=ready for human merge or orchestration auto-merge.</span>
           </div>
-            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;display:flex;flex-direction:column;justify-content:center;position:relative;background:#fff3cc;">
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#fff3cc;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Pending</strong>
             <span style="color:#536168;font-size:13px;">Refresh watch detail and last_event_at; keep status=watching.</span>
           </div>
