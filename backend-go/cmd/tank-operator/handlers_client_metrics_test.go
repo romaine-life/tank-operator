@@ -160,6 +160,77 @@ func TestHandleChatScrollMetricsLogsThinkingRowInvariantContext(t *testing.T) {
 	}
 }
 
+func TestHandleChatScrollMetricsLogsSelectedTurnActivityLoadingContext(t *testing.T) {
+	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
+	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/chat-scroll", strings.NewReader(`{
+		"events": [{
+			"event": "turn-activity-selected-loading-stranded",
+			"surface": "session",
+			"sessionMode": "codex_gui",
+			"sessionId": "1038",
+			"previousSessionId": "1031",
+			"key": "turn_a80515c0-be0a-43c9-8ffa-06e5b7eb080b",
+			"source": "session-switch",
+			"reason": "absent",
+			"status": 0,
+			"entries": 0,
+			"groups": 0,
+			"activityEntries": 65,
+			"turnActivityShells": 1,
+			"durableActiveTurnActivityShells": 1
+		}]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	var logs bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	app.handleChatScrollMetrics(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("metrics status = %d body=%s, want 202", res.Code, res.Body.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		`"event":"turn-activity-selected-loading-stranded"`,
+		`"session_id":"1038"`,
+		`"previous_session_id":"1031"`,
+		`"key":"turn_a80515c0-be0a-43c9-8ffa-06e5b7eb080b"`,
+		`"source":"session-switch"`,
+		`"reason":"absent"`,
+		`"status":0`,
+		`"entries":0`,
+		`"groups":0`,
+		`"activity_entries":65`,
+		`"turn_activity_shells":1`,
+		`"durable_active_turn_activity_shells":1`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("slog output missing %s; got: %s", want, logged)
+		}
+	}
+
+	metrics := scrapePrometheus(t)
+	if !strings.Contains(metrics, `tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-activity-selected-loading-stranded",has_scroll_parent="unknown",session_mode="codex_gui",surface="session"}`) {
+		t.Fatalf("scrape missing turn-activity-selected-loading-stranded event:\n%s", metrics)
+	}
+	if got := chatScrollEventLabel("turn-activity-selected-loading-slow"); got != "turn-activity-selected-loading-slow" {
+		t.Fatalf("slow selected-loading event label = %q", got)
+	}
+	if got := chatScrollEventLabel("turn-activity-selected-loading-stranded"); got != "turn-activity-selected-loading-stranded" {
+		t.Fatalf("stranded selected-loading event label = %q", got)
+	}
+	if strings.Contains(metrics, `session_id="1038"`) ||
+		strings.Contains(metrics, `previous_session_id="1031"`) ||
+		strings.Contains(metrics, `turn_a80515c0`) ||
+		strings.Contains(metrics, `reason="absent"`) {
+		t.Fatalf("scrape leaked selected turn loading trace context:\n%s", metrics)
+	}
+}
+
 func TestHandleChatScrollMetricsRecordsNavigationModeTransitions(t *testing.T) {
 	// The two navigation-mode event names are the durable
 	// observability surface for the user-trust failure that motivated

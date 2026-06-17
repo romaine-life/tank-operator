@@ -475,6 +475,67 @@ spec:
               to decide whether the cause was a stale server activity
               projection or a missed local-run finalization.
 
+        - alert: TankTurnActivitySelectedLoadingStranded
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-stranded",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "selected Turns pane stayed on Loading activity with no active load state on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser rendered the selected turn's "Loading
+              activity..." body for longer than the stuck threshold
+              while its selected-turn load state was absent or
+              unloaded. That is the hidden strand class: the UI is
+              visibly waiting, but the load lifecycle telemetry has no
+              corresponding in-flight request to observe.
+
+              This alert is intentionally render-side. It fires from
+              the actual condition that puts the spinner on screen, not
+              from an inferred request lifecycle. Inspect structured
+              orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-activity-selected-loading-stranded"
+
+              The log carries session_id, previous_session_id, source
+              (session-switch vs turns-selected), key (selected
+              turn_id), reason (absent/unloaded), status code,
+              turn_activity_shells, durable_active_turn_activity_shells,
+              and activity_entries (the projected shell child count).
+              If source=session-switch, start with the in-place
+              session-change path: tail-bootstrap-reset, turn-directory
+              reload, selected latest turn, then activity detail load.
+              If activity_entries is nonzero, durable projection exists
+              but the selected detail body is disconnected from it. If
+              turn_activity_shells is zero, inspect the turn
+              directory/timeline bootstrap path before the activity
+              endpoint.
+
+        - alert: TankTurnActivitySelectedLoadingSlow
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-slow",surface="session"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: info
+          annotations:
+            summary: "selected Turns pane stayed on Loading activity with an in-flight load on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser rendered the selected turn's "Loading
+              activity..." body for longer than the stuck threshold
+              while a selected-turn activity request was still marked
+              loading. This is not the no-load strand; compare with
+              turn_activity_load_timed_out / turn_activity_load_failed
+              session-event telemetry and the /activity handler logs.
+              Structured chat-scroll logs for
+              event="turn-activity-selected-loading-slow" carry the
+              session_id and selected turn_id.
+
         - alert: TankBrowserTerminalLocalRunMismatch
           expr: |
             sum by (session_mode) (
