@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -234,6 +235,54 @@ func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testi
 	}
 	if got := orch.snapshot(phaseID("a")).Status; got != pgstore.PhaseMerged {
 		t.Fatalf("phase status = %q, want merged", got)
+	}
+}
+
+func TestHandleInternalRegisterPRReadinessResolvesBranchInBackend(t *testing.T) {
+	mergeable := true
+	store := &fakeCIWatchStore{}
+	app := ciWatchTestServer(t, store)
+	gh := &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		PR:             mcpgithub.PullRequestDetail{Number: 1234},
+		Mergeable:      &mergeable,
+		MergeableState: "clean",
+		HeadSHA:        "abc123",
+		CheckState:     "success",
+		CIStatus:       "succeeded",
+		HTMLURL:        "https://github.com/romaine-life/tank-operator/pull/1234",
+	}}
+	app.mcpGitHub = gh
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/pr-readiness", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "tank/session/47/tank-operator",
+		"expected_head_sha": "abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterPRReadiness(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gh.resolveOpenPRCalls != 1 || gh.resolvePRCalls != 0 {
+		t.Fatalf("resolve calls = open %d by-number %d, want open 1 by-number 0", gh.resolveOpenPRCalls, gh.resolvePRCalls)
+	}
+	if len(store.registerCalls) != 1 {
+		t.Fatalf("register calls = %d, want 1", len(store.registerCalls))
+	}
+	got := store.registerCalls[0]
+	if got.PROwner != "romaine-life" || got.PRName != "tank-operator" || got.PRNumber != 1234 || got.HeadSHA != "abc123" {
+		t.Fatalf("registered readiness = %#v", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["state"] != "ready" || body["pr_number"] != float64(1234) {
+		t.Fatalf("body = %#v", body)
 	}
 }
 

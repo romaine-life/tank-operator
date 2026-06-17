@@ -130,7 +130,7 @@ New tool `watch_current_session_pr`, added to the Tank governed-tool surface in
 ```jsonc
 {
   "name": "watch_current_session_pr",
-  "description": "Hand off CI/mergeability watching for the current session's governed PR to Tank. Registers the PR watch and lets the backend authoritative reducer read current GitHub CI/mergeability state. Returns an immediate problem to fix, ready, or watching so the agent can end its turn. Tank emits a completion record on green-and-merged, or wakes the session on failure/conflict.",
+  "description": "Register the current session's governed PR head with Tank's PR-readiness process. Tank reads authoritative GitHub CI/mergeability state and returns conflict, failed, watching, or ready.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -144,9 +144,10 @@ New tool `watch_current_session_pr`, added to the Tank governed-tool surface in
 
 Handler behavior (handoff is synchronous; live state is backend-owned):
 
-1. Resolve repo + governed PR + current local/remote/PR head SHA (reuse the head
-   reconciliation already in `_verify_github_hot_swap_head`) enough to identify the
-   PR, then upsert the durable watch row.
+1. Resolve repo + current local head SHA, then call Tank's
+   `POST /api/internal/sessions/{id}/pr-readiness` endpoint. Tank resolves the
+   governed branch PR when the caller did not pass a PR number, then upserts the
+   durable readiness row.
 2. **Reconcile authoritatively in the backend**: GET the PR, read
    `mergeable` / `mergeable_state`, and resolve CI evidence for the PR head. If
    GitHub returns `mergeable == null` / `mergeable_state == "unknown"`, keep the
@@ -271,9 +272,9 @@ orchestrator** that reuses the existing governance gates:
 
 - verify against the durable ledger via the internal `/api/internal/sessions/{id}/hot-swap/verify`
   endpoint (already server-side); this still proves the exact commit was
-  governed/pushed, while CI + mergeability are read through the same backend
-  reducer used by `watch_current_session_pr`,
-- re-verify live GitHub head + mergeability + checks through that reducer,
+  governed/pushed, while CI + mergeability are registered through the same Tank
+  PR-readiness process used by `watch_current_session_pr`,
+- re-verify live GitHub head + mergeability + checks through that readiness reducer,
 - mark the draft PR ready (`markPullRequestReadyForReview`) — session PRs start as
   drafts (`repo-cloner`); the agent's `watch_current_session_pr` handoff is the
   readiness signal,
@@ -366,7 +367,8 @@ Two layers, both off data we already hold:
 | `ci_status.updated` event type | `conversation/types.go`, `builders.go` | additive event (display-only) |
 | `source=ci-failure` / `ci-conflict` | `enqueueSDKTurn` callers | additive turn source |
 | server-side governed merge | orchestrator (Go) reusing hot-swap/verify + mcp-github token | new internal path |
-| test-slot deployment gate | `/api/internal/sessions/{id}/hot-swap/verify` reusing backend reducer for CI/mergeability | shared enforcement path |
+| Tank PR-readiness endpoint | `/api/internal/sessions/{id}/pr-readiness` backed by `session_ci_watches` | shared enforcement path |
+| test-slot deployment gate | `/api/internal/sessions/{id}/hot-swap/verify` as compatibility facade over PR readiness + publish proof | shared enforcement path |
 | `watch_current_session_pr` tool | `mcp-auth-proxy/.../server.py` | new governed tool |
 | ring on `ci_status.updated` | `frontend/src/sessionActivity.ts`, `conversationReducer.ts`, `App.tsx` | additive UI |
 | reaper excludes active watch | `sessionregistry.ClaimIdleForReap` | predicate change |
@@ -441,15 +443,17 @@ named behavior "event-driven rollout watch."
 
 Each stage is independently shippable and coherent.
 
-1. **Shipped:** `watch_current_session_pr` registers the PR and lets the backend reducer
-   return `conflict|failed|ready|watching`.
+1. **Shipped:** Tank owns `POST /api/internal/sessions/{id}/pr-readiness`; both
+   `watch_current_session_pr` and hot-swap/test-slot verification register the same
+   readiness process and receive `conflict|failed|ready|watching`.
 2. **Shipped:** `POST /webhooks/github` + HMAC, reverse lookup, stale check-SHA guard,
    and aggregate recomputation.
 3. **Shipped:** red/conflict reducer output calls `enqueueSDKTurn`.
 4. **Shipped:** green reducer output marks the watch ready, or auto-merges an
    orchestration phase; merged PR webhooks emit `ci_status.updated`.
 5. **Shipped:** the Glimmung test-slot/hot-swap gate keeps publish proof in the
-   governed ledger but uses the same backend reducer for CI and mergeability.
+   governed ledger but uses the same Tank PR-readiness process for CI and
+   mergeability.
 6. **Remaining hardening:** broader observability/alerts and a durable stuck-watch
    backstop.
 

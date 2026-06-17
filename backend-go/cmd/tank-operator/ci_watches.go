@@ -8,12 +8,9 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
-// handleInternalRegisterCIWatch registers (or refreshes) a GitHub PR
-// CI/mergeability watch for the session. The Tank watch_current_session_pr tool
-// calls this at agent hand-off, after it has performed the authoritative GitHub
-// read (resolving the async mergeable_state). The durable row drives the
-// webhook receiver, the idle reaper, and the human merge surface. See
-// docs/event-driven-rollout.md.
+// handleInternalRegisterCIWatch is the older route for registering a GitHub PR
+// readiness watch. Keep it as a compatibility facade over the Tank-owned
+// /pr-readiness entry point so old callers use the same backend reconcile path.
 func (s *appServer) handleInternalRegisterCIWatch(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/ci-watches")
 	if user == nil {
@@ -23,74 +20,22 @@ func (s *appServer) handleInternalRegisterCIWatch(w http.ResponseWriter, r *http
 		writeError(w, http.StatusServiceUnavailable, "ci watch store unavailable")
 		return
 	}
-	sessionID := r.PathValue("session_id")
-	var body struct {
-		PROwner        string `json:"pr_owner"`
-		PRName         string `json:"pr_name"`
-		PRNumber       int    `json:"pr_number"`
-		HeadSHA        string `json:"head_sha"`
-		MergeableState string `json:"mergeable_state"`
-		CheckState     string `json:"check_state"`
-		Detail         string `json:"detail"`
-		PRURL          string `json:"pr_url"`
-		Status         string `json:"status"`
-	}
+	var body prReadinessRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	watch, err := s.ciWatches.Register(r.Context(), pgstore.RegisterCIWatchRequest{
-		SessionID:      sessionID,
-		OwnerEmail:     user.ActorEmail,
-		PROwner:        body.PROwner,
-		PRName:         body.PRName,
-		PRNumber:       body.PRNumber,
-		HeadSHA:        body.HeadSHA,
-		MergeableState: body.MergeableState,
-		CheckState:     body.CheckState,
-		Detail:         body.Detail,
-		PRURL:          body.PRURL,
-	})
+	req, err := prReadinessRegistrationFromBody(r.PathValue("session_id"), user.ActorEmail, body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Phase->PR linking: if this session is an orchestration phase's spoke, copy
-	// the PR coordinates it just registered onto the phase, so the PR->phase
-	// reverse lookup resolves when the PR merges. This is the cleanest existing
-	// "this session registered a PR" hook — the spoke registers via the same
-	// watch_current_session_pr handoff every governed PR uses. A no-op for
-	// ordinary (non-orchestration) sessions.
-	if s.orchestrations != nil {
-		s.orchestrations.linkPhasePR(r.Context(), sessionID, pgstore.SetPhasePRRequest{
-			PROwner:  watch.PROwner,
-			PRName:   watch.PRName,
-			PRNumber: watch.PRNumber,
-			PRURL:    watch.PRURL,
-		})
-	}
-	if s.mcpGitHub != nil {
-		result, err := s.reconcileAndApplyCIWatch(r.Context(), watch, ciWatchReconcileHandoff)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, "reconcile CI watch: "+err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"watch":           watch,
-			"state":           ciWatchToolState(result.Status),
-			"detail":          result.Detail,
-			"head_sha":        result.HeadSHA,
-			"mergeable_state": result.MergeableState,
-			"check_state":     result.CheckState,
-			"failing_checks":  result.FailingChecks,
-			"pr_url":          result.PRURL,
-		})
+	registered, err := s.registerAndReconcilePRReadiness(r.Context(), req, ciWatchReconcileHandoff)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "reconcile PR readiness: "+err.Error())
 		return
 	}
-	if ciWatchRegistrationReady(body.Status, body.CheckState, body.MergeableState) {
-		s.handleGreenCIWatch(r.Context(), watch, body.Detail)
-	}
-	writeJSON(w, http.StatusOK, watch)
+	writeJSON(w, http.StatusOK, prReadinessResponseBody(registered.Watch, registered.Result))
 }
 
 func ciWatchRegistrationReady(status, checkState, mergeableState string) bool {

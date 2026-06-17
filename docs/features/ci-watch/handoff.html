@@ -24,8 +24,8 @@
       <div style="display:block;padding:22px;">
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0;max-width:780px;margin:0 auto;">
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#d8eef7;">
-            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">watch_current_session_pr</strong>
-            <span style="color:#536168;font-size:13px;">Registers the PR handoff; the backend immediately reconciles live PR, CI, and mergeability state.</span>
+            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">POST /pr-readiness</strong>
+            <span style="color:#536168;font-size:13px;">watch_current_session_pr and test-slot verification register the same Tank-owned PR/head readiness request.</span>
           </div>
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f4e4c8;">
@@ -35,7 +35,7 @@
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#eadff4;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">session_ci_watches row</strong>
-            <span style="color:#536168;font-size:13px;">Persistent handoff state the backend can find after the agent sleeps.</span>
+            <span style="color:#536168;font-size:13px;">Backing row for Tank-owned PR readiness state.</span>
             <div aria-label="Key session_ci_watches fields" style="display:grid;grid-template-columns:max-content 1fr;gap:4px 10px;margin-top:8px;color:#536168;font-size:12px;"><b style="color:#172126;font-weight:700;">repo/pr</b><span>owner, repo, pull number</span><b style="color:#172126;font-weight:700;">head_sha</b><span>current watched commit</span><b style="color:#172126;font-weight:700;">status</b><span>watching, ready, failed, conflict</span><b style="color:#172126;font-weight:700;">last_event_at</b><span>latest reconciled webhook</span></div>
           </div>
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>

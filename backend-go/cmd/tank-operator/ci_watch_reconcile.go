@@ -58,6 +58,13 @@ func (s *appServer) reconcileAndApplyCIWatchAttempt(ctx context.Context, watch p
 	if err != nil {
 		return ciWatchReconcileResult{}, err
 	}
+	return s.applyResolvedCIWatchState(ctx, watch, state, source, retryAttempt)
+}
+
+func (s *appServer) applyResolvedCIWatchState(ctx context.Context, watch pgstore.CIWatch, state mcpgithub.PullRequestState, source ciWatchReconcileSource, retryAttempt int) (ciWatchReconcileResult, error) {
+	if s.ciWatches == nil {
+		return ciWatchReconcileResult{}, errCIWatchReconcileUnavailable("ci watch store unavailable")
+	}
 	result := classifyCIWatchState(watch, state)
 	updated, err := s.ciWatches.UpdateObservation(ctx, pgstore.UpdateCIWatchObservationRequest{
 		WatchID:        watch.WatchID,

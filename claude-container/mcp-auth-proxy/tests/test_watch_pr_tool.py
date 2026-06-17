@@ -41,11 +41,11 @@ class _Resp:
 
 
 class _WatchHTTP:
-    """Routes the GitHub + backend calls _handle_tank_watch_pr_tool makes.
+    """Routes the backend call _handle_tank_watch_pr_tool makes.
 
     pr_detail_sequence/check_runs are used to synthesize the backend
-    /ci-watches response in tests. The tool itself no longer polls PR detail;
-    the backend reducer owns live CI and mergeability state.
+    /pr-readiness response in tests. The tool itself no longer resolves PR
+    detail; the backend reducer owns live CI and mergeability state.
     """
 
     def __init__(self, *, pr_detail_sequence, check_runs, pr_list=None, watch_response=None) -> None:
@@ -66,7 +66,7 @@ class _WatchHTTP:
         self.posts.append({"url": url, "json": json})
         if "mcp-github" in url:
             return _Resp(200, _MINT_TOKEN_SSE)
-        if "ci-watches" in url:
+        if "pr-readiness" in url:
             return _Resp(200, _dumps(self._backend_watch_response(json)))
         return _Resp(200, b"{}")
 
@@ -83,20 +83,22 @@ class _WatchHTTP:
         check_state = "failure" if failed else "pending" if pending or not self._check_runs else "success"
         if mergeable_state in {"dirty", "behind"}:
             state = "conflict"
-            detail = f"PR #{watch_payload['pr_number']} needs a rebase onto its base (mergeable_state={mergeable_state})."
+            detail = f"PR #{watch_payload.get('pr_number') or 1113} needs a rebase onto its base (mergeable_state={mergeable_state})."
         elif failed:
             state = "failed"
             detail = f"Required checks failed: {', '.join(failed[:8])}."
         elif mergeable is True and mergeable_state == "clean" and check_state == "success":
             state = "ready"
-            detail = f"PR #{watch_payload['pr_number']} is green and mergeable, awaiting human merge in Tank."
+            detail = f"PR #{watch_payload.get('pr_number') or 1113} is green and mergeable, awaiting human merge in Tank."
         else:
             state = "watching"
             detail = f"CI in progress (mergeable_state={mergeable_state or 'unknown'}, checks={check_state})."
         return {
             "state": state,
             "detail": detail,
-            "head_sha": watch_payload.get("head_sha") or "headsha",
+            "repo": watch_payload.get("repo") or "romaine-life/tank-operator",
+            "pr_number": watch_payload.get("pr_number") or 1113,
+            "head_sha": watch_payload.get("expected_head_sha") or "headsha",
             "pr_url": watch_payload.get("pr_url") or "https://github.com/romaine-life/tank-operator/pull/1113",
             "mergeable_state": mergeable_state,
             "check_state": check_state,
@@ -173,7 +175,7 @@ def _structured(http, repo, **extra):
 
 
 def _registered(http) -> bool:
-    return any("ci-watches" in p["url"] for p in http.posts)
+    return any("pr-readiness" in p["url"] for p in http.posts)
 
 
 def test_watch_pr_reports_conflict_on_dirty(tmp_path) -> None:
@@ -208,7 +210,7 @@ def test_watch_pr_reports_ready_when_green(tmp_path) -> None:
     structured = _structured(http, repo)
     assert structured["state"] == "ready"
     assert _registered(http) is True
-    watch_post = next(p for p in http.posts if "ci-watches" in p["url"])
+    watch_post = next(p for p in http.posts if "pr-readiness" in p["url"])
     assert watch_post["json"]["status"] == "watching"
     assert watch_post["json"]["check_state"] == "pending"
 
@@ -222,12 +224,11 @@ def test_watch_pr_registers_watch_when_pending(tmp_path) -> None:
     structured = _structured(http, repo)
     assert structured["state"] == "watching"
     assert _registered(http) is True
-    watch_post = next(p for p in http.posts if "ci-watches" in p["url"])
-    assert watch_post["json"]["pr_owner"] == "romaine-life"
-    assert watch_post["json"]["pr_name"] == "tank-operator"
+    watch_post = next(p for p in http.posts if "pr-readiness" in p["url"])
+    assert watch_post["json"]["repo"] == "romaine-life/tank-operator"
     assert watch_post["json"]["pr_number"] == 1113
-    assert watch_post["json"]["head_sha"] == ""
-    assert structured["head_sha"] == "headsha"
+    assert watch_post["json"]["expected_head_sha"]
+    assert structured["head_sha"] == watch_post["json"]["expected_head_sha"]
 
 
 def test_watch_pr_hands_mergeability_poll_to_backend(tmp_path) -> None:
@@ -256,8 +257,9 @@ def test_watch_pr_resolves_pr_number_from_open_pr(tmp_path) -> None:
         pr_detail_sequence=[(True, "clean")],
         check_runs=[{"name": "test", "status": "completed", "conclusion": "success"}],
     )
-    # No pr_number argument -> the tool resolves the open PR for the branch head.
+    # No pr_number argument -> Tank resolves the open PR for the branch head.
     response = asyncio.run(_handle_tank_watch_pr_tool(http, _Tok(), 7, {"repo_path": str(repo)}))
     structured = json.loads(response.text)["result"]["structuredContent"]
     assert structured["pr_number"] == 1113
     assert structured["state"] == "ready"
+    assert http.pr_detail_calls == 0

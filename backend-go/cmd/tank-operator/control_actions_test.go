@@ -2428,6 +2428,7 @@ func TestHandleInternalVerifyHotSwapUsesBackendReducer(t *testing.T) {
 		},
 	}
 	app := controlActionTestServer(t, store)
+	app.ciWatches = &fakeCIWatchStore{}
 	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
 		PR:             mcpgithub.PullRequestDetail{Number: prNumber},
 		Mergeable:      &mergeable,
@@ -2483,6 +2484,7 @@ func TestHandleInternalVerifyHotSwapBlocksBackendReducerPendingCI(t *testing.T) 
 		}},
 	}
 	app := controlActionTestServer(t, store)
+	app.ciWatches = &fakeCIWatchStore{}
 	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
 		PR:             mcpgithub.PullRequestDetail{Number: 1113},
 		Mergeable:      &mergeable,
@@ -2503,14 +2505,14 @@ func TestHandleInternalVerifyHotSwapBlocksBackendReducerPendingCI(t *testing.T) 
 
 	app.handleInternalVerifyHotSwap(rec, req)
 
-	if rec.Code != http.StatusConflict {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var body hotSwapVerificationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Allowed || !body.PublishVerified || body.CIVerified || !body.MergeVerified {
+	if body.Allowed || !body.PublishVerified || body.CIVerified || !body.MergeVerified || body.ReadinessState != "watching" {
 		t.Fatalf("verification body = %#v", body)
 	}
 	if got := strings.Join(body.Reasons, "\n"); !strings.Contains(got, "CI in progress") {

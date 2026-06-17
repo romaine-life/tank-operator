@@ -551,11 +551,11 @@ def _append_tank_publish_tool_to_json(value) -> bool:
             {
                 "name": _TANK_WATCH_PR_TOOL,
                 "description": (
-                    "Hand off CI/mergeability watching for the current session's "
-                    "governed PR to Tank. Performs the authoritative GitHub read "
+                    "Register the current session's governed PR head with Tank's "
+                    "PR-readiness process. Tank performs the authoritative GitHub read "
                     "(resolving GitHub's asynchronous mergeable_state and reading the "
                     "check rollup) so you do not poll check status yourself. Returns "
-                    "'conflict' or 'failed' to fix now, or 'watching'/'ready'."
+                    "'conflict', 'failed', 'watching', or 'ready'."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -2613,56 +2613,44 @@ async def _handle_tank_watch_pr_tool(
         if requested_repo and requested_repo != f"{owner}/{repo}":
             raise ValueError(f"repo argument {requested_repo!r} does not match origin {owner}/{repo}")
 
-        # Resolve the PR number: explicit arg, else the open PR for this branch.
+        # Tank resolves the PR number from branch when the caller does not pass one.
         raw_pr_number = arguments.get("pr_number")
         try:
             pr_number = int(raw_pr_number) if raw_pr_number is not None else 0
         except (TypeError, ValueError):
             raise ValueError("pr_number must be an integer")
         service_token = await auth_romaine_provider.token()
-        head_sha = ""
+        head_sha = await _git_output(repo_path, "rev-parse", "HEAD")
         pr_url = ""
-        if pr_number <= 0:
-            github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
-            list_status, list_body = await _github_api_json(
-                http,
-                github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=open",
-            )
-            if list_status >= 400 or not isinstance(list_body, list) or not list_body:
-                raise ValueError(f"no open PR found for {owner}:{branch}; pass pr_number explicitly")
-            first = list_body[0] if isinstance(list_body[0], dict) else {}
-            pr_number = int(first.get("number") or 0)
-            if pr_number <= 0:
-                raise ValueError(f"could not resolve PR number for {owner}:{branch}")
-            head = first.get("head")
-            head_sha = str(head.get("sha") or "") if isinstance(head, dict) else ""
-            pr_url = str(first.get("html_url") or "")
 
         headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
-        watch_url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/ci-watches"
+        watch_url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pr-readiness"
         watch_payload = {
-            "pr_owner": owner,
-            "pr_name": repo,
-            "pr_number": pr_number,
-            "head_sha": head_sha,
+            "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "expected_head_sha": head_sha,
             "mergeable_state": "",
             "check_state": "pending",
-            "detail": "CI watch registered; backend reconcile owns live state.",
+            "detail": "PR readiness registered; backend reconcile owns live state.",
             "pr_url": pr_url,
             "status": "watching",
         }
+        if pr_number > 0:
+            watch_payload["pr_number"] = pr_number
         async with http.post(watch_url, headers=headers, json=watch_payload) as resp:
             body_text = await resp.text()
             if resp.status >= 400:
-                raise RuntimeError(f"could not register CI watch: HTTP {resp.status}: {body_text[:300]}")
+                raise RuntimeError(f"could not register PR readiness: HTTP {resp.status}: {body_text[:300]}")
         try:
             watch_body = json.loads(body_text) if body_text else {}
         except Exception:
             watch_body = {}
         state = str(watch_body.get("state") or watch_body.get("status") or "watching")
-        detail = str(watch_body.get("detail") or "CI watch registered; backend reconcile is watching.")
+        detail = str(watch_body.get("detail") or "PR readiness registered; backend reconcile is watching.")
+        try:
+            pr_number = int(watch_body.get("pr_number") or pr_number or 0)
+        except (TypeError, ValueError):
+            pr_number = 0
         head_sha = str(watch_body.get("head_sha") or head_sha)
         pr_url = str(watch_body.get("pr_url") or pr_url)
         mergeable_state = str(watch_body.get("mergeable_state") or "")

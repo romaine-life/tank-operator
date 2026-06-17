@@ -8,8 +8,8 @@
 <body style="margin:0;font-family:Arial,Helvetica,sans-serif;color:#172126;background:#eef4f5;line-height:1.45;">
   <main style="max-width:1180px;margin:0 auto;padding:32px 16px 48px;">
     <header style="margin-bottom:24px;">
-      <h1 style="margin:0 0 8px;font-size:36px;line-height:1.1;">CI Watch Webhook Reconcile Shape</h1>
-      <p style="max-width:860px;margin:0;color:#536168;font-size:17px;">Webhooks are edge triggers. The backend does one authoritative reconcile for the watched PR head and transitions only on aggregate evidence. The core loop has one narrow polling exception: a deduped mergeability retry when GitHub reports UNKNOWN. The webhook handler itself does not spin.</p>
+      <h1 style="margin:0 0 8px;font-size:36px;line-height:1.1;">PR Readiness Reconcile Shape</h1>
+      <p style="max-width:860px;margin:0;color:#536168;font-size:17px;">Tank owns one PR-head readiness process. Webhooks are edge triggers; the backend does one authoritative reconcile and transitions only on aggregate evidence. The core loop has one narrow polling exception: a deduped mergeability retry when GitHub reports UNKNOWN.</p>
       <div aria-label="CI watch diagram pages" style="display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0;">
         <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #9aa8ae;border-radius:8px;padding:7px 11px;background:#eef4f5;color:#172126;font-size:13px;font-weight:700;">Overview</span>
         <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Agent handoff</span>
@@ -27,8 +27,8 @@
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px;padding:18px 22px 22px;">
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0;">
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#d8eef7;">
-            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">watch_current_session_pr</strong>
-            <span style="color:#536168;font-size:13px;">Registers the PR handoff; the backend immediately reconciles live PR, CI, and mergeability state.</span>
+            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">POST /pr-readiness</strong>
+            <span style="color:#536168;font-size:13px;">Rollout and test-slot callers register the same PR/head readiness request.</span>
           </div>
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f4e4c8;">
@@ -38,7 +38,7 @@
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#eadff4;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">session_ci_watches row</strong>
-            <span style="color:#536168;font-size:13px;">Persistent handoff state the backend can find after the agent sleeps.</span>
+            <span style="color:#536168;font-size:13px;">Backing row for Tank-owned PR readiness state.</span>
             <div aria-label="Key session_ci_watches fields" style="display:grid;grid-template-columns:max-content 1fr;gap:4px 10px;margin-top:8px;color:#536168;font-size:12px;"><b style="color:#172126;font-weight:700;">repo/pr</b><span>owner, repo, pull number</span><b style="color:#172126;font-weight:700;">head_sha</b><span>current watched commit</span><b style="color:#172126;font-weight:700;">status</b><span>watching, ready, failed, conflict</span><b style="color:#172126;font-weight:700;">last_event_at</b><span>latest reconciled webhook</span></div>
           </div>
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
@@ -55,7 +55,7 @@
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#ffffff;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Authenticate and route</strong>
-            <span style="color:#536168;font-size:13px;">Verify HMAC, then look up session_ci_watches by repo plus PR number.</span>
+            <span style="color:#536168;font-size:13px;">Verify HMAC, then look up the readiness row by repo plus PR number.</span>
           </div>
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#fff3cc;">

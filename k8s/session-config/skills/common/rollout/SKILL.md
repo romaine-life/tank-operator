@@ -11,7 +11,7 @@ When the user invokes `/rollout`, carry the current change to a clean, merge-rea
 
 1. **Finish the code change.** Make the requested edits, keep the diff focused, and run the relevant local checks.
 2. **Publish.** Commit on the session branch — the post-commit hook auto-publishes through `publish_current_head`, which records the commit and starts Tank's CI/mergeability watch. Once the PR exists, call `set_pull_request_link` with the session id and PR URL so the Tank UI can show its status.
-3. **Hand CI off to Tank.** Call the `watch_current_session_pr` tool. It performs the authoritative read for you — resolving GitHub's *asynchronous* `mergeable_state`, which is the exact thing agents get wrong — and returns one of:
+3. **Register PR readiness with Tank.** Call the `watch_current_session_pr` tool. It registers the current PR head with Tank's shared readiness process — resolving GitHub's *asynchronous* `mergeable_state`, which is the exact thing agents get wrong — and returns one of:
    - **`conflict`** — rebase the session branch onto its base, resolve, re-publish, then call `watch_current_session_pr` again.
    - **`failed`** — a required check is already red; fix the cause, re-publish, then call `watch_current_session_pr` again.
    - **`ready`** — green and mergeable; tell the user it is ready for them to merge in Tank.
