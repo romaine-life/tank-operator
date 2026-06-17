@@ -430,6 +430,7 @@ const CliProcessTerminal = lazy(() =>
 const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
 const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
 const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
+const TURN_DIRECTORY_NEW_TURN_LOOP_THRESHOLD = 3;
 // Minimum spacing between resync_required-triggered full snapshot
 // refreshes on the session-list stream. Each full resync is a snapshot
 // GET plus a near-immediate stream reopen (ticket mint + auth), so a
@@ -12966,6 +12967,27 @@ export function latestAutoFollowApprovalTurnId(
     : null;
 }
 
+export function turnActivityShellIdsMissingFromDirectory(
+  liveEntries: TranscriptEntry[],
+  directoryTurnIds: ReadonlySet<string>,
+): string[] {
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of liveEntries) {
+    const tid = (entry.turnId ?? "").trim();
+    if (
+      tid &&
+      isTurnActivityEntry(entry) &&
+      !directoryTurnIds.has(tid) &&
+      !seen.has(tid)
+    ) {
+      seen.add(tid);
+      missing.push(tid);
+    }
+  }
+  return missing;
+}
+
 export function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
@@ -17990,6 +18012,12 @@ function ChatPane({
   const [turnDirectoryRevision, setTurnDirectoryRevision] = useState(0);
   const turnDirectoryTurnIdsRef = useRef<Set<string>>(new Set());
   const loadTurnDirectoryInFlightRef = useRef(false);
+  const turnDirectoryNewTurnLoopRef = useRef<{
+    key: string;
+    count: number;
+    reported: boolean;
+  }>({ key: "", count: 0, reported: false });
+  const turnDirectoryRouteMismatchKeyRef = useRef<string | null>(null);
   const loadTurnDirectory = useCallback(
     async (source: string): Promise<void> => {
       // The pre-session splash has no session to read; admin/public read-only
@@ -17998,6 +18026,24 @@ function ChatPane({
       if (loadTurnDirectoryInFlightRef.current) return;
       loadTurnDirectoryInFlightRef.current = true;
       const requestSessionId = session.id;
+      const routeSessionId = readSessionRouteFromPath()?.sessionId ?? "";
+      if (routeSessionId && routeSessionId !== requestSessionId) {
+        const mismatchKey = `${requestSessionId}:${routeSessionId}:${source}`;
+        if (turnDirectoryRouteMismatchKeyRef.current !== mismatchKey) {
+          turnDirectoryRouteMismatchKeyRef.current = mismatchKey;
+          logChatScrollEvent("turn-directory-route-session-mismatch", {
+            surface: "session",
+            sessionId: requestSessionId,
+            sessionMode: session.mode,
+            source,
+            reason: "route-session-mismatch",
+            key: routeSessionId,
+            eventCount: turnDirectoryTurnIdsRef.current.size,
+          });
+        }
+      } else {
+        turnDirectoryRouteMismatchKeyRef.current = null;
+      }
       setTurnDirectoryStatus((prev) => (prev === "ready" ? prev : "loading"));
       logChatScrollEvent("turn-directory-request", {
         surface: "session",
@@ -18069,6 +18115,12 @@ function ChatPane({
     setPendingApprovalTurnOpenId(null);
     approvalAutoFollowPrimedRef.current = false;
     approvalAutoFollowKnownTurnIdsRef.current = new Set();
+    turnDirectoryNewTurnLoopRef.current = {
+      key: "",
+      count: 0,
+      reported: false,
+    };
+    turnDirectoryRouteMismatchKeyRef.current = null;
   }, [session.id]);
   // Load the directory when the pane becomes visible (open / tab switch /
   // session change). The new-turn refetch effect lives lower, after
@@ -21739,17 +21791,48 @@ function ChatPane({
   useEffect(() => {
     if (turnDirectoryStatus !== "ready") return;
     const known = turnDirectoryTurnIdsRef.current;
-    let hasNewTurn = false;
-    for (const entry of renderedEntries) {
-      const tid = (entry.turnId ?? "").trim();
-      if (tid && isTurnActivityEntry(entry) && !known.has(tid)) {
-        hasNewTurn = true;
-        break;
-      }
+    const missingTurnIds = turnActivityShellIdsMissingFromDirectory(
+      renderedEntries,
+      known,
+    );
+    if (missingTurnIds.length === 0) {
+      turnDirectoryNewTurnLoopRef.current = {
+        key: "",
+        count: 0,
+        reported: false,
+      };
+      return;
     }
-    if (hasNewTurn) void loadTurnDirectory("new-turn");
+    const missingKey = missingTurnIds.join("|");
+    const previous = turnDirectoryNewTurnLoopRef.current;
+    const next =
+      previous.key === missingKey
+        ? { ...previous, count: previous.count + 1 }
+        : { key: missingKey, count: 1, reported: false };
+    if (
+      next.count >= TURN_DIRECTORY_NEW_TURN_LOOP_THRESHOLD &&
+      !next.reported
+    ) {
+      next.reported = true;
+      logChatScrollEvent("turn-directory-new-turn-loop", {
+        surface: "session",
+        sessionId: session.id,
+        sessionMode: session.mode,
+        source: "new-turn",
+        reason: "stable-missing-turn-activity-shell",
+        key: missingTurnIds[0],
+        eventCount: missingTurnIds.length,
+        canonicalEventCount: known.size,
+        entries: renderedEntries.length,
+        turnActivityShells: renderedEntries.filter(isTurnActivityEntry).length,
+      });
+    }
+    turnDirectoryNewTurnLoopRef.current = next;
+    void loadTurnDirectory("new-turn");
   }, [
     renderedEntries,
+    session.id,
+    session.mode,
     turnDirectoryStatus,
     turnDirectoryRevision,
     loadTurnDirectory,
