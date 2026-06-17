@@ -75,6 +75,7 @@ import {
   natsPublishFailureTotal,
   optionsPinnedTotal,
   optionsRepinnedTotal,
+  breakGlassMcpRebuildTotal,
   providerApiRetryTotal,
   providerControlTotal,
   providerErrorTotal,
@@ -1040,6 +1041,12 @@ export class Runner {
   private pinnedModel: string | null = null;
   private pinnedEffort: EffortLevel | null = null;
   private pendingRepin: { model: string; effort: EffortLevel } | null = null;
+  // pendingMcpRebuild is set when a break-glass approval turn (carrying
+  // mcp_activate_name) needs the SDK query rebuilt so a now-granted MCP server's
+  // tools surface. Consumed at the same idle turn boundary as pendingRepin (via
+  // performRebuild), but it keeps the current pinned model/effort — the rebuild
+  // exists only to re-read .mcp.json and re-handshake servers.
+  private pendingMcpRebuild = false;
   private rebuildInProgress = false;
   private sdkStderrBuffer = "";
   // reportedContextWindowTokens latches the per-turn ModelUsage context
@@ -1382,8 +1389,9 @@ export class Runner {
     this.resolveSdkReady();
   }
 
-  // performRebuild applies a scheduled model/effort re-pin (pendingRepin) at an
-  // idle turn boundary: it builds + swaps in a fresh query() that resumes the
+  // performRebuild applies a scheduled rebuild at an idle turn boundary — a
+  // model/effort re-pin (pendingRepin) or a break-glass MCP activation
+  // (pendingMcpRebuild): it builds + swaps in a fresh query() that resumes the
   // live conversation under the new options, THEN tears down the old idle
   // query. Building before teardown means run()'s outer loop sees this.sdkQuery
   // already swapped when the old iterator unwinds, so it re-enters on the new
@@ -1392,10 +1400,17 @@ export class Runner {
   // max_ack_pending=1 guarantees that at acceptCommandTurn time.
   private async performRebuild(): Promise<void> {
     const repin = this.pendingRepin;
+    const mcpRebuild = this.pendingMcpRebuild;
     this.pendingRepin = null;
-    if (!repin || this.runSignal?.aborted) {
+    this.pendingMcpRebuild = false;
+    if ((!repin && !mcpRebuild) || this.runSignal?.aborted) {
       return;
     }
+    // A model/effort re-pin carries new options. A break-glass MCP rebuild keeps
+    // the current pinned options and exists only to re-read .mcp.json and
+    // re-handshake every server, surfacing the now-granted break-glass tools.
+    const model = repin?.model ?? this.pinnedModel ?? DEFAULT_MODEL;
+    const effort = repin?.effort ?? this.pinnedEffort ?? DEFAULT_EFFORT;
     const oldQuery = this.sdkQuery;
     const oldQueue = this.userQueue;
     // The live conversation's provider session id (latched from SDK events),
@@ -1411,15 +1426,21 @@ export class Runner {
         this.resolveSdkReady = resolve;
       });
       this.reportedContextWindowTokens = null;
-      this.buildSdkQuery(repin.model, repin.effort, resumeID);
-      optionsRepinnedTotal.labels(repin.model, repin.effort).inc();
+      this.buildSdkQuery(model, effort, resumeID);
+      if (repin) {
+        optionsRepinnedTotal.labels(model, effort).inc();
+      }
+      if (mcpRebuild) {
+        breakGlassMcpRebuildTotal.inc();
+        console.log(JSON.stringify({ msg: "break_glass_mcp_rebuilt" }));
+      }
       // Tear down the old idle query: interrupt() + closing its prompt queue
       // ends its iterator (the same teardown onAbort uses). run()'s outer loop
       // then re-enters on the swapped-in new query.
       try {
         oldQuery?.interrupt();
       } catch (err) {
-        console.warn("re-pin: interrupting the old query failed:", err);
+        console.warn("rebuild: interrupting the old query failed:", err);
       }
       oldQueue.close();
     } finally {
@@ -2229,25 +2250,16 @@ export class Runner {
     // though we won't feed THIS turn into the SDK below.
     this.ensureSdkQuery(record);
     // Break-glass surfacing: a break-glass approval turn carries
-    // mcp_activate_name — the server to reconnect. That server is configured
-    // from boot (present but tool-less while locked); the grant is now active,
-    // so reconnecting it in place re-runs the MCP handshake and surfaces its
-    // now-granted tools live. (Adding a server to a resumed query does NOT
-    // register its tools — the SDK's reconnectMcpServer on an existing server
-    // does.) Best-effort, before the turn is fed so the tools are live for it.
-    const reconnectMcp = String(record.mcp_activate_name ?? "").trim();
-    if (reconnectMcp) {
-      try {
-        await this.sdkQuery?.reconnectMcpServer(reconnectMcp);
-        console.log(
-          JSON.stringify({
-            msg: "break_glass_mcp_reconnected",
-            server: reconnectMcp,
-          }),
-        );
-      } catch (err) {
-        console.warn("break-glass mcp reconnect failed:", err);
-      }
+    // mcp_activate_name — a now-granted MCP server whose tools must surface for
+    // this session. Reconnecting that server on the live query does NOT
+    // re-register its tools, and a server written into .mcp.json mid-session is
+    // never re-read — so the only reliable path is a full query rebuild, which
+    // re-reads .mcp.json (loadConfiguredMcpServers) and re-handshakes every
+    // server, fetching the now-unlocked tools. Flag it here; the idle-boundary
+    // performRebuild just below applies it before this turn is fed, so the tools
+    // are live for the very turn the user sees.
+    if (String(record.mcp_activate_name ?? "").trim()) {
+      this.pendingMcpRebuild = true;
     }
     // Apply a scheduled mid-session re-pin at this idle boundary (no active
     // turn, nothing queued yet) before feeding the turn, so THIS turn runs on
@@ -2255,7 +2267,7 @@ export class Runner {
     // here; if a turn is somehow still active the re-pin stays pending for the
     // next idle submit_turn.
     if (
-      this.pendingRepin &&
+      (this.pendingRepin || this.pendingMcpRebuild) &&
       this.activeTurn === null &&
       this.pendingTurns.length === 0
     ) {
