@@ -9,10 +9,15 @@ and [../README.md](../README.md) for how capability ledgers are used.
 - **Status:** shipped
 - **Intent:** The agent never reads GitHub mergeability itself. `watch_current_session_pr`
   resolves GitHub's *asynchronous* `mergeable_state` (polling past `unknown`) plus
-  the check rollup, and returns `conflict | failed | ready | watching`. This is the
-  fix for the "reports it's good while the PR actually has a conflict" class.
+  auditable CI evidence, and returns `conflict | failed | ready | watching`. Exact
+  head-SHA check runs satisfy a check directly. A missing path-filtered check can
+  satisfy only when Tank finds the same PR branch's prior green run and proves no
+  commit since that run changed the workflow's `pull_request.paths` inputs. This is
+  the fix for both the "reports it's good while the PR actually has a conflict" class
+  and the "path-filtered checks never appear on unchanged HEAD" class.
 - **Durable source:** `session_ci_watches` row (status `watching`) registered via
-  `POST /api/internal/sessions/{id}/ci-watches`.
+  `POST /api/internal/sessions/{id}/ci-watches`; per-check CI evidence is recorded in
+  the `github.commit.ci` control-action payload.
 
 ## ci-watch-wake
 
