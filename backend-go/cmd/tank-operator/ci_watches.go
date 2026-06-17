@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
@@ -32,6 +33,7 @@ func (s *appServer) handleInternalRegisterCIWatch(w http.ResponseWriter, r *http
 		CheckState     string `json:"check_state"`
 		Detail         string `json:"detail"`
 		PRURL          string `json:"pr_url"`
+		Status         string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -67,5 +69,17 @@ func (s *appServer) handleInternalRegisterCIWatch(w http.ResponseWriter, r *http
 			PRURL:    watch.PRURL,
 		})
 	}
+	if ciWatchRegistrationReady(body.Status, body.CheckState, body.MergeableState) {
+		s.handleGreenCIWatch(r.Context(), watch, body.Detail)
+	}
 	writeJSON(w, http.StatusOK, watch)
+}
+
+func ciWatchRegistrationReady(status, checkState, mergeableState string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status == "ready" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(checkState), "success") &&
+		strings.EqualFold(strings.TrimSpace(mergeableState), "clean")
 }

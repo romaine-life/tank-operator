@@ -41,12 +41,16 @@ func (s *fakeCIWatchStore) Register(_ context.Context, req pgstore.RegisterCIWat
 		PRName:     req.PRName,
 		PRNumber:   req.PRNumber,
 		HeadSHA:    req.HeadSHA,
+		PRURL:      req.PRURL,
 	}, nil
 }
 
 func (s *fakeCIWatchStore) UpdateStatus(_ context.Context, watchID string, status pgstore.CIWatchStatus, _ string) (pgstore.CIWatch, error) {
 	s.updateStatusCalls = append(s.updateStatusCalls, ciWatchStatusCall{watchID: watchID, status: status})
-	return pgstore.CIWatch{}, nil
+	w := s.getByPRResult
+	w.WatchID = watchID
+	w.Status = status
+	return w, nil
 }
 
 func (s *fakeCIWatchStore) Get(_ context.Context, _ string) (pgstore.CIWatch, error) {
@@ -63,7 +67,10 @@ func (s *fakeCIWatchStore) GetLatestForSession(_ context.Context, _, _ string) (
 
 func (s *fakeCIWatchStore) MarkMerged(_ context.Context, watchID, _ string) (pgstore.CIWatch, error) {
 	s.markMergedCalls = append(s.markMergedCalls, watchID)
-	return pgstore.CIWatch{}, nil
+	w := s.getByPRResult
+	w.WatchID = watchID
+	w.Status = pgstore.CIWatchMerged
+	return w, nil
 }
 
 func (s *fakeCIWatchStore) HasActiveForSession(_ context.Context, _, _ string) (bool, error) {
@@ -153,6 +160,50 @@ func TestHandleInternalRegisterCIWatchLinksPhasePR(t *testing.T) {
 	}
 	if got.PRNumber != 1234 || got.PROwner != "romaine-life" || got.PRName != "tank-operator" {
 		t.Fatalf("phase a PR coordinates not stamped: %#v", got)
+	}
+}
+
+func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testing.T) {
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "ciwatch_test", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
+		HeadSHA: "abc123", PRURL: "https://github.com/romaine-life/tank-operator/pull/1234",
+	}}
+	app := ciWatchTestServer(t, store)
+	orch := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhaseRunning, spoke: "47"},
+	)
+	app.orchestrations = newOrchestrationEngine(orch, newRecordingSpawner().spawn)
+	gh := &fakeMCPGitHub{mergeCommit: "merge-sha"}
+	app.mcpGitHub = gh
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/ci-watches", strings.NewReader(`{
+		"pr_owner": "romaine-life",
+		"pr_name": "tank-operator",
+		"pr_number": 1234,
+		"head_sha": "abc123",
+		"mergeable_state": "clean",
+		"check_state": "success",
+		"status": "ready",
+		"pr_url": "https://github.com/romaine-life/tank-operator/pull/1234"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterCIWatch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gh.mergeCalls != 1 || gh.mergeWithHeadSHA != "abc123" {
+		t.Fatalf("merge calls=%d head=%q, want one guarded merge on abc123", gh.mergeCalls, gh.mergeWithHeadSHA)
+	}
+	if len(store.markMergedCalls) != 1 {
+		t.Fatalf("mark merged calls = %#v, want one", store.markMergedCalls)
+	}
+	if got := orch.snapshot(phaseID("a")).Status; got != pgstore.PhaseMerged {
+		t.Fatalf("phase status = %q, want merged", got)
 	}
 }
 
