@@ -44,6 +44,7 @@ from mcp_auth_proxy.server import (
     _handle_tank_update_pr_body_tool,
     _handle_tank_pr_lane_tool,
     _handle_break_glass_mcp,
+    _handle_break_glass_mint_token,
     _json_objects_from_mcp_body,
     _make_handler,
     _mint_github_installation_token,
@@ -490,14 +491,107 @@ def test_mint_github_installation_token_full_requests_full_scope() -> None:
         )
     )
 
-    # Break-glass mint_full_git_token must ask mcp-github for the App's full
-    # permission set (full=True), not the contents-only clone scope.
+    # Governed GitHub API operations still use the App's full permission set.
     assert token == "full-token"
     assert http.calls[0]["json"]["params"]["arguments"] == {
         "repos": ["romaine-life/tank-operator"],
         "write": True,
         "full": True,
     }
+
+
+def test_break_glass_mint_token_defaults_to_contents_write_scope(monkeypatch) -> None:
+    minted: list[dict] = []
+
+    async def fake_active(_http, _service_token, repo_slug):
+        assert repo_slug == "romaine-life/tank-operator"
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token"],
+            "branch_scope": {"kind": "unlimited"},
+            "expires_at": "2026-06-12T23:00:00Z",
+        }
+
+    async def fake_mint(_http, _service_token, repo_slug, *, workflows=False, full=False):
+        minted.append({"repo": repo_slug, "workflows": workflows, "full": full})
+        return "write-token"
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
+
+    response = asyncio.run(
+        _handle_break_glass_mint_token(
+            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
+            _StaticTokenProvider("service-token"),
+            88,
+            {"repo": "romaine-life/tank-operator"},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["result"]["structuredContent"]["token"] == "write-token"
+    assert minted == [{"repo": "romaine-life/tank-operator", "workflows": False, "full": False}]
+
+
+def test_break_glass_mint_token_rejects_workflows_without_operation(monkeypatch) -> None:
+    async def fake_active(_http, _service_token, _repo_slug):
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token"],
+            "branch_scope": {"kind": "unlimited"},
+        }
+
+    async def fake_mint(*_args, **_kwargs):
+        raise AssertionError("workflow token mint should not run without workflow grant")
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
+
+    response = asyncio.run(
+        _handle_break_glass_mint_token(
+            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
+            _StaticTokenProvider("service-token"),
+            89,
+            {"repo": "romaine-life/tank-operator", "workflows": True},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["error"]["code"] == -32020
+    assert "workflow-file writes" in payload["error"]["message"]
+
+
+def test_break_glass_mint_token_allows_workflows_with_operation(monkeypatch) -> None:
+    minted: list[dict] = []
+
+    async def fake_active(_http, _service_token, _repo_slug):
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token", "workflows"],
+            "branch_scope": {"kind": "unlimited"},
+            "expires_at": "2026-06-12T23:00:00Z",
+        }
+
+    async def fake_mint(_http, _service_token, repo_slug, *, workflows=False, full=False):
+        minted.append({"repo": repo_slug, "workflows": workflows, "full": full})
+        return "workflow-token"
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
+
+    response = asyncio.run(
+        _handle_break_glass_mint_token(
+            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
+            _StaticTokenProvider("service-token"),
+            90,
+            {"repo": "romaine-life/tank-operator", "workflows": True},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["result"]["structuredContent"]["token"] == "workflow-token"
+    assert payload["result"]["structuredContent"]["workflows"] is True
+    assert minted == [{"repo": "romaine-life/tank-operator", "workflows": True, "full": False}]
 
 
 def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path) -> None:
@@ -823,6 +917,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert "approval URL" in break_glass["description"]
     assert break_glass["inputSchema"]["required"] == ["repo_scope", "branch_scope", "reason"]
     assert "token" not in break_glass["inputSchema"]["properties"]
+    assert break_glass["inputSchema"]["properties"]["workflows"]["type"] == "boolean"
 
 
 def test_break_glass_approval_url_carries_request_context() -> None:
@@ -973,6 +1068,8 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     assert recorded["payload"]["request_event_id"] == recorded["event_id"]
     assert recorded["payload"]["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
     assert recorded["payload"]["branch_scope"] == {"kind": "unlimited"}
+    assert recorded["payload"]["operations"] == ["mint_full_git_token", "push_current_head"]
+    assert recorded["payload"]["workflows"] is False
     parsed_approval = urlparse(structured["approval_url"])
     approval_query = parse_qs(parsed_approval.query)
     assert parsed_approval.path.startswith("/sessions/95/break-glass/")
@@ -980,6 +1077,37 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     assert "branch_scope" not in approval_query
     assert "reason" not in approval_query
     assert recorded_call["headers"]["Authorization"] == "Bearer service-token"
+
+
+def test_tank_break_glass_tool_records_workflows_operation(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":false}'),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            9,
+            {
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+                "branch_scope": {"kind": "unlimited"},
+                "reason": "need workflow repair",
+                "workflows": True,
+            },
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
+    recorded = recorded_call["json"]
+    assert structured["workflows"] is True
+    assert structured["operations"] == ["mint_full_git_token", "push_current_head", "workflows"]
+    assert recorded["payload"]["workflows"] is True
+    assert recorded["payload"]["operations"] == ["mint_full_git_token", "push_current_head", "workflows"]
 
 
 def test_azure_break_glass_approval_url_carries_intent_without_repo() -> None:

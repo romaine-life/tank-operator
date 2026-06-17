@@ -15437,12 +15437,16 @@ function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): 
 }
 
 function adminBreakGlassKind(row: ControlActionRow): string {
-  return row.action === "azure.break_glass.request" ? "Azure break glass" : "GitHub break glass";
+  if (row.action === "azure.break_glass.request") return "Azure break glass";
+  return adminBreakGlassIncludesWorkflows(row)
+    ? "GitHub workflows break glass"
+    : "GitHub break glass";
 }
 
 function adminBreakGlassAccessType(row: ControlActionRow): string {
-  return row.action === "azure.break_glass.request"
-    ? "Azure personal MCP access"
+  if (row.action === "azure.break_glass.request") return "Azure personal MCP access";
+  return adminBreakGlassIncludesWorkflows(row)
+    ? "GitHub workflow-file write access"
     : "GitHub write access";
 }
 
@@ -15467,8 +15471,15 @@ function adminBreakGlassScope(row: ControlActionRow): string {
   const parts = [
     adminScopeLabel("repos", nonemptyAdminValue(repoScope.kind), repos),
     adminScopeLabel("branches", nonemptyAdminValue(branchScope.kind), branches),
+    adminBreakGlassIncludesWorkflows(row) ? "workflows: write" : "",
   ].filter(Boolean);
   return parts.join(" / ");
+}
+
+function adminBreakGlassIncludesWorkflows(row: ControlActionRow): boolean {
+  const payload = adminBreakGlassPayload(row);
+  const operations = adminBreakGlassStringList(payload.operations);
+  return payload.workflows === true || operations.includes("workflows");
 }
 
 function adminScopeLabel(

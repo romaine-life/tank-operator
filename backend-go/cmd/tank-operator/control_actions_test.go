@@ -1103,11 +1103,63 @@ func TestHandleApproveBreakGlassRequestPersistsGitGrantForRequestOwner(t *testin
 	if payload["approved_by"] != "admin@example.test" {
 		t.Fatalf("approved_by = %v", payload["approved_by"])
 	}
+	ops, _ := payload["operations"].([]any)
+	if len(ops) != 1 || ops[0] != "mint_full_git_token" {
+		t.Fatalf("operations = %v", payload["operations"])
+	}
 	if _, ok := payload["repo_scope"].(map[string]any); !ok {
 		t.Fatalf("repo_scope = %#v", payload["repo_scope"])
 	}
 	if _, ok := payload["branch_scope"].(map[string]any); !ok {
 		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+}
+
+func TestHandleApproveBreakGlassRequestPersistsWorkflowGrantOperation(t *testing.T) {
+	store := &fakeControlActionStore{
+		getRow: pgstore.ControlActionEvent{
+			EventID:      "request-workflows",
+			InvocationID: "invocation-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-3",
+			SessionID:    "47",
+			Action:       "github.break_glass.request",
+			Status:       "started",
+			TargetKind:   "github_repository",
+			TargetRef:    "https://github.com/romaine-life/tank-operator",
+			RepoOwner:    "romaine-life",
+			RepoName:     "tank-operator",
+			Payload: []byte(`{
+				"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+				"branch_scope": {"kind":"unlimited"},
+				"operations": ["mint_full_git_token", "push_current_head", "workflows"],
+				"workflows": true,
+				"reason": "repair workflow"
+			}`),
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/break-glass-requests/request-workflows/approve", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "request-workflows")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveBreakGlassRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(store.appendCalls[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	ops, _ := payload["operations"].([]any)
+	if len(ops) != 3 || ops[0] != "mint_full_git_token" || ops[1] != "push_current_head" || ops[2] != "workflows" {
+		t.Fatalf("operations = %v", payload["operations"])
 	}
 }
 
@@ -1402,7 +1454,7 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	payload, _ := json.Marshal(map[string]any{
 		"expires_at":   expiresAt,
-		"operations":   []string{"mint_full_git_token"},
+		"operations":   []string{"mint_full_git_token", "workflows"},
 		"reason":       "repair branch",
 		"repo_scope":   map[string]any{"kind": "current_repo", "repo": "romaine-life/tank-operator"},
 		"branch_scope": map[string]any{"kind": "unlimited"},
@@ -1435,6 +1487,10 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	}
 	if body["active"] != true || body["event_id"] != "grant-1" {
 		t.Fatalf("body = %#v", body)
+	}
+	ops, _ := body["operations"].([]any)
+	if len(ops) != 2 || ops[0] != "mint_full_git_token" || ops[1] != "workflows" {
+		t.Fatalf("operations = %v", body["operations"])
 	}
 	if store.listOwner != "owner@example.test" || store.listSession != "47" {
 		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
