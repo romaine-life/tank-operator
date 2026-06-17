@@ -6,13 +6,13 @@ image:
   tag: "app-675ca43100563147b21d6c784a4f8fc0d00f9fae22beb4c8f5f841d7cca1d3f0"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-16T23:47:27Z"
-    git_sha: "b5a3958cc9d58c305ca84ce6857d1b507d632df7"
+    built_at: "2026-06-17T00:07:12Z"
+    git_sha: "e453fe6dd08c102a4e11c5ad3408029fd17e95f3"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/b5a3958cc9d58c305ca84ce6857d1b507d632df7"
-    pr_number: "1245"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1245"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27655588228"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/e453fe6dd08c102a4e11c5ad3408029fd17e95f3"
+    pr_number: "1263"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1263"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27656532894"
     repository: "romaine-life/tank-operator"
     actor: "nelsong6"
 
