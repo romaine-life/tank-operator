@@ -147,6 +147,11 @@ type appServer struct {
 	// dropped-webhook backstop. nil in stub mode / when pgPool is unset.
 	orchestrations *orchestrationEngine
 
+	// orchestrationRuns is the launch/review handler's store surface. The
+	// engine above owns DAG advancement; this handle owns run creation and
+	// approval before reconcileRun starts dispatching phases.
+	orchestrationRuns orchestrationRunStore
+
 	// backgroundTaskWakes is the durable backend-owned store for "a Claude
 	// background task finished while the session was idle" wakes. The runner
 	// registers the natural terminal; the orchestrator claims due rows and
@@ -388,6 +393,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// exchange so the orchestrator can mint a service JWT acting for the
 	// SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
+	mux.HandleFunc("POST /api/orchestrations", s.handleCreateOrchestration)
+	mux.HandleFunc("POST /api/orchestrations/{orchestration_id}/review/approve", s.handleApproveOrchestrationReview)
 	mux.HandleFunc("GET /api/bug-labels", s.handleListBugLabels)
 	mux.HandleFunc("GET /api/session-run-options", s.handleSessionRunOptions)
 
@@ -553,6 +560,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/ci-watches", s.handleInternalRegisterCIWatch)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/orchestration/blocked", s.handleInternalOrchestrationBlocked)
 	// Public inbound GitHub webhook; authenticated by HMAC inside the handler.
 	mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)

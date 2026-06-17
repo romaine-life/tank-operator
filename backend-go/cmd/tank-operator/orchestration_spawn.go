@@ -46,6 +46,7 @@ func (s *appServer) spawnPhaseSpoke(ctx context.Context, orch pgstore.Orchestrat
 		return "", fmt.Errorf("orchestration %s has no owner_email", orch.OrchestrationID)
 	}
 	repos := []string{orch.RepoOwner + "/" + orch.RepoName}
+	repoBases := repoBasesForPhase(orch, phase)
 
 	name := "Phase: " + phase.Key
 	launchAt := time.Now().UTC()
@@ -57,6 +58,7 @@ func (s *appServer) spawnPhaseSpoke(ctx context.Context, orch pgstore.Orchestrat
 		Owner:        owner,
 		Mode:         orchestrationSpokeMode,
 		Repos:        repos,
+		RepoBases:    repoBases,
 		Capabilities: []string{sessionmodel.SessionCapabilityRestrictedGit},
 		Name:         &name,
 		RequestedAt:  requestedAt,
@@ -84,4 +86,13 @@ func (s *appServer) spawnPhaseSpoke(ctx context.Context, orch pgstore.Orchestrat
 		return "", fmt.Errorf("submit phase brief turn: %s", detail)
 	}
 	return info.ID, nil
+}
+
+func repoBasesForPhase(orch pgstore.Orchestration, phase pgstore.OrchestrationPhase) map[string]string {
+	if phase.Target != pgstore.PhaseTargetIntegration || strings.TrimSpace(orch.IntegrationBranch) == "" {
+		return map[string]string{}
+	}
+	return map[string]string{
+		orch.RepoOwner + "/" + orch.RepoName: strings.TrimSpace(orch.IntegrationBranch),
+	}
 }

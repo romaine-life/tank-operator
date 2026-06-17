@@ -61,6 +61,28 @@ type ReturnTestSlotRequest struct {
 	Reason          string  `json:"reason,omitempty"`
 }
 
+type CheckoutTestSlotRequest struct {
+	Project       string  `json:"project"`
+	Workflow      *string `json:"workflow,omitempty"`
+	TankSessionID *string `json:"tank_session_id,omitempty"`
+	TTLSeconds    *int    `json:"ttl_seconds,omitempty"`
+}
+
+type CheckoutTestSlotResult struct {
+	State                string  `json:"state"`
+	Project              string  `json:"project"`
+	Workflow             string  `json:"workflow"`
+	SlotIndex            *int    `json:"slot_index,omitempty"`
+	SlotName             *string `json:"slot_name,omitempty"`
+	URL                  *string `json:"url,omitempty"`
+	PlaywrightWSEndpoint *string `json:"playwright_ws_endpoint,omitempty"`
+	Lease                string  `json:"lease"`
+	Host                 *string `json:"host,omitempty"`
+	Usable               bool    `json:"usable"`
+	StatusURL            *string `json:"status_url,omitempty"`
+	Detail               *string `json:"detail,omitempty"`
+}
+
 type ReturnTestSlotResult struct {
 	State          string  `json:"state"`
 	Project        string  `json:"project"`
@@ -71,6 +93,23 @@ type ReturnTestSlotResult struct {
 	Usable         bool    `json:"usable"`
 	StatusURL      *string `json:"status_url,omitempty"`
 	Detail         *string `json:"detail,omitempty"`
+}
+
+type DeployImageToTestSlotRequest struct {
+	Project   string  `json:"project"`
+	SlotIndex *int    `json:"slot_index,omitempty"`
+	SlotName  *string `json:"slot_name,omitempty"`
+	GitRef    string  `json:"git_ref"`
+}
+
+type DeployImageToTestSlotResult struct {
+	Lease  string         `json:"lease"`
+	Job    string         `json:"job"`
+	Status string         `json:"status"`
+	GitRef string         `json:"git_ref"`
+	SHA    string         `json:"sha"`
+	Image  string         `json:"image"`
+	Raw    map[string]any `json:"-"`
 }
 
 func NewClient(opts Options) *Client {
@@ -122,6 +161,73 @@ func (c *Client) State(ctx context.Context, actorEmail string) (StateSnapshot, e
 		return StateSnapshot{}, fmt.Errorf("decode glimmung state: %w", err)
 	}
 	return snapshot, nil
+}
+
+func (c *Client) CheckoutTestSlot(ctx context.Context, actorEmail string, body CheckoutTestSlotRequest) (CheckoutTestSlotResult, error) {
+	token, err := c.mintToken(ctx, actorEmail)
+	if err != nil {
+		return CheckoutTestSlotResult{}, err
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return CheckoutTestSlotResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/test-slots/checkout", bytes.NewReader(raw))
+	if err != nil {
+		return CheckoutTestSlotResult{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return CheckoutTestSlotResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return CheckoutTestSlotResult{}, fmt.Errorf("glimmung checkout returned %d: %s", resp.StatusCode, responseDetail(resp))
+	}
+	var result CheckoutTestSlotResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return CheckoutTestSlotResult{}, fmt.Errorf("decode glimmung checkout: %w", err)
+	}
+	return result, nil
+}
+
+func (c *Client) DeployImageToTestSlot(ctx context.Context, actorEmail string, body DeployImageToTestSlotRequest) (DeployImageToTestSlotResult, error) {
+	token, err := c.mintToken(ctx, actorEmail)
+	if err != nil {
+		return DeployImageToTestSlotResult{}, err
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return DeployImageToTestSlotResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/test-slots/deploy-image", bytes.NewReader(raw))
+	if err != nil {
+		return DeployImageToTestSlotResult{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return DeployImageToTestSlotResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return DeployImageToTestSlotResult{}, fmt.Errorf("glimmung deploy-image returned %d: %s", resp.StatusCode, responseDetail(resp))
+	}
+	var rawResult map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&rawResult); err != nil {
+		return DeployImageToTestSlotResult{}, fmt.Errorf("decode glimmung deploy-image: %w", err)
+	}
+	result := DeployImageToTestSlotResult{Raw: rawResult}
+	result.Lease, _ = rawResult["lease"].(string)
+	result.Job, _ = rawResult["job"].(string)
+	result.Status, _ = rawResult["status"].(string)
+	result.GitRef, _ = rawResult["git_ref"].(string)
+	result.SHA, _ = rawResult["sha"].(string)
+	result.Image, _ = rawResult["image"].(string)
+	return result, nil
 }
 
 func (c *Client) ReturnTestSlot(ctx context.Context, actorEmail string, body ReturnTestSlotRequest) (ReturnTestSlotResult, error) {

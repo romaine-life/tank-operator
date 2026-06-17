@@ -21,6 +21,8 @@ var glimmungSlotNamePattern = regexp.MustCompile(`^(.+)-slot-(\d+)$`)
 
 type AppServerGlimmung interface {
 	State(ctx context.Context, actorEmail string) (glimmung.StateSnapshot, error)
+	CheckoutTestSlot(ctx context.Context, actorEmail string, body glimmung.CheckoutTestSlotRequest) (glimmung.CheckoutTestSlotResult, error)
+	DeployImageToTestSlot(ctx context.Context, actorEmail string, body glimmung.DeployImageToTestSlotRequest) (glimmung.DeployImageToTestSlotResult, error)
 	ReturnTestSlot(ctx context.Context, actorEmail string, body glimmung.ReturnTestSlotRequest) (glimmung.ReturnTestSlotResult, error)
 }
 

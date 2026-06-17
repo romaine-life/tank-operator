@@ -368,6 +368,9 @@ type ManifestOptions struct {
 	// create time. PodManifest passes it to the repo-cloner init
 	// container as JSON; empty means no init container.
 	Repos []string
+	// RepoBases optionally maps a repo slug to the branch repo-cloner should
+	// use as the governed PR base instead of the repo default branch.
+	RepoBases map[string]string
 	// Name is the optional user-facing session title selected before
 	// creation. It is stamped on the pod annotation so degraded pod-only
 	// reads match the registry row.
@@ -740,6 +743,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	initContainers := []any{}
 	if wantSDKRunner && len(opts.Repos) > 0 {
 		reposJSON, _ := json.Marshal(opts.Repos)
+		repoBasesJSON, _ := json.Marshal(opts.RepoBases)
+		if opts.RepoBases == nil {
+			repoBasesJSON = []byte("{}")
+		}
 		initContainers = append(initContainers, map[string]any{
 			"name":            "repo-cloner",
 			"image":           sessionImage,
@@ -755,6 +762,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					},
 				},
 				map[string]any{"name": "TANK_REPOS_JSON", "value": string(reposJSON)},
+				map[string]any{"name": "TANK_REPO_BASES_JSON", "value": string(repoBasesJSON)},
 				map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 				map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
 				map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},

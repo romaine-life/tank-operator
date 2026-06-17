@@ -674,7 +674,10 @@ func main() {
 	// webhook + CI-watch register handlers call it on the hot path; the
 	// reconcile loop below is the dropped-webhook backstop.
 	if orchestrationStore != nil {
+		srv.orchestrationRuns = orchestrationStore
 		srv.orchestrations = newOrchestrationEngine(orchestrationStore, srv.spawnPhaseSpoke)
+		srv.orchestrations.reviewReady = srv.emitOrchestrationReviewReadyRecord
+		srv.orchestrations.phaseMerged = srv.handleOrchestrationPhaseMerged
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {

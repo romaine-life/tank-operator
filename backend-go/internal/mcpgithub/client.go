@@ -74,6 +74,14 @@ type Repo struct {
 	Private  bool   `json:"private"`
 }
 
+// PullRequest is the narrow projection returned by mcp-github's
+// create_pull_request tool.
+type PullRequest struct {
+	Number  int
+	HTMLURL string
+	State   string
+}
+
 // Options configures a Client. Zero-value fields use the
 // production-default constants above; tests can override every URL.
 type Options struct {
@@ -195,6 +203,13 @@ func (c *Client) MarkPRReady(ctx context.Context, userEmail, owner, name string,
 // is rejected), so this is the authoritative merge. Returns the merge commit
 // SHA when available.
 func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod string) (string, error) {
+	return c.MergePRWithHead(ctx, userEmail, owner, name, number, mergeMethod, "")
+}
+
+// MergePRWithHead is MergePR plus mcp-github's expected_head_sha guard. The
+// tool reads the live PR head and refuses to merge if it moved since the CI
+// watch was registered.
+func (c *Client) MergePRWithHead(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, expectedHeadSHA string) (string, error) {
 	if c == nil {
 		return "", errors.New("mcpgithub: client unavailable")
 	}
@@ -209,13 +224,75 @@ func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, num
 	if err != nil {
 		return "", fmt.Errorf("mint on-behalf-of token: %w", err)
 	}
-	res, err := c.callTool(ctx, token, "merge_pull_request", map[string]any{
+	args := map[string]any{
 		"owner": owner, "name": name, "number": number, "merge_method": mergeMethod,
-	})
+	}
+	if expectedHeadSHA = strings.TrimSpace(expectedHeadSHA); expectedHeadSHA != "" {
+		args["expected_head_sha"] = expectedHeadSHA
+	}
+	res, err := c.callTool(ctx, token, "merge_pull_request", args)
 	if err != nil {
 		return "", err
 	}
 	return mergeCommitFromResult(res), nil
+}
+
+// CreateBranch creates a branch in a repository via mcp-github's create_branch
+// tool, using base as the source branch or ref.
+func (c *Client) CreateBranch(ctx context.Context, userEmail, owner, name, branch, base string) error {
+	if c == nil {
+		return errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return errors.New("mcpgithub: user email is empty")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("mcpgithub: branch is empty")
+	}
+	if strings.TrimSpace(base) == "" {
+		base = "main"
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	_, err = c.callTool(ctx, token, "create_branch", map[string]any{
+		"owner": owner, "name": name, "branch": branch, "base": base,
+	})
+	return err
+}
+
+// CreatePullRequest opens a PR through mcp-github's audited tool surface.
+func (c *Client) CreatePullRequest(ctx context.Context, userEmail, owner, name, title, head, base, body string, draft bool) (PullRequest, error) {
+	if c == nil {
+		return PullRequest{}, errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return PullRequest{}, errors.New("mcpgithub: user email is empty")
+	}
+	args := map[string]any{
+		"owner": owner,
+		"name":  name,
+		"title": title,
+		"head":  head,
+		"base":  base,
+		"draft": draft,
+	}
+	if strings.TrimSpace(body) != "" {
+		args["body"] = body
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	res, err := c.callTool(ctx, token, "create_pull_request", args)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	return pullRequestFromResult(res), nil
 }
 
 // callTool issues a single MCP JSON-RPC tools/call and returns the decoded
@@ -324,6 +401,26 @@ func mergeCommitFromResult(result map[string]any) string {
 		return sha
 	}
 	return ""
+}
+
+func pullRequestFromResult(result map[string]any) PullRequest {
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		return PullRequest{}
+	}
+	var out PullRequest
+	switch n := sc["number"].(type) {
+	case float64:
+		out.Number = int(n)
+	case int:
+		out.Number = n
+	}
+	out.HTMLURL, _ = sc["html_url"].(string)
+	if out.HTMLURL == "" {
+		out.HTMLURL, _ = sc["url"].(string)
+	}
+	out.State, _ = sc["state"].(string)
+	return out
 }
 
 // tokenFor returns a cached or freshly-minted service JWT for the

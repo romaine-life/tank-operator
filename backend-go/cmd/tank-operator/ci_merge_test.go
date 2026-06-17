@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
@@ -13,10 +14,17 @@ import (
 )
 
 type fakeMCPGitHub struct {
-	mergeCommit  string
-	mergeErr     error
-	markReadyErr error
-	mergeCalls   int
+	mergeCommit       string
+	mergeErr          error
+	markReadyErr      error
+	createBranchErr   error
+	createPRErr       error
+	mergeCalls        int
+	mergeWithHeadSHA  string
+	createBranchCalls []string
+	createPRCalls     []string
+	createPRNumber    int
+	createPRURL       string
 }
 
 func (f *fakeMCPGitHub) ListRepos(_ context.Context, _ string) ([]mcpgithub.Repo, error) {
@@ -30,6 +38,33 @@ func (f *fakeMCPGitHub) MarkPRReady(_ context.Context, _, _, _ string, _ int) er
 func (f *fakeMCPGitHub) MergePR(_ context.Context, _, _, _ string, _ int, _ string) (string, error) {
 	f.mergeCalls++
 	return f.mergeCommit, f.mergeErr
+}
+
+func (f *fakeMCPGitHub) MergePRWithHead(_ context.Context, _, _, _ string, _ int, _ string, expectedHeadSHA string) (string, error) {
+	f.mergeCalls++
+	f.mergeWithHeadSHA = expectedHeadSHA
+	return f.mergeCommit, f.mergeErr
+}
+
+func (f *fakeMCPGitHub) CreateBranch(_ context.Context, _, owner, name, branch, base string) error {
+	f.createBranchCalls = append(f.createBranchCalls, owner+"/"+name+":"+branch+":"+base)
+	return f.createBranchErr
+}
+
+func (f *fakeMCPGitHub) CreatePullRequest(_ context.Context, _, owner, name, title, head, base, _ string, _ bool) (mcpgithub.PullRequest, error) {
+	f.createPRCalls = append(f.createPRCalls, owner+"/"+name+":"+title+":"+head+":"+base)
+	if f.createPRErr != nil {
+		return mcpgithub.PullRequest{}, f.createPRErr
+	}
+	number := f.createPRNumber
+	if number == 0 {
+		number = 99
+	}
+	url := f.createPRURL
+	if url == "" {
+		url = "https://github.com/" + owner + "/" + name + "/pull/" + strconv.Itoa(number)
+	}
+	return mcpgithub.PullRequest{Number: number, HTMLURL: url, State: "open"}, nil
 }
 
 func mergeTestApp(t *testing.T, watches *fakeCIWatchStore, gh *fakeMCPGitHub) *appServer {
