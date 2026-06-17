@@ -3,7 +3,8 @@
 Project: `tank-operator`
 
 Use Glimmung `deploy_image_to_test_slot` after the branch is pushed and CI has
-built the proof image. Pass the checked-out slot and the pushed branch or SHA.
+built the proof image. Pass the checked-out slot and the pushed branch or
+commit ref.
 
 After deployment, verify the slot's public health endpoint:
 

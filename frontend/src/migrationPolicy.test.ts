@@ -107,10 +107,42 @@ const initialModeGoLongSource = readSource(
 const initialModeTestSource = readSource(
   "../../k8s/app-config/initial-mode-test.md",
 );
+const dockerBuildCheckWorkflowSource = readSource(
+  "../../.github/workflows/docker-build-check.yaml",
+);
+const k8sValuesSource = readSource("../../k8s/values.yaml");
+const testingDocsSource = readSource("../../docs/testing.md");
+const tankOperatorTestSkillSource = readSource(
+  "../../k8s/session-config/skills/common/test/references/repos/tank-operator.md",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   expect(appSource.includes("POLL_INTERVAL_MS")).toBe(false);
   expect(/setInterval\(\s*refreshSessionActivity/.test(appSource)).toBe(false);
+});
+
+test("Glimmung app image deploys stay fingerprint-first", () => {
+  expect(dockerBuildCheckWorkflowSource.includes("Compute image fingerprint")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Build and push proof image")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Tag app image by CI run lookup")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource).toMatch(/if: matrix\.name == 'app' &&/);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-pr-${PR_NUMBER}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-ref-${short_ref_hash}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("--source \"romainecr.azurecr.io/${{ matrix.image-repo }}:${src}\"")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("--image \"${{ matrix.image-repo }}:${lookup_tag}\"")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Tag image by commit SHA")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("commit-SHA tag")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("sha='${{ github.event.pull_request.head.sha || github.sha }}'")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource).not.toMatch(/image-repo\s*\}\}:\$\{\{\s*github\.(?:sha|event\.pull_request\.head\.sha)/);
+  expect(dockerBuildCheckWorkflowSource).not.toMatch(/\$\{\{\s*matrix\.image-repo\s*\}\}:\$\{sha\}/);
+
+  expect(k8sValuesSource.includes("Fingerprint-pinned. The build workflow")).toBe(true);
+  expect(k8sValuesSource.includes("SHA-pinned")).toBe(false);
+
+  expect(testingDocsSource.includes("CI-run lookup tag")).toBe(true);
+  expect(testingDocsSource).toMatch(/raw commit-SHA image\s+alias/);
+  expect(tankOperatorTestSkillSource.includes("commit ref")).toBe(true);
+  expect(tankOperatorTestSkillSource.includes("branch or SHA")).toBe(false);
 });
 
 test("App-root holds no periodic React state setters (cascade-prone pattern)", () => {

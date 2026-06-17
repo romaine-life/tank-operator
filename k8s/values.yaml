@@ -1,8 +1,8 @@
 image:
   repository: romainecr.azurecr.io/tank-operator
-  # SHA-pinned. The build workflow rewrites this line on every push to main
-  # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
-  # exact image CI just produced â€” no implicit `:latest` drift.
+  # Fingerprint-pinned. The build workflow rewrites this line on every push
+  # to main via a `[skip ci]` follow-up commit, so the cluster reconciles to
+  # the exact image CI just produced â€” no implicit `:latest` drift.
   tag: "app-fc373c3df4d4ea318695b1e6466e83b7fa162288090bbf9fe3553f8ba32b0921"
   pullPolicy: IfNotPresent
   metadata:
@@ -70,8 +70,8 @@ orchestrator:
     minAvailable: 1
 
 session:
-  # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
-  # every push to main via a `[skip ci]` follow-up commit.
+  # Fingerprint-pinned. claude-container-build.yml rewrites these tag
+  # suffixes on every push to main via a `[skip ci]` follow-up commit.
   image: "romainecr.azurecr.io/claude-container:claude-0267fdbc10ae8f37ace335c401a094c3c122b1111cb0d9afadcee0d8b2c74720"
   codexImage: "romainecr.azurecr.io/codex-container:codex-b9de89609f9f64bba1202d4248483bafd3a0d51da57492f7c048f52215035d31"
   imageMetadata:
@@ -193,8 +193,8 @@ oauthGateway:
 apiProxy:
   image:
     repository: romainecr.azurecr.io/api-proxy
-    # SHA-pinned. The api-proxy build workflow rewrites this line on every
-    # push to main via a `[skip ci]` follow-up commit. The 4-space indent
+    # Fingerprint-pinned. The api-proxy build workflow rewrites this line on
+    # every push to main via a `[skip ci]` follow-up commit. The 4-space indent
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
