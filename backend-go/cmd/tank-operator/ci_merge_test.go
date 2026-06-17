@@ -17,7 +17,21 @@ type fakeMCPGitHub struct {
 	mergeErr     error
 	markReadyErr error
 	mergeCalls   int
+
+	// orchestration surface recorders
+	lastMergeExpectedSHA string
+	createBranchCalls    []fakeCreateBranchCall
+	createBranchErr      error
+	createPRCalls        []fakeCreatePRCall
+	createPRResult       mcpgithub.CreatedPR
+	createPRErr          error
+	defaultBranch        string
+	defaultBranchErr     error
 }
+
+type fakeCreateBranchCall struct{ branch, base string }
+
+type fakeCreatePRCall struct{ head, base string }
 
 func (f *fakeMCPGitHub) ListRepos(_ context.Context, _ string) ([]mcpgithub.Repo, error) {
 	return nil, nil
@@ -27,9 +41,27 @@ func (f *fakeMCPGitHub) MarkPRReady(_ context.Context, _, _, _ string, _ int) er
 	return f.markReadyErr
 }
 
-func (f *fakeMCPGitHub) MergePR(_ context.Context, _, _, _ string, _ int, _ string) (string, error) {
+func (f *fakeMCPGitHub) MergePR(_ context.Context, _, _, _ string, _ int, _, expectedHeadSHA string) (string, error) {
 	f.mergeCalls++
+	f.lastMergeExpectedSHA = expectedHeadSHA
 	return f.mergeCommit, f.mergeErr
+}
+
+func (f *fakeMCPGitHub) CreateBranch(_ context.Context, _, _, _, branch, base string) error {
+	f.createBranchCalls = append(f.createBranchCalls, fakeCreateBranchCall{branch: branch, base: base})
+	return f.createBranchErr
+}
+
+func (f *fakeMCPGitHub) CreatePR(_ context.Context, _, _, _, _, head, base, _ string, _ bool) (mcpgithub.CreatedPR, error) {
+	f.createPRCalls = append(f.createPRCalls, fakeCreatePRCall{head: head, base: base})
+	return f.createPRResult, f.createPRErr
+}
+
+func (f *fakeMCPGitHub) DefaultBranch(_ context.Context, _, _, _ string) (string, error) {
+	if f.defaultBranch == "" {
+		return "main", f.defaultBranchErr
+	}
+	return f.defaultBranch, f.defaultBranchErr
 }
 
 func mergeTestApp(t *testing.T, watches *fakeCIWatchStore, gh *fakeMCPGitHub) *appServer {

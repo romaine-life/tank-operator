@@ -183,6 +183,74 @@ func TestOrchestrationListActiveOrchestrationIDs(t *testing.T) {
 	}
 }
 
+func TestOrchestrationBlockUnblockPhase(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool := newStrandedTurnTestPool(t, ctx, "orch_block")
+	store := NewOrchestrationStore(pool)
+
+	orch, _, err := store.Create(ctx, CreateOrchestrationRequest{
+		OwnerEmail: "owner@example.test",
+		RepoOwner:  "romaine-life",
+		RepoName:   "tank-operator",
+		State:      OrchestrationApproved,
+		Phases:     advancePlan(),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	aID := OrchestrationPhaseID(orch.OrchestrationID, "a")
+	bID := OrchestrationPhaseID(orch.OrchestrationID, "b")
+
+	// Drive a to running, then block it with a durable reason.
+	if _, _, err := store.MarkPhaseReady(ctx, aID); err != nil {
+		t.Fatalf("mark ready: %v", err)
+	}
+	if _, _, err := store.ClaimPhaseForSpawn(ctx, aID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := store.AttachPhaseSpoke(ctx, aID, "session-a"); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	blocked, ok, err := store.BlockPhase(ctx, aID, "stuck on missing credential")
+	if err != nil || !ok {
+		t.Fatalf("block running phase: ok=%v err=%v, want true/nil", ok, err)
+	}
+	if blocked.Status != PhaseBlocked || blocked.Detail != "stuck on missing credential" {
+		t.Fatalf("blocked phase = {%q, %q}, want {blocked, reason}", blocked.Status, blocked.Detail)
+	}
+
+	// Re-blocking an already-blocked phase is a guarded no-op.
+	if _, ok, err := store.BlockPhase(ctx, aID, "again"); err != nil || ok {
+		t.Fatalf("re-block: ok=%v err=%v, want false/nil (already blocked)", ok, err)
+	}
+
+	// Blocking a terminal-success phase must be refused by the guard.
+	if _, err := store.MarkPhaseMerged(ctx, bID, "sha-b"); err != nil {
+		t.Fatalf("merge b: %v", err)
+	}
+	if _, ok, err := store.BlockPhase(ctx, bID, "too late"); err != nil || ok {
+		t.Fatalf("block merged phase: ok=%v err=%v, want false/nil", ok, err)
+	}
+
+	// Unblock returns a to pending and clears the detail; the column round-trips.
+	unblocked, ok, err := store.UnblockPhase(ctx, aID)
+	if err != nil || !ok {
+		t.Fatalf("unblock: ok=%v err=%v, want true/nil", ok, err)
+	}
+	if unblocked.Status != PhasePending || unblocked.Detail != "" {
+		t.Fatalf("unblocked phase = {%q, %q}, want {pending, \"\"}", unblocked.Status, unblocked.Detail)
+	}
+	if reread, _ := store.GetPhase(ctx, aID); reread.Detail != "" {
+		t.Fatalf("re-read detail = %q, want cleared", reread.Detail)
+	}
+
+	// Unblocking a non-blocked phase is a guarded no-op.
+	if _, ok, err := store.UnblockPhase(ctx, aID); err != nil || ok {
+		t.Fatalf("re-unblock: ok=%v err=%v, want false/nil", ok, err)
+	}
+}
+
 func containsString(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

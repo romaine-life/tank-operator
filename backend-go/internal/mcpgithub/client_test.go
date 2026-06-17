@@ -25,6 +25,16 @@ type fakeMCPServer struct {
 	exchangeToken     string
 	exchangeExpiresIn time.Duration
 	mcpResponse       string
+	lastMCPRPC        map[string]any
+}
+
+// lastToolArgs returns the arguments map of the most recent MCP tools/call.
+func (f *fakeMCPServer) lastToolArgs() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	params, _ := f.lastMCPRPC["params"].(map[string]any)
+	args, _ := params["arguments"].(map[string]any)
+	return args
 }
 
 func newFakeMCPServer() *fakeMCPServer {
@@ -58,6 +68,11 @@ func (f *fakeMCPServer) start(t *testing.T) (exchangeURL, mcpURL string, stop fu
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&f.mcpCalls, 1)
+		var rpc map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&rpc)
+		f.mu.Lock()
+		f.lastMCPRPC = rpc
+		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(f.mcpResponse))
 	})

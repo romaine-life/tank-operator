@@ -34,7 +34,70 @@ var (
 		Name: "tank_orchestration_run_done_total",
 		Help: "Orchestration runs transitioned to done (all phases merged/skipped).",
 	})
+
+	orchestrationMergeTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_orchestration_phase_merge_total",
+		Help: "Autonomous green→merge attempts on phase PRs (merged|not_ready|mark_failed|error).",
+	}, []string{"result"})
+
+	orchestrationSyncForwardTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_orchestration_sync_forward_total",
+		Help: "Merge-forward of main into the run's integration branch, by result (ok|error).",
+	}, []string{"result"})
+
+	orchestrationBlockedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_orchestration_phase_blocked_total",
+		Help: "Phases moved to blocked because their spoke signalled it is stuck.",
+	})
+
+	orchestrationAwaitingReviewTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_orchestration_awaiting_review_total",
+		Help: "Runs parked on the human review/escalation gate (awaiting_review).",
+	})
+
+	orchestrationReviewEnvTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_orchestration_review_env_total",
+		Help: "Terminal-gate review-environment bring-ups from the integration branch (up|error).",
+	}, []string{"result"})
+
+	orchestrationKickoffTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_orchestration_kickoff_total",
+		Help: "Create-and-start kickoff attempts from a plan doc (started|rejected).",
+	}, []string{"result"})
+
+	orchestrationPromoteTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_orchestration_promote_total",
+		Help: "Integration→main promotions at the human go gate (merged|error).",
+	}, []string{"result"})
 )
+
+func recordOrchestrationMerge(result string) {
+	orchestrationMergeTotal.WithLabelValues(result).Inc()
+}
+
+func recordOrchestrationSyncForward(result string) {
+	orchestrationSyncForwardTotal.WithLabelValues(result).Inc()
+}
+
+func recordOrchestrationBlocked() {
+	orchestrationBlockedTotal.Inc()
+}
+
+func recordOrchestrationAwaitingReview() {
+	orchestrationAwaitingReviewTotal.Inc()
+}
+
+func recordOrchestrationReviewEnv(result string) {
+	orchestrationReviewEnvTotal.WithLabelValues(result).Inc()
+}
+
+func recordOrchestrationKickoff(result string) {
+	orchestrationKickoffTotal.WithLabelValues(result).Inc()
+}
+
+func recordOrchestrationPromote(result string) {
+	orchestrationPromoteTotal.WithLabelValues(result).Inc()
+}
 
 func recordOrchestrationAdvance(result string) {
 	orchestrationAdvanceTotal.WithLabelValues(result).Inc()

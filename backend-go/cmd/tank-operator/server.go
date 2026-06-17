@@ -147,6 +147,11 @@ type appServer struct {
 	// dropped-webhook backstop. nil in stub mode / when pgPool is unset.
 	orchestrations *orchestrationEngine
 
+	// orchStore is the durable orchestration run store the kickoff + human-gate
+	// HTTP handlers read/write directly (the engine owns the advance-time
+	// slice). Satisfied by *pgstore.OrchestrationStore; nil in stub mode.
+	orchStore appOrchestrationStore
+
 	// backgroundTaskWakes is the durable backend-owned store for "a Claude
 	// background task finished while the session was idle" wakes. The runner
 	// registers the natural terminal; the orchestrator claims due rows and
@@ -553,6 +558,15 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/ci-watches", s.handleInternalRegisterCIWatch)
+	// Multi-phase orchestration: the create-and-start on-switch, run status, the
+	// human terminal-review gate (promote integration→main / fail), unblocking an
+	// escalated phase, and a spoke's "I'm blocked" escalation signal.
+	mux.HandleFunc("POST /api/internal/orchestrations", s.handleInternalCreateOrchestration)
+	mux.HandleFunc("GET /api/internal/orchestrations/{orchestration_id}", s.handleInternalGetOrchestration)
+	mux.HandleFunc("POST /api/internal/orchestrations/{orchestration_id}/approve-merge", s.handleInternalApproveMergeOrchestration)
+	mux.HandleFunc("POST /api/internal/orchestrations/{orchestration_id}/fail", s.handleInternalFailOrchestration)
+	mux.HandleFunc("POST /api/internal/orchestrations/phases/{phase_id}/unblock", s.handleInternalUnblockOrchestrationPhase)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/orchestration/block", s.handleInternalSignalOrchestrationBlocked)
 	// Public inbound GitHub webhook; authenticated by HMAC inside the handler.
 	mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)

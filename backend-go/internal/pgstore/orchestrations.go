@@ -122,8 +122,12 @@ type OrchestrationPhase struct {
 	PRNumber        int
 	PRURL           string
 	MergeSHA        string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// Detail is a human-readable reason stamped when a phase reaches a
+	// terminal-failure (blocked) or carries a diagnostic note from the
+	// autonomous merge path. Empty on the happy path.
+	Detail    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // CreateOrchestrationRequest is the create-time insert: a run materialized from
@@ -465,7 +469,7 @@ const orchestrationColumns = `orchestration_id, owner_email, approver_email, rep
 
 const orchestrationPhaseColumns = `phase_id, orchestration_id, ordinal, phase_key, brief,
 	depends_on, target, status, spoke_session_id, pr_owner, pr_name, pr_number,
-	pr_url, merge_sha, created_at, updated_at`
+	pr_url, merge_sha, detail, created_at, updated_at`
 
 // Get returns a single run by id (without its phases).
 func (s *OrchestrationStore) Get(ctx context.Context, orchestrationID string) (Orchestration, error) {
@@ -774,6 +778,59 @@ func (s *OrchestrationStore) RequeuePhaseForRespawn(ctx context.Context, phaseID
 	return tag.RowsAffected() > 0, nil
 }
 
+// BlockPhase records that a phase is genuinely stuck — its spoke signalled it
+// cannot proceed — moving it to the terminal-failure 'blocked' status and
+// stamping the human-readable reason. Guarded on a non-terminal status so a
+// duplicate block signal, or a signal racing a merge/skip, never drags a phase
+// out of a terminal state: only the writer that observes the row still active
+// flips it, and the returned bool reports whether this call did. A blocked
+// phase's depends_on edges stay unsatisfied, so its DAG subtree pauses rather
+// than hanging silently. Reversible via UnblockPhase.
+func (s *OrchestrationStore) BlockPhase(ctx context.Context, phaseID, reason string) (OrchestrationPhase, bool, error) {
+	if s == nil || s.pool == nil {
+		return OrchestrationPhase{}, false, errors.New("orchestration store unavailable")
+	}
+	const q = `
+		UPDATE orchestration_phases
+		SET status = 'blocked', detail = $2, updated_at = now()
+		WHERE phase_id = $1
+		  AND status IN ('pending', 'ready', 'running', 'pr_open')
+		RETURNING ` + orchestrationPhaseColumns
+	out, err := scanOrchestrationPhase(s.pool.QueryRow(ctx, q, strings.TrimSpace(phaseID), strings.TrimSpace(reason)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrchestrationPhase{}, false, nil
+	}
+	if err != nil {
+		return OrchestrationPhase{}, false, err
+	}
+	return out, true, nil
+}
+
+// UnblockPhase clears a 'blocked' phase back to 'pending' so the next advance
+// pass re-evaluates its dependencies and (when satisfied) re-readies and
+// re-dispatches it. This is the human's "I resolved the blocker, resume that
+// branch" lever. Guarded on status='blocked' so it only ever moves a blocked
+// row and the call is idempotent; the detail note is cleared. The returned bool
+// reports whether this call performed the transition.
+func (s *OrchestrationStore) UnblockPhase(ctx context.Context, phaseID string) (OrchestrationPhase, bool, error) {
+	if s == nil || s.pool == nil {
+		return OrchestrationPhase{}, false, errors.New("orchestration store unavailable")
+	}
+	const q = `
+		UPDATE orchestration_phases
+		SET status = 'pending', detail = '', updated_at = now()
+		WHERE phase_id = $1 AND status = 'blocked'
+		RETURNING ` + orchestrationPhaseColumns
+	out, err := scanOrchestrationPhase(s.pool.QueryRow(ctx, q, strings.TrimSpace(phaseID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrchestrationPhase{}, false, nil
+	}
+	if err != nil {
+		return OrchestrationPhase{}, false, err
+	}
+	return out, true, nil
+}
+
 // ListActiveOrchestrationIDs returns the ids of runs the advance loop should
 // keep driving: those in 'approved' (a frozen plan whose root phases have not
 // been dispatched yet) or 'running' (at least one phase in flight). Terminal
@@ -867,6 +924,7 @@ func scanOrchestrationPhase(row orchestrationRowScanner) (OrchestrationPhase, er
 		&out.PRNumber,
 		&out.PRURL,
 		&out.MergeSHA,
+		&out.Detail,
 		&out.CreatedAt,
 		&out.UpdatedAt,
 	)

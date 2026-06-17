@@ -194,16 +194,30 @@ create_session_branch_pr() {
     return 0
   fi
 
-  base_branch="$(git -C "$target" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
-  if [ -z "$base_branch" ]; then
-    base_branch="$(git -C "$target" branch --show-current)"
+  # An orchestration integration-target phase overrides the fork point + PR
+  # base via TANK_SESSION_BASE_BRANCH; the normal case resolves the repo's
+  # default branch. A non-empty override that doesn't exist on origin is a hard
+  # error rather than a silent fall-through to the default, so a misconfigured
+  # integration phase fails loudly instead of opening a PR against main.
+  if [ -n "${TANK_SESSION_BASE_BRANCH:-}" ]; then
+    base_branch="$TANK_SESSION_BASE_BRANCH"
+    if ! git -C "$target" ls-remote --exit-code --heads origin "$base_branch" >/dev/null 2>&1; then
+      echo "repo-cloner: requested base branch '$base_branch' does not exist on origin for $slug" >&2
+      return 1
+    fi
+    git -C "$target" fetch --no-tags origin "$base_branch" >/dev/null 2>&1 || true
+  else
+    base_branch="$(git -C "$target" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+    if [ -z "$base_branch" ]; then
+      base_branch="$(git -C "$target" branch --show-current)"
+    fi
   fi
   if [ -z "$base_branch" ]; then
     echo "repo-cloner: cannot determine base branch for $slug" >&2
     return 1
   fi
 
-  echo "repo-cloner: creating governed session branch $branch for $slug"
+  echo "repo-cloner: creating governed session branch $branch for $slug (base $base_branch)"
   git -C "$target" checkout -B "$branch" "origin/$base_branch"
   git -C "$target" \
     -c user.name="Tank Operator" \

@@ -674,7 +674,17 @@ func main() {
 	// webhook + CI-watch register handlers call it on the hot path; the
 	// reconcile loop below is the dropped-webhook backstop.
 	if orchestrationStore != nil {
-		srv.orchestrations = newOrchestrationEngine(orchestrationStore, srv.spawnPhaseSpoke)
+		srv.orchStore = orchestrationStore
+		engine := newOrchestrationEngine(orchestrationStore, srv.spawnPhaseSpoke)
+		// Bind the GitHub-effecting + human-facing capability hooks. The engine
+		// owns the DAG decisions; these own the mcp-github merge/branch calls and
+		// the display-plane records. reviewEnv (test-env bring-up from the
+		// integration branch) is intentionally left unwired in this slice — the
+		// review gate is complete without it; see docs/event-driven-rollout.md.
+		engine.merge = srv.mergePhasePR
+		engine.syncForward = srv.syncIntegrationForward
+		engine.notify = srv.emitOrchestrationRecord
+		srv.orchestrations = engine
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {

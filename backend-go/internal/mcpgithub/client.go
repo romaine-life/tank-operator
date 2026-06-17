@@ -194,7 +194,14 @@ func (c *Client) MarkPRReady(ctx context.Context, userEmail, owner, name string,
 // userEmail. GitHub itself enforces the green/mergeable gate (an unmergeable PR
 // is rejected), so this is the authoritative merge. Returns the merge commit
 // SHA when available.
-func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod string) (string, error) {
+//
+// expectedHeadSHA, when non-empty, is forwarded as the tool's expected_head_sha
+// guard: mcp-github refuses the merge before any write if the PR's current head
+// moved off that SHA. The autonomous orchestrator passes the head SHA CI went
+// green on so a push that lands after the green signal cannot be merged
+// unverified; the human-merge surface passes "" (the human's click is the
+// guard).
+func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, expectedHeadSHA string) (string, error) {
 	if c == nil {
 		return "", errors.New("mcpgithub: client unavailable")
 	}
@@ -209,9 +216,13 @@ func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, num
 	if err != nil {
 		return "", fmt.Errorf("mint on-behalf-of token: %w", err)
 	}
-	res, err := c.callTool(ctx, token, "merge_pull_request", map[string]any{
+	args := map[string]any{
 		"owner": owner, "name": name, "number": number, "merge_method": mergeMethod,
-	})
+	}
+	if sha := strings.TrimSpace(expectedHeadSHA); sha != "" {
+		args["expected_head_sha"] = sha
+	}
+	res, err := c.callTool(ctx, token, "merge_pull_request", args)
 	if err != nil {
 		return "", err
 	}

@@ -146,6 +146,35 @@ func interpretGitHubWebhook(eventType string, p *githubWebhookPayload) ciWebhook
 	return sig
 }
 
+// greenishCICompletion reports whether a delivery is a non-failing CI
+// completion (a check_suite/check_run/workflow_run that finished with a
+// conclusion that is not red) and the PR number it carries. It is the trigger
+// for the orchestration green→merge fast path: a passing check is the moment a
+// phase PR might have just gone fully green. A failing conclusion is left to the
+// existing red-wake path; the merge gate itself is GitHub's, so a premature
+// "greenish" (other checks still pending) merely yields a refused merge.
+func greenishCICompletion(eventType string, p *githubWebhookPayload) (int, bool) {
+	switch eventType {
+	case "check_suite":
+		if p.CheckSuite == nil || p.Action != "completed" || ciFailingConclusions[p.CheckSuite.Conclusion] {
+			return 0, false
+		}
+		return firstPRNumber(p.CheckSuite.PullRequests), true
+	case "check_run":
+		if p.CheckRun == nil || p.Action != "completed" || ciFailingConclusions[p.CheckRun.Conclusion] {
+			return 0, false
+		}
+		return firstPRNumber(p.CheckRun.PullRequests), true
+	case "workflow_run":
+		if p.WorkflowRun == nil || p.Action != "completed" || ciFailingConclusions[p.WorkflowRun.Conclusion] {
+			return 0, false
+		}
+		return firstPRNumber(p.WorkflowRun.PullRequests), true
+	default:
+		return 0, false
+	}
+}
+
 func (s *appServer) verifyGitHubWebhookSignature(header string, body []byte) bool {
 	secret := strings.TrimSpace(s.githubWebhookSecret)
 	if secret == "" {
@@ -195,12 +224,24 @@ func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) 
 	sig := interpretGitHubWebhook(eventType, &p)
 	owner := strings.ToLower(strings.TrimSpace(p.Repository.Owner.Login))
 	name := strings.ToLower(strings.TrimSpace(p.Repository.Name))
+	ctx := r.Context()
+	// Orchestration green→merge fast path: a non-failing CI completion for a
+	// watched PR that maps to a still-open phase triggers an immediate green-
+	// gated merge attempt, so a phase self-completes within seconds of going
+	// green instead of waiting for the reconcile backstop. GitHub is the merge
+	// gate (a not-yet-green PR is refused), so firing on every passing check is
+	// safe and idempotent. This runs independently of the CI-watch coalescing
+	// below — a green check carries sig.kind=="" and would otherwise be ignored.
+	if s.orchestrations != nil && owner != "" && name != "" {
+		if prNum, greenish := greenishCICompletion(eventType, &p); greenish && prNum > 0 {
+			s.orchestrations.maybeAutoMergeOnCI(ctx, owner, name, prNum)
+		}
+	}
 	if sig.kind == "" || owner == "" || name == "" || sig.prNumber <= 0 {
 		recordCIWebhook(eventType, "ignored")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	ctx := r.Context()
 	// Orchestration advance runs independently of the CI-watch subsystem below:
 	// a merged phase PR must walk the DAG even when no ci_watch row exists, or
 	// the row is already terminal. A Tank-governed merge marks the watch 'merged'

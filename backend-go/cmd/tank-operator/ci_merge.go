@@ -42,7 +42,7 @@ func (s *appServer) handleMergeSessionPR(w http.ResponseWriter, r *http.Request)
 	if err := s.mcpGitHub.MarkPRReady(ctx, user.Email, watch.PROwner, watch.PRName, watch.PRNumber); err != nil {
 		slog.Warn("mark PR ready failed (continuing to merge)", "session", sessionID, "error", err)
 	}
-	mergeCommit, err := s.mcpGitHub.MergePR(ctx, user.Email, watch.PROwner, watch.PRName, watch.PRNumber, "squash")
+	mergeCommit, err := s.mcpGitHub.MergePR(ctx, user.Email, watch.PROwner, watch.PRName, watch.PRNumber, "squash", "")
 	if err != nil {
 		recordCITerminal("merge_rejected")
 		writeError(w, http.StatusConflict, "merge failed: "+err.Error())

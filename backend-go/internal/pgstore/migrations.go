@@ -2133,6 +2133,13 @@ var schemaMigrations = []migration{
 	{ID: "0174", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_spoke
 		ON orchestration_phases (spoke_session_id)
 		WHERE spoke_session_id <> ''`},
+	// Durable human-readable reason a phase reached a terminal-failure
+	// (blocked: a spoke signalled it is genuinely stuck) or a diagnostic note
+	// from the autonomous merge path. Surfaced in the escalation record and the
+	// run status read; write-once-ish (last writer wins). Additive, defaulted so
+	// existing rows are valid.
+	{ID: "0175", SQL: `ALTER TABLE orchestration_phases
+		ADD COLUMN IF NOT EXISTS detail text NOT NULL DEFAULT ''`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

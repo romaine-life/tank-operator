@@ -235,6 +235,11 @@ type CreateOptions struct {
 	// the registry row and threads them into the pod manifest for the
 	// repo-cloner init container.
 	Repos []string
+	// BaseBranch overrides the branch the repo-cloner forks the governed
+	// session branch from and targets its PR at. Empty (the normal case)
+	// uses the repo's default branch. The orchestration engine sets it to a
+	// run's integration branch for integration-target phase spokes.
+	BaseBranch string
 	// Name is the optional display title supplied by the workspace title
 	// bar before the create request is sent. It is normalized once here
 	// and becomes part of the initial durable sessions row.
@@ -331,6 +336,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
+	manifestOpts.BaseBranch = strings.TrimSpace(opts.BaseBranch)
 	manifestOpts.Name = &storedName
 	manifestOpts.Capabilities = capabilities
 	manifestOpts.Model = model

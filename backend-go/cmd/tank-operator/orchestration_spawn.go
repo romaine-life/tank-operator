@@ -47,6 +47,15 @@ func (s *appServer) spawnPhaseSpoke(ctx context.Context, orch pgstore.Orchestrat
 	}
 	repos := []string{orch.RepoOwner + "/" + orch.RepoName}
 
+	// An integration-target phase forks its branch off — and opens its PR
+	// against — the run's integration branch, so its work merges into
+	// integration (kept current with main) rather than straight to main. A
+	// main-target phase leaves BaseBranch empty (the repo default).
+	baseBranch := ""
+	if phase.Target == pgstore.PhaseTargetIntegration {
+		baseBranch = strings.TrimSpace(orch.IntegrationBranch)
+	}
+
 	name := "Phase: " + phase.Key
 	launchAt := time.Now().UTC()
 	// Mirror handleInternalCreateSession: the row's requested_at trails the
@@ -57,6 +66,7 @@ func (s *appServer) spawnPhaseSpoke(ctx context.Context, orch pgstore.Orchestrat
 		Owner:       owner,
 		Mode:        orchestrationSpokeMode,
 		Repos:       repos,
+		BaseBranch:  baseBranch,
 		Name:        &name,
 		RequestedAt: requestedAt,
 	})

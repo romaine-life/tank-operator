@@ -366,6 +366,12 @@ type ManifestOptions struct {
 	// create time. PodManifest passes it to the repo-cloner init
 	// container as JSON; empty means no init container.
 	Repos []string
+	// BaseBranch overrides the branch the repo-cloner forks the governed
+	// session branch from and opens the governed PR against. Empty means
+	// "use the repo's default branch" (the normal case). The orchestration
+	// engine sets it to a run's integration branch for integration-target
+	// phase spokes, so their PRs target integration rather than main.
+	BaseBranch string
 	// Name is the optional user-facing session title selected before
 	// creation. It is stamped on the pod annotation so degraded pod-only
 	// reads match the registry row.
@@ -753,6 +759,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					},
 				},
 				map[string]any{"name": "TANK_REPOS_JSON", "value": string(reposJSON)},
+				// Empty (the common case) tells repo-cloner to use the repo's
+				// default branch; a non-empty value (an orchestration integration
+				// branch) overrides both the fork point and the governed PR base.
+				map[string]any{"name": "TANK_SESSION_BASE_BRANCH", "value": opts.BaseBranch},
 				map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 				map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
 				map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
