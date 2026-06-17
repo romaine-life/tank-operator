@@ -399,7 +399,8 @@ Open hardening:
   direct service egress is denied or scoped to the sidecar.
 - Break-glass does not advertise privileged Git options in the normal MCP tool
   list. The visible normal-mode surface is the narrow
-  `request_git_break_glass` request tool, which records the request without
+  `request_git_break_glass` request tool, which records the request and returns
+  a Tank approval URL (`/sessions/{id}?break_glass_request={event_id}`) without
   minting or revealing a token. Grants are stored as
   `github.break_glass.grant` control-action events with repo, operation, request
   event id, and TTL scope. Denials are stored as `github.break_glass.deny`.
@@ -413,21 +414,23 @@ Open hardening:
   MCP server for the session/repo and writes runtime MCP config for Codex and
   Claude. That privileged server lists no tools before activation, rechecks the
   grant on every list/call, and records token/push use as
-  `github.break_glass.token` or `github.break_glass.push`. The browser approval
-  panel and deep link were retired 2026-06-17, so Tank no longer exposes an App
-  Chrome route for writing the grant or denial. auth.romaine.life only
-  authenticates the admin JWT that Tank verifies. When a grant is
+  `github.break_glass.token` or `github.break_glass.push`. Tank's browser UI
+  renders the approval panel and writes the grant or denial. auth.romaine.life
+  only authenticates the admin JWT that Tank verifies. When a grant is
   persisted, Tank starts a system-authored follow-up turn telling the agent the
   user approved the request and to call `request_git_break_glass` again to
   activate the privileged MCP server.
-- Browser break-glass approval surfaces were retired 2026-06-17. A started
-  `github.break_glass.request` or `azure.break_glass.request` remains an audited
-  control-action request, but it no longer contributes to the composer approval
-  chip, and App Chrome no longer accepts the old query-param approval link,
-  `/sessions/{id}/break-glass/{event_id}` route, or
-  `/settings/admin/break-glass` panel. The composer approval chip is reserved
-  for non-break-glass approval queues such as test-slot model approval and
-  governed PR-lane approval.
+- Break-glass approval deep link + admin panel (added 2026-06-14; composer chip
+  retired 2026-06-17). A started `github.break_glass.request` or
+  `azure.break_glass.request` remains an audited control-action request, but it
+  no longer contributes to the composer approval chip. If the URL carries
+  `break_glass_request`, the pane fetches that exact request from Tank
+  (`GET /api/sessions/{id}/break-glass-requests/{event_id}`) so an admin can
+  approve another user's request without relying on the owner's control-action
+  list. Approve/deny POST to
+  `/api/sessions/{id}/break-glass-requests/{event_id}/{approve|deny}`. The
+  composer approval chip is reserved for non-break-glass approval queues such as
+  test-slot model approval and governed PR-lane approval.
 
 ## Locked-by-default Azure MCP (break-glass)
 
@@ -463,10 +466,10 @@ Contract impact:
 - The visible normal-mode surface is the narrow `request_azure_break_glass`
   tool (proxy-injected into the mcp-tank-operator surface, independent of
   restricted-git). For **every** session it records an
-  `azure.break_glass.request` control-action event without granting access or
-  revealing a token. The browser approval deep link was retired 2026-06-17.
-  Approval is always an explicit human admin action — there is no auto-approval
-  path for any session.
+  `azure.break_glass.request` control-action event and returns the Tank approval
+  deep-link shape (`/sessions/{id}?break_glass_request={event_id}`) without
+  granting access or revealing a token. Approval is always an explicit human
+  admin action — there is no auto-approval path for any session.
 - Grants are stored as `azure.break_glass.grant` control-action events
   (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
   same `control_action_events` ledger as git break-glass. They are not
@@ -493,7 +496,7 @@ Contract impact:
 - **Live surfacing (event-driven).** A mid-session SDK reconnect does *not*
   re-register an MCP server's tools, so on grant the orchestrator also POSTs
   `mcp-azure-personal`'s `/internal/grant-activated {session_id}`
-  (`internal/azurepersonal`, fired from the Azure grant notification path —
+  (`internal/azurepersonal`, fired from `enqueueAzureBreakGlassApprovalTurn` —
   best-effort + async, counter `tank_azure_grant_activated_total`). The stateful
   azure-personal server emits `notifications/tools/list_changed` on that session's
   live stream and the SDK auto-refreshes `tools/list`, so the tools surface with
@@ -507,8 +510,8 @@ Open hardening:
   retired, so its subject was dropped from the RoleBinding and no exemption is
   configured. `breakGlass.exemptSubjects` remains for any future unattended
   automation that legitimately needs Azure without a per-session grant.
-- The public Azure break-glass approval panel was retired 2026-06-17;
-  auth.romaine.life remains the identity provider for admin JWTs, not the
+- Tank owns the public azure break-glass approval panel and approve/deny API;
+  auth.romaine.life remains the identity provider for the admin JWT, not the
   approval workflow owner.
 
 ## Non-Restricted Session Full Git Access

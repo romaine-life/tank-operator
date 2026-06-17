@@ -79,7 +79,7 @@ describe("durable turn directory feeds the Turns selector", () => {
       shell("turn_1", 1),
       shell("turn_2", 2, {
         status: "completed",
-        submittedSource: "test-slot-model-approval",
+        submittedSource: "break-glass-approval",
       }),
     ];
     const items = buildTurnViewItems(directory, null, {}, "claude", 200_000);
@@ -91,7 +91,7 @@ describe("durable turn directory feeds the Turns selector", () => {
       [
         shell("turn_1", 1, {
           status: "completed",
-          submittedSource: "test-slot-model-approval",
+          submittedSource: "break-glass-approval",
         }),
         shell("turn_2", 2),
       ],
