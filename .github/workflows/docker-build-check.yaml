@@ -173,12 +173,8 @@ jobs:
           push: true
           tags: romainecr.azurecr.io/${{ matrix.image-repo }}:${{ steps.fingerprint.outputs.proof_tag }}
           build-args: ${{ matrix.build_args }}
-          cache-from: |
-            type=registry,ref=${{ matrix.cache-ref }}
-            type=gha,scope=${{ matrix.name }}
-          cache-to: |
-            type=registry,ref=${{ matrix.cache-ref }},mode=max
-            type=gha,mode=max,scope=${{ matrix.name }}
+          cache-from: type=registry,ref=${{ matrix.cache-ref }}
+          cache-to: type=registry,ref=${{ matrix.cache-ref }},mode=max
 
       - name: Tag image by commit SHA (deploy-to-image resolution)
         # The deploy-to-image flow (glimmung deploy_slot_to_image) resolves a
