@@ -16,6 +16,7 @@
       --trigger: #d8eef7;
       --compute: #e9f4df;
       --store: #eadff4;
+      --poll: #f4e4c8;
       --pending: #fff3cc;
       --wake: #f8d9d4;
       --ready: #dcebe0;
@@ -128,6 +129,7 @@
     .trigger { background: var(--trigger); }
     .compute { background: var(--compute); }
     .store { background: var(--store); }
+    .poll { background: var(--poll); }
     .pending { background: var(--pending); }
     .wake { background: var(--wake); }
     .ready { background: var(--ready); }
@@ -191,6 +193,11 @@
       background: #edf7f4;
       border-radius: 0 8px 8px 0;
       color: #223338;
+    }
+
+    .callout.polling {
+      border-left-color: #94631f;
+      background: #fbf0dc;
     }
 
     .callout strong {
@@ -263,9 +270,10 @@
       <h1>CI Watch Webhook Reconcile Shape</h1>
       <p class="lede">
         Webhooks are edge triggers. The backend does one authoritative reconcile for
-        the watched PR head, transitions only on aggregate evidence, and treats
-        GitHub's calculating mergeability state as pending instead of polling inside
-        the webhook handler.
+        the watched PR head and transitions only on aggregate evidence. Polling is
+        constrained to two explicit places: a bounded mergeability retry where GitHub
+        reports UNKNOWN, and the current publish observer/backstop. The webhook
+        handler itself does not spin.
       </p>
       <p class="mobile-note">On narrow screens, lanes are stacked in execution order.</p>
     </header>
@@ -283,6 +291,11 @@
           <div class="node trigger">
             <strong>watch_current_session_pr</strong>
             <span>Registers the PR handoff after the initial authoritative read.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node poll">
+            <strong>Bounded mergeability retry</strong>
+            <span>GET the PR; if mergeable is null or UNKNOWN, sleep about 1.5 seconds and retry, currently up to 6 reads.</span>
           </div>
           <div class="connector" aria-hidden="true"></div>
           <div class="node store">
@@ -326,8 +339,8 @@
           </div>
           <div class="connector" aria-hidden="true"></div>
           <div class="node compute">
-            <strong>Read PR mergeability once</strong>
-            <span>Use GitHub's PR state to detect dirty or behind. Draft is not a conflict.</span>
+            <strong>Read PR mergeability</strong>
+            <span>Use GitHub's PR state to detect dirty or behind. UNKNOWN remains pending; draft is not a conflict.</span>
           </div>
           <div class="connector" aria-hidden="true"></div>
           <div class="node decision">
@@ -340,10 +353,17 @@
             </span>
           </div>
           <div class="callout">
-            <strong>No CI polling loop</strong>
+            <strong>No webhook spin loop</strong>
             GitHub's UNKNOWN or REST mergeable=null means "calculation not ready".
             The handler refreshes the watch detail and waits for another event or a
             deferred backstop instead of spinning.
+          </div>
+          <div class="callout polling">
+            <strong>Current polling surface</strong>
+            publish_current_head also starts a background commit observer that samples
+            CI and mergeability about every 30 seconds, currently up to 60 attempts,
+            until failure, green+mergeable, or timeout. That is a backstop/ledger
+            observer, not the webhook wake path.
           </div>
         </div>
 
@@ -373,6 +393,7 @@
     <div class="legend" aria-label="Legend">
       <span><i class="swatch trigger"></i> trigger or registration</span>
       <span><i class="swatch store"></i> durable database state</span>
+      <span><i class="swatch poll"></i> bounded or background polling</span>
       <span><i class="swatch compute"></i> authoritative read</span>
       <span><i class="swatch ready"></i> ready outcome</span>
       <span><i class="swatch wake"></i> agent wake outcome</span>
