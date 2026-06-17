@@ -575,6 +575,11 @@ func (s *projectionState) applyTurnProgress(event map[string]any, status string)
 		"orderKey":       transcriptString(event, "order_key"),
 		"progressStatus": status,
 	}
+	if status == "submitted" {
+		if source := strings.TrimSpace(transcriptPayloadString(event, "source")); source != "" {
+			entry["submittedSource"] = source
+		}
+	}
 	s.turnProgress = append(s.turnProgress, projectedEntryItem{
 		entry:    entry,
 		orderKey: transcriptString(event, "order_key"),
@@ -1803,7 +1808,25 @@ func buildTurnActivityShellRow(activity turnActivityBody, turnEntries []map[stri
 		}
 		break
 	}
+	if source := turnSubmittedSource(turnEntries, activity.TurnID); source != "" {
+		shell["submittedSource"] = source
+		activity.Summary["submittedSource"] = source
+	}
 	return shell
+}
+
+func turnSubmittedSource(entries []map[string]any, turnID string) string {
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") != turnID ||
+			!isProjectionTurnProgress(entry) ||
+			transcriptMapString(entry, "progressStatus") != "submitted" {
+			continue
+		}
+		if source := transcriptMapString(entry, "submittedSource"); source != "" {
+			return source
+		}
+	}
+	return ""
 }
 
 func foldBackgroundWakeContinuationActivities(projection transcriptProjection, wakeParents map[string]string) transcriptProjection {
@@ -2079,6 +2102,9 @@ func applyActivityAnchorSummary(summary map[string]any, anchors []map[string]any
 		last := anchors[len(anchors)-1]
 		summary["lastActivityAt"] = transcriptMapString(last, "time")
 		summary["endOrderKey"] = transcriptMapString(last, "orderKey")
+	}
+	if source := transcriptMapString(first, "submittedSource"); source != "" {
+		summary["submittedSource"] = source
 	}
 }
 

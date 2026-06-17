@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 
 import {
   buildTurnViewItems,
+  latestAutoFollowApprovalTurnId,
   mergeTurnDirectoryWithLiveShells,
 } from "./App.tsx";
 import type { TranscriptEntry } from "./App.tsx";
@@ -71,5 +72,49 @@ describe("durable turn directory feeds the Turns selector", () => {
     expect(items.map((t) => t.turnId)).toEqual(["turn_1", "turn_2", "turn_3"]);
     expect(items[2].label).toBe("Current turn");
     expect(items[2].active).toBe(true);
+  });
+
+  test("approval-created latest turns are eligible for auto-follow", () => {
+    const directory = [
+      shell("turn_1", 1),
+      shell("turn_2", 2, {
+        status: "completed",
+        submittedSource: "break-glass-approval",
+      }),
+    ];
+    const items = buildTurnViewItems(directory, null, {}, "claude", 200_000);
+    expect(latestAutoFollowApprovalTurnId(items)).toBe("turn_2");
+  });
+
+  test("non-latest or non-approval submitted sources do not auto-follow", () => {
+    const oldApproval = buildTurnViewItems(
+      [
+        shell("turn_1", 1, {
+          status: "completed",
+          submittedSource: "break-glass-approval",
+        }),
+        shell("turn_2", 2),
+      ],
+      null,
+      {},
+      "claude",
+      200_000,
+    );
+    expect(latestAutoFollowApprovalTurnId(oldApproval)).toBe(null);
+
+    const backgroundWake = buildTurnViewItems(
+      [
+        shell("turn_1", 1),
+        shell("turn_2", 2, {
+          status: "completed",
+          submittedSource: "background-task",
+        }),
+      ],
+      null,
+      {},
+      "claude",
+      200_000,
+    );
+    expect(latestAutoFollowApprovalTurnId(backgroundWake)).toBe(null);
   });
 });
