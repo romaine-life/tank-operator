@@ -94,6 +94,64 @@ Evidence:
   `turnDirectory.test.ts`, and the `scripts/check-removed-chat-runtime.mjs` guard
   blocking the window-derived selector.
 
+## Self-healing turn-directory loading
+
+Status: shipped
+
+Intent:
+Clicking a session in the tabs view must always load its turns. The first
+turn-directory loader was edge-triggered behind a permanent single-flight
+boolean latch (blocked by name in `scripts/check-removed-chat-runtime.mjs`) with
+no abort, timeout, or reconciliation. In the tabs view a pane persists across
+session switches, so
+switching to a new session while the previous session's load was still in flight
+took the latch's early return — the new load never started — and when the stale
+load resolved it returned without a terminal status. The Turns view was left on
+"Loading turns…" with nothing in flight and no edge to re-fire, recoverable only
+by remount (reload, or nav-away-and-back). Both `idle` and `loading` rendered the
+same spinner with no exit, Retry was wired only to the `error` state, and a load
+that never started emitted no telemetry — so the most common failure was both
+unrecoverable without remount and invisible. Loading is now a level-triggered
+reconciler keyed to the session epoch, so the strand is structurally
+unrepresentable and observable when it is auto-healed.
+
+Affected contracts:
+- Transcript Navigation (primary — Live Behavior + Failure And Recovery +
+  Observability for directory loading)
+- Observability (the new bounded client events and the stuck alert)
+
+Contract impact:
+- A visible, loadable pane whose directory status is non-terminal
+  (`idle`/`loading`) with no load in flight for the current session always has a
+  load running. Recovery is never remount-only.
+- The in-flight load is keyed by session epoch via an `AbortController`, not a
+  boolean latch: switching sessions aborts the superseded load, a stale
+  completion is ignored by controller identity, and the current load owns the
+  terminal status. A load that never started cannot strand the spinner.
+- A load is bounded by a wall-clock timeout (`TURN_DIRECTORY_LOAD_TIMEOUT_MS`); a
+  wedged connection becomes the retryable `error` state, never an eternal
+  spinner. The Retry affordance is reachable from the loading state, not only
+  from `error`.
+- The "never started" / stuck failure is observable: `turn-directory-stuck` (the
+  spinner exceeded `TURN_DIRECTORY_STUCK_THRESHOLD_MS` — the user-trust signal),
+  `turn-directory-reconcile` (the reconciler auto-healed a vanished load), and
+  `turn-directory-timeout` (a load abandoned into the retryable error state). The
+  `TankTurnDirectoryStuck` alert fires on a sustained stuck rate.
+
+Evidence:
+- Frontend: `frontend/src/turnDirectoryLoad.ts` (pure, unit-tested reconcile
+  gate: `evaluateTurnDirectoryReconcile` / `evaluateStuckWatchdog` /
+  `shouldArmStuckWatchdog` + thresholds), `turnDirectoryLoad.test.ts` (the truth
+  table pinning that a visible non-terminal pane with nothing in flight always
+  loads), and the `App.tsx` reconcile + watchdog + abort wiring.
+- Backend: `turn-directory-{reconcile,stuck,timeout}` added to both client-event
+  allowlists in `handlers_client_metrics.go`, asserted in
+  `handlers_client_metrics_test.go` to ride `tank_chat_scroll_client_events_total`.
+- Observability + guard: the `TankTurnDirectoryStuck` PrometheusRule in
+  `k8s/templates/observability.yaml`, and the migration guard in
+  `scripts/check-removed-chat-runtime.mjs` blocking the retired single-flight
+  latch by name.
+
 ## Deep-linkable turn activity pages
 
 Status: active

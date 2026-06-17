@@ -136,16 +136,26 @@ yanking the viewport away from a user reading history.
 - Load, ready, reconnect, and resync must not reset the viewport unless the
   user has explicitly returned to live tail or the current cursor is invalid.
 - The Turns view's turn selector lists every turn in the durable turn directory,
-  not just the turns in the loaded `/timeline` window. The directory loads on
-  session open and refreshes when the live stream surfaces a turn the directory
-  does not yet list (a newly submitted turn), so the selector reaches Turn 1 of
-  a long session without the reader paging the chat window back. Selecting a turn
-  the chat window never loaded resolves through the same lazy `/activity` load as
-  any other turn — the detail surface is already directory-agnostic. While the
-  directory has not loaded the view shows an explicit loading or retryable error
-  state; it never silently lists only the loaded window. The just-submitted turn
-  appears immediately as the active "Current turn" (from `renderedActiveTurnId`)
-  and gains its durable number when the directory refresh lands.
+  not just the turns in the loaded `/timeline` window. Directory loading is a
+  level-triggered reconciler (`frontend/src/turnDirectoryLoad.ts`): a visible,
+  loadable pane whose directory is not loaded and has no load in flight for the
+  current session always has a load running, and it refreshes when the live
+  stream surfaces a turn the directory does not yet list (a newly submitted
+  turn), so the selector reaches Turn 1 of a long session without the reader
+  paging the chat window back. Selecting a turn the chat window never loaded
+  resolves through the same lazy `/activity` load as any other turn — the detail
+  surface is already directory-agnostic. While the directory has not loaded the
+  view shows an explicit loading or retryable error state; it never silently
+  lists only the loaded window. Because loading is level-triggered and keyed to
+  the session epoch (an `AbortController`, not a permanent boolean latch), a
+  stranded "Loading turns…" spinner cannot persist: switching the pane between
+  sessions aborts the superseded load, and any non-terminal state with nothing
+  in flight reconciles into a fresh load rather than waiting for a remount
+  (reload / nav-away-and-back). Recovery is never remount-only; the retryable
+  affordance is reachable from the loading state too, not only from `error`. The
+  just-submitted turn appears immediately as the active "Current turn" (from
+  `renderedActiveTurnId`) and gains its durable number when the directory
+  refresh lands.
 - The Turns view exposes a dedicated **Page dropdown** beside the turn selector.
   It is present whenever a turn is selected; a single-page turn renders it
   **disabled** ("Page 1 of 1") rather than omitting it, and a turn that crosses
@@ -228,6 +238,21 @@ yanking the viewport away from a user reading history.
   SPA emits bounded `turn-directory-request` / `turn-directory-loaded` /
   `turn-directory-error` client events so a directory load that fails (leaving
   the retryable Turns error state) is diagnosable without browser devtools.
+- Client directory loading observes not only loads that *fail* but loads that
+  *never start* — the failure the SPA must not record nothing for. The loader is
+  a level-triggered reconciler (`frontend/src/turnDirectoryLoad.ts`): a visible
+  pane with a non-terminal status and nothing in flight always re-drives a load,
+  so a stranded "Loading turns…" spinner cannot survive without recovery, and a
+  load is bounded by a wall-clock timeout that surfaces a wedged connection as
+  the retryable `error` state rather than an eternal spinner. Three further
+  bounded client events make the strand class diagnosable: `turn-directory-stuck`
+  (the spinner exceeded the watchdog threshold — the user-trust signal, paired
+  with the `TankTurnDirectoryStuck` alert), `turn-directory-reconcile` (the
+  reconciler auto-healed a load that vanished), and `turn-directory-timeout` (a
+  load was abandoned into the retryable error state). The retired edge-triggered
+  single-flight loader and its boolean latch (`loadTurnDirectoryInFlightRef`),
+  which could strand the spinner with no in-flight work and no telemetry, are
+  blocked from reintroduction by `scripts/check-removed-chat-runtime.mjs`.
 
 - Normal session open lands at the live tail.
 - A copied message link resolves through a durable cursor and lands on the
@@ -260,6 +285,17 @@ yanking the viewport away from a user reading history.
   not a window-only list. Background-wake turns do not appear as separate
   selector entries (they fold into their originating turn, matching the
   directory).
+- Clicking between sessions in the tabs view loads each session's turns without
+  remount. A pane left showing "Loading turns…" with no load in flight recovers
+  on its own (the level-triggered reconciler re-drives the load) rather than
+  requiring a reload or nav-away-and-back; switching to a session while a prior
+  session's load is in flight does not strand the new session on the spinner. A
+  directory load that wedges times out into the retryable error state instead of
+  spinning forever, and Retry is reachable from the loading state, not only from
+  `error`. The retired edge-triggered single-flight loader and its
+  `loadTurnDirectoryInFlightRef` latch cannot reappear without failing
+  `scripts/check-removed-chat-runtime.mjs`; `frontend/src/turnDirectoryLoad.test.ts`
+  pins that a visible non-terminal pane with nothing in flight always loads.
 - Opening a pending `needs_input` turn lands on the question-set page, not the
   last output page. Multiple questions from one AskUserQuestion invocation stay
   in one answer set but render as adjacent semantic `question_set` pages, and

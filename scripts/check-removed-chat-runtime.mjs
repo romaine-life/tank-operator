@@ -73,6 +73,12 @@ const ignoredRelativePaths = new Set([
   // not live code reintroducing the retired path.
   "frontend/src/navigationMode.ts",
   "frontend/src/navigationMode.test.ts",
+  // turnDirectoryLoad module — its header documents the strand bug class it
+  // retires, naming the retired loadTurnDirectoryInFlightRef latch. Same
+  // prose-not-code exemption as navigationMode.ts: the guard blocks
+  // reintroduction in implementation files, not a module explaining the
+  // retirement.
+  "frontend/src/turnDirectoryLoad.ts",
   // Transcript-navigation contract — the Observability section names
   // the retired symbols explicitly so future readers can find the
   // migration guard from the contract.
@@ -174,6 +180,16 @@ const blocked = [
   // derivation that hid every turn older than the ~24-row tail; the cutover
   // feeds it turnViewSourceEntries (directory-owned set, live-overlaid).
   { name: "window-derived Turns selector", pattern: /buildTurnViewItems\(\s*renderedEntries\b/ },
+  // The turn-directory loader's single-flight boolean latch was the strand
+  // bug: set permanently true, with no AbortController and no lifecycle, it
+  // swallowed the next session's load on a cross-session supersede and, when
+  // the stale load resolved, returned without a terminal status — leaving the
+  // Turns view on "Loading turns…" with nothing in flight and no edge to
+  // re-fire (recoverable only by remount). The level-triggered reconciler
+  // (frontend/src/turnDirectoryLoad.ts) replaced it with an
+  // AbortController+epoch ref. Block the retired latch name so a future
+  // refactor can't reintroduce the edge-triggered single-flight gate.
+  { name: "retired turn-directory single-flight boolean latch", pattern: /\bloadTurnDirectoryInFlightRef\b/ },
   { name: "retired runner Cosmos event module", pattern: /\b(?:agent|codex)-runner\/src\/cosmos\.ts\b/ },
   { name: "retired runner Cosmos tests", pattern: /\bcosmos\.test\.ts\b/ },
   { name: "retired session Azure config secret", pattern: /\bSESSION_AZURE_CONFIG_SECRET\b/ },

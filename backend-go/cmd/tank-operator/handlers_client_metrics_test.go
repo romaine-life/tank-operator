@@ -230,6 +230,77 @@ func TestHandleChatScrollMetricsRecordsNavigationModeTransitions(t *testing.T) {
 	}
 }
 
+func TestHandleChatScrollMetricsRecordsTurnDirectoryRecovery(t *testing.T) {
+	// The turn-directory loader's level-triggered reconciler closed an
+	// observability hole: the retired edge-triggered loader recorded NOTHING
+	// for its most common failure — a load that never started, leaving the
+	// Turns view stranded on "Loading turns…". These three event names are the
+	// durable signal that the strand was caught (reconcile), that the spinner
+	// was visibly stuck (the user-trust failure), and that a wedged connection
+	// timed out into the retryable error state. The allowlist must accept all
+	// three so they ride the bounded counter instead of collapsing to "other".
+	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
+	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/chat-scroll", strings.NewReader(`{
+		"events": [
+			{
+				"event": "turn-directory-reconcile",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "1001",
+				"source": "loading"
+			},
+			{
+				"event": "turn-directory-stuck",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "1001",
+				"source": "loading"
+			},
+			{
+				"event": "turn-directory-timeout",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "1001",
+				"source": "open"
+			}
+		]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	var logs bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	app.handleChatScrollMetrics(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("metrics status = %d body=%s, want 202", res.Code, res.Body.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		`"event":"turn-directory-reconcile"`,
+		`"event":"turn-directory-stuck"`,
+		`"event":"turn-directory-timeout"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("slog output missing %s; got: %s", want, logged)
+		}
+	}
+
+	metrics := scrapePrometheus(t)
+	for _, want := range []string{
+		`tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-directory-reconcile",has_scroll_parent="unknown",session_mode="claude_gui",surface="session"}`,
+		`tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-directory-stuck",has_scroll_parent="unknown",session_mode="claude_gui",surface="session"}`,
+		`tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-directory-timeout",has_scroll_parent="unknown",session_mode="claude_gui",surface="session"}`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("scrape missing %s\n%s", want, metrics)
+		}
+	}
+}
+
 func TestHandleChatScrollMetricsRejectsUnboundedBatch(t *testing.T) {
 	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
 	var body bytes.Buffer
