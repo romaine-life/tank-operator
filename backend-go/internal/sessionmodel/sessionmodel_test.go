@@ -391,6 +391,9 @@ func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
 	if got, want := env["TANK_REPOS_JSON"], "[\"romaine-life/tank-operator\"]"; got != want {
 		t.Fatalf("TANK_REPOS_JSON = %v, want %q", got, want)
 	}
+	if got, want := env["TANK_REPO_BASES_JSON"], "{}"; got != want {
+		t.Fatalf("TANK_REPO_BASES_JSON = %v, want %q", got, want)
+	}
 	if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.test"; got != want {
 		t.Fatalf("TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
 	}
@@ -462,6 +465,21 @@ func TestPodManifestRestrictedGitCapabilityWiresOptInEnv(t *testing.T) {
 	assertConfigMapMountSubPath(t, cloner, "/opt/tank/agent-pre-push-hook.sh", "agent-pre-push-hook.sh")
 	assertVolumeMount(t, cloner, "workspace")
 	assertVolumeMount(t, cloner, "auth-romaine-sa-token")
+}
+
+func TestRepoClonerAvoidsBraceDefaultExpansionForRepoBases(t *testing.T) {
+	script, err := os.ReadFile("../../../k8s/session-config/repo-cloner.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(script)
+	if strings.Contains(body, `REPO_BASES_JSON="${TANK_REPO_BASES_JSON:-{}}"`) {
+		t.Fatal("repo-cloner must not use ${TANK_REPO_BASES_JSON:-{}}; bash appends the closing brace and turns {} into {}}")
+	}
+	if !strings.Contains(body, `REPO_BASES_JSON="${TANK_REPO_BASES_JSON:-}"`) ||
+		!strings.Contains(body, `REPO_BASES_JSON="{}"`) {
+		t.Fatal("repo-cloner must normalize an unset TANK_REPO_BASES_JSON through an explicit {} assignment")
+	}
 }
 
 func TestPodManifestWithoutSelectedReposOmitsRepoCloner(t *testing.T) {
