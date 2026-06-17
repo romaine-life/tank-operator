@@ -18,6 +18,7 @@ const (
 	ciWatchReconcileHandoff          ciWatchReconcileSource = "handoff"
 	ciWatchReconcileWebhook          ciWatchReconcileSource = "webhook"
 	ciWatchReconcileMergeabilityPoll ciWatchReconcileSource = "mergeability_poll"
+	ciWatchReconcileBackstop         ciWatchReconcileSource = "backstop"
 )
 
 type ciWatchReconcileResult struct {
@@ -86,6 +87,13 @@ func (s *appServer) applyResolvedCIWatchState(ctx context.Context, watch pgstore
 	}
 	if err != nil {
 		return result, err
+	}
+
+	// Age-to-terminal observability. Only the winning transition reaches here
+	// (losers returned on the stale sentinel above), so each terminal is counted
+	// once.
+	if result.Status != pgstore.CIWatchWatching && !updated.RegisteredAt.IsZero() {
+		recordCIWatchAge(time.Since(updated.RegisteredAt).Seconds())
 	}
 
 	switch result.Status {

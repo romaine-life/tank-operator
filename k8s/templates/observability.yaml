@@ -161,6 +161,16 @@ metadata:
     app.kubernetes.io/name: tank-operator
 spec:
   groups:
+    - name: tank-operator.ci-watch
+      rules:
+        - alert: TankCIWatchStalled
+          expr: tank_ci_watch_oldest_stale_age_seconds > 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a governed-PR CI watch has been 'watching' with no event for over an hour"
+            runbook: "A CI watch is stuck: the deciding webhook was likely dropped and the durable backstop's live re-drive did not resolve it (CI genuinely hung, or mergeability never resolved). The owning session stays reaper-protected and asleep by design. Check the PR's real check/mergeable state on GitHub and the tank_ci_webhooks_total{result} breakdown, then resolve or close the PR. The agent is intentionally NOT woken for this infra non-event."
     - name: tank-operator.http
       rules:
         - alert: TankOperatorHTTP5xxRate

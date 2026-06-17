@@ -333,6 +333,45 @@ func (s *CIWatchStore) HasActiveForSession(ctx context.Context, sessionScope, se
 	return active, err
 }
 
+// ListStaleWatching returns watches still in 'watching' whose last activity
+// (last_event_at, else registered_at) is older than the cutoff. The durable
+// reconcile backstop re-drives these: a watch that has seen no webhook in the
+// staleness window is the signature of a dropped delivery (or a hung CI run) --
+// the stranded-watch failure class the in-memory mergeability retry could not
+// survive an orchestrator restart of.
+func (s *CIWatchStore) ListStaleWatching(ctx context.Context, olderThan time.Duration, limit int) ([]CIWatch, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("ci watch store unavailable")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	cutoff := olderThan.Seconds()
+	if cutoff < 0 {
+		cutoff = 0
+	}
+	const q = `SELECT ` + ciWatchColumns + `
+		FROM session_ci_watches
+		WHERE status = 'watching'
+			AND COALESCE(last_event_at, registered_at) < now() - make_interval(secs => $1::double precision)
+		ORDER BY COALESCE(last_event_at, registered_at) ASC
+		LIMIT $2`
+	rows, err := s.pool.Query(ctx, q, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CIWatch{}
+	for rows.Next() {
+		w, err := scanCIWatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
 type ciWatchScanner interface {
 	Scan(dest ...any) error
 }

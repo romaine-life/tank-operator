@@ -270,6 +270,7 @@ type ciWatchStore interface {
 	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)
 	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
 	HasActiveForSession(context.Context, string, string) (bool, error)
+	ListStaleWatching(context.Context, time.Duration, int) ([]pgstore.CIWatch, error)
 }
 
 type pendingLaunchStore interface {

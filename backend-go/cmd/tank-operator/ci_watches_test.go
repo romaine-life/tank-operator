@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
@@ -29,6 +30,7 @@ type fakeCIWatchStore struct {
 
 	getByPRResult          pgstore.CIWatch
 	getByPRErr             error
+	staleWatching          []pgstore.CIWatch
 	updateStatusCalls      []ciWatchStatusCall
 	updateObservationCalls []ciWatchObservationCall
 	markMergedCalls        []string
@@ -109,6 +111,10 @@ func (s *fakeCIWatchStore) MarkMerged(_ context.Context, watchID, _ string) (pgs
 
 func (s *fakeCIWatchStore) HasActiveForSession(_ context.Context, _, _ string) (bool, error) {
 	return false, nil
+}
+
+func (s *fakeCIWatchStore) ListStaleWatching(_ context.Context, _ time.Duration, _ int) ([]pgstore.CIWatch, error) {
+	return s.staleWatching, nil
 }
 
 func ciWatchTestServer(t *testing.T, store ciWatchStore) *appServer {
@@ -330,6 +336,33 @@ func TestApplyResolvedCIWatchStateSkipsSideEffectsOnLostRace(t *testing.T) {
 	}
 	if store.getByPRResult.Status != pgstore.CIWatchFailed {
 		t.Fatalf("losing observation clobbered the row to %q, want it left failed", store.getByPRResult.Status)
+	}
+}
+
+func TestReconcileStaleCIWatchesReDrivesStuckWatch(t *testing.T) {
+	// A 'watching' watch went stale (its deciding webhook was dropped). The
+	// durable backstop must re-drive it with a fresh live read instead of
+	// leaving the session stranded asleep.
+	mergeable := true
+	stale := pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+	}
+	store := &fakeCIWatchStore{staleWatching: []pgstore.CIWatch{stale}, getByPRResult: stale}
+	app := ciWatchTestServer(t, store)
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc",
+		CheckState: "success", CIStatus: "succeeded", AllChecksSettled: true,
+	}}
+	if err := app.reconcileStaleCIWatches(context.Background(), time.Minute); err != nil {
+		t.Fatalf("backstop pass: %v", err)
+	}
+	if len(store.updateObservationCalls) != 1 {
+		t.Fatalf("backstop did not re-drive the stale watch: %+v", store.updateObservationCalls)
+	}
+	if store.updateObservationCalls[0].req.Status != pgstore.CIWatchReady {
+		t.Fatalf("re-drive resolved to %q, want ready", store.updateObservationCalls[0].req.Status)
 	}
 }
 
