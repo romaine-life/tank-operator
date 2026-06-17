@@ -227,7 +227,8 @@ stale-SHA guard.
 
 ### D. Terminal-state computation + coalescing
 
-Diagram: [CI Watch Webhook Reconcile Shape](features/ci-watch/webhook-reconcile-shape.html).
+Diagram: [CI Watch Webhook Reconcile Shape](features/ci-watch/webhook-reconcile-shape.html),
+an overview with one page per lane.
 
 A single PR emits dozens of `check_run`/`check_suite`/`workflow_run`/`status` events.
 The watcher does **not** wake on each. On every (non-stale) event it recomputes the

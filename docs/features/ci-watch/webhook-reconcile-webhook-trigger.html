@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CI Watch Webhook Trigger</title>
+  <link rel="stylesheet" href="webhook-reconcile.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Webhook Trigger</h1>
+      <p class="lede">
+        GitHub deliveries wake the backend, not the agent directly. The handler
+        authenticates the delivery, finds the durable watch, and drops events
+        that cannot affect the current watched PR head.
+      </p>
+      <nav class="page-nav" aria-label="CI watch diagram pages">
+        <a href="webhook-reconcile-shape.html">Overview</a>
+        <a href="webhook-reconcile-agent-handoff.html">Agent handoff</a>
+        <a href="webhook-reconcile-webhook-trigger.html" aria-current="page">Webhook trigger</a>
+        <a href="webhook-reconcile-aggregate-reconcile.html">Aggregate reconcile</a>
+        <a href="webhook-reconcile-terminal-action.html">Terminal action</a>
+      </nav>
+    </header>
+
+    <section class="diagram" aria-label="Webhook trigger lane">
+      <div class="single-flow">
+        <div class="lane">
+          <div class="node trigger">
+            <strong>GitHub webhook arrives</strong>
+            <span>check_run, check_suite, workflow_run, status, or pull_request.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node">
+            <strong>Authenticate and route</strong>
+            <span>Verify HMAC, then look up session_ci_watches by repo plus PR number.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node pending">
+            <strong>Drop non-actionable events</strong>
+            <span>No watch, terminal watch, or stale event head SHA.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

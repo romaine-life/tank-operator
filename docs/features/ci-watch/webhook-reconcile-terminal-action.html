@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CI Watch Terminal Action</title>
+  <link rel="stylesheet" href="webhook-reconcile.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Terminal Action</h1>
+      <p class="lede">
+        Reconcile only acts on aggregate state transitions. Red and conflict
+        wake the agent; ready allows human merge or orchestration auto-merge;
+        pending leaves the watch active.
+      </p>
+      <nav class="page-nav" aria-label="CI watch diagram pages">
+        <a href="webhook-reconcile-shape.html">Overview</a>
+        <a href="webhook-reconcile-agent-handoff.html">Agent handoff</a>
+        <a href="webhook-reconcile-webhook-trigger.html">Webhook trigger</a>
+        <a href="webhook-reconcile-aggregate-reconcile.html">Aggregate reconcile</a>
+        <a href="webhook-reconcile-terminal-action.html" aria-current="page">Terminal action</a>
+      </nav>
+    </header>
+
+    <section class="diagram" aria-label="Terminal action lane">
+      <div class="single-flow">
+        <div class="lane">
+          <div class="outcomes">
+            <div class="node wake">
+              <strong>Red</strong>
+              <span>Set watch status=failed and wake the session to fix CI.</span>
+            </div>
+            <div class="node wake">
+              <strong>Conflict</strong>
+              <span>Set watch status=conflict and wake the session to rebase or resolve.</span>
+            </div>
+            <div class="node ready">
+              <strong>Ready</strong>
+              <span>Set watch status=ready for human merge or orchestration auto-merge.</span>
+            </div>
+            <div class="node pending">
+              <strong>Pending</strong>
+              <span>Refresh watch detail and last_event_at; keep status=watching.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

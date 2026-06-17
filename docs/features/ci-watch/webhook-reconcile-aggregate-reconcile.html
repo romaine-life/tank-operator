@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CI Watch Aggregate Reconcile</title>
+  <link rel="stylesheet" href="webhook-reconcile.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Aggregate Reconcile</h1>
+      <p class="lede">
+        This is the event-triggered control loop. A webhook is only an edge
+        notification; the backend recomputes aggregate CI and PR state before
+        changing the durable watch.
+      </p>
+      <nav class="page-nav" aria-label="CI watch diagram pages">
+        <a href="webhook-reconcile-shape.html">Overview</a>
+        <a href="webhook-reconcile-agent-handoff.html">Agent handoff</a>
+        <a href="webhook-reconcile-webhook-trigger.html">Webhook trigger</a>
+        <a href="webhook-reconcile-aggregate-reconcile.html" aria-current="page">Aggregate reconcile</a>
+        <a href="webhook-reconcile-terminal-action.html">Terminal action</a>
+      </nav>
+    </header>
+
+    <section class="diagram" aria-label="Aggregate reconcile lane">
+      <div class="single-flow">
+        <div class="lane reconcile">
+          <div class="node compute">
+            <strong>Read aggregate CI evidence</strong>
+            <span>Latest check run per name, combined status, and path-filtered prior-green evidence.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node compute">
+            <strong>Read PR mergeability</strong>
+            <span>Use GitHub's PR state to detect dirty or behind. UNKNOWN remains pending; draft is not a conflict.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node decision">
+            <strong>Classify the aggregate</strong>
+            <span>
+              failed checks -> red;
+              dirty or behind -> conflict;
+              CI satisfied plus clean -> ready;
+              missing checks or UNKNOWN mergeability -> pending.
+            </span>
+          </div>
+          <div class="callout">
+            <strong>No webhook spin loop</strong>
+            GitHub's UNKNOWN or REST mergeable=null means "calculation not ready".
+            The handler refreshes the watch detail and waits for another event or a
+            deferred backstop instead of spinning.
+          </div>
+          <div class="callout polling">
+            <strong>Current polling surface</strong>
+            publish_current_head also starts a background commit observer that samples
+            CI and mergeability about every 30 seconds, currently up to 60 attempts,
+            until failure, green+mergeable, or timeout. That is a backstop/ledger
+            observer, not the webhook wake path.
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

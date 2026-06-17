@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CI Watch Agent Handoff</title>
+  <link rel="stylesheet" href="webhook-reconcile.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Agent Handoff</h1>
+      <p class="lede">
+        The agent publishes work, asks Tank to watch the governed PR, and then
+        stops. The durable row is the contract that lets later webhook requests
+        find the sleeping session.
+      </p>
+      <nav class="page-nav" aria-label="CI watch diagram pages">
+        <a href="webhook-reconcile-shape.html">Overview</a>
+        <a href="webhook-reconcile-agent-handoff.html" aria-current="page">Agent handoff</a>
+        <a href="webhook-reconcile-webhook-trigger.html">Webhook trigger</a>
+        <a href="webhook-reconcile-aggregate-reconcile.html">Aggregate reconcile</a>
+        <a href="webhook-reconcile-terminal-action.html">Terminal action</a>
+      </nav>
+    </header>
+
+    <section class="diagram" aria-label="Agent handoff lane">
+      <div class="single-flow">
+        <div class="lane">
+          <div class="node trigger">
+            <strong>watch_current_session_pr</strong>
+            <span>Registers the PR handoff after the initial authoritative read.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node poll">
+            <strong>Bounded mergeability retry</strong>
+            <span>GET the PR; if mergeable is null or UNKNOWN, sleep about 1.5 seconds and retry, currently up to 6 reads.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node store">
+            <strong>session_ci_watches row</strong>
+            <span>Persistent handoff state the backend can find after the agent sleeps.</span>
+            <div class="fields" aria-label="Key session_ci_watches fields">
+              <b>repo/pr</b><span>owner, repo, pull number</span>
+              <b>head_sha</b><span>current watched commit</span>
+              <b>status</b><span>watching, ready, failed, conflict</span>
+              <b>last_event_at</b><span>latest reconciled webhook</span>
+            </div>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node">
+            <strong>Agent stops</strong>
+            <span>Session sleeps while Tank waits for repo events.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
