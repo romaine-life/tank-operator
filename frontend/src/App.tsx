@@ -47,15 +47,6 @@ import {
   type TurnActivityPageInfo,
   type TurnActivityPagerState,
 } from "./turnActivityPager";
-import {
-  evaluateStuckWatchdog,
-  evaluateTurnDirectoryReconcile,
-  shouldArmStuckWatchdog,
-  TURN_DIRECTORY_LOAD_TIMEOUT_MS,
-  TURN_DIRECTORY_STUCK_THRESHOLD_MS,
-  type TurnDirectoryLoadSource,
-  type TurnDirectoryStatus,
-} from "./turnDirectoryLoad";
 import { turnViewTurnNavigation } from "./turnViewNavigation";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
@@ -658,7 +649,7 @@ type TurnDirectoryBody = {
   latest_turn_number?: number;
   truncated?: boolean;
 };
-// TurnDirectoryStatus is owned by ./turnDirectoryLoad (the pure reconcile gate).
+type TurnDirectoryStatus = "idle" | "loading" | "ready" | "error";
 type SdkHistoryRefreshSource =
   | "history"
   | "projected-refresh"
@@ -17809,44 +17800,20 @@ function ChatPane({
   const [turnDirectoryStatus, setTurnDirectoryStatus] =
     useState<TurnDirectoryStatus>("idle");
   const [turnDirectoryTruncated, setTurnDirectoryTruncated] = useState(false);
-  // Revision bumps after every settled load so the new-turn refetch effect and
-  // the reconciler re-evaluate against the freshly-known turn-id set / cleared
-  // in-flight ref (a ref mutation alone re-renders nothing).
+  // Revision bumps after every load attempt so the new-turn refetch effect
+  // re-evaluates against the freshly-known turn-id set (and re-fires if a turn
+  // appeared while a single-flighted load was in progress).
   const [turnDirectoryRevision, setTurnDirectoryRevision] = useState(0);
-  // Surfaced under the spinner once the watchdog judges the load stuck, so the
-  // user has an explicit Retry from a non-terminal state (not only `error`).
-  const [turnDirectorySlow, setTurnDirectorySlow] = useState(false);
   const turnDirectoryTurnIdsRef = useRef<Set<string>>(new Set());
-  // The in-flight load, keyed by session epoch. Replaces the retired permanent
-  // single-flight boolean latch: a load for a superseded session is aborted and
-  // never gates the current session's load, and "is a load running" is keyed on
-  // controller identity, so a stale completion can never strand the view at
-  // idle/loading. See turnDirectoryLoad.ts.
-  const turnDirectoryLoadRef = useRef<{
-    sessionId: string;
-    controller: AbortController;
-  } | null>(null);
+  const loadTurnDirectoryInFlightRef = useRef(false);
   const loadTurnDirectory = useCallback(
-    async (source: TurnDirectoryLoadSource): Promise<void> => {
+    async (source: string): Promise<void> => {
       // The pre-session splash has no session to read; admin/public read-only
       // surfaces do load their complete directory.
       if (publicView && !publicShareTokenValue) return;
+      if (loadTurnDirectoryInFlightRef.current) return;
+      loadTurnDirectoryInFlightRef.current = true;
       const requestSessionId = session.id;
-      const existing = turnDirectoryLoadRef.current;
-      if (existing) {
-        const sameSession = existing.sessionId === requestSessionId;
-        // Passive sources (open / reconcile / new-turn / watchdog) must not
-        // stack a second load on a genuine in-flight one for the same session.
-        // An explicit user Retry forces a fresh load by aborting the in-flight
-        // one, so the button is never a no-op while the spinner shows.
-        if (sameSession && source !== "retry") return;
-        existing.controller.abort();
-      }
-      const controller = new AbortController();
-      const load = { sessionId: requestSessionId, controller };
-      turnDirectoryLoadRef.current = load;
-      const isCurrent = () => turnDirectoryLoadRef.current === load;
-      setTurnDirectorySlow(false);
       setTurnDirectoryStatus((prev) => (prev === "ready" ? prev : "loading"));
       logChatScrollEvent("turn-directory-request", {
         surface: "session",
@@ -17854,21 +17821,9 @@ function ChatPane({
         sessionMode: session.mode,
         source,
       });
-      // A wedged connection must become the retryable error state, not an
-      // eternal spinner; abort the load if it outruns its wall-clock budget.
-      const timeoutId = window.setTimeout(() => {
-        controller.abort(
-          new DOMException("turn directory load timed out", "TimeoutError"),
-        );
-      }, TURN_DIRECTORY_LOAD_TIMEOUT_MS);
       try {
-        const res = await fetchPaneResource(turnDirectoryRequestPathForPane(), {
-          signal: controller.signal,
-        });
-        // Relevance is keyed on controller identity, not a sessionId compare:
-        // if a newer load superseded this one (same or different session) it
-        // now owns the terminal status, so this load must bail silently.
-        if (!isCurrent()) return;
+        const res = await fetchPaneResource(turnDirectoryRequestPathForPane());
+        if (sessionIdRef.current !== requestSessionId) return;
         if (!res.ok) {
           setTurnDirectoryStatus("error");
           logChatScrollEvent("turn-directory-error", {
@@ -17881,7 +17836,7 @@ function ChatPane({
           return;
         }
         const body = (await res.json()) as TurnDirectoryBody;
-        if (!isCurrent()) return;
+        if (sessionIdRef.current !== requestSessionId) return;
         const shells = normalizeProjectedTranscriptEntries(
           Array.isArray(body.turns) ? body.turns : [],
         );
@@ -17901,27 +17856,12 @@ function ChatPane({
           source,
           eventCount: shells.length,
         });
-      } catch (err) {
-        // Superseded (aborted by a newer load / session change / unmount): the
-        // owner of the current ref drives status, so stay silent here.
-        if (!isCurrent()) return;
-        const timedOut =
-          err instanceof DOMException && err.name === "TimeoutError";
-        setTurnDirectoryStatus("error");
-        logChatScrollEvent(
-          timedOut ? "turn-directory-timeout" : "turn-directory-error",
-          {
-            surface: "session",
-            sessionId: requestSessionId,
-            sessionMode: session.mode,
-            source,
-          },
-        );
-      } finally {
-        window.clearTimeout(timeoutId);
-        if (turnDirectoryLoadRef.current === load) {
-          turnDirectoryLoadRef.current = null;
+      } catch {
+        if (sessionIdRef.current === requestSessionId) {
+          setTurnDirectoryStatus("error");
         }
+      } finally {
+        loadTurnDirectoryInFlightRef.current = false;
         setTurnDirectoryRevision((n) => n + 1);
       }
     },
@@ -17934,80 +17874,23 @@ function ChatPane({
       turnDirectoryRequestPathForPane,
     ],
   );
-  // Point the pane at a new session: abort any in-flight load for the old
-  // session and drop its directory so the Turns view never shows a stale turn
-  // set. The reconciler below then loads the new session's directory.
+  // Drop the previous session's directory the instant the pane is pointed at a
+  // new session, so the Turns view never shows a stale turn set during the
+  // cross-session load (harmless if the pane remounts per session).
   useEffect(() => {
-    turnDirectoryLoadRef.current?.controller.abort();
-    turnDirectoryLoadRef.current = null;
     setTurnDirectoryEntries([]);
     setTurnDirectoryStatus("idle");
     setTurnDirectoryTruncated(false);
-    setTurnDirectorySlow(false);
     turnDirectoryTurnIdsRef.current = new Set();
   }, [session.id]);
-  // Level-triggered directory reconciler: whenever a visible, loadable pane has
-  // a non-terminal status with nothing in flight for this session, ensure a
-  // load is running. This self-heals from any stranded state — the property the
-  // retired edge-triggered + boolean-latch loader lacked. See turnDirectoryLoad.ts.
+  // Load the directory when the pane becomes visible (open / tab switch /
+  // session change). The new-turn refetch effect lives lower, after
+  // renderedEntries is defined.
   useEffect(() => {
-    const decision = evaluateTurnDirectoryReconcile({
-      visible,
-      blockedPublicView: publicView && !publicShareTokenValue,
-      status: turnDirectoryStatus,
-      hasLiveLoadForSession:
-        turnDirectoryLoadRef.current?.sessionId === session.id,
-    });
-    if (decision.action === "load") void loadTurnDirectory(decision.source);
-  }, [
-    visible,
-    publicView,
-    publicShareTokenValue,
-    turnDirectoryStatus,
-    turnDirectoryRevision,
-    session.id,
-    loadTurnDirectory,
-  ]);
-  // Spinner watchdog: if the Turns view shows "Loading turns…" past the stuck
-  // threshold, surface a Retry affordance and emit the user-trust signal the
-  // retired design recorded nothing for. If nothing is in flight it also
-  // re-drives a load — the residual strand a ref-only state change can't make
-  // the reconcile effect re-fire. See turnDirectoryLoad.ts.
-  useEffect(() => {
-    if (!shouldArmStuckWatchdog(turnDirectoryStatus, visible)) return;
-    const timer = window.setTimeout(() => {
-      const decision = evaluateStuckWatchdog({
-        status: turnDirectoryStatus,
-        hasLiveLoadForSession:
-          turnDirectoryLoadRef.current?.sessionId === session.id,
-      });
-      if (!decision.emitStuck) return;
-      setTurnDirectorySlow(true);
-      logChatScrollEvent("turn-directory-stuck", {
-        surface: "session",
-        sessionId: session.id,
-        sessionMode: session.mode,
-        source: turnDirectoryStatus,
-      });
-      if (decision.recover) void loadTurnDirectory("watchdog");
-    }, TURN_DIRECTORY_STUCK_THRESHOLD_MS);
-    return () => window.clearTimeout(timer);
-  }, [
-    visible,
-    turnDirectoryStatus,
-    turnDirectoryRevision,
-    session.id,
-    session.mode,
-    loadTurnDirectory,
-  ]);
-  // Abort any in-flight directory load when the pane unmounts.
-  useEffect(
-    () => () => {
-      turnDirectoryLoadRef.current?.controller.abort();
-      turnDirectoryLoadRef.current = null;
-    },
-    [],
-  );
+    if (!visible) return;
+    if (publicView && !publicShareTokenValue) return;
+    void loadTurnDirectory("open");
+  }, [visible, publicView, publicShareTokenValue, loadTurnDirectory]);
   // runningRef is read from the SSE silence watchdog so we can tell
   // whether a silent stream was silent *during a turn* (the
   // candidate-B signature) or just idle. Mirrors the visibleRef
@@ -23393,20 +23276,7 @@ function ChatPane({
                         className="run-spin"
                         aria-hidden="true"
                       />
-                      <span>
-                        {turnDirectorySlow
-                          ? "Still loading this session’s turns…"
-                          : "Loading turns..."}
-                      </span>
-                      {turnDirectorySlow ? (
-                        <button
-                          type="button"
-                          className="btn-secondary run-turn-view-alert-action"
-                          onClick={() => void loadTurnDirectory("retry")}
-                        >
-                          Retry
-                        </button>
-                      ) : null}
+                      <span>Loading turns...</span>
                     </div>
                   </div>
                 </div>
