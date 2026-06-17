@@ -4,6 +4,7 @@ import {
   buildTurnViewItems,
   latestAutoFollowApprovalTurnId,
   mergeTurnDirectoryWithLiveShells,
+  turnActivityShellIdsMissingFromDirectory,
 } from "./App.tsx";
 import type { TranscriptEntry } from "./App.tsx";
 
@@ -116,5 +117,22 @@ describe("durable turn directory feeds the Turns selector", () => {
       200_000,
     );
     expect(latestAutoFollowApprovalTurnId(backgroundWake)).toBe(null);
+  });
+
+  test("detects live turn activity shells missing from the durable directory", () => {
+    const live = [
+      shell("turn_2", 2),
+      shell("turn_3", 3),
+      shell("turn_3", 3),
+      { id: "msg-4", kind: "message", role: "assistant", turnId: "turn_4" },
+      shell("turn_5", 5),
+    ] as unknown as TranscriptEntry[];
+
+    expect(
+      turnActivityShellIdsMissingFromDirectory(
+        live,
+        new Set(["turn_1", "turn_2"]),
+      ),
+    ).toEqual(["turn_3", "turn_5"]);
   });
 });

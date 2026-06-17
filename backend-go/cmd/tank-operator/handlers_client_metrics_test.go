@@ -231,6 +231,88 @@ func TestHandleChatScrollMetricsLogsSelectedTurnActivityLoadingContext(t *testin
 	}
 }
 
+func TestHandleChatScrollMetricsLogsTurnDirectoryLoopContext(t *testing.T) {
+	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
+	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/chat-scroll", strings.NewReader(`{
+		"events": [
+			{
+				"event": "turn-directory-new-turn-loop",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "1049",
+				"pagePath": "/sessions/1027/turns/29/pages/1",
+				"source": "new-turn",
+				"reason": "stable-missing-turn-activity-shell",
+				"key": "turn_answer-7fca9ecff10e7ee52e443acb",
+				"eventCount": 1,
+				"canonicalEventCount": 3,
+				"entries": 9,
+				"turnActivityShells": 4
+			},
+			{
+				"event": "turn-directory-route-session-mismatch",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "1049",
+				"pagePath": "/sessions/1027/turns/29/pages/1",
+				"source": "new-turn",
+				"reason": "route-session-mismatch",
+				"key": "1027",
+				"eventCount": 3
+			}
+		]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	var logs bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	app.handleChatScrollMetrics(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("metrics status = %d body=%s, want 202", res.Code, res.Body.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		`"event":"turn-directory-new-turn-loop"`,
+		`"event":"turn-directory-route-session-mismatch"`,
+		`"session_id":"1049"`,
+		`"page_path":"/sessions/1027/turns/29/pages/1"`,
+		`"source":"new-turn"`,
+		`"reason":"stable-missing-turn-activity-shell"`,
+		`"reason":"route-session-mismatch"`,
+		`"key":"turn_answer-7fca9ecff10e7ee52e443acb"`,
+		`"key":"1027"`,
+		`"event_count":1`,
+		`"canonical_event_count":3`,
+		`"entries":9`,
+		`"turn_activity_shells":4`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("slog output missing %s; got: %s", want, logged)
+		}
+	}
+
+	metrics := scrapePrometheus(t)
+	for _, want := range []string{
+		`tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-directory-new-turn-loop",has_scroll_parent="unknown",session_mode="claude_gui",surface="session"}`,
+		`tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-directory-route-session-mismatch",has_scroll_parent="unknown",session_mode="claude_gui",surface="session"}`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("scrape missing %s:\n%s", want, metrics)
+		}
+	}
+	if strings.Contains(metrics, `turn_answer-7fca9`) ||
+		strings.Contains(metrics, `session_id="1049"`) ||
+		strings.Contains(metrics, `page_path=`) ||
+		strings.Contains(metrics, `reason="route-session-mismatch"`) {
+		t.Fatalf("scrape leaked turn-directory trace context:\n%s", metrics)
+	}
+}
+
 func TestHandleChatScrollMetricsRecordsNavigationModeTransitions(t *testing.T) {
 	// The two navigation-mode event names are the durable
 	// observability surface for the user-trust failure that motivated
