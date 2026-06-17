@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,7 +14,10 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
+
+const orchestrationEventStreamPageLimit = 100
 
 type orchestrationRunStore interface {
 	Create(context.Context, pgstore.CreateOrchestrationRequest) (pgstore.Orchestration, []pgstore.OrchestrationPhase, error)
@@ -185,6 +189,188 @@ func (s *appServer) handleGetOrchestration(w http.ResponseWriter, r *http.Reques
 		Orchestration: orchestrationRunDTO(orch),
 		Phases:        outPhases,
 	})
+}
+
+func (s *appServer) handleOrchestrationEventStream(w http.ResponseWriter, r *http.Request) {
+	orchestrationID := strings.TrimSpace(r.PathValue("orchestration_id"))
+	user, _, ok := s.requireBrowserStreamAuth(w, r, streamKindOrchestration, orchestrationID)
+	if !ok {
+		return
+	}
+	if s.orchestrationRuns == nil {
+		writeError(w, http.StatusServiceUnavailable, "orchestration store unavailable")
+		return
+	}
+	if s.sessionBus == nil {
+		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	deadlineW := newSSEDeadlineWriter(w, flusher)
+	w = deadlineW
+	flusher = deadlineW
+
+	eventStore := s.sessionEventStoreForScope(s.sessionScope)
+	orch, phases, err := s.orchestrationRuns.GetWithPhases(r.Context(), orchestrationID)
+	if err != nil {
+		writeSSEJSONEvent(w, "stream-error", "", map[string]any{"reason": "read_orchestration_failed", "detail": err.Error()})
+		flusher.Flush()
+		return
+	}
+	if orch.OwnerEmail != orchestrationActorEmail(user) {
+		writeSSEJSONEvent(w, "stream-error", "", map[string]any{"reason": "orchestration_not_found"})
+		flusher.Flush()
+		return
+	}
+	writeSSEJSONEvent(w, "ready", "", map[string]any{"orchestration_id": orchestrationID})
+	writeOrchestrationSnapshotSSE(w, orch, phases)
+	flusher.Flush()
+
+	wakes := make(chan string, 32)
+	unsubscribes := map[string]func(){}
+	cursors := map[string]string{}
+	defer func() {
+		for _, unsubscribe := range unsubscribes {
+			unsubscribe()
+		}
+	}()
+	subscribePhases := func(phases []pgstore.OrchestrationPhase) {
+		for _, phase := range phases {
+			spoke := strings.TrimSpace(phase.SpokeSessionID)
+			if spoke == "" {
+				continue
+			}
+			if _, exists := unsubscribes[spoke]; exists {
+				continue
+			}
+			storageKey := sessionmodel.SessionStorageKey(s.sessionScope, spoke)
+			ch, unsubscribe, err := s.sessionBus.SubscribeWakesForStorageKey(r.Context(), storageKey, nil)
+			if err != nil {
+				slog.Warn("orchestration event stream spoke subscribe failed", "orchestration_id", orchestrationID, "spoke_session_id", spoke, "error", err)
+				continue
+			}
+			unsubscribes[spoke] = unsubscribe
+			go func(spoke string, ch <-chan struct{}) {
+				for {
+					select {
+					case <-r.Context().Done():
+						return
+					case _, ok := <-ch:
+						if !ok {
+							return
+						}
+						select {
+						case wakes <- spoke:
+						case <-r.Context().Done():
+							return
+						}
+					}
+				}
+			}(spoke, ch)
+		}
+	}
+	subscribePhases(phases)
+
+	heartbeat := time.NewTicker(sessionEventStreamHeartbeat)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case spoke := <-wakes:
+			pending := map[string]bool{spoke: true}
+		drain:
+			for {
+				select {
+				case next := <-wakes:
+					pending[next] = true
+				default:
+					break drain
+				}
+			}
+			orch, phases, err = s.orchestrationRuns.GetWithPhases(r.Context(), orchestrationID)
+			if err != nil {
+				writeSSEJSONEvent(w, "stream-error", "", map[string]any{"reason": "read_orchestration_failed", "detail": err.Error()})
+				flusher.Flush()
+				return
+			}
+			subscribePhases(phases)
+			for wokeSpoke := range pending {
+				if err := s.emitOrchestrationCIStatusEvents(r.Context(), w, eventStore, wokeSpoke, cursors, phases); err != nil {
+					writeSSEJSONEvent(w, "stream-error", "", map[string]any{"reason": "event_page_failed", "detail": err.Error()})
+					flusher.Flush()
+					return
+				}
+			}
+			writeOrchestrationSnapshotSSE(w, orch, phases)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprint(w, ": keep-alive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *appServer) emitOrchestrationCIStatusEvents(ctx context.Context, w http.ResponseWriter, eventStore store.SessionEventStore, spoke string, cursors map[string]string, phases []pgstore.OrchestrationPhase) error {
+	if eventStore == nil {
+		eventStore = store.StubSessionEventStore{}
+	}
+	phaseBySpoke := map[string]pgstore.OrchestrationPhase{}
+	for _, phase := range phases {
+		if strings.TrimSpace(phase.SpokeSessionID) != "" {
+			phaseBySpoke[phase.SpokeSessionID] = phase
+		}
+	}
+	for {
+		page, err := eventStore.ListBySession(ctx, spoke, store.SessionEventCursor{AfterOrderKey: cursors[spoke]}, orchestrationEventStreamPageLimit)
+		if err != nil {
+			return err
+		}
+		for _, event := range page.Events {
+			if stringMapField(event, "type") != string(conversation.EventCIStatusUpdated) {
+				continue
+			}
+			phase := phaseBySpoke[spoke]
+			writeSSEJSONEvent(w, "phase-status", eventOrderKeyForSSE(event), map[string]any{
+				"spoke_session_id": spoke,
+				"phase":            orchestrationPhaseDTO(phase),
+				"ci_status":        event["payload"],
+			})
+		}
+		if page.NextOrderKey != "" {
+			cursors[spoke] = page.NextOrderKey
+		}
+		if !page.HasMore {
+			return nil
+		}
+	}
+}
+
+func writeOrchestrationSnapshotSSE(w http.ResponseWriter, orch pgstore.Orchestration, phases []pgstore.OrchestrationPhase) {
+	outPhases := make([]orchestrationPhaseJSON, 0, len(phases))
+	for _, phase := range phases {
+		outPhases = append(outPhases, orchestrationPhaseDTO(phase))
+	}
+	writeSSEJSONEvent(w, "orchestration-snapshot", "", orchestrationReadResponse{
+		Orchestration: orchestrationRunDTO(orch),
+		Phases:        outPhases,
+	})
+}
+
+func eventOrderKeyForSSE(event map[string]any) string {
+	if v, ok := event["order_key"].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (s *appServer) handleCreateOrchestration(w http.ResponseWriter, r *http.Request) {

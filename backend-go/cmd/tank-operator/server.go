@@ -396,6 +396,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/orchestrations", s.handleListOrchestrations)
 	mux.HandleFunc("POST /api/orchestrations", s.handleCreateOrchestration)
 	mux.HandleFunc("GET /api/orchestrations/{orchestration_id}", s.handleGetOrchestration)
+	mux.HandleFunc("GET /api/orchestrations/{orchestration_id}/events", s.handleOrchestrationEventStream)
 	mux.HandleFunc("POST /api/orchestrations/{orchestration_id}/review/approve", s.handleApproveOrchestrationReview)
 	mux.HandleFunc("GET /api/bug-labels", s.handleListBugLabels)
 	mux.HandleFunc("GET /api/session-run-options", s.handleSessionRunOptions)

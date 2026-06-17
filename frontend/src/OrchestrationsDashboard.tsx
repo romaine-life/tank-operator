@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ExternalLinkIcon,
   GitBranchIcon,
@@ -9,7 +9,7 @@ import {
   RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
-import { authedFetch } from "./auth";
+import { authedEventSource, authedFetch } from "./auth";
 
 type OrchestrationState =
   | "draft"
@@ -142,6 +142,12 @@ function formatTime(value?: string): string {
   return date.toLocaleString();
 }
 
+function upsertRun(runs: OrchestrationRun[], run: OrchestrationRun): OrchestrationRun[] {
+  if (!run.id) return runs;
+  const next = runs.filter((item) => item.id !== run.id);
+  return [run, ...next];
+}
+
 export function OrchestrationsDashboard() {
   const [runs, setRuns] = useState<OrchestrationRun[]>([]);
   const [detail, setDetail] = useState<OrchestrationDetail | null>(null);
@@ -154,6 +160,7 @@ export function OrchestrationsDashboard() {
   const [repoOwner, setRepoOwner] = useState("romaine-life");
   const [repoName, setRepoName] = useState("tank-operator");
   const [phases, setPhases] = useState<DraftPhase[]>([newPhase(0)]);
+  const orchestrationEventSourceRef = useRef<EventSource | null>(null);
 
   const loadList = useCallback(async () => {
     setLoadingList(true);
@@ -192,9 +199,81 @@ export function OrchestrationsDashboard() {
   useEffect(() => {
     if (!selectedID) return;
     void loadDetail(selectedID);
-    const handle = window.setInterval(() => void loadDetail(selectedID, true), 3000);
-    return () => window.clearInterval(handle);
   }, [loadDetail, selectedID]);
+
+  useEffect(() => {
+    if (!selectedID) return;
+    const streamID = selectedID;
+    let canceled = false;
+    orchestrationEventSourceRef.current?.close();
+    orchestrationEventSourceRef.current = null;
+
+    async function openStream() {
+      try {
+        const source = await authedEventSource(
+          `/api/orchestrations/${encodeURIComponent(streamID)}/events`,
+          { stream: "orchestration-events", sessionId: streamID },
+        );
+        if (canceled) {
+          source.close();
+          return;
+        }
+        orchestrationEventSourceRef.current = source;
+        source.addEventListener("orchestration-snapshot", (event) => {
+          const message = event as MessageEvent;
+          let parsed: any;
+          try {
+            parsed = JSON.parse(String(message.data));
+          } catch {
+            return;
+          }
+          setDetail({
+            orchestration: normalizeRun(parsed?.orchestration ?? parsed?.Orchestration),
+            phases: (Array.isArray(parsed?.phases) ? parsed.phases : parsed?.Phases ?? []).map(normalizePhase),
+          });
+          setRuns((current) => upsertRun(current, normalizeRun(parsed?.orchestration ?? parsed?.Orchestration)));
+        });
+        source.addEventListener("phase-status", (event) => {
+          const message = event as MessageEvent;
+          let parsed: any;
+          try {
+            parsed = JSON.parse(String(message.data));
+          } catch {
+            return;
+          }
+          const phase = normalizePhase(parsed?.phase);
+          if (!phase.key && !phase.phase_id) return;
+          setDetail((current) => {
+            if (!current || current.orchestration.id !== streamID) return current;
+            return {
+              ...current,
+              phases: current.phases.map((existing) =>
+                existing.phase_id === phase.phase_id || existing.key === phase.key ? phase : existing,
+              ),
+            };
+          });
+        });
+        source.addEventListener("stream-error", (event) => {
+          const message = event as MessageEvent;
+          setError(message.data ? String(message.data) : "orchestration event stream failed");
+        });
+        source.onerror = () => {
+          setError("orchestration event stream disconnected");
+        };
+      } catch (err) {
+        if (!canceled) {
+          setError(err instanceof Error ? err.message : "failed to open orchestration event stream");
+        }
+      }
+    }
+
+    void openStream();
+    return () => {
+      canceled = true;
+      orchestrationEventSourceRef.current?.close();
+      orchestrationEventSourceRef.current = null;
+    };
+  }, [selectedID]);
 
   const phaseKeys = useMemo(
     () => phases.map((phase) => phase.key.trim()).filter(Boolean),
