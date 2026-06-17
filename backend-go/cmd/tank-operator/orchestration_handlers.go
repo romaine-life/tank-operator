@@ -18,6 +18,7 @@ type orchestrationRunStore interface {
 	Create(context.Context, pgstore.CreateOrchestrationRequest) (pgstore.Orchestration, []pgstore.OrchestrationPhase, error)
 	Approve(context.Context, string, string) (pgstore.Orchestration, error)
 	GetWithPhases(ctx context.Context, orchestrationID string) (pgstore.Orchestration, []pgstore.OrchestrationPhase, error)
+	UpdateState(ctx context.Context, orchestrationID string, state pgstore.OrchestrationState) (pgstore.Orchestration, error)
 }
 
 type orchestrationPlanPhaseRequest struct {
@@ -192,22 +193,6 @@ func (s *appServer) emitOrchestrationPhaseStatusRecord(ctx context.Context, orch
 	if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
 		slog.Warn("orchestration phase status record persist failed", "session", sessionID, "phase_id", phase.PhaseID, "error", err)
 	}
-}
-
-func (s *appServer) emitOrchestrationReviewReadyRecord(ctx context.Context, orch pgstore.Orchestration, phases []pgstore.OrchestrationPhase) {
-	var target pgstore.OrchestrationPhase
-	for i := len(phases) - 1; i >= 0; i-- {
-		if strings.TrimSpace(phases[i].SpokeSessionID) != "" {
-			target = phases[i]
-			break
-		}
-	}
-	if target.SpokeSessionID == "" {
-		return
-	}
-	detail := "Orchestration " + orch.OrchestrationID + " is awaiting review on integration branch " + orch.IntegrationBranch + "."
-	target.PRURL = "https://github.com/" + orch.RepoOwner + "/" + orch.RepoName + "/tree/" + orch.IntegrationBranch
-	s.emitOrchestrationPhaseStatusRecord(ctx, orch, target, orch.OwnerEmail, "ready", detail)
 }
 
 func orchestrationActorEmail(user auth.User) string {

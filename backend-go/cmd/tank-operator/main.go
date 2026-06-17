@@ -677,6 +677,7 @@ func main() {
 		srv.orchestrationRuns = orchestrationStore
 		srv.orchestrations = newOrchestrationEngine(orchestrationStore, srv.spawnPhaseSpoke)
 		srv.orchestrations.reviewReady = srv.emitOrchestrationReviewReadyRecord
+		srv.orchestrations.phaseMerged = srv.handleOrchestrationPhaseMerged
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {

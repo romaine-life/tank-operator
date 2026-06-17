@@ -53,6 +53,7 @@ type orchestrationStore interface {
 type phaseSpokeSpawnFunc func(ctx context.Context, orch pgstore.Orchestration, phase pgstore.OrchestrationPhase) (string, error)
 
 type orchestrationReviewReadyFunc func(ctx context.Context, orch pgstore.Orchestration, phases []pgstore.OrchestrationPhase)
+type orchestrationPhaseMergedFunc func(ctx context.Context, phase pgstore.OrchestrationPhase) error
 
 // orchestrationEngine owns the advance loop. It holds no mutable state of its
 // own — every decision reads the durable DAG and every effect is a guarded
@@ -62,6 +63,7 @@ type orchestrationEngine struct {
 	store       orchestrationStore
 	spawn       phaseSpokeSpawnFunc
 	reviewReady orchestrationReviewReadyFunc
+	phaseMerged orchestrationPhaseMergedFunc
 	log         *slog.Logger
 }
 
@@ -121,13 +123,23 @@ func (e *orchestrationEngine) advanceOnMerge(ctx context.Context, prOwner, prNam
 		return
 	}
 	if phase.Status != pgstore.PhaseMerged {
-		if _, err := e.store.MarkPhaseMerged(ctx, phase.PhaseID, mergeSHA); err != nil {
+		updated, err := e.store.MarkPhaseMerged(ctx, phase.PhaseID, mergeSHA)
+		if err != nil {
 			recordOrchestrationAdvance("error")
 			e.log.Warn("orchestration advance: mark merged failed",
 				"phase_id", phase.PhaseID, "error", err)
 			return
 		}
+		phase = updated
 		recordOrchestrationAdvance("merged")
+		if e.phaseMerged != nil {
+			if err := e.phaseMerged(ctx, phase); err != nil {
+				recordOrchestrationAdvance("error")
+				e.log.Warn("orchestration advance: phase-merged hook failed",
+					"phase_id", phase.PhaseID, "error", err)
+				return
+			}
+		}
 	} else {
 		// Duplicate/late merged delivery. Still re-drive: a prior advance that
 		// crashed after the merge write but before dispatch is recovered here.
@@ -308,9 +320,9 @@ func (e *orchestrationEngine) dispatchReadyPhase(ctx context.Context, orch pgsto
 }
 
 // settleRunState transitions the run after a drive pass: approved -> running
-// once a phase is in flight, and running -> done once every phase reached a
-// terminal success (merged or skipped). The terminal human-review gate is a
-// later slice; for now all-phases-merged is done.
+// once a phase is in flight; running -> awaiting_review when an integration
+// branch needs human approval; otherwise running -> done once every phase
+// reached a terminal success (merged or skipped).
 func (e *orchestrationEngine) settleRunState(ctx context.Context, orchestrationID string) error {
 	orch, phases, err := e.store.GetWithPhases(ctx, orchestrationID)
 	if err != nil {

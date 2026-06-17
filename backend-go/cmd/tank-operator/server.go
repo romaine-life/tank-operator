@@ -394,6 +394,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("POST /api/orchestrations", s.handleCreateOrchestration)
+	mux.HandleFunc("POST /api/orchestrations/{orchestration_id}/review/approve", s.handleApproveOrchestrationReview)
 	mux.HandleFunc("GET /api/bug-labels", s.handleListBugLabels)
 	mux.HandleFunc("GET /api/session-run-options", s.handleSessionRunOptions)
 

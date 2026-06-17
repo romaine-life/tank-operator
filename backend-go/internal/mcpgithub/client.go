@@ -74,6 +74,14 @@ type Repo struct {
 	Private  bool   `json:"private"`
 }
 
+// PullRequest is the narrow projection returned by mcp-github's
+// create_pull_request tool.
+type PullRequest struct {
+	Number  int
+	HTMLURL string
+	State   string
+}
+
 // Options configures a Client. Zero-value fields use the
 // production-default constants above; tests can override every URL.
 type Options struct {
@@ -256,6 +264,37 @@ func (c *Client) CreateBranch(ctx context.Context, userEmail, owner, name, branc
 	return err
 }
 
+// CreatePullRequest opens a PR through mcp-github's audited tool surface.
+func (c *Client) CreatePullRequest(ctx context.Context, userEmail, owner, name, title, head, base, body string, draft bool) (PullRequest, error) {
+	if c == nil {
+		return PullRequest{}, errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return PullRequest{}, errors.New("mcpgithub: user email is empty")
+	}
+	args := map[string]any{
+		"owner": owner,
+		"name":  name,
+		"title": title,
+		"head":  head,
+		"base":  base,
+		"draft": draft,
+	}
+	if strings.TrimSpace(body) != "" {
+		args["body"] = body
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	res, err := c.callTool(ctx, token, "create_pull_request", args)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	return pullRequestFromResult(res), nil
+}
+
 // callTool issues a single MCP JSON-RPC tools/call and returns the decoded
 // result object, surfacing JSON-RPC and tool-level (isError) errors. Tolerates
 // bare-JSON or SSE framing like callListInstallationRepos.
@@ -362,6 +401,26 @@ func mergeCommitFromResult(result map[string]any) string {
 		return sha
 	}
 	return ""
+}
+
+func pullRequestFromResult(result map[string]any) PullRequest {
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		return PullRequest{}
+	}
+	var out PullRequest
+	switch n := sc["number"].(type) {
+	case float64:
+		out.Number = int(n)
+	case int:
+		out.Number = n
+	}
+	out.HTMLURL, _ = sc["html_url"].(string)
+	if out.HTMLURL == "" {
+		out.HTMLURL, _ = sc["url"].(string)
+	}
+	out.State, _ = sc["state"].(string)
+	return out
 }
 
 // tokenFor returns a cached or freshly-minted service JWT for the

@@ -16,10 +16,16 @@ import (
 )
 
 type fakeGlimmungClient struct {
-	stateReqEmail  string
-	returnReqEmail string
-	returnReq      glimmung.ReturnTestSlotRequest
-	state          glimmung.StateSnapshot
+	stateReqEmail    string
+	returnReqEmail   string
+	checkoutReqEmail string
+	deployReqEmail   string
+	returnReq        glimmung.ReturnTestSlotRequest
+	checkoutReq      glimmung.CheckoutTestSlotRequest
+	deployReq        glimmung.DeployImageToTestSlotRequest
+	state            glimmung.StateSnapshot
+	checkoutResult   glimmung.CheckoutTestSlotResult
+	deployResult     glimmung.DeployImageToTestSlotResult
 }
 
 func (f *fakeGlimmungClient) State(_ context.Context, actorEmail string) (glimmung.StateSnapshot, error) {
@@ -31,6 +37,30 @@ func (f *fakeGlimmungClient) ReturnTestSlot(_ context.Context, actorEmail string
 	f.returnReqEmail = actorEmail
 	f.returnReq = body
 	return glimmung.ReturnTestSlotResult{State: "cleaning", Project: body.Project, CleanupStarted: true}, nil
+}
+
+func (f *fakeGlimmungClient) CheckoutTestSlot(_ context.Context, actorEmail string, body glimmung.CheckoutTestSlotRequest) (glimmung.CheckoutTestSlotResult, error) {
+	f.checkoutReqEmail = actorEmail
+	f.checkoutReq = body
+	if f.checkoutResult.Lease == "" {
+		idx := 1
+		name := "tank-operator-slot-1"
+		url := "https://tank-operator-slot-1.tank.dev.romaine.life/"
+		f.checkoutResult = glimmung.CheckoutTestSlotResult{
+			State: "active", Project: body.Project, SlotIndex: &idx, SlotName: &name,
+			URL: &url, Lease: "lease-1", Usable: true,
+		}
+	}
+	return f.checkoutResult, nil
+}
+
+func (f *fakeGlimmungClient) DeployImageToTestSlot(_ context.Context, actorEmail string, body glimmung.DeployImageToTestSlotRequest) (glimmung.DeployImageToTestSlotResult, error) {
+	f.deployReqEmail = actorEmail
+	f.deployReq = body
+	if f.deployResult.Job == "" {
+		f.deployResult = glimmung.DeployImageToTestSlotResult{Lease: "lease-1", Job: "deploy-1", Status: "running", GitRef: body.GitRef}
+	}
+	return f.deployResult, nil
 }
 
 func TestHandleReturnTestSlotReturnsOwnedLeaseAndClearsState(t *testing.T) {
