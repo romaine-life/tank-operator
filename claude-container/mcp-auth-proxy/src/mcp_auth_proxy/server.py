@@ -114,6 +114,7 @@ _BREAK_GLASS_MCP_PORT = 9999
 # mcp-azure-personal still re-checks the grant on every call.
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
+_BREAK_GLASS_WORKFLOWS_OPERATION = "workflows"
 _GITHUB_WRITE_TOOL_DENYLIST = {
     "mint_clone_token",
     "create_pull_request",
@@ -805,6 +806,10 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                     "reason": {
                         "type": "string",
                         "description": "Short reason the governed publish path is insufficient.",
+                    },
+                    "workflows": {
+                        "type": "boolean",
+                        "description": "Also request approval to push edits under .github/workflows/.",
                     },
                     "source": {
                         "type": "string",
@@ -1662,6 +1667,17 @@ def _grant_allows(grant: dict | None, operation: str) -> bool:
     return operation in {str(item) for item in operations}
 
 
+def _grant_allows_workflows(grant: dict | None) -> bool:
+    return _grant_allows(grant, _BREAK_GLASS_WORKFLOWS_OPERATION)
+
+
+def _break_glass_operations(*, workflows: bool) -> list[str]:
+    operations = [_BREAK_GLASS_MINT_TOKEN_TOOL, _BREAK_GLASS_PUSH_HEAD_TOOL]
+    if workflows:
+        operations.append(_BREAK_GLASS_WORKFLOWS_OPERATION)
+    return operations
+
+
 def _grant_branch_allows(grant: dict | None, branch: str) -> bool:
     if not grant:
         return False
@@ -1835,10 +1851,9 @@ async def _mint_github_installation_token(http: ClientSession, service_token: st
     if workflows:
         arguments["workflows"] = True
     if full:
-        # Break-glass mint_full_git_token: request the App's entire granted
-        # permission set (not just contents) so the approved token is a genuine
-        # escape hatch. The internal governed-publish callers deliberately omit
-        # this and stay contents-only.
+        # Request the App's entire granted permission set for governed GitHub API
+        # operations that need non-git permissions. Break-glass raw git tokens
+        # leave this false and use contents/workflows scopes instead.
         arguments["full"] = True
     payload = {
         "jsonrpc": "2.0",
@@ -3407,11 +3422,14 @@ async def _handle_tank_break_glass_tool(
             raise ValueError("reason is required")
         if len(reason) > 400:
             reason = reason[:400]
+        workflows = bool(arguments.get("workflows"))
         source = str(arguments.get("source") or "agent").strip() or "agent"
         owner, repo = repo_slug.split("/", 1) if repo_slug else ("", "")
         service_token = await auth_romaine_provider.token()
         grant = await _active_break_glass_grant(http, service_token, repo_slug)
         if grant and not _grant_covers_branch_scope(grant, branch_scope):
+            grant = None
+        if grant and workflows and not _grant_allows_workflows(grant):
             grant = None
         activation = _activate_break_glass_mcp_config(repo_slug, grant) if grant else None
         event_id = f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
@@ -3442,6 +3460,8 @@ async def _handle_tank_break_glass_tool(
                     "source": source,
                     "repo_scope": repo_scope,
                     "branch_scope": branch_scope,
+                    "operations": _break_glass_operations(workflows=workflows),
+                    "workflows": workflows,
                     "repo_path": str(repo_path) if repo_path is not None else "",
                 },
             },
@@ -3456,6 +3476,8 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "operations": _break_glass_operations(workflows=workflows),
+                "workflows": workflows,
                 "request_event_id": event_id,
                 "status": "approved",
                 "approval_url": approval_url,
@@ -3473,6 +3495,8 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "operations": _break_glass_operations(workflows=workflows),
+                "workflows": workflows,
                 "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
@@ -4070,14 +4094,14 @@ def _break_glass_tools_result() -> dict:
             {
                 "name": _BREAK_GLASS_MINT_TOKEN_TOOL,
                 "description": (
-                    "Mint an approved short-lived full GitHub git token for one repo. "
+                    "Mint an approved short-lived GitHub git token for one repo. "
                     "Requires an active Tank break-glass grant and records an audit event."
                 ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "repo": {"type": "string", "description": "GitHub slug, for example romaine-life/tank-operator."},
-                        "workflows": {"type": "boolean", "description": "Also request workflow-file write permission when approved."},
+                        "workflows": {"type": "boolean", "description": "Also request workflow-file write permission; requires a grant whose operations include workflows."},
                         "reason": {"type": "string", "description": "Why the token is needed."},
                     },
                     "required": ["repo"],
@@ -4155,8 +4179,15 @@ async def _handle_break_glass_mint_token(http: ClientSession, auth_romaine_provi
             {"repo": repo_slug, "grant_event_id": grant.get("event_id")},
         )
     workflows = bool(arguments.get("workflows"))
+    if workflows and not _grant_allows_workflows(grant):
+        return _mcp_error_response(
+            request_id,
+            -32020,
+            "active break-glass grant does not allow workflow-file writes; request GitHub break-glass with workflows=true",
+            {"repo": repo_slug, "grant_event_id": grant.get("event_id")},
+        )
     try:
-        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows, full=True)
+        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows)
         await _record_break_glass_use(
             http,
             service_token,

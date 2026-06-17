@@ -104,6 +104,12 @@ type branchScope struct {
 	Count    int      `json:"count,omitempty"`
 }
 
+const (
+	gitBreakGlassOpMintToken = "mint_full_git_token"
+	gitBreakGlassOpPushHead  = "push_current_head"
+	gitBreakGlassOpWorkflows = "workflows"
+)
+
 func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/control-actions")
 	if user == nil {
@@ -2001,18 +2007,29 @@ func asString(value any) string {
 }
 
 func normalizeBreakGlassOperations(in []string) []string {
-	allowed := map[string]bool{"mint_full_git_token": true, "push_current_head": true}
+	canonical := []string{gitBreakGlassOpMintToken, gitBreakGlassOpPushHead, gitBreakGlassOpWorkflows}
+	allowed := map[string]bool{}
 	seen := map[string]bool{}
-	out := []string{}
+	for _, op := range canonical {
+		allowed[op] = true
+	}
 	for _, raw := range in {
 		op := strings.TrimSpace(raw)
-		if allowed[op] && !seen[op] {
-			out = append(out, op)
+		if allowed[op] {
 			seen[op] = true
 		}
 	}
+	if seen[gitBreakGlassOpWorkflows] {
+		seen[gitBreakGlassOpMintToken] = true
+	}
+	out := []string{}
+	for _, op := range canonical {
+		if seen[op] {
+			out = append(out, op)
+		}
+	}
 	if len(out) == 0 {
-		out = []string{"mint_full_git_token", "push_current_head"}
+		out = []string{gitBreakGlassOpMintToken, gitBreakGlassOpPushHead}
 	}
 	return out
 }

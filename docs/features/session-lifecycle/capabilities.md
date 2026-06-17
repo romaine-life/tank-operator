@@ -404,6 +404,11 @@ Open hardening:
   minting or revealing a token. Grants are stored as
   `github.break_glass.grant` control-action events with repo, operation, request
   event id, and TTL scope. Denials are stored as `github.break_glass.deny`.
+  Workflow-file pushes are an explicit GitHub break-glass flavor:
+  `request_git_break_glass(workflows=true)` records the extra `workflows`
+  operation, and `mint_full_git_token(workflows=true)` is refused unless the
+  active grant includes it. Ordinary break-glass git tokens are contents-write
+  only, not full App-scope tokens.
   Once an active grant exists, calling
   `request_git_break_glass` again activates a separate `tank-git-break-glass`
   MCP server for the session/repo and writes runtime MCP config for Codex and
