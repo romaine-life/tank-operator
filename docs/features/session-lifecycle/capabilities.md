@@ -420,20 +420,17 @@ Open hardening:
   persisted, Tank starts a system-authored follow-up turn telling the agent the
   user approved the request and to call `request_git_break_glass` again to
   activate the privileged MCP server.
-- Break-glass approval chip + panel (added 2026-06-14). A started
-  `github.break_glass.request` with no unexpired grant for its repo is surfaced
-  as a "chip": the composer pull-request button turns amber with an alert dot,
-  and its popup menu exposes an "Approve break glass" entry linking to the Tank
-  session deep link. The composer also renders `BreakGlassApprovalIndicator`;
-  if the URL carries `break_glass_request`, the pane fetches that exact request
-  from Tank (`GET /api/sessions/{id}/break-glass-requests/{event_id}`) so an
-  admin can approve another user's request without relying on the owner's
-  control-action list. Approve/deny POST to
+- Break-glass approval deep link + admin panel (added 2026-06-14; composer chip
+  retired 2026-06-17). A started `github.break_glass.request` or
+  `azure.break_glass.request` remains an audited control-action request, but it
+  no longer contributes to the composer approval chip. If the URL carries
+  `break_glass_request`, the pane fetches that exact request from Tank
+  (`GET /api/sessions/{id}/break-glass-requests/{event_id}`) so an admin can
+  approve another user's request without relying on the owner's control-action
+  list. Approve/deny POST to
   `/api/sessions/{id}/break-glass-requests/{event_id}/{approve|deny}`. The
-  same popup also separates the two PR links the UI already tracked: the latest
-  PR the agent opened (control-action git activity) and the PR explicitly linked
-  via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
-  positioning so the composer input-group's `overflow: hidden` cannot clip it.
+  composer approval chip is reserved for non-break-glass approval queues such as
+  test-slot model approval and governed PR-lane approval.
 
 ## Locked-by-default Azure MCP (break-glass)
 

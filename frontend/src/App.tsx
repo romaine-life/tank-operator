@@ -245,7 +245,6 @@ import {
 import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
-  pendingBreakGlassRequests,
   pendingPRLaneRequests,
   type BreakGlassRequest,
   type ControlActionRow,
@@ -1758,11 +1757,11 @@ interface AdminBreakGlassListBody {
   requests?: AdminBreakGlassListItem[];
 }
 
-type BreakGlassApprovalMenuKind = "github" | "azure" | "model" | "pr-lane";
+type ApprovalMenuKind = "model" | "pr-lane";
 
-interface BreakGlassApprovalMenuItem {
+interface ApprovalMenuItem {
   id: string;
-  kind: BreakGlassApprovalMenuKind;
+  kind: ApprovalMenuKind;
   href: string;
   label: string;
   target: string;
@@ -2168,19 +2167,6 @@ function sessionUrl(id: string): string {
   return sessionRouteUrl(id);
 }
 
-function breakGlassRequestUrl(sessionId: string, requestEventId: string): string {
-  return sessionRouteUrl(
-    sessionId,
-    "break-glass",
-    null,
-    null,
-    null,
-    null,
-    null,
-    requestEventId,
-  );
-}
-
 function testSlotModelRequestUrl(sessionId: string, requestEventId: string): string {
   return sessionRouteUrl(
     sessionId,
@@ -2526,10 +2512,10 @@ interface ComposerToolButtonsProps {
   glimmungRuns: {
     runs: GlimmungRunLink[];
   };
-  breakGlass: {
-    items: BreakGlassApprovalMenuItem[];
+  approvals: {
+    items: ApprovalMenuItem[];
     approvingId?: string | null;
-    onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
+    onQuickApprove?: (item: ApprovalMenuItem) => void;
     onApprovePRLane?: (
       request: PRLaneRequest,
       override?: "listed" | "count" | "unlimited",
@@ -2559,12 +2545,7 @@ interface ComposerToolButtonsProps {
 
 // PullRequestMenuButton turns the composer pull-request icon into a small popup
 // menu instead of a single hard-coded link. It exposes the latest PR the agent
-// opened, the PR explicitly linked to the session (test/rollout), and an
-// in-app "Approve break glass" action. The break-glass entry lights up (amber
-// dot) whenever a `request_git_break_glass` call is awaiting a grant and links
-// to the Tank session deep link for that request. Self-contained
-// open/outside-click/escape handling mirrors BugLabelPicker so it composes
-// cleanly inside the composer toolbar.
+// opened and the PR explicitly linked to the session (test/rollout).
 function PullRequestMenuButton({
   latestUrl,
   linkedUrl,
@@ -2762,23 +2743,18 @@ function PullRequestMenuButton({
   );
 }
 
-function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
-  const Icon =
-    kind === "model"
-      ? FlaskConicalIcon
-      : kind === "pr-lane"
-        ? GitBranchIcon
-        : ShieldAlertIcon;
+function ApprovalMenuIcon({ kind }: { kind: ApprovalMenuKind }) {
+  const Icon = kind === "model" ? FlaskConicalIcon : GitBranchIcon;
   return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
 }
 
-function BreakGlassApprovalMenuButton({
+function ApprovalMenuButton({
   items,
   approvingId,
   onQuickApprove,
   onApprovePRLane,
   onDenyPRLane,
-}: ComposerToolButtonsProps["breakGlass"]) {
+}: ComposerToolButtonsProps["approvals"]) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -2789,9 +2765,8 @@ function BreakGlassApprovalMenuButton({
   const pendingCount = items.length;
   const title =
     pendingCount > 0
-      ? `Break-glass approvals awaiting review (${pendingCount})`
-      : "No break-glass approvals pending";
-  const settingsHref = appRouteUrl("settings", "admin", "break-glass");
+      ? `Approvals awaiting review (${pendingCount})`
+      : "No approvals pending";
 
   const computeAnchor = useCallback(() => {
     const r = triggerRef.current?.getBoundingClientRect();
@@ -2842,7 +2817,7 @@ function BreakGlassApprovalMenuButton({
       <button
         ref={triggerRef}
         type="button"
-        className={`run-composer-icon-btn run-composer-action-btn run-break-glass-action-btn${pendingCount > 0 ? " has-alert" : ""}`}
+        className={`run-composer-icon-btn run-composer-action-btn run-approval-action-btn${pendingCount > 0 ? " has-alert" : ""}`}
         aria-label={title}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -2850,7 +2825,7 @@ function BreakGlassApprovalMenuButton({
         disabled={pendingCount === 0}
         onClick={() => setOpen((value) => !value)}
       >
-        <ShieldAlertIcon className="run-composer-icon" aria-hidden="true" />
+        <ListChecksIcon className="run-composer-icon" aria-hidden="true" />
         {pendingCount > 0 && (
           <span className="run-pr-alert-dot" aria-hidden="true" />
         )}
@@ -2870,22 +2845,7 @@ function BreakGlassApprovalMenuButton({
             }
           >
             <div className="run-pr-menu-header">
-              <div className="run-slash-palette-label">Break glass</div>
-              <a
-                className="run-pr-menu-settings"
-                href={settingsHref}
-                onClick={(event) => {
-                  if (!isPlainLeftClick(event)) {
-                    setOpen(false);
-                    return;
-                  }
-                  event.preventDefault();
-                  setOpen(false);
-                  navigateToSessionRoute(settingsHref);
-                }}
-              >
-                Settings
-              </a>
+              <div className="run-slash-palette-label">Approvals</div>
             </div>
             {items.map((item) => {
               const prLane = item.prLaneRequest;
@@ -2903,7 +2863,7 @@ function BreakGlassApprovalMenuButton({
                 >
                   <span className="run-pr-menu-main">
                     <span className="run-pr-menu-name">
-                      <BreakGlassMenuIcon kind={item.kind} />
+                      <ApprovalMenuIcon kind={item.kind} />
                       {item.label}
                     </span>
                     <span className="run-slash-desc">
@@ -3155,7 +3115,7 @@ function ComposerToolButtons({
   rollout,
   test,
   glimmungRuns,
-  breakGlass,
+  approvals,
   pullRequest,
   slash,
   mcp,
@@ -3253,7 +3213,7 @@ function ComposerToolButtons({
       </DropdownMenu>
       <GlimmungRunMenuButton {...glimmungRuns} />
       <PullRequestMenuButton {...pullRequest} />
-      <BreakGlassApprovalMenuButton {...breakGlass} />
+      <ApprovalMenuButton {...approvals} />
       {bugLabelControl}
       <button
         type="button"
@@ -4886,7 +4846,7 @@ function DemoLanding() {
                         title: "Sign in to start a session",
                       }}
                       glimmungRuns={{ runs: [] }}
-                      breakGlass={{ items: [] }}
+                      approvals={{ items: [] }}
                       pullRequest={{}}
                       slash={{
                         disabled: true,
@@ -10670,7 +10630,7 @@ function splitBreakGlassScopeValues(value: string): string[] {
 function pendingTestSlotModelApprovalMenuItems(
   sessionId: string,
   rows: ControlActionRow[],
-): BreakGlassApprovalMenuItem[] {
+): ApprovalMenuItem[] {
   const resolvedRequests = new Set<string>();
   for (const row of rows) {
     if (row.action !== "tank.test_slot_model.grant") continue;
@@ -10729,7 +10689,7 @@ function prLaneBranchScopeLabel(request: PRLaneRequest): string {
 function prLaneApprovalMenuItems(
   sessionId: string,
   requests: PRLaneRequest[],
-): BreakGlassApprovalMenuItem[] {
+): ApprovalMenuItem[] {
   return requests.map((request) => {
     const branchScope = prLaneBranchScopeLabel(request);
     const meta = [
@@ -10755,26 +10715,12 @@ function prLaneApprovalMenuItems(
   });
 }
 
-function breakGlassApprovalMenuItemsForSession(
+function approvalMenuItemsForSession(
   sessionId: string,
-  breakGlassRequests: BreakGlassRequest[],
   testSlotModelRows: ControlActionRow[],
   prLaneRequests: PRLaneRequest[],
-): BreakGlassApprovalMenuItem[] {
-  const breakGlassItems = breakGlassRequests.map((request) => ({
-    id: request.eventId,
-    kind: request.kind === "azure" ? ("azure" as const) : ("github" as const),
-    href: breakGlassRequestUrl(sessionId, request.eventId),
-    label:
-      request.kind === "azure"
-        ? "Azure break glass"
-        : "GitHub break glass",
-    target: request.target,
-    reason: request.reason,
-    createdAt: request.createdAt,
-  }));
+): ApprovalMenuItem[] {
   return [
-    ...breakGlassItems,
     ...pendingTestSlotModelApprovalMenuItems(sessionId, testSlotModelRows),
     ...prLaneApprovalMenuItems(sessionId, prLaneRequests),
   ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
@@ -17425,19 +17371,14 @@ function ChatPane({
     () => pendingPRLaneRequests(controlActionRows),
     [controlActionRows],
   );
-  const breakGlassRequests = useMemo(
-    () => pendingBreakGlassRequests(breakGlassActionRows),
-    [breakGlassActionRows],
-  );
-  const breakGlassApprovalMenuItems = useMemo(
+  const approvalMenuItems = useMemo(
     () =>
-      breakGlassApprovalMenuItemsForSession(
+      approvalMenuItemsForSession(
         session.id,
-        breakGlassRequests,
         testSlotModelActionRows,
         prLaneRequests,
       ),
-    [breakGlassRequests, prLaneRequests, session.id, testSlotModelActionRows],
+    [prLaneRequests, session.id, testSlotModelActionRows],
   );
   const postPRLaneDecision = useCallback(
     async (
@@ -17563,8 +17504,8 @@ function ChatPane({
       session.id,
     ],
   );
-  const quickApproveBreakGlassMenuItem = useCallback(
-    (item: BreakGlassApprovalMenuItem) => {
+  const quickApproveApprovalMenuItem = useCallback(
+    (item: ApprovalMenuItem) => {
       if (item.kind === "model") {
         void postTestSlotModelApproval({ eventId: item.id }, "");
         return;
@@ -17575,9 +17516,8 @@ function ChatPane({
         }
         return;
       }
-      void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
     },
-    [postBreakGlassDecision, postPRLaneDecision, postTestSlotModelApproval],
+    [postPRLaneDecision, postTestSlotModelApproval],
   );
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
@@ -24221,14 +24161,14 @@ function ChatPane({
                 glimmungRuns={{
                   runs: glimmungRunLinks,
                 }}
-                breakGlass={{
-                  items: breakGlassApprovalMenuItems,
+                approvals={{
+                  items: approvalMenuItems,
                   approvingId:
                     breakGlassApprovalBusyId ??
                     testSlotModelApprovalBusyId ??
                     prLaneApprovalBusyId,
                   onQuickApprove:
-                    publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
+                    publicView || readOnly ? undefined : quickApproveApprovalMenuItem,
                   onApprovePRLane:
                     publicView || readOnly
                       ? undefined
@@ -28874,7 +28814,7 @@ function AuthenticatedApp() {
                       title: "Available in an active chat session",
                     }}
                     glimmungRuns={{ runs: [] }}
-                    breakGlass={{ items: [] }}
+                    approvals={{ items: [] }}
                     pullRequest={{}}
                     slash={{
                       disabled: true,
