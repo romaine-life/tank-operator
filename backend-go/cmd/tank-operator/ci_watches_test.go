@@ -219,7 +219,7 @@ func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testi
 		mergeCommit: "merge-sha",
 		prState: mcpgithub.PullRequestState{
 			Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc123",
-			CheckState: "success", CIStatus: "succeeded",
+			CheckState: "success", CIStatus: "succeeded", AllChecksSettled: true,
 		},
 	}
 	app.mcpGitHub = gh
@@ -392,6 +392,38 @@ func TestApplyResolvedCIWatchStateAlertsOnOutOfBandHead(t *testing.T) {
 	}
 	if len(store.updateStatusCalls) != 0 {
 		t.Fatalf("out-of-band head must not wake/auto-merge: %+v", store.updateStatusCalls)
+	}
+}
+
+func TestAutoMergeWithheldUntilChecksConfirmedSettled(t *testing.T) {
+	// GitHub reports clean and Tank classifies Ready, but the confirm read shows
+	// the checks are not all settled yet (the partial/transient-clean window).
+	// Auto-merge must withhold and un-latch to 'watching' for retry, not merge.
+	mergeable := true
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "ciwatch_test", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234, HeadSHA: "abc123",
+	}}
+	app := ciWatchTestServer(t, store)
+	orch := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhaseRunning, spoke: "47"},
+	)
+	app.orchestrations = newOrchestrationEngine(orch, newRecordingSpawner().spawn)
+	gh := &fakeMCPGitHub{mergeCommit: "merge-sha", prState: mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc123",
+		CheckState: "success", CIStatus: "succeeded", AllChecksSettled: false,
+	}}
+	app.mcpGitHub = gh
+
+	watch := store.getByPRResult
+	watch.Status = pgstore.CIWatchWatching
+	app.handleGreenCIWatch(context.Background(), watch, "ready")
+
+	if gh.mergeCalls != 0 {
+		t.Fatalf("auto-merge should withhold on unconfirmed settle, mergeCalls=%d", gh.mergeCalls)
+	}
+	if len(store.updateStatusCalls) != 1 || store.updateStatusCalls[0].status != pgstore.CIWatchWatching {
+		t.Fatalf("withheld auto-merge should un-latch to watching, got %+v", store.updateStatusCalls)
 	}
 }
 
