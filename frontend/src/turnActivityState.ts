@@ -110,6 +110,35 @@ export function turnActivityShouldStartLoad<Entry, PageInfo, Collapse = unknown>
   return true;
 }
 
+// The per-turn load lifecycle discriminant.
+export type TurnActivityLoadStatus = TurnActivityLoadState<
+  unknown,
+  unknown,
+  unknown
+>["status"];
+
+// turnActivityShouldReconcileLoad is the level-triggered gate for the selected
+// turn's activity body. The body is loaded by edge-triggered effects (selecting
+// a turn, switching to the Turns tab, pressing R). Edge triggers alone strand
+// the view when a reset drops the selected turn back to "unloaded" without one
+// of those edges firing: the tabs view hides (not unmounts) panes, and a
+// hidden -> visible reactivation reset clears the per-turn load map, yet the
+// selected turn id and active tab are unchanged, so nothing re-fires and the
+// body sits on "Loading activity..." until a remount (reload / nav-away-back).
+//
+// Keying a reconcile effect on the selected turn's load STATUS closes that gap:
+// when the status drops to "unloaded" the effect re-runs and ensures a load.
+// "error" is intentionally NOT reconciled (it has its own retry affordance;
+// auto-retrying would hot-loop a hard failure), and neither is "loading" /
+// "loaded" (a load is in flight or done). Only absent / "unloaded" reconciles.
+export function turnActivityShouldReconcileLoad(
+  status: TurnActivityLoadStatus | undefined,
+  opts: { activeTabIsTurns: boolean; hasSelectedTurn: boolean },
+): boolean {
+  if (!opts.activeTabIsTurns || !opts.hasSelectedTurn) return false;
+  return status == null || status === "unloaded";
+}
+
 export function turnActivityLoadVisibleSnapshot<Entry, PageInfo, Collapse = unknown>(
   state: TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined,
 ): TurnActivityLoadSnapshot<Entry, PageInfo, Collapse> | undefined {

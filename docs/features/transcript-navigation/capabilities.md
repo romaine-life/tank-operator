@@ -94,6 +94,43 @@ Evidence:
   `turnDirectory.test.ts`, and the `scripts/check-removed-chat-runtime.mjs` guard
   blocking the window-derived selector.
 
+## Self-healing turn-activity loading
+
+Status: shipped
+
+Intent:
+The per-turn activity body (the `/activity` load behind "Loading activity…") must
+render every time a turn is selected, including when revisiting a session tab.
+The tabs view keeps panes mounted-but-hidden; a hidden→visible reactivation runs
+`resetSdkTimelineBootstrapState("visible-reactivation", …)`, which used to wipe
+the per-turn load map (`turnActivityLoadsByTurn`). The activity-load trigger is
+edge-triggered on `[activeTab, effectiveSelectedTurnId]` — neither changes when
+you revisit the tab you were already on — so the selected turn dropped to
+`unloaded` and the body stranded on "Loading activity…" with no edge to re-fire,
+recoverable only by remount (reload / nav-away-and-back / pressing R, which
+force-loads). This is the same edge-triggered-without-reconciliation class as the
+turn-directory strand above, in the activity loader.
+
+Contract impact:
+- The durable, turn-keyed activity cache is preserved across same-session
+  reactivation (only a real session change invalidates it — different turns), so
+  revisiting a tab renders the loaded body instantly instead of clearing and
+  re-fetching. `resetSdkTimelineBootstrapState` takes `clearTurnActivityCache`
+  (default true; the reactivation caller passes false); the derived memos
+  (`activityEntriesByTurn` / `turnActivityPageInfo` / `loadingActivityTurns`)
+  recompute from the preserved map.
+- A level-triggered reconciler keyed on the selected turn's load *status*
+  re-drives a load whenever it is absent/`unloaded` while a turn is selected on
+  the Turns tab — so any reset that empties the map self-heals rather than
+  stranding. `error` is excluded (its own retry affordance; no hot-loop).
+
+Evidence:
+- Frontend: `turnActivityState.turnActivityShouldReconcileLoad` (pure gate) +
+  `turnActivityState.test.ts` (reconcile re-drives `unloaded`; leaves
+  loading/loaded/error alone; off-tab/no-selection no-ops), the reconcile effect
+  + `clearTurnActivityCache` gating in `App.tsx`. Recovery via R / reload / nav
+  is preserved (the edge-triggered effect is kept alongside the reconciler).
+
 ## Self-healing turn-directory loading
 
 Status: shipped

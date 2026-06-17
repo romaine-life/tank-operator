@@ -383,6 +383,7 @@ import {
   failTurnActivityLoad,
   turnActivityLoadVisibleSnapshot,
   turnActivityGroupIsActive,
+  turnActivityShouldReconcileLoad,
   turnActivityShouldStartLoad,
   turnActivityShellIsDurablyActive,
   type TurnActivityLoadProblem,
@@ -18624,6 +18625,11 @@ function ChatPane({
       source?: SdkHistoryRefreshSource;
       clearRealtime?: boolean;
       scrollToLatestOnReady?: boolean;
+      // Whether to drop the per-turn activity cache. Defaults to true (a real
+      // session change invalidates it — different turns). Same-session
+      // reactivation passes false to keep the durable turn-keyed cache, so
+      // revisiting a tab renders instantly instead of re-fetching.
+      clearTurnActivityCache?: boolean;
     } = {},
   ): void {
     sdkWindowEpochRef.current += 1;
@@ -18664,10 +18670,18 @@ function ChatPane({
     setEntries([]);
     setTokensUsed(0);
     clearActivityLiveRefreshState();
-    turnActivityLoadsByTurnRef.current = {};
-    setTurnActivityLoadsByTurn({});
-    activityEntriesByTurnRef.current = {};
-    selectedTurnPageRef.current = {};
+    // The turn-keyed activity cache is durable and only invalidated by a real
+    // session change. Preserve it across same-session reactivation so the body
+    // renders instantly instead of clearing + re-fetching. The derived memos
+    // (activityEntriesByTurn / turnActivityPageInfo / loadingActivityTurns)
+    // recompute from this map, so preserving it keeps the rendered body
+    // coherent; the level-triggered reconciler re-drives a load if it is empty.
+    if (options.clearTurnActivityCache !== false) {
+      turnActivityLoadsByTurnRef.current = {};
+      setTurnActivityLoadsByTurn({});
+      activityEntriesByTurnRef.current = {};
+      selectedTurnPageRef.current = {};
+    }
     setSdkConnectionState("idle");
     dispatchTimelineBootstrap({
       type: "reset",
@@ -18915,6 +18929,10 @@ function ChatPane({
         source: "visible-reactivation",
         clearRealtime: true,
         scrollToLatestOnReady: !hasExplicitTarget,
+        // Same session — keep the durable turn-activity cache so revisiting a
+        // tab renders the loaded body instantly rather than clearing it and
+        // re-fetching (the strand this fixes). Only the timeline window resets.
+        clearTurnActivityCache: false,
       },
     );
     dispatchNavigationMode(
@@ -22017,6 +22035,37 @@ function ChatPane({
     if (!effectiveSelectedTurnId) return;
     ensureTurnActivityLoaded(effectiveSelectedTurnId);
   }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+  // Level-triggered safety net for the activity body. The effect above is
+  // edge-triggered on tab/turn changes, so it does NOT re-fire when a reset
+  // drops the selected turn back to "unloaded" with no tab/turn change — the
+  // tabs view hides (not unmounts) panes, and a hidden->visible reactivation
+  // reset clears turnActivityLoadsByTurn, stranding the body on
+  // "Loading activity..." with no edge to re-fire (recoverable only by remount,
+  // i.e. reload / nav-away-and-back / pressing R). Keying this reconcile on the
+  // selected turn's load STATUS re-drives the load the instant it goes
+  // unloaded. "error" is excluded so a hard failure cannot hot-loop, and the
+  // ref-based shouldStartLoad gate dedups against the edge effect above. See
+  // turnActivityState.ts (turnActivityShouldReconcileLoad).
+  const selectedActivityStatus = effectiveSelectedTurnId
+    ? turnActivityLoadsByTurn[effectiveSelectedTurnId]?.status
+    : undefined;
+  useEffect(() => {
+    if (!effectiveSelectedTurnId) return;
+    if (
+      !turnActivityShouldReconcileLoad(selectedActivityStatus, {
+        activeTabIsTurns: activeTab === "turns",
+        hasSelectedTurn: true,
+      })
+    ) {
+      return;
+    }
+    ensureTurnActivityLoaded(effectiveSelectedTurnId);
+  }, [
+    activeTab,
+    effectiveSelectedTurnId,
+    selectedActivityStatus,
+    ensureTurnActivityLoaded,
+  ]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (pendingTurnViewRouteAnchor !== "bottom") return;

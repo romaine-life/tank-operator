@@ -296,6 +296,16 @@ yanking the viewport away from a user reading history.
   `loadTurnDirectoryInFlightRef` latch cannot reappear without failing
   `scripts/check-removed-chat-runtime.mjs`; `frontend/src/turnDirectoryLoad.test.ts`
   pins that a visible non-terminal pane with nothing in flight always loads.
+- The per-turn activity body ("Loading activity…") renders every time a turn is
+  selected, including revisiting a session tab. Because the tabs view hides (not
+  unmounts) panes, a hidden→visible reactivation must not strand the body: the
+  durable turn-keyed activity cache survives same-session reactivation, and a
+  level-triggered reconciler keyed on the selected turn's load status re-drives a
+  load whenever it is `unloaded` while a turn is selected — so the body never
+  sits on "Loading activity…" with nothing in flight and no edge to re-fire. The
+  pure gate `turnActivityShouldReconcileLoad` (tested in
+  `turnActivityState.test.ts`) owns the decision and excludes `error` (its own
+  retry affordance) to avoid a hot-loop.
 - Opening a pending `needs_input` turn lands on the question-set page, not the
   last output page. Multiple questions from one AskUserQuestion invocation stay
   in one answer set but render as adjacent semantic `question_set` pages, and

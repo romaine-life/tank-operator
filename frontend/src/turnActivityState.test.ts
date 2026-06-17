@@ -7,10 +7,12 @@ import {
   turnActivityLoadIsLoaded,
   turnActivityLoadVisibleSnapshot,
   turnActivityGroupIsActive,
+  turnActivityShouldReconcileLoad,
   turnActivityShouldStartLoad,
   turnActivityShellIsDurablyActive,
   type TurnActivityLoadSnapshot,
   type TurnActivityLoadState,
+  type TurnActivityLoadStatus,
 } from "./turnActivityState.ts";
 
 type Entry = { id: string };
@@ -136,6 +138,51 @@ test("load errors expose retry state without fabricating partial activity", () =
 
   expect(failed?.status).toBe("error");
   expect(turnActivityLoadVisibleSnapshot(failed)).toBeUndefined();
+});
+
+test("reconcile re-drives an unloaded selected turn (the reactivation strand)", () => {
+  // After a hidden->visible reactivation reset wipes the per-turn load map, the
+  // selected turn's status is absent/unloaded. The edge-triggered loader does
+  // not re-fire (tab + selected turn unchanged), so reconcile must.
+  for (const status of [undefined, "unloaded"] as (
+    | TurnActivityLoadStatus
+    | undefined
+  )[]) {
+    expect(
+      turnActivityShouldReconcileLoad(status, {
+        activeTabIsTurns: true,
+        hasSelectedTurn: true,
+      }),
+    ).toBe(true);
+  }
+});
+
+test("reconcile leaves loaded / loading / error turns alone", () => {
+  // loaded: nothing to do. loading: a load is in flight. error: has its own
+  // retry affordance — auto-reconciling would hot-loop a hard failure.
+  for (const status of ["loading", "loaded", "error"] as TurnActivityLoadStatus[]) {
+    expect(
+      turnActivityShouldReconcileLoad(status, {
+        activeTabIsTurns: true,
+        hasSelectedTurn: true,
+      }),
+    ).toBe(false);
+  }
+});
+
+test("reconcile does nothing off the Turns tab or with no selected turn", () => {
+  expect(
+    turnActivityShouldReconcileLoad("unloaded", {
+      activeTabIsTurns: false,
+      hasSelectedTurn: true,
+    }),
+  ).toBe(false);
+  expect(
+    turnActivityShouldReconcileLoad("unloaded", {
+      activeTabIsTurns: true,
+      hasSelectedTurn: false,
+    }),
+  ).toBe(false);
 });
 
 test("live refresh failures keep the last coherent snapshot visible", () => {
