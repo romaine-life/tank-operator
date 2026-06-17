@@ -2125,6 +2125,14 @@ var schemaMigrations = []migration{
 	{ID: "0173", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_pr
 		ON orchestration_phases (pr_owner, pr_name, pr_number)
 		WHERE pr_number > 0`},
+	// session -> phase reverse lookup for the advance loop's phase->PR linking:
+	// when a phase's spoke session registers a PR (the CI-watch handoff path),
+	// the orchestrator joins session id back to its owning phase to copy the PR
+	// coordinates on. Partial: only phases that have actually been dispatched
+	// carry a spoke_session_id. Mirrors orchestration_phases_pr.
+	{ID: "0174", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_spoke
+		ON orchestration_phases (spoke_session_id)
+		WHERE spoke_session_id <> ''`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

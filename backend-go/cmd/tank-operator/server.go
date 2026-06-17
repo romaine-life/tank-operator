@@ -139,6 +139,14 @@ type appServer struct {
 	// POST /webhooks/github route. Empty -> the receiver fails closed.
 	githubWebhookSecret string
 
+	// orchestrations is the deterministic multi-phase advance engine
+	// (docs/event-driven-rollout.md sibling): the merged-PR webhook calls
+	// advanceOnMerge to walk the DAG and dispatch the next ready phase's spoke,
+	// the CI-watch register handler calls linkPhasePR to join a spoke's PR back
+	// to its phase, and a background loop calls reconcileAllActive as the
+	// dropped-webhook backstop. nil in stub mode / when pgPool is unset.
+	orchestrations *orchestrationEngine
+
 	// backgroundTaskWakes is the durable backend-owned store for "a Claude
 	// background task finished while the session was idle" wakes. The runner
 	// registers the natural terminal; the orchestrator claims due rows and

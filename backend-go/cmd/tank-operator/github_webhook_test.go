@@ -152,6 +152,58 @@ func TestHandleGitHubWebhookStaleSHAIgnored(t *testing.T) {
 	}
 }
 
+const mergedPRBody = `{"action":"closed","repository":{"owner":{"login":"romaine-life"},"name":"tank-operator"},"pull_request":{"number":100,"merged":true,"merge_commit_sha":"sha-a","head":{"sha":"h1"}}}`
+
+// TestHandleGitHubWebhookAdvancesOrchestrationPhase proves the merged-PR webhook
+// walks the orchestration DAG end-to-end through the real handler: a merged
+// phase PR marks the phase merged and dispatches the dependent phase, even
+// though the CI-watch lookup finds nothing actionable (the two subsystems are
+// independent).
+func TestHandleGitHubWebhookAdvancesOrchestrationPhase(t *testing.T) {
+	app := webhookTestApp(t, &fakeCIWatchStore{})
+	store := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhaseRunning, prNumber: 100, spoke: "spoke-a"},
+		phaseSpec{key: "b", deps: []string{"a"}, status: pgstore.PhasePending},
+	)
+	sp := newRecordingSpawner()
+	app.orchestrations = newOrchestrationEngine(store, sp.spawn)
+
+	rec := postWebhook(t, app, "pull_request", mergedPRBody, signWebhook("topsecret", mergedPRBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := store.snapshot(phaseID("a")).Status; got != pgstore.PhaseMerged {
+		t.Fatalf("phase a status = %q, want merged", got)
+	}
+	if got := store.snapshot(phaseID("b")).Status; got != pgstore.PhaseRunning {
+		t.Fatalf("phase b status = %q, want running (dispatched)", got)
+	}
+	if sp.count("b") != 1 {
+		t.Fatalf("phase b spawned %d times, want 1", sp.count("b"))
+	}
+}
+
+// TestHandleGitHubWebhookOrchestrationDoubleMergeAdvancesOnce proves the handler
+// is idempotent against GitHub's at-least-once delivery: two identical merged
+// deliveries dispatch the dependent phase exactly once.
+func TestHandleGitHubWebhookOrchestrationDoubleMergeAdvancesOnce(t *testing.T) {
+	app := webhookTestApp(t, &fakeCIWatchStore{})
+	store := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhaseRunning, prNumber: 100, spoke: "spoke-a"},
+		phaseSpec{key: "b", deps: []string{"a"}, status: pgstore.PhasePending},
+	)
+	sp := newRecordingSpawner()
+	app.orchestrations = newOrchestrationEngine(store, sp.spawn)
+
+	sig := signWebhook("topsecret", mergedPRBody)
+	_ = postWebhook(t, app, "pull_request", mergedPRBody, sig)
+	_ = postWebhook(t, app, "pull_request", mergedPRBody, sig) // duplicate delivery
+
+	if sp.count("b") != 1 {
+		t.Fatalf("phase b spawned %d times across a double delivery, want 1", sp.count("b"))
+	}
+}
+
 func TestHandleGitHubWebhookCoalescesAfterTerminal(t *testing.T) {
 	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
 		WatchID: "cw1", SessionID: "47", PRNumber: 1234,

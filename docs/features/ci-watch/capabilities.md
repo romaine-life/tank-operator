@@ -46,3 +46,47 @@ and [../README.md](../README.md) for how capability ledgers are used.
   model's replayed context. External merges are recorded via the `pull_request`
   closed/merged webhook.
 - **Durable source:** `ci_status.updated` event (actor=system, source=tank).
+
+## orchestration-advance
+
+- **Status:** shipped (advance-on-merge + spawn)
+- **Intent:** The deterministic engine that walks a multi-phase orchestration DAG
+  with no LLM in the continuation loop. When a phase's PR merges, the merged-PR
+  webhook (`pull_request` closed/merged → `advanceOnMerge`) marks the phase
+  `merged`, recomputes which still-`pending` phases now have every `depends_on`
+  satisfied (all `merged`/`skipped`), and dispatches a spoke session for each —
+  cloned off the run's repo `main`, with the phase's stored `brief` as its first
+  turn (the same `mgr.Create` + `enqueueSDKTurn` machinery `spawn_run_session`
+  uses). When no phase remains active the run transitions to `done`. Idempotent
+  against GitHub's at-least-once delivery: every state move is an atomically
+  guarded conditional UPDATE (`MarkPhaseReady` pending→ready, `ClaimPhaseForSpawn`
+  ready→running, `RequeuePhaseForRespawn` running-with-empty-spoke→ready), so a
+  duplicate webhook or a racing replica advances the run exactly once.
+- **Durable source:** `orchestration_phases` status/spoke/PR/merge columns
+  (#1264); the advance engine drives `orchestrations.state`. Out of scope for this
+  slice (later): autonomous green→merge, integration-branch targets, and the
+  terminal human-review gate.
+
+## orchestration-phase-pr-link
+
+- **Status:** shipped
+- **Intent:** Joins a phase's spoke session to the PR it opened so the merged-PR
+  reverse lookup resolves at merge time. When a `running` phase's spoke registers
+  its PR via the existing `watch_current_session_pr` / `POST
+  /api/internal/sessions/{id}/ci-watches` handoff, the orchestrator copies the PR
+  coordinates onto the phase (`MarkPhasePROpen`, status → `pr_open`). A no-op for
+  ordinary (non-orchestration) sessions; never drags a `merged` phase back.
+- **Durable source:** `orchestration_phases` `pr_owner/pr_name/pr_number/pr_url`,
+  resolved by `spoke_session_id` (index `orchestration_phases_spoke`).
+
+## orchestration-reconcile-backstop
+
+- **Status:** shipped
+- **Intent:** The dropped-webhook backstop. A periodic loop re-drives every
+  non-terminal run (`ListActiveOrchestrationIDs`): a phase whose PR actually
+  merged but whose advance never landed, and any ready/pending phase that should
+  have a spoke but doesn't, are repaired without a webhook; a freshly-`approved`
+  run's root phases are bootstrapped. A missed webhook degrades to a delay, never
+  a hung run. Per-replica idempotent — every effect is a guarded write.
+- **Durable source:** `orchestrations` (state `approved`/`running`) +
+  `orchestration_phases`; `runOrchestrationReconcileLoop`.

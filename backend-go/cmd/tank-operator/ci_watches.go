@@ -53,5 +53,19 @@ func (s *appServer) handleInternalRegisterCIWatch(w http.ResponseWriter, r *http
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Phase->PR linking: if this session is an orchestration phase's spoke, copy
+	// the PR coordinates it just registered onto the phase, so the PR->phase
+	// reverse lookup resolves when the PR merges. This is the cleanest existing
+	// "this session registered a PR" hook — the spoke registers via the same
+	// watch_current_session_pr handoff every governed PR uses. A no-op for
+	// ordinary (non-orchestration) sessions.
+	if s.orchestrations != nil {
+		s.orchestrations.linkPhasePR(r.Context(), sessionID, pgstore.SetPhasePRRequest{
+			PROwner:  watch.PROwner,
+			PRName:   watch.PRName,
+			PRNumber: watch.PRNumber,
+			PRURL:    watch.PRURL,
+		})
+	}
 	writeJSON(w, http.StatusOK, watch)
 }
