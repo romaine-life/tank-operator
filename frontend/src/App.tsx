@@ -256,6 +256,7 @@ import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
 import { McpIcon } from "./McpIcon";
 import {
+  clearHomeRestrictedGitPreference,
   readHomeRestrictedGitEnabled,
   writeHomeRestrictedGitEnabled,
 } from "./homePreferences";
@@ -1264,8 +1265,10 @@ const DEMO_LANDING_LINES = [
   "Sign in from the lower-left profile area when you want real pods.",
 ];
 
-const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
-const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
+const HOME_DRAFT_SESSION_MODE_KEY = "tank.homeDraftSessionMode.v1";
+const HOME_DRAFT_INTERACTION_KEY = "tank.homeDraftInteraction.v1";
+const DEFAULT_HOME_SESSION_MODE: DefaultSessionMode = "claude_gui";
+const DEFAULT_HOME_INTERACTION: SessionInteraction = "gui";
 const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
 
 function normalizeSessionMode(value: string | null): string | null {
@@ -1275,40 +1278,47 @@ function normalizeSessionMode(value: string | null): string | null {
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(
-      localStorage.getItem(DEFAULT_SESSION_MODE_KEY),
+      sessionStorage.getItem(HOME_DRAFT_SESSION_MODE_KEY),
     );
     if (stored === "codex_app_server" || stored === "codex_exec_gui") {
       return "codex_gui";
     }
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
-    // localStorage can be unavailable in hardened/private browser contexts.
+    // sessionStorage can be unavailable in hardened/private browser contexts.
   }
-  return "claude_gui";
+  return DEFAULT_HOME_SESSION_MODE;
 }
 
 function writeDefaultSessionMode(mode: DefaultSessionMode): void {
   try {
-    localStorage.setItem(DEFAULT_SESSION_MODE_KEY, mode);
+    sessionStorage.setItem(HOME_DRAFT_SESSION_MODE_KEY, mode);
   } catch {
-    // Preference persistence is best-effort; session creation should continue.
+    // Draft persistence is best-effort; session creation should continue.
   }
 }
 
 function readDefaultInteraction(): SessionInteraction {
   try {
-    const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
+    const stored = sessionStorage.getItem(HOME_DRAFT_INTERACTION_KEY);
     if (stored === "gui" || stored === "cli") return stored;
     if (stored === "terminal") return "cli";
   } catch {}
   // Derive from stored session mode when the interaction preference is absent.
   const mode = readDefaultSessionMode();
-  return CHAT_MODES.has(mode) ? "gui" : "cli";
+  return CHAT_MODES.has(mode) ? DEFAULT_HOME_INTERACTION : "cli";
 }
 
 function writeDefaultInteraction(interaction: SessionInteraction): void {
   try {
-    localStorage.setItem(DEFAULT_INTERACTION_KEY, interaction);
+    sessionStorage.setItem(HOME_DRAFT_INTERACTION_KEY, interaction);
+  } catch {}
+}
+
+function clearHomeDraftModePreference(): void {
+  try {
+    sessionStorage.removeItem(HOME_DRAFT_SESSION_MODE_KEY);
+    sessionStorage.removeItem(HOME_DRAFT_INTERACTION_KEY);
   } catch {}
 }
 
@@ -5598,9 +5608,9 @@ const EFFORT_LABELS: Record<string, Omit<EffortOption, "id">> = {
   max: { label: "Max", hint: "Largest Claude reasoning budget" },
 };
 const DEFAULT_CLAUDE_MODEL_ID = "";
-const DEFAULT_CLAUDE_EFFORT_ID = "";
+const DEFAULT_CLAUDE_EFFORT_ID = "max";
 const DEFAULT_CODEX_MODEL_ID = "";
-const DEFAULT_CODEX_EFFORT_ID = "";
+const DEFAULT_CODEX_EFFORT_ID = "xhigh";
 
 interface SessionRunOptionMode {
   mode: string;
@@ -5916,13 +5926,10 @@ interface RunPrefs {
   // chat-app convention. See docs/product-inspirations.md analysis.
   turnCompleteSoundOnVisible: boolean;
   chatFontScale: number;
-  // Provider model + effort prefs persist the user's last picks across
-  // sessions so a fresh session opens with them pre-selected. They drive
-  // initial selectedModelId / selectedEffort state in RunPane and are
-  // also written back on every change. Once a turn is submitted the
-  // model + effort are sealed for that session pod's lifetime (see
-  // claude-runner/src/runner.ts and codex-runner/src/runner.ts), so these
-  // prefs only affect the *next* session created in this browser.
+  // Provider model + effort are splash launch-draft prefs. They survive
+  // leaving and returning to the splash in the same tab, but a successful
+  // session create resets them to the product defaults instead of turning
+  // the last launch into the next launch's default.
   claudeModelId: string;
   claudeEffort: string;
   codexModelId: string;
@@ -5948,10 +5955,21 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
-const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>(["initialMessageMode"]);
+const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>([
+  "claudeModelId",
+  "claudeEffort",
+  "codexModelId",
+  "codexEffort",
+  "initialMessageMode",
+]);
+const HOME_DRAFT_RUN_PREF_PREFIX = "tank.homeDraftRunPref.v1:";
 
 function isDurableRunPref(key: keyof RunPrefs): boolean {
   return !EPHEMERAL_RUN_PREF_KEYS.has(key);
+}
+
+function isEphemeralRunPref(key: keyof RunPrefs): boolean {
+  return EPHEMERAL_RUN_PREF_KEYS.has(key);
 }
 
 function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
@@ -5966,8 +5984,65 @@ function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
 function persistRunPrefsLocally(prefs: RunPrefs) {
   try {
     for (const key of Object.keys(prefs) as (keyof RunPrefs)[]) {
-      if (!isDurableRunPref(key)) continue;
+      if (!isDurableRunPref(key)) {
+        localStorage.removeItem(RUN_PREF_PREFIX + String(key));
+        continue;
+      }
       localStorage.setItem(RUN_PREF_PREFIX + String(key), String(prefs[key]));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function applySerializedRunPref(
+  out: RunPrefs,
+  key: keyof RunPrefs,
+  raw: string | null,
+) {
+  if (raw == null) return;
+  if (key === "chatFontScale") {
+    out[key] = clampChatFontScale(Number(raw));
+  } else if (key === "turnCompleteSoundVolume") {
+    out[key] = clampTurnCompleteSoundVolume(Number(raw));
+  } else if (key === "claudeModelId") {
+    out[key] = raw.trim();
+  } else if (key === "claudeEffort") {
+    out[key] = raw.trim();
+  } else if (key === "codexModelId") {
+    out[key] = raw.trim();
+  } else if (key === "codexEffort") {
+    out[key] = raw.trim();
+  } else if (key === "initialMessageMode") {
+    if (
+      INITIAL_MESSAGE_MODE_OPTIONS.some((option) => option.id === raw.trim())
+    ) {
+      out[key] = raw.trim() as InitialMessageMode;
+    }
+  } else if (raw === "true" || raw === "false") {
+    (out as unknown as Record<string, unknown>)[key] = raw === "true";
+  }
+}
+
+function writeEphemeralRunPrefForSession<K extends keyof RunPrefs>(
+  key: K,
+  value: RunPrefs[K],
+) {
+  if (!isEphemeralRunPref(key)) return;
+  try {
+    sessionStorage.setItem(
+      HOME_DRAFT_RUN_PREF_PREFIX + String(key),
+      String(value),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearEphemeralRunPrefsForSession() {
+  try {
+    for (const key of EPHEMERAL_RUN_PREF_KEYS) {
+      sessionStorage.removeItem(HOME_DRAFT_RUN_PREF_PREFIX + String(key));
     }
   } catch {
     /* ignore */
@@ -6067,21 +6142,16 @@ function loadRunPrefs(): RunPrefs {
     for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
       if (!isDurableRunPref(key)) continue;
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
-      if (key === "chatFontScale") {
-        if (raw != null) out[key] = clampChatFontScale(Number(raw));
-      } else if (key === "turnCompleteSoundVolume") {
-        if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
-      } else if (key === "claudeModelId") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "claudeEffort") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "codexModelId") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "codexEffort") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (raw === "true" || raw === "false") {
-        (out as unknown as Record<string, unknown>)[key] = raw === "true";
-      }
+      applySerializedRunPref(out, key, raw);
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
+      if (!isEphemeralRunPref(key)) continue;
+      const raw = sessionStorage.getItem(HOME_DRAFT_RUN_PREF_PREFIX + key);
+      applySerializedRunPref(out, key, raw);
     }
   } catch {
     /* ignore */
@@ -24344,6 +24414,8 @@ function AuthenticatedApp() {
       if (isDurableRunPref(key)) {
         persistRunPrefsLocally(next);
         persistRunPrefs(next);
+      } else {
+        writeEphemeralRunPrefForSession(key, value);
       }
       return next;
     });
@@ -25411,16 +25483,6 @@ function AuthenticatedApp() {
       setHomeSpireLensMcpEnabled(false);
     }
   }, [defaultSessionMode, spireLensMcpAvailable]);
-
-  // Persist the Restricted Git choice so it survives reloads and mode switches
-  // and is actually used on the next session create. The create-time
-  // REPO_SUPPORTED_MODES guard already withholds the capability for modes that
-  // can't use it (and the toggle is hidden for them), so there is no reason to
-  // silently clear the user's stored choice when the default mode changes —
-  // that silent reset is what dropped restricted_git from sessions 927/929.
-  useEffect(() => {
-    writeHomeRestrictedGitEnabled(homeRestrictedGitEnabled);
-  }, [homeRestrictedGitEnabled]);
 
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
@@ -26639,6 +26701,34 @@ function AuthenticatedApp() {
     setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
   }
 
+  function resetHomeLaunchDefaults() {
+    clearHomeDraftModePreference();
+    setDefaultInteraction(DEFAULT_HOME_INTERACTION);
+    setDefaultSessionMode(DEFAULT_HOME_SESSION_MODE);
+
+    clearEphemeralRunPrefsForSession();
+    setRunPrefs((prev) => {
+      const base: RunPrefs = {
+        ...prev,
+        claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
+        claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
+        codexModelId: DEFAULT_CODEX_MODEL_ID,
+        codexEffort: DEFAULT_CODEX_EFFORT_ID,
+        initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
+      };
+      const next = sessionRunOptions
+        ? reconcileRunPrefsWithRunOptions(base, sessionRunOptions)
+        : base;
+      persistRunPrefsLocally(next);
+      persistRunPrefs(next);
+      return next;
+    });
+
+    clearHomeRestrictedGitPreference();
+    setHomeRestrictedGitEnabled(true);
+    setHomeModelMenuOpen(false);
+  }
+
   async function createSession(
     mode: SessionMode = defaultSessionMode,
     initialPrompt?: string,
@@ -26773,6 +26863,7 @@ function AuthenticatedApp() {
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
+      resetHomeLaunchDefaults();
       recordSessionListDebugEvent({
         kind: "create-response",
         source: "createSession",
@@ -28341,9 +28432,13 @@ function AuthenticatedApp() {
                           <button
                             type="button"
                             className={`home-quick-action home-capability-action${!homeRestrictedGitEnabled ? " is-selected" : ""}`}
-                            onClick={() =>
-                              setHomeRestrictedGitEnabled((value) => !value)
-                            }
+                            onClick={() => {
+                              setHomeRestrictedGitEnabled((value) => {
+                                const next = !value;
+                                writeHomeRestrictedGitEnabled(next);
+                                return next;
+                              });
+                            }}
                             disabled={busy}
                             aria-pressed={!homeRestrictedGitEnabled}
                             title="Disable Tank-governed Git for this session and use standard git access"
