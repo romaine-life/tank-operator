@@ -4848,6 +4848,13 @@ button:disabled {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.run-turn-view-context[data-collapsed="false"][data-context-loaded="true"] {
+  max-height: min(22rem, 34dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .run-turn-view-context[data-collapsed="true"] {
   padding-bottom: var(--space-2);
 }

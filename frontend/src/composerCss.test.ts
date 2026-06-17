@@ -233,6 +233,20 @@ test("turn view transcript rows share the same avatar gutter", () => {
   expect(inlineActivityContentRule).toMatch(/max-width:\s*100%;/);
 });
 
+test("expanded turn prompt context scrolls before hiding section controls", () => {
+  const promptContextRule = cssRule(
+    '.run-turn-view-context[data-collapsed="false"][data-context-loaded="true"]',
+  );
+  expect(promptContextRule).toMatch(/max-height:\s*min\(22rem,\s*34dvh\);/);
+  expect(promptContextRule).toMatch(/overflow-y:\s*auto;/);
+  expect(promptContextRule).toMatch(/overscroll-behavior:\s*contain;/);
+  expect(promptContextRule).toMatch(/scrollbar-gutter:\s*stable;/);
+
+  const promptSectionRule = cssRule(".run-turn-view-prompt-section");
+  expect(promptSectionRule).toMatch(/flex:\s*0\s+0\s+auto;/);
+  expect(promptSectionRule).toMatch(/min-width:\s*0;/);
+});
+
 test("standalone transcript artifacts align to the message content column", () => {
   const transcriptRule = cssRule(".run-transcript");
   expect(transcriptRule).toMatch(
