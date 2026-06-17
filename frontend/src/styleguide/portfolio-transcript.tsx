@@ -307,7 +307,8 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
           data-context-loaded="true"
           data-section-divider="true"
           data-design-component="TurnPromptContext"
-          data-design-state="expanded-long-prompt-scroll-capped"
+          data-design-state="expanded-with-divider"
+          data-design-scenario="long-prompt-scroll-capped"
           data-inspectable
         >
           <TranscriptMessage variant="user" ownedByActivity>
