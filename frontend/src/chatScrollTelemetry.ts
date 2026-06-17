@@ -22,6 +22,8 @@ interface ChatScrollMetricPayload {
   sessionMode: string;
   sessionId?: string;
   previousSessionId?: string;
+  routeSessionId?: string;
+  selectedTurnId?: string;
   pagePath?: string;
   pageSearch?: string;
   source?: string;
@@ -140,6 +142,8 @@ function enqueueChatScrollMetric(
     sessionMode: metricString(detail.sessionMode) || "unknown",
     sessionId: metricString(detail.sessionId),
     previousSessionId: metricString(detail.previousSessionId),
+    routeSessionId: metricString(detail.routeSessionId),
+    selectedTurnId: metricString(detail.selectedTurnId),
     pagePath: currentPagePath(),
     pageSearch: currentPageSearch(),
     source: metricString(detail.source),

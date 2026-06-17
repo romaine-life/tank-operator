@@ -83,6 +83,8 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
   logChatScrollEvent("at-bottom-change", {
     sessionMode: "codex_gui",
     sessionId: "101",
+    routeSessionId: "202",
+    selectedTurnId: "turn_abc",
     source: "keyboard",
     anchor: "oldest",
     key: "Home",
@@ -107,6 +109,8 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
   expect(event.event).toBe("at-bottom-change");
   expect(event.sessionMode).toBe("codex_gui");
   expect(event.sessionId).toBe("101");
+  expect(event.routeSessionId).toBe("202");
+  expect(event.selectedTurnId).toBe("turn_abc");
   expect(event.pagePath).toBe("/sessions/101");
   expect(event.pageSearch).toBe("?session=101");
   expect(event.source).toBe("keyboard");

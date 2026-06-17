@@ -163,22 +163,41 @@ func TestHandleChatScrollMetricsLogsThinkingRowInvariantContext(t *testing.T) {
 func TestHandleChatScrollMetricsLogsSelectedTurnActivityLoadingContext(t *testing.T) {
 	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
 	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/chat-scroll", strings.NewReader(`{
-		"events": [{
-			"event": "turn-activity-selected-loading-stranded",
-			"surface": "session",
-			"sessionMode": "codex_gui",
-			"sessionId": "1038",
-			"previousSessionId": "1031",
-			"key": "turn_a80515c0-be0a-43c9-8ffa-06e5b7eb080b",
-			"source": "session-switch",
-			"reason": "absent",
-			"status": 0,
-			"entries": 0,
-			"groups": 0,
-			"activityEntries": 65,
-			"turnActivityShells": 1,
-			"durableActiveTurnActivityShells": 1
-		}]
+		"events": [
+			{
+				"event": "turn-activity-selected-loading-stranded",
+				"surface": "session",
+				"sessionMode": "codex_gui",
+				"sessionId": "1038",
+				"previousSessionId": "1031",
+				"key": "turn_a80515c0-be0a-43c9-8ffa-06e5b7eb080b",
+				"source": "session-switch",
+				"reason": "absent",
+				"status": 0,
+				"entries": 0,
+				"groups": 0,
+				"activityEntries": 65,
+				"turnActivityShells": 1,
+				"durableActiveTurnActivityShells": 1
+			},
+			{
+				"event": "turn-activity-selected-route-session-mismatch",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "1049",
+				"routeSessionId": "1031",
+				"selectedTurnId": "turn_28d18c7c-a36c-4ee3-9512-7492f83291a0",
+				"key": "1031",
+				"source": "turns-selected",
+				"reason": "route-session-mismatch",
+				"status": 0,
+				"entries": 0,
+				"groups": 0,
+				"activityEntries": 0,
+				"turnActivityShells": 1,
+				"durableActiveTurnActivityShells": 1
+			}
+		]
 	}`))
 	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
 	res := httptest.NewRecorder()
@@ -196,11 +215,18 @@ func TestHandleChatScrollMetricsLogsSelectedTurnActivityLoadingContext(t *testin
 	logged := logs.String()
 	for _, want := range []string{
 		`"event":"turn-activity-selected-loading-stranded"`,
+		`"event":"turn-activity-selected-route-session-mismatch"`,
 		`"session_id":"1038"`,
+		`"session_id":"1049"`,
 		`"previous_session_id":"1031"`,
+		`"route_session_id":"1031"`,
+		`"selected_turn_id":"turn_28d18c7c-a36c-4ee3-9512-7492f83291a0"`,
 		`"key":"turn_a80515c0-be0a-43c9-8ffa-06e5b7eb080b"`,
+		`"key":"1031"`,
 		`"source":"session-switch"`,
+		`"source":"turns-selected"`,
 		`"reason":"absent"`,
+		`"reason":"route-session-mismatch"`,
 		`"status":0`,
 		`"entries":0`,
 		`"groups":0`,
@@ -217,15 +243,24 @@ func TestHandleChatScrollMetricsLogsSelectedTurnActivityLoadingContext(t *testin
 	if !strings.Contains(metrics, `tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-activity-selected-loading-stranded",has_scroll_parent="unknown",session_mode="codex_gui",surface="session"}`) {
 		t.Fatalf("scrape missing turn-activity-selected-loading-stranded event:\n%s", metrics)
 	}
+	if !strings.Contains(metrics, `tank_chat_scroll_client_events_total{at_bottom="unknown",event="turn-activity-selected-route-session-mismatch",has_scroll_parent="unknown",session_mode="claude_gui",surface="session"}`) {
+		t.Fatalf("scrape missing turn-activity-selected-route-session-mismatch event:\n%s", metrics)
+	}
 	if got := chatScrollEventLabel("turn-activity-selected-loading-slow"); got != "turn-activity-selected-loading-slow" {
 		t.Fatalf("slow selected-loading event label = %q", got)
 	}
 	if got := chatScrollEventLabel("turn-activity-selected-loading-stranded"); got != "turn-activity-selected-loading-stranded" {
 		t.Fatalf("stranded selected-loading event label = %q", got)
 	}
+	if got := chatScrollEventLabel("turn-activity-selected-route-session-mismatch"); got != "turn-activity-selected-route-session-mismatch" {
+		t.Fatalf("selected route/session mismatch event label = %q", got)
+	}
 	if strings.Contains(metrics, `session_id="1038"`) ||
+		strings.Contains(metrics, `session_id="1049"`) ||
 		strings.Contains(metrics, `previous_session_id="1031"`) ||
+		strings.Contains(metrics, `route_session_id="1031"`) ||
 		strings.Contains(metrics, `turn_a80515c0`) ||
+		strings.Contains(metrics, `turn_28d18c7c`) ||
 		strings.Contains(metrics, `reason="absent"`) {
 		t.Fatalf("scrape leaked selected turn loading trace context:\n%s", metrics)
 	}

@@ -4,6 +4,7 @@ import {
   buildTurnViewItems,
   latestAutoFollowApprovalTurnId,
   mergeTurnDirectoryWithLiveShells,
+  selectedActivityRouteSessionMismatch,
   turnActivityShellIdsMissingFromDirectory,
 } from "./App.tsx";
 import type { TranscriptEntry } from "./App.tsx";
@@ -134,5 +135,12 @@ describe("durable turn directory feeds the Turns selector", () => {
         new Set(["turn_1", "turn_2"]),
       ),
     ).toEqual(["turn_3", "turn_5"]);
+  });
+
+  test("detects selected activity route/session mismatches", () => {
+    expect(selectedActivityRouteSessionMismatch("1031", "1049")).toBe("1049");
+    expect(selectedActivityRouteSessionMismatch("1031", "1031")).toBeNull();
+    expect(selectedActivityRouteSessionMismatch("1031", "")).toBeNull();
+    expect(selectedActivityRouteSessionMismatch("", "1031")).toBeNull();
   });
 });

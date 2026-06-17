@@ -530,6 +530,39 @@ spec:
               session id), page_path, source, and event_count (directory
               turn count known before the request).
 
+        - alert: TankTurnActivitySelectedRouteSessionMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-route-session-mismatch",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "selected activity pane belongs to a different session than the route on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              A selected Turns activity body reached the stuck loading
+              watchdog while the mounted pane session id disagreed with
+              the current /sessions/{id} route. This is the explicit
+              selected-activity form of the stale-pane/session ownership
+              bug: an old session component is still participating under
+              a new session URL.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-activity-selected-route-session-mismatch"
+
+              The log carries session_id (the mounted pane),
+              route_session_id (the URL session), selected_turn_id,
+              page_path, source, reason, status, entries, groups,
+              turn_activity_shells, durable_active_turn_activity_shells,
+              and activity_entries. Compare it with the adjacent
+              event="turn-activity-selected-loading-stranded" log for the
+              same timestamp to tell whether the wrong pane is also the
+              one rendering the visible spinner or only a hidden stale
+              participant.
+
         - alert: TankTurnActivitySelectedLoadingStranded
           expr: |
             sum by (session_mode) (

@@ -588,6 +588,8 @@ test("selected turn activity spinner render emits bounded diagnostics", () => {
   expect(appSource.includes("turnActivityLoadStatusMetricCode")).toBe(true);
   expect(appSource.includes('"turn-activity-selected-loading-stranded"')).toBe(true);
   expect(appSource.includes('"turn-activity-selected-loading-slow"')).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-route-session-mismatch"')).toBe(true);
+  expect(appSource.includes("selectedActivityRouteSessionMismatch")).toBe(true);
   expect(appSource.includes("window.setTimeout")).toBe(true);
   expect(appSource.includes("TURN_ACTIVITY_STUCK_THRESHOLD_MS")).toBe(true);
   expect(appSource.includes("activityLoadingSessionSwitchTelemetry")).toBe(true);
@@ -597,7 +599,11 @@ test("selected turn activity spinner render emits bounded diagnostics", () => {
   expect(appSource.includes('"turns-selected"')).toBe(true);
   expect(appSource.includes("previousSessionId: activityLoadingPreviousSessionId")).toBe(true);
   expect(chatScrollTelemetrySource.includes("previousSessionId?: string")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("routeSessionId?: string")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("selectedTurnId?: string")).toBe(true);
   expect(chatScrollMetricsHandlerSource.includes("PreviousSessionID")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("RouteSessionID")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("SelectedTurnID")).toBe(true);
   expect(appSource.includes("reason: selectedLoadingReason")).toBe(true);
   expect(appSource.includes("key: selectedTurnIdForTelemetry")).toBe(true);
   expect(appSource.includes(
@@ -611,7 +617,11 @@ test("selected turn activity spinner render emits bounded diagnostics", () => {
   expect(chatScrollMetricsHandlerSource.includes(
           '"turn-activity-selected-loading-slow"',
         )).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-route-session-mismatch"',
+        )).toBe(true);
   expect(observabilitySource.includes("TankTurnActivitySelectedLoadingStranded")).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedRouteSessionMismatch")).toBe(true);
   expect(observabilitySource.includes("TankTurnActivitySelectedLoadingSlow")).toBe(true);
   expect(observabilitySource.includes(
           'tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-stranded",surface="session"}',
