@@ -107,10 +107,35 @@ const initialModeGoLongSource = readSource(
 const initialModeTestSource = readSource(
   "../../k8s/app-config/initial-mode-test.md",
 );
+const dockerBuildCheckWorkflowSource = readSource(
+  "../../.github/workflows/docker-build-check.yaml",
+);
+const k8sValuesSource = readSource("../../k8s/values.yaml");
+const testingDocsSource = readSource("../../docs/testing.md");
+const tankOperatorTestSkillSource = readSource(
+  "../../k8s/session-config/skills/common/test/references/repos/tank-operator.md",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   expect(appSource.includes("POLL_INTERVAL_MS")).toBe(false);
   expect(/setInterval\(\s*refreshSessionActivity/.test(appSource)).toBe(false);
+});
+
+test("Glimmung app image deploys stay fingerprint-first", () => {
+  expect(dockerBuildCheckWorkflowSource.includes("Compute image fingerprint")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Build and push proof image")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Tag image by commit SHA")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("commit-SHA tag")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("sha='${{ github.event.pull_request.head.sha || github.sha }}'")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource).not.toMatch(/image-repo\s*\}\}:\$\{\{\s*github\.(?:sha|event\.pull_request\.head\.sha)/);
+
+  expect(k8sValuesSource.includes("Fingerprint-pinned. The build workflow")).toBe(true);
+  expect(k8sValuesSource.includes("SHA-pinned")).toBe(false);
+
+  expect(testingDocsSource.includes("fingerprint tag CI produced")).toBe(true);
+  expect(testingDocsSource).toMatch(/commit-SHA image\s+alias/);
+  expect(tankOperatorTestSkillSource.includes("commit ref")).toBe(true);
+  expect(tankOperatorTestSkillSource.includes("branch or SHA")).toBe(false);
 });
 
 test("App-root holds no periodic React state setters (cascade-prone pattern)", () => {

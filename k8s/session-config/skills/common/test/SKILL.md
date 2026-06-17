@@ -57,7 +57,7 @@ If no repo guide exists, use the generic Glimmung flow:
 
 - infer or ask for the Glimmung project
 - open or update the PR so CI builds the proof image for the commit
-- call `deploy_image_to_test_slot` with the pushed branch or SHA
+- call `deploy_image_to_test_slot` with the pushed branch or commit ref
 - verify the slot's real surface serves that build
 - return the slot when validation is complete
 
