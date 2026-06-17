@@ -129,6 +129,27 @@ const blocked = [
     pattern: /optionsOverrideIgnoredTotal|tank_runner_options_override_ignored_total/,
   },
   { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
+  // Break-glass approvals are still available through the admin/deep-link
+  // flow, but the composer approval chip was retired on 2026-06-17. Block
+  // the old row-to-chip reducer, menu symbols, settings shortcut, and CSS
+  // hook so persisted break-glass control-action rows cannot reappear as a
+  // composer chip.
+  { name: "retired composer break-glass pending reducer", pattern: /\bpendingBreakGlassRequests\b/ },
+  { name: "retired composer break-glass menu button", pattern: /\bBreakGlassApprovalMenuButton\b/ },
+  { name: "retired composer break-glass menu item", pattern: /\bBreakGlassApprovalMenuItem\b/ },
+  { name: "retired composer break-glass menu icon", pattern: /\bBreakGlassMenuIcon\b/ },
+  { name: "retired composer break-glass menu builder", pattern: /\bbreakGlassApprovalMenuItemsForSession\b/ },
+  { name: "retired composer break-glass quick approve", pattern: /\bquickApproveBreakGlassMenuItem\b/ },
+  { name: "retired composer break-glass CSS hook", pattern: /\brun-break-glass-action-btn\b/ },
+  {
+    name: "retired composer break-glass settings shortcut",
+    pattern: /appRouteUrl\(\s*["']settings["']\s*,\s*["']admin["']\s*,\s*["']break-glass["']\s*\)/,
+  },
+  {
+    name: "retired composer break-glass approval kind",
+    pattern: /type\s+ApprovalMenuKind\s*=[^;\n]*(?:["']github["']|["']azure["'])/,
+  },
+  { name: "retired composer break-glass prop", pattern: /\bbreakGlass=\{\{/ },
   // tank-operator#83 — sidebar session-list moved from wake-and-refetch
   // polling onto a durable typed-event ledger + cursor-resumable SSE.
   // Block reintroduction of every name that participated in the prior

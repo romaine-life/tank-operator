@@ -246,7 +246,6 @@ import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
   pendingPRLaneRequests,
-  type BreakGlassRequest,
   type ControlActionRow,
   type ControlActionStatus,
   type PRLaneRequest,
@@ -2204,6 +2203,7 @@ type BreakGlassRequestLookupResponse = {
 };
 
 type TestSlotModelRequestLookupResponse = BreakGlassRequestLookupResponse;
+type ApprovalRequestRef = { eventId: string };
 
 function approvalNotificationTurnId(body: unknown): string {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
@@ -10107,7 +10107,7 @@ function TestSlotModelApprovalPage({
   requestId: string | null;
   rows: ControlActionRow[];
   busyEventId: string | null;
-  onApprove: (request: Pick<BreakGlassRequest, "eventId">, note?: string) => void;
+  onApprove: (request: ApprovalRequestRef, note?: string) => void;
 }) {
   const request = useMemo(
     () =>
@@ -10276,7 +10276,7 @@ function StandaloneTestSlotModelApprovalSurface({
   }, [fetchRequest]);
 
   const approveRequest = useCallback(
-    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+    async (request: ApprovalRequestRef, note = "") => {
       setBusyEventId(request.eventId);
       try {
         const res = await authedFetch(
@@ -10343,7 +10343,7 @@ function BreakGlassRequestPage({
   rows: ControlActionRow[];
   busyEventId: string | null;
   onDecision: (
-    request: Pick<BreakGlassRequest, "eventId">,
+    request: ApprovalRequestRef,
     decision: "approve" | "deny",
     body?: Record<string, unknown>,
   ) => void;
@@ -17434,7 +17434,7 @@ function ChatPane({
   );
   const postBreakGlassDecision = useCallback(
     async (
-      request: Pick<BreakGlassRequest, "eventId">,
+      request: ApprovalRequestRef,
       decision: "approve" | "deny",
       body: Record<string, unknown> = {},
     ) => {
@@ -17472,7 +17472,7 @@ function ChatPane({
     ],
   );
   const postTestSlotModelApproval = useCallback(
-    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+    async (request: ApprovalRequestRef, note = "") => {
       if (publicView || readOnly) return;
       setTestSlotModelApprovalBusyId(request.eventId);
       try {
