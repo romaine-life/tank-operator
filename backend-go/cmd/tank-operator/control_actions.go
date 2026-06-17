@@ -47,7 +47,6 @@ type hotSwapVerificationRequest struct {
 	Repo             string `json:"repo"`
 	Branch           string `json:"branch"`
 	SHA              string `json:"sha"`
-	ArtifactKind     string `json:"artifact_kind,omitempty"`
 	ValidationTarget string `json:"validation_target,omitempty"`
 	SourceTool       string `json:"source_tool,omitempty"`
 }
@@ -62,7 +61,6 @@ type hotSwapVerificationResponse struct {
 	PublishVerified  bool     `json:"publish_verified"`
 	CIVerified       bool     `json:"ci_verified"`
 	MergeVerified    bool     `json:"merge_verified"`
-	ArtifactKind     string   `json:"artifact_kind,omitempty"`
 	ValidationTarget string   `json:"validation_target,omitempty"`
 	SourceTool       string   `json:"source_tool,omitempty"`
 }
@@ -1560,7 +1558,6 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 	resp.Repo = repo
 	resp.Branch = branch
 	resp.SHA = sha
-	resp.ArtifactKind = strings.TrimSpace(body.ArtifactKind)
 	resp.ValidationTarget = strings.TrimSpace(body.ValidationTarget)
 	resp.SourceTool = strings.TrimSpace(body.SourceTool)
 	if resp.Allowed {
@@ -1988,7 +1985,7 @@ func asString(value any) string {
 }
 
 func normalizeBreakGlassOperations(in []string) []string {
-	allowed := map[string]bool{"mint_full_git_token": true, "push_current_head": true, "apply_test_slot_hot_swap": true}
+	allowed := map[string]bool{"mint_full_git_token": true, "push_current_head": true}
 	seen := map[string]bool{}
 	out := []string{}
 	for _, raw := range in {
@@ -1999,7 +1996,7 @@ func normalizeBreakGlassOperations(in []string) []string {
 		}
 	}
 	if len(out) == 0 {
-		out = []string{"mint_full_git_token", "push_current_head", "apply_test_slot_hot_swap"}
+		out = []string{"mint_full_git_token", "push_current_head"}
 	}
 	return out
 }

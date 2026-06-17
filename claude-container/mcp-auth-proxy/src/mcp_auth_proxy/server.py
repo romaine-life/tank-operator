@@ -104,7 +104,6 @@ _TANK_MERGE_TOOL = "merge_current_session_pr"
 _TANK_RENAME_PR_TOOL = "rename_current_session_pr"
 _TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
 _TANK_WATCH_PR_TOOL = "watch_current_session_pr"
-_GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
 # azure-personal is absent from the default session .mcp.json (locked by
@@ -512,9 +511,6 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     has_update_pr_body = any(isinstance(tool, dict) and tool.get("name") == _TANK_UPDATE_PR_BODY_TOOL for tool in tools)
     has_watch_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_WATCH_PR_TOOL for tool in tools)
     changed = False
-    for tool in tools:
-        if isinstance(tool, dict) and tool.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
-            changed = _augment_glimmung_hot_swap_tool_schema(tool) or changed
     if not has_publish:
         tools.append(
             {
@@ -932,32 +928,6 @@ def _append_azure_break_glass_tool_to_json(value) -> bool:
                 },
             }
         )
-        changed = True
-    return changed
-
-
-def _augment_glimmung_hot_swap_tool_schema(tool: dict) -> bool:
-    schema = tool.get("inputSchema")
-    if not isinstance(schema, dict):
-        schema = {"type": "object", "properties": {}}
-        tool["inputSchema"] = schema
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        properties = {}
-        schema["properties"] = properties
-
-    changed = False
-    if "repo" not in properties:
-        properties["repo"] = {
-            "type": "string",
-            "description": "Optional GitHub slug, for example romaine-life/tank-operator. Used by Tank to verify the governed branch before hot-swap.",
-        }
-        changed = True
-    if "repo_path" not in properties:
-        properties["repo_path"] = {
-            "type": "string",
-            "description": "Optional absolute or /workspace-relative path to the repo. Used by Tank to verify branch, publish, PR, CI, and mergeability before hot-swap.",
-        }
         changed = True
     return changed
 
@@ -3420,102 +3390,6 @@ async def _handle_tank_update_pr_body_tool(
         )
 
 
-async def _prepare_glimmung_hot_swap_call(
-    http: ClientSession,
-    auth_romaine_provider,
-    request_id: object,
-    body: bytes,
-    arguments: dict,
-) -> tuple[bytes, dict] | web.Response:
-    try:
-        if not ORIGIN_SESSION_ID:
-            raise ValueError("SESSION_ID is required for governed hot-swap")
-        repo_path = _repo_path_for_hot_swap(arguments)
-        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
-        if not git_dir:
-            raise ValueError(f"{repo_path} is not a git repository")
-        branch = await _git_output(repo_path, "branch", "--show-current")
-        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
-        slug = _repo_slug_from_remote(remote_url)
-        if slug is None:
-            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
-        owner, repo = slug
-        if not _is_tank_session_branch(branch, repo):
-            raise ValueError(f"current branch is {branch!r}; expected Tank session branch {_default_tank_session_branch(repo)!r} or one of its approved lanes")
-        rc, stdout, stderr = await _run_git(repo_path, "status", "--porcelain")
-        if rc != 0:
-            raise RuntimeError(stderr or stdout or "git status failed")
-        if stdout.strip():
-            raise ValueError("worktree has uncommitted changes; commit and publish before hot-swapping")
-        sha = await _git_output(repo_path, "rev-parse", "HEAD")
-        requested_ref = str(arguments.get("git_ref") or "").strip()
-        allowed_requested_refs = {sha, branch, f"refs/heads/{branch}", "HEAD"}
-        if requested_ref and requested_ref not in allowed_requested_refs:
-            raise ValueError(f"git_ref {requested_ref!r} does not match local governed branch HEAD {sha[:12]}")
-        requested_repo = str(arguments.get("repo") or "").strip()
-        if requested_repo and requested_repo != f"{owner}/{repo}":
-            raise ValueError(f"repo argument {requested_repo!r} does not match origin {owner}/{repo}")
-
-        service_token = await auth_romaine_provider.token()
-        github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
-        tank_verify = await _post_tank_hot_swap_verify(
-            http,
-            service_token,
-            {
-                "repo": f"{owner}/{repo}",
-                "branch": branch,
-                "sha": sha,
-                "artifact_kind": str(arguments.get("artifact_kind") or ""),
-                "validation_target": str(arguments.get("validation_target") or ""),
-                "source_tool": _GLIMMUNG_HOT_SWAP_TOOL,
-            },
-        )
-        live_verify = await _verify_github_hot_swap_head(http, github_token, owner, repo, branch, sha)
-        reasons: list[str] = []
-        if tank_verify.get("allowed") is not True:
-            tank_reasons = tank_verify.get("reasons")
-            if isinstance(tank_reasons, list):
-                reasons.extend(f"Tank ledger: {reason}" for reason in tank_reasons)
-            else:
-                reasons.append("Tank ledger did not confirm governed publish, green CI, and clean mergeability")
-        if live_verify.get("allowed") is not True:
-            live_reasons = live_verify.get("reasons")
-            if isinstance(live_reasons, list):
-                reasons.extend(f"GitHub live state: {reason}" for reason in live_reasons)
-            else:
-                reasons.append("GitHub live state did not confirm latest branch head, open PR, green CI, and clean mergeability")
-        if reasons:
-            raise ValueError("hot-swap blocked:\n- " + "\n- ".join(reasons))
-
-        forwarded_arguments = {
-            key: value
-            for key, value in arguments.items()
-            if key not in {"repo", "repo_path"}
-        }
-        forwarded_arguments["git_ref"] = sha
-        return _rewrite_mcp_tool_arguments(body, forwarded_arguments), {
-            "repo": f"{owner}/{repo}",
-            "branch": branch,
-            "sha": sha,
-            "pr_number": live_verify.get("pr_number") or tank_verify.get("pr_number"),
-            "artifact_kind": arguments.get("artifact_kind"),
-            "validation_target": arguments.get("validation_target"),
-        }
-    except Exception as exc:
-        log.warning("Glimmung hot-swap gate failed", exc_info=True)
-        return _mcp_error_response(
-            request_id,
-            -32030,
-            str(exc),
-            {
-                "tool": _GLIMMUNG_HOT_SWAP_TOOL,
-                "replacement_tool": _TANK_PUBLISH_TOOL,
-                "break_glass_tool": _TANK_BREAK_GLASS_TOOL,
-                "ci_enforcement": _CI_ENFORCEMENT_TEXT,
-            },
-        )
-
-
 async def _handle_tank_break_glass_tool(
     http: ClientSession,
     auth_romaine_provider,
@@ -4796,7 +4670,6 @@ def _make_handler(
     github_activity_provider=None,
     tank_publish_provider=None,
     azure_break_glass_provider=None,
-    glimmung_hot_swap_provider=None,
     block_github_write_tools: bool = False,
 ):
     """Build the request handler for an MCP upstream.
@@ -4930,25 +4803,6 @@ def _make_handler(
                     return _mcp_error_response(request_id, -32602, "arguments must be an object")
                 record_proxy_request(mcp_label, 200)
                 return await _handle_query_tank_db_tool(http, azure_break_glass_provider, request_id, arguments)
-
-        if glimmung_hot_swap_provider is not None and parsed_method is not None:
-            method, params, request_id = parsed_method
-            if method == "tools/call" and params.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
-                arguments = params.get("arguments") or {}
-                if not isinstance(arguments, dict):
-                    return _mcp_error_response(request_id, -32602, "arguments must be an object")
-                prepared = await _prepare_glimmung_hot_swap_call(
-                    http,
-                    glimmung_hot_swap_provider,
-                    request_id,
-                    body,
-                    arguments,
-                )
-                if isinstance(prepared, web.Response):
-                    record_proxy_request(mcp_label, 200)
-                    return prepared
-                body, _verification = prepared
-
         github_tool_call = _parse_mcp_tool_call(body) if github_activity_provider is not None else None
         tank_tools_list = tank_publish_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
         azure_tools_list = azure_break_glass_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
@@ -5254,11 +5108,6 @@ async def run() -> None:
                     # locked by default for every session.
                     azure_break_glass_provider=(
                         auth_romaine_provider if port == TANK_OPERATOR_MCP_PORT else None
-                    ),
-                    glimmung_hot_swap_provider=(
-                        auth_romaine_provider
-                        if RESTRICTED_GIT_ENABLED and port == GLIMMUNG_MCP_PORT
-                        else None
                     ),
                     block_github_write_tools=RESTRICTED_GIT_ENABLED and port == GITHUB_MCP_PORT,
                 ),

@@ -2083,9 +2083,8 @@ func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing
 		"repo": "romaine-life/tank-operator",
 		"branch": "`+branch+`",
 		"sha": "`+sha+`",
-		"artifact_kind": "codex_runner",
 		"validation_target": "existing_session",
-		"source_tool": "apply_test_slot_hot_swap"
+		"source_tool": "deploy_image_to_test_slot"
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))

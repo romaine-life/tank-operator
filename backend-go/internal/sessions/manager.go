@@ -166,7 +166,7 @@ func resolveIP(host string) string {
 // session-image override when one is set for this orchestrator's scope. This is
 // the test-slot "point the slot at a branch session image" mechanism
 // (docs/testing.md): newly-created sessions boot the override image the same way
-// production boots its chart-pinned image — no runtime overlay, no fidelity gap.
+// production boots its chart-pinned image — no runtime overlay, no accuracy gap.
 //
 // It is a deliberate no-op when no resolver is wired (production never wires
 // one) or for the production scope, so prod always stamps the configured
