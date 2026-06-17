@@ -119,6 +119,43 @@ func TestHandleInternalRegisterCIWatchRegistersWithServiceActor(t *testing.T) {
 	}
 }
 
+// TestHandleInternalRegisterCIWatchLinksPhasePR proves the phase->PR join: when
+// the registering session is an orchestration phase's spoke, the PR coordinates
+// it registers are copied onto the phase (so the merged-PR reverse lookup will
+// resolve later) and the phase moves to pr_open.
+func TestHandleInternalRegisterCIWatchLinksPhasePR(t *testing.T) {
+	store := &fakeCIWatchStore{}
+	app := ciWatchTestServer(t, store)
+	orch := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhaseRunning, spoke: "47"},
+	)
+	app.orchestrations = newOrchestrationEngine(orch, newRecordingSpawner().spawn)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/ci-watches", strings.NewReader(`{
+		"pr_owner": "romaine-life",
+		"pr_name": "tank-operator",
+		"pr_number": 1234,
+		"head_sha": "abc123",
+		"pr_url": "https://github.com/romaine-life/tank-operator/pull/1234"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterCIWatch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := orch.snapshot(phaseID("a"))
+	if got.Status != pgstore.PhasePROpen {
+		t.Fatalf("phase a status = %q, want pr_open", got.Status)
+	}
+	if got.PRNumber != 1234 || got.PROwner != "romaine-life" || got.PRName != "tank-operator" {
+		t.Fatalf("phase a PR coordinates not stamped: %#v", got)
+	}
+}
+
 func TestHandleInternalRegisterCIWatchRejectsNonService(t *testing.T) {
 	store := &fakeCIWatchStore{}
 	app := ciWatchTestServer(t, store)

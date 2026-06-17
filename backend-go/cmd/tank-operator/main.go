@@ -273,12 +273,16 @@ func main() {
 	var controlActionStore *pgstore.ControlActionStore
 	var pendingLaunchStore *pgstore.PendingLaunchStore
 	var ciWatchStore *pgstore.CIWatchStore
+	var orchestrationStore *pgstore.OrchestrationStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
 		backgroundTaskWakeStore = pgstore.NewBackgroundTaskWakeStore(pgPool, sessionScope)
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
 		ciWatchStore = pgstore.NewCIWatchStore(pgPool, sessionScope)
+		// The orchestration store carries no session scope — a run is owned by an
+		// email and targets a repo, not bound to a session_scope.
+		orchestrationStore = pgstore.NewOrchestrationStore(pgPool)
 	}
 	githubWebhookSecret := strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET"))
 
@@ -665,6 +669,13 @@ func main() {
 	if pendingLaunchStore != nil {
 		srv.pendingLaunch = pendingLaunchStore
 	}
+	// The deterministic orchestration advance engine: bound to the durable
+	// store and the real spoke spawner (mgr.Create + enqueueSDKTurn). The
+	// webhook + CI-watch register handlers call it on the hot path; the
+	// reconcile loop below is the dropped-webhook backstop.
+	if orchestrationStore != nil {
+		srv.orchestrations = newOrchestrationEngine(orchestrationStore, srv.spawnPhaseSpoke)
+	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {
 			if err := runScheduledWakeupLoop(workerCtx, srv, scheduledWakeupDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
@@ -726,6 +737,18 @@ func main() {
 		go func() {
 			if err := runSessionRowReconcileLoop(workerCtx, srv, sessionRegStore, rowWriter, sessionRowReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("session row reconcile loop stopped", "error", err)
+			}
+		}()
+	}
+	// Orchestration advance backstop: re-drive every non-terminal run so a
+	// dropped merged-PR webhook degrades to a delay, never a hung run, and a
+	// freshly-approved run's root phases get dispatched. Per-replica idempotent
+	// (every effect is a guarded write). Needs the engine, which needs both the
+	// durable store and the spoke spawner — nil in stub mode.
+	if srv.orchestrations != nil {
+		go func() {
+			if err := runOrchestrationReconcileLoop(workerCtx, srv.orchestrations, orchestrationReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("orchestration reconcile loop stopped", "error", err)
 			}
 		}()
 	}

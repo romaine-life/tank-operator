@@ -201,6 +201,15 @@ func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	ctx := r.Context()
+	// Orchestration advance runs independently of the CI-watch subsystem below:
+	// a merged phase PR must walk the DAG even when no ci_watch row exists, or
+	// the row is already terminal. A Tank-governed merge marks the watch 'merged'
+	// before GitHub's webhook arrives, so the not-watching coalescing guard would
+	// otherwise drop the merge signal entirely. The engine is idempotent (it
+	// guards on phase status), so a duplicate delivery advances the run once.
+	if sig.kind == "merged" && s.orchestrations != nil {
+		s.orchestrations.advanceOnMerge(ctx, owner, name, sig.prNumber, sig.mergeCommit)
+	}
 	watch, err := s.ciWatches.GetByPR(ctx, owner, name, sig.prNumber)
 	if err != nil {
 		recordCIWebhook(eventType, "no_watch")

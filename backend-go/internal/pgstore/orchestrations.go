@@ -672,6 +672,137 @@ func (s *OrchestrationStore) GetPhaseByPR(ctx context.Context, prOwner, prName s
 	return out, err
 }
 
+// GetPhaseBySpokeSession is the session -> phase reverse lookup: a phase's
+// spoke session registers a PR (via the CI-watch path) and the orchestrator
+// must join that session back to its owning phase to copy the PR coordinates
+// onto it. The most-recently-updated match wins, mirroring GetPhaseByPR. A
+// session that is not any phase's spoke returns ErrOrchestrationPhaseNotFound.
+func (s *OrchestrationStore) GetPhaseBySpokeSession(ctx context.Context, spokeSessionID string) (OrchestrationPhase, error) {
+	if s == nil || s.pool == nil {
+		return OrchestrationPhase{}, errors.New("orchestration store unavailable")
+	}
+	spokeSessionID = strings.TrimSpace(spokeSessionID)
+	if spokeSessionID == "" {
+		return OrchestrationPhase{}, ErrOrchestrationPhaseNotFound
+	}
+	const q = `SELECT ` + orchestrationPhaseColumns + `
+		FROM orchestration_phases
+		WHERE spoke_session_id = $1
+		ORDER BY updated_at DESC
+		LIMIT 1`
+	out, err := scanOrchestrationPhase(s.pool.QueryRow(ctx, q, spokeSessionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrchestrationPhase{}, ErrOrchestrationPhaseNotFound
+	}
+	return out, err
+}
+
+// MarkPhaseReady promotes a phase from 'pending' to 'ready' once the advance
+// loop has computed that its depends_on are all satisfied. The transition is
+// guarded on status='pending' so the call is idempotent and safe under
+// concurrent advancers/reconcilers: only the writer that observes the row still
+// pending flips it, and the returned bool reports whether this call did. A
+// phase already past pending (claimed, running, merged) is left untouched.
+func (s *OrchestrationStore) MarkPhaseReady(ctx context.Context, phaseID string) (OrchestrationPhase, bool, error) {
+	if s == nil || s.pool == nil {
+		return OrchestrationPhase{}, false, errors.New("orchestration store unavailable")
+	}
+	const q = `
+		UPDATE orchestration_phases
+		SET status = 'ready', updated_at = now()
+		WHERE phase_id = $1 AND status = 'pending'
+		RETURNING ` + orchestrationPhaseColumns
+	out, err := scanOrchestrationPhase(s.pool.QueryRow(ctx, q, strings.TrimSpace(phaseID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrchestrationPhase{}, false, nil
+	}
+	if err != nil {
+		return OrchestrationPhase{}, false, err
+	}
+	return out, true, nil
+}
+
+// ClaimPhaseForSpawn atomically claims a 'ready' phase for spoke dispatch,
+// moving it to 'running'. The status-keyed conditional UPDATE is the
+// concurrency choke point: a duplicate merged-PR webhook, two orchestrator
+// replicas, or the webhook racing the reconcile backstop can all call this for
+// the same phase, but exactly one wins the ready->running transition (the
+// row-level write lock serializes them and the WHERE no longer matches once the
+// status has moved). The winner — the only caller that gets ok=true — then
+// creates the session and records it with AttachPhaseSpoke. spoke_session_id is
+// intentionally left empty by the claim so a crash between claim and attach is
+// recoverable by RequeuePhaseForRespawn rather than silently stranding the run.
+func (s *OrchestrationStore) ClaimPhaseForSpawn(ctx context.Context, phaseID string) (OrchestrationPhase, bool, error) {
+	if s == nil || s.pool == nil {
+		return OrchestrationPhase{}, false, errors.New("orchestration store unavailable")
+	}
+	const q = `
+		UPDATE orchestration_phases
+		SET status = 'running', updated_at = now()
+		WHERE phase_id = $1 AND status = 'ready'
+		RETURNING ` + orchestrationPhaseColumns
+	out, err := scanOrchestrationPhase(s.pool.QueryRow(ctx, q, strings.TrimSpace(phaseID)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrchestrationPhase{}, false, nil
+	}
+	if err != nil {
+		return OrchestrationPhase{}, false, err
+	}
+	return out, true, nil
+}
+
+// RequeuePhaseForRespawn recovers a phase that was claimed for spawn
+// ('running') but never got a spoke recorded — the spawn errored, or the
+// process died between ClaimPhaseForSpawn and AttachPhaseSpoke. It moves such a
+// row back to 'ready' so the next advance/reconcile pass re-claims and re-spawns
+// it. Guarded on status='running' AND spoke_session_id=” so it never disturbs a
+// phase whose spoke is live; the returned bool serializes recovery the same way
+// the claim serializes dispatch (only the writer that flips running->ready
+// proceeds to re-spawn).
+func (s *OrchestrationStore) RequeuePhaseForRespawn(ctx context.Context, phaseID string) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, errors.New("orchestration store unavailable")
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE orchestration_phases
+		SET status = 'ready', updated_at = now()
+		WHERE phase_id = $1 AND status = 'running' AND spoke_session_id = ''
+	`, strings.TrimSpace(phaseID))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ListActiveOrchestrationIDs returns the ids of runs the advance loop should
+// keep driving: those in 'approved' (a frozen plan whose root phases have not
+// been dispatched yet) or 'running' (at least one phase in flight). Terminal
+// runs (done/failed) and not-yet-approved drafts are excluded. The reconcile
+// backstop walks this set to re-drive reality for runs a dropped webhook left
+// stalled.
+func (s *OrchestrationStore) ListActiveOrchestrationIDs(ctx context.Context) ([]string, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("orchestration store unavailable")
+	}
+	const q = `SELECT orchestration_id FROM orchestrations
+		WHERE state IN ('approved', 'running')
+		ORDER BY created_at ASC`
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 func validPhaseStatus(status PhaseStatus) bool {
 	switch status {
 	case PhasePending, PhaseReady, PhaseRunning, PhasePROpen,
