@@ -15,6 +15,7 @@
       --edge: #cbd6da;
       --trigger: #d8eef7;
       --compute: #e9f4df;
+      --store: #eadff4;
       --pending: #fff3cc;
       --wake: #f8d9d4;
       --ready: #dcebe0;
@@ -126,9 +127,24 @@
 
     .trigger { background: var(--trigger); }
     .compute { background: var(--compute); }
+    .store { background: var(--store); }
     .pending { background: var(--pending); }
     .wake { background: var(--wake); }
     .ready { background: var(--ready); }
+
+    .fields {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 4px 10px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .fields b {
+      color: var(--ink);
+      font-weight: 700;
+    }
 
     .connector {
       height: 28px;
@@ -266,7 +282,18 @@
         <div class="lane">
           <div class="node trigger">
             <strong>watch_current_session_pr</strong>
-            <span>Registers session_ci_watches for the current PR head SHA.</span>
+            <span>Registers the PR handoff after the initial authoritative read.</span>
+          </div>
+          <div class="connector" aria-hidden="true"></div>
+          <div class="node store">
+            <strong>session_ci_watches row</strong>
+            <span>Persistent handoff state the backend can find after the agent sleeps.</span>
+            <div class="fields" aria-label="Key session_ci_watches fields">
+              <b>repo/pr</b><span>owner, repo, pull number</span>
+              <b>head_sha</b><span>current watched commit</span>
+              <b>status</b><span>watching, ready, failed, conflict</span>
+              <b>last_event_at</b><span>latest reconciled webhook</span>
+            </div>
           </div>
           <div class="connector" aria-hidden="true"></div>
           <div class="node">
@@ -283,7 +310,7 @@
           <div class="connector" aria-hidden="true"></div>
           <div class="node">
             <strong>Authenticate and route</strong>
-            <span>Verify HMAC, map repo plus PR number to the durable watch.</span>
+            <span>Verify HMAC, then look up session_ci_watches by repo plus PR number.</span>
           </div>
           <div class="connector" aria-hidden="true"></div>
           <div class="node pending">
@@ -324,19 +351,19 @@
           <div class="outcomes">
             <div class="node wake">
               <strong>Red</strong>
-              <span>Mark failed and wake the session to fix CI.</span>
+              <span>Set watch status=failed and wake the session to fix CI.</span>
             </div>
             <div class="node wake">
               <strong>Conflict</strong>
-              <span>Mark conflict and wake the session to rebase or resolve.</span>
+              <span>Set watch status=conflict and wake the session to rebase or resolve.</span>
             </div>
             <div class="node ready">
               <strong>Ready</strong>
-              <span>Mark ready for human merge or orchestration auto-merge.</span>
+              <span>Set watch status=ready for human merge or orchestration auto-merge.</span>
             </div>
             <div class="node pending">
               <strong>Pending</strong>
-              <span>Refresh last_event_at and keep watching.</span>
+              <span>Refresh watch detail and last_event_at; keep status=watching.</span>
             </div>
           </div>
         </div>
@@ -345,6 +372,7 @@
 
     <div class="legend" aria-label="Legend">
       <span><i class="swatch trigger"></i> trigger or registration</span>
+      <span><i class="swatch store"></i> durable database state</span>
       <span><i class="swatch compute"></i> authoritative read</span>
       <span><i class="swatch ready"></i> ready outcome</span>
       <span><i class="swatch wake"></i> agent wake outcome</span>
