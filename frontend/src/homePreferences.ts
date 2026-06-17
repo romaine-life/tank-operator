@@ -1,29 +1,20 @@
-// Durable home-composer preferences kept in localStorage, mirroring the
-// existing `tank.defaultSessionMode` / `tank.defaultInteraction` idiom in
-// App.tsx. Extracted here so the read/write round-trip is unit-testable
-// without rendering the (very large) App component.
-
-// Bumped to `.v2` when restricted Git became the default (it used to be
-// opt-in). The old `tank.homeRestrictedGit` key persisted `"false"` for
-// essentially every prior visitor — the persist effect wrote the old `false`
-// default on mount — so reusing it would silently pin returning users to
-// unrestricted Git and defeat the new default. Bumping the key lets main.tsx's
-// TANK_KEY_ALLOWLIST reaper drop the stale key on boot, so the new default
-// applies cleanly to new and returning users alike.
-export const RESTRICTED_GIT_PREF_KEY = "tank.homeRestrictedGit.v2";
+// Home-composer launch choices are tab-scoped draft state, not durable user
+// defaults. Keeping the value in sessionStorage lets a partially configured
+// splash survive a reload/back-forward within the same tab, while a successful
+// session create clears it back to the product default.
+export const RESTRICTED_GIT_PREF_KEY = "tank.homeRestrictedGitDraft.v1";
 
 /**
  * Whether new sessions start with the `restricted_git` capability. Restricted
- * (Tank-governed) Git is now the default, so this reads enabled unless the user
- * has explicitly opted out — only the exact string "false" disables it. The
- * splash toggle is an opt-out ("Unrestricted Git"); persisting the choice lets
- * it survive reloads and mode switches so the next session actually honors it.
+ * (Tank-governed) Git is the default, so this reads enabled unless the user has
+ * explicitly opted out for the current splash draft — only the exact string
+ * "false" disables it. The splash toggle is an opt-out ("Unrestricted Git").
  */
 export function readHomeRestrictedGitEnabled(): boolean {
   try {
-    return localStorage.getItem(RESTRICTED_GIT_PREF_KEY) !== "false";
+    return window.sessionStorage.getItem(RESTRICTED_GIT_PREF_KEY) !== "false";
   } catch {
-    // localStorage can be unavailable in hardened/private browser contexts;
+    // sessionStorage can be unavailable in hardened/private browser contexts;
     // fall back to the default (restricted Git enabled).
     return true;
   }
@@ -31,7 +22,18 @@ export function readHomeRestrictedGitEnabled(): boolean {
 
 export function writeHomeRestrictedGitEnabled(enabled: boolean): void {
   try {
-    localStorage.setItem(RESTRICTED_GIT_PREF_KEY, enabled ? "true" : "false");
+    window.sessionStorage.setItem(
+      RESTRICTED_GIT_PREF_KEY,
+      enabled ? "true" : "false",
+    );
+  } catch {
+    // Preference persistence is best-effort; session creation should continue.
+  }
+}
+
+export function clearHomeRestrictedGitPreference(): void {
+  try {
+    window.sessionStorage.removeItem(RESTRICTED_GIT_PREF_KEY);
   } catch {
     // Preference persistence is best-effort; session creation should continue.
   }
