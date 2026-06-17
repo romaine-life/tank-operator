@@ -81,7 +81,7 @@ type githubWebhookPayload struct {
 type ciWebhookSignal struct {
 	prNumber    int
 	headSHA     string
-	kind        string // "" (ignore) | "red" | "conflict" | "merged"
+	kind        string // "" (ignore) | "green" | "red" | "conflict" | "merged"
 	mergeCommit string
 	detail      string
 }
@@ -118,7 +118,10 @@ func interpretGitHubWebhook(eventType string, p *githubWebhookPayload) ciWebhook
 		}
 		sig.headSHA = p.CheckSuite.HeadSHA
 		sig.prNumber = firstPRNumber(p.CheckSuite.PullRequests)
-		if ciFailingConclusions[p.CheckSuite.Conclusion] {
+		if strings.EqualFold(p.CheckSuite.Conclusion, "success") {
+			sig.kind = "green"
+			sig.detail = "a check suite concluded success"
+		} else if ciFailingConclusions[p.CheckSuite.Conclusion] {
 			sig.kind = "red"
 			sig.detail = "a check suite concluded " + p.CheckSuite.Conclusion
 		}
@@ -128,7 +131,10 @@ func interpretGitHubWebhook(eventType string, p *githubWebhookPayload) ciWebhook
 		}
 		sig.headSHA = p.CheckRun.HeadSHA
 		sig.prNumber = firstPRNumber(p.CheckRun.PullRequests)
-		if ciFailingConclusions[p.CheckRun.Conclusion] {
+		if strings.EqualFold(p.CheckRun.Conclusion, "success") {
+			sig.kind = "green"
+			sig.detail = "check '" + p.CheckRun.Name + "' concluded success"
+		} else if ciFailingConclusions[p.CheckRun.Conclusion] {
 			sig.kind = "red"
 			sig.detail = "check '" + p.CheckRun.Name + "' concluded " + p.CheckRun.Conclusion
 		}
@@ -138,7 +144,10 @@ func interpretGitHubWebhook(eventType string, p *githubWebhookPayload) ciWebhook
 		}
 		sig.headSHA = p.WorkflowRun.HeadSHA
 		sig.prNumber = firstPRNumber(p.WorkflowRun.PullRequests)
-		if ciFailingConclusions[p.WorkflowRun.Conclusion] {
+		if strings.EqualFold(p.WorkflowRun.Conclusion, "success") {
+			sig.kind = "green"
+			sig.detail = "workflow '" + p.WorkflowRun.Name + "' concluded success"
+		} else if ciFailingConclusions[p.WorkflowRun.Conclusion] {
 			sig.kind = "red"
 			sig.detail = "workflow '" + p.WorkflowRun.Name + "' concluded " + p.WorkflowRun.Conclusion
 		}
@@ -239,6 +248,8 @@ func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) 
 func (s *appServer) applyCIWebhookSignal(ctx context.Context, watch pgstore.CIWatch, sig ciWebhookSignal) {
 	recordCITerminal(sig.kind)
 	switch sig.kind {
+	case "green":
+		s.handleGreenCIWatch(ctx, watch, sig.detail)
 	case "red":
 		_, _ = s.ciWatches.UpdateStatus(ctx, watch.WatchID, pgstore.CIWatchFailed, sig.detail)
 		s.wakeSessionForCI(ctx, watch, "ci-failure", sig)

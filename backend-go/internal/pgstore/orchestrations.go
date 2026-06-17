@@ -170,7 +170,10 @@ func OrchestrationPhaseID(orchestrationID, phaseKey string) string {
 	return "orchphase_" + hex.EncodeToString(h[:])[:32]
 }
 
-func newOrchestrationID() (string, error) {
+// NewOrchestrationID returns a fresh durable run id. Callers that need the id
+// before Create (for example to derive an integration branch name) can supply
+// it back in CreateOrchestrationRequest.OrchestrationID.
+func NewOrchestrationID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
@@ -389,7 +392,7 @@ func (s *OrchestrationStore) Create(ctx context.Context, req CreateOrchestration
 
 	orchestrationID := strings.TrimSpace(req.OrchestrationID)
 	if orchestrationID == "" {
-		orchestrationID, err = newOrchestrationID()
+		orchestrationID, err = NewOrchestrationID()
 		if err != nil {
 			return Orchestration{}, nil, err
 		}
@@ -548,6 +551,32 @@ func (s *OrchestrationStore) UpdateState(ctx context.Context, orchestrationID st
 		WHERE orchestration_id = $1
 		RETURNING ` + orchestrationColumns
 	out, err := scanOrchestration(s.pool.QueryRow(ctx, q, strings.TrimSpace(orchestrationID), string(state)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Orchestration{}, ErrOrchestrationNotFound
+	}
+	return out, err
+}
+
+// Approve freezes a draft run for execution, recording the approver and first
+// approval timestamp. It is intentionally narrow: phase dispatch still happens
+// through the advance engine's reconcileRun so there is one DAG driver.
+func (s *OrchestrationStore) Approve(ctx context.Context, orchestrationID, approverEmail string) (Orchestration, error) {
+	if s == nil || s.pool == nil {
+		return Orchestration{}, errors.New("orchestration store unavailable")
+	}
+	approverEmail = strings.ToLower(strings.TrimSpace(approverEmail))
+	if approverEmail == "" {
+		return Orchestration{}, errors.New("approve orchestration requires approver_email")
+	}
+	const q = `
+		UPDATE orchestrations
+		SET state = 'approved',
+			approver_email = $2,
+			approved_at = COALESCE(approved_at, now()),
+			updated_at = now()
+		WHERE orchestration_id = $1 AND state IN ('draft', 'approved')
+		RETURNING ` + orchestrationColumns
+	out, err := scanOrchestration(s.pool.QueryRow(ctx, q, strings.TrimSpace(orchestrationID), approverEmail))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Orchestration{}, ErrOrchestrationNotFound
 	}

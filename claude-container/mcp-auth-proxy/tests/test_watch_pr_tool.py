@@ -171,7 +171,10 @@ def test_watch_pr_reports_ready_when_green(tmp_path) -> None:
     )
     structured = _structured(http, repo)
     assert structured["state"] == "ready"
-    assert _registered(http) is False
+    assert _registered(http) is True
+    watch_post = next(p for p in http.posts if "ci-watches" in p["url"])
+    assert watch_post["json"]["status"] == "ready"
+    assert watch_post["json"]["check_state"] == "success"
 
 
 def test_watch_pr_registers_watch_when_pending(tmp_path) -> None:

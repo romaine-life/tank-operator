@@ -2680,9 +2680,10 @@ async def _handle_tank_watch_pr_tool(
             state = "watching"
             detail = f"CI in progress (mergeable_state={mergeable_state or 'unknown'}, checks={check_state}: {ci_error})."
 
-        # Register a durable watch only for the genuinely-pending case. 'conflict'
-        # and 'failed' are returned for the agent to fix now; 'ready' needs no wait.
-        if state == "watching":
+        # Register durable backend state for pending and ready PRs. Ready PRs do
+        # not need an agent wait, but the backend still needs the PR link so
+        # orchestration phases can auto-merge and advance.
+        if state in {"watching", "ready"}:
             headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
             watch_url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/ci-watches"
             watch_payload = {
@@ -2694,6 +2695,7 @@ async def _handle_tank_watch_pr_tool(
                 "check_state": check_state,
                 "detail": detail,
                 "pr_url": pr_url,
+                "status": state,
             }
             async with http.post(watch_url, headers=headers, json=watch_payload) as resp:
                 if resp.status >= 400:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -32,6 +33,7 @@ type phaseSpec struct {
 	status   pgstore.PhaseStatus
 	prNumber int // PR coordinates pre-linked for the merged-PR reverse lookup
 	spoke    string
+	target   pgstore.PhaseTarget
 }
 
 func phaseID(key string) string { return "phase-" + key }
@@ -57,9 +59,12 @@ func newFakeOrchStore(state pgstore.OrchestrationState, specs ...phaseSpec) *fak
 			Key:             sp.key,
 			Brief:           "do " + sp.key,
 			DependsOn:       sp.deps,
-			Target:          pgstore.PhaseTargetMain,
+			Target:          sp.target,
 			Status:          sp.status,
 			SpokeSessionID:  sp.spoke,
+		}
+		if p.Target == "" {
+			p.Target = pgstore.PhaseTargetMain
 		}
 		if sp.prNumber > 0 {
 			p.PROwner = fakePROwner
@@ -73,6 +78,60 @@ func newFakeOrchStore(state pgstore.OrchestrationState, specs ...phaseSpec) *fak
 }
 
 func (s *fakeOrchStore) snapshot(id string) pgstore.OrchestrationPhase { return *s.phases[id] }
+
+func (s *fakeOrchStore) Create(_ context.Context, req pgstore.CreateOrchestrationRequest) (pgstore.Orchestration, []pgstore.OrchestrationPhase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := req.OrchestrationID
+	if id == "" {
+		id = "orch-1"
+	}
+	state := req.State
+	if state == "" {
+		state = pgstore.OrchestrationDraft
+	}
+	s.orch = pgstore.Orchestration{
+		OrchestrationID:   id,
+		OwnerEmail:        req.OwnerEmail,
+		RepoOwner:         strings.ToLower(req.RepoOwner),
+		RepoName:          strings.ToLower(req.RepoName),
+		IntegrationBranch: req.IntegrationBranch,
+		State:             state,
+		PhaseCount:        len(req.Phases),
+	}
+	s.phases = make(map[string]*pgstore.OrchestrationPhase, len(req.Phases))
+	s.order = nil
+	for i, sp := range req.Phases {
+		p := &pgstore.OrchestrationPhase{
+			PhaseID:         phaseID(sp.Key),
+			OrchestrationID: id,
+			Ordinal:         i,
+			Key:             sp.Key,
+			Brief:           sp.Brief,
+			DependsOn:       sp.DependsOn,
+			Target:          sp.Target,
+			Status:          pgstore.PhasePending,
+		}
+		if p.Target == "" {
+			p.Target = pgstore.PhaseTargetMain
+		}
+		s.phases[p.PhaseID] = p
+		s.order = append(s.order, p.PhaseID)
+	}
+	out := make([]pgstore.OrchestrationPhase, 0, len(s.order))
+	for _, id := range s.order {
+		out = append(out, *s.phases[id])
+	}
+	return s.orch, out, nil
+}
+
+func (s *fakeOrchStore) Approve(_ context.Context, _ string, approver string) (pgstore.Orchestration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.orch.ApproverEmail = approver
+	s.orch.State = pgstore.OrchestrationApproved
+	return s.orch, nil
+}
 
 func (s *fakeOrchStore) GetWithPhases(_ context.Context, _ string) (pgstore.Orchestration, []pgstore.OrchestrationPhase, error) {
 	s.mu.Lock()
@@ -197,6 +256,17 @@ func (s *fakeOrchStore) UpdateState(_ context.Context, _ string, state pgstore.O
 	defer s.mu.Unlock()
 	s.orch.State = state
 	return s.orch, nil
+}
+
+func (s *fakeOrchStore) UpdatePhaseStatus(_ context.Context, phaseID string, status pgstore.PhaseStatus) (pgstore.OrchestrationPhase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.phases[phaseID]
+	if p == nil {
+		return pgstore.OrchestrationPhase{}, pgstore.ErrOrchestrationPhaseNotFound
+	}
+	p.Status = status
+	return *p, nil
 }
 
 func (s *fakeOrchStore) ListActiveOrchestrationIDs(_ context.Context) ([]string, error) {
@@ -436,5 +506,59 @@ func TestLinkPhasePRSkipsMergedPhase(t *testing.T) {
 	})
 	if got := store.snapshot(phaseID("a")).Status; got != pgstore.PhaseMerged {
 		t.Fatalf("merged phase dragged back to %q", got)
+	}
+}
+
+func TestRunWithIntegrationBranchAwaitsReview(t *testing.T) {
+	store := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhaseMerged, prNumber: 100, spoke: "spoke-a"},
+		phaseSpec{key: "b", deps: []string{"a"}, status: pgstore.PhaseRunning, prNumber: 200, spoke: "spoke-b"},
+	)
+	store.orch.IntegrationBranch = "tank/orchestration/orch-1/integration"
+	e := newTestEngine(store, newRecordingSpawner().spawn)
+	reviewCalls := 0
+	e.reviewReady = func(context.Context, pgstore.Orchestration, []pgstore.OrchestrationPhase) {
+		reviewCalls++
+	}
+
+	e.advanceOnMerge(context.Background(), fakePROwner, fakePRName, 200, "sha-b")
+
+	if got := store.orch.State; got != pgstore.OrchestrationAwaitingReview {
+		t.Fatalf("run state = %q, want awaiting_review", got)
+	}
+	if reviewCalls != 1 {
+		t.Fatalf("review hook calls = %d, want 1", reviewCalls)
+	}
+}
+
+func TestBlockSpokePhaseMarksBlocked(t *testing.T) {
+	store := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhasePROpen, prNumber: 100, spoke: "spoke-a"},
+		phaseSpec{key: "b", deps: []string{"a"}, status: pgstore.PhasePending},
+	)
+	e := newTestEngine(store, newRecordingSpawner().spawn)
+
+	_, phase, err := e.blockSpokePhase(context.Background(), "spoke-a")
+	if err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	if phase.Status != pgstore.PhaseBlocked {
+		t.Fatalf("blocked phase status = %q, want blocked", phase.Status)
+	}
+	if got := store.snapshot(phaseID("b")).Status; got != pgstore.PhasePending {
+		t.Fatalf("dependent phase status = %q, want pending", got)
+	}
+}
+
+func TestRepoBasesForIntegrationPhase(t *testing.T) {
+	orch := pgstore.Orchestration{RepoOwner: "romaine-life", RepoName: "tank-operator", IntegrationBranch: "tank/orchestration/orch-1/integration"}
+	phase := pgstore.OrchestrationPhase{Target: pgstore.PhaseTargetIntegration}
+
+	got := repoBasesForPhase(orch, phase)
+	if got["romaine-life/tank-operator"] != orch.IntegrationBranch {
+		t.Fatalf("repo base = %#v, want integration branch", got)
+	}
+	if got := repoBasesForPhase(orch, pgstore.OrchestrationPhase{Target: pgstore.PhaseTargetMain}); len(got) != 0 {
+		t.Fatalf("main phase got repo bases: %#v", got)
 	}
 }

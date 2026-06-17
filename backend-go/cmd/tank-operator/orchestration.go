@@ -41,6 +41,7 @@ type orchestrationStore interface {
 	AttachPhaseSpoke(ctx context.Context, phaseID, spokeSessionID string) (pgstore.OrchestrationPhase, error)
 	MarkPhasePROpen(ctx context.Context, phaseID string, req pgstore.SetPhasePRRequest) (pgstore.OrchestrationPhase, error)
 	MarkPhaseMerged(ctx context.Context, phaseID, mergeSHA string) (pgstore.OrchestrationPhase, error)
+	UpdatePhaseStatus(ctx context.Context, phaseID string, status pgstore.PhaseStatus) (pgstore.OrchestrationPhase, error)
 	UpdateState(ctx context.Context, orchestrationID string, state pgstore.OrchestrationState) (pgstore.Orchestration, error)
 	ListActiveOrchestrationIDs(ctx context.Context) ([]string, error)
 }
@@ -51,14 +52,17 @@ type orchestrationStore interface {
 // POST /api/internal/sessions/{id}/turns use); tests pass a fake.
 type phaseSpokeSpawnFunc func(ctx context.Context, orch pgstore.Orchestration, phase pgstore.OrchestrationPhase) (string, error)
 
+type orchestrationReviewReadyFunc func(ctx context.Context, orch pgstore.Orchestration, phases []pgstore.OrchestrationPhase)
+
 // orchestrationEngine owns the advance loop. It holds no mutable state of its
 // own — every decision reads the durable DAG and every effect is a guarded
 // store write — so the webhook hot path and the reconcile loop can both call it
 // concurrently.
 type orchestrationEngine struct {
-	store orchestrationStore
-	spawn phaseSpokeSpawnFunc
-	log   *slog.Logger
+	store       orchestrationStore
+	spawn       phaseSpokeSpawnFunc
+	reviewReady orchestrationReviewReadyFunc
+	log         *slog.Logger
 }
 
 func newOrchestrationEngine(store orchestrationStore, spawn phaseSpokeSpawnFunc) *orchestrationEngine {
@@ -66,6 +70,33 @@ func newOrchestrationEngine(store orchestrationStore, spawn phaseSpokeSpawnFunc)
 		return nil
 	}
 	return &orchestrationEngine{store: store, spawn: spawn, log: slog.Default()}
+}
+
+// blockSpokePhase records an explicit spoke-reported blocker. Downstream phases
+// that depend on this node stay pending because phaseDepsSatisfied only accepts
+// merged/skipped dependencies; the display record is emitted by the handler.
+func (e *orchestrationEngine) blockSpokePhase(ctx context.Context, spokeSessionID string) (pgstore.Orchestration, pgstore.OrchestrationPhase, error) {
+	if e == nil || e.store == nil {
+		return pgstore.Orchestration{}, pgstore.OrchestrationPhase{}, errors.New("orchestration engine unavailable")
+	}
+	phase, err := e.store.GetPhaseBySpokeSession(ctx, spokeSessionID)
+	if err != nil {
+		return pgstore.Orchestration{}, pgstore.OrchestrationPhase{}, err
+	}
+	switch phase.Status {
+	case pgstore.PhaseMerged, pgstore.PhaseSkipped, pgstore.PhaseBlocked:
+		// Terminal phases stay terminal; duplicate blocked reports are harmless.
+	default:
+		phase, err = e.store.UpdatePhaseStatus(ctx, phase.PhaseID, pgstore.PhaseBlocked)
+		if err != nil {
+			return pgstore.Orchestration{}, pgstore.OrchestrationPhase{}, err
+		}
+	}
+	orch, _, err := e.store.GetWithPhases(ctx, phase.OrchestrationID)
+	if err != nil {
+		return pgstore.Orchestration{}, pgstore.OrchestrationPhase{}, err
+	}
+	return orch, phase, nil
 }
 
 // advanceOnMerge is the webhook hot path: a merged PR (repo + number) maps to
@@ -308,6 +339,17 @@ func (e *orchestrationEngine) settleRunState(ctx context.Context, orchestrationI
 	}
 
 	if allTerminalSuccess {
+		if strings.TrimSpace(orch.IntegrationBranch) != "" {
+			updated, err := e.store.UpdateState(ctx, orchestrationID, pgstore.OrchestrationAwaitingReview)
+			if err != nil {
+				return err
+			}
+			if e.reviewReady != nil {
+				e.reviewReady(ctx, updated, phases)
+			}
+			e.log.Info("orchestration run awaiting integration review", "orchestration_id", orchestrationID, "integration_branch", orch.IntegrationBranch)
+			return nil
+		}
 		if _, err := e.store.UpdateState(ctx, orchestrationID, pgstore.OrchestrationDone); err != nil {
 			return err
 		}
