@@ -35,7 +35,6 @@ from mcp_auth_proxy.server import (
     _filter_github_write_tools,
     _github_tool_block_response,
     _is_read_only_clone_token_request,
-    _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
     _handle_tank_azure_break_glass_tool,
     _handle_query_tank_db_tool,
@@ -519,59 +518,6 @@ def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path
     assert env["GITHUB_TOKEN"] == "token"
 
 
-def test_glimmung_hot_swap_gate_rewrites_git_ref_to_verified_sha(monkeypatch, tmp_path) -> None:
-    workspace = tmp_path
-    repo = workspace / "tank-operator"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
-    (repo / "README.md").write_text("test\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
-    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    body = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 12,
-        "method": "tools/call",
-        "params": {
-            "name": "apply_test_slot_hot_swap",
-            "arguments": {
-                "project": "tank-operator",
-                "slot_index": 2,
-                "artifact_kind": "codex_runner",
-                "validation_target": "existing_session",
-                "git_ref": "tank/session/95/tank-operator",
-                "repo_path": str(repo),
-            },
-        },
-    }).encode("utf-8")
-
-    prepared = asyncio.run(
-        _prepare_glimmung_hot_swap_call(
-            _HotSwapHTTP(sha),
-            _StaticTokenProvider("service-token"),
-            12,
-            body,
-            json.loads(body)["params"]["arguments"],
-        )
-    )
-
-    assert not hasattr(prepared, "text")
-    forwarded_body, verification = prepared
-    forwarded = json.loads(forwarded_body)
-    forwarded_args = forwarded["params"]["arguments"]
-    assert forwarded_args["git_ref"] == sha
-    assert forwarded_args["project"] == "tank-operator"
-    assert "repo_path" not in forwarded_args
-    assert verification["sha"] == sha
-
-
 def test_tank_merge_tool_merges_verified_session_branch(monkeypatch, tmp_path) -> None:
     workspace = tmp_path
     repo = workspace / "tank-operator"
@@ -877,36 +823,6 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert "approval URL" in break_glass["description"]
     assert break_glass["inputSchema"]["required"] == ["repo_scope", "branch_scope", "reason"]
     assert "token" not in break_glass["inputSchema"]["properties"]
-
-
-def test_hot_swap_tool_schema_gets_repo_path_for_tank_gate() -> None:
-    raw = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {
-            "tools": [
-                {
-                    "name": "apply_test_slot_hot_swap",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "project": {"type": "string"},
-                            "git_ref": {"type": "string"},
-                        },
-                        "additionalProperties": False,
-                    },
-                }
-            ]
-        },
-    }).encode("utf-8")
-
-    augmented = json.loads(_append_tank_publish_tool(raw))
-
-    hot_swap = augmented["result"]["tools"][0]
-    properties = hot_swap["inputSchema"]["properties"]
-    assert properties["repo"]["type"] == "string"
-    assert properties["repo_path"]["type"] == "string"
-    assert hot_swap["inputSchema"]["additionalProperties"] is False
 
 
 def test_break_glass_approval_url_carries_request_context() -> None:

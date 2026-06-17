@@ -172,7 +172,7 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
               ? { kind: "all_repos" }
               : { kind: "current_repo", repo: repo.trim() },
           branch_scope: { kind: "unlimited" },
-          operations: ["mint_full_git_token", "push_current_head", "apply_test_slot_hot_swap"],
+          operations: ["mint_full_git_token", "push_current_head"],
         },
       );
     }

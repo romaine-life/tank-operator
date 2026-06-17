@@ -199,10 +199,10 @@ Status: in progress
 
 Intent:
 Let a developer iterating in a Glimmung test slot make NEWLY-created sessions
-boot branch-built session-runner code, not just hot-swap the already-running
+boot branch-built session-runner code, not just update the already-running
 pods. The slot's orchestrator stamps a per-scope override image onto new pods
 the same way production stamps its chart-pinned image — no runtime overlay, full
-fidelity. Production is never affected.
+accuracy. Production is never affected.
 
 Affected contracts:
 - Session Lifecycle

@@ -1,6 +1,6 @@
 ---
 name: test
-description: Reserve and use a Glimmung test environment for validating the current session's work, using repo-specific hot-swap guidance when available
+description: Reserve and use a Glimmung test environment for validating the current session's work with CI-built image deploys
 ---
 
 # /test
@@ -24,8 +24,10 @@ Reserve a test slot with the Glimmung MCP `checkout_test_slot` tool:
 
 The checkout response provides the assigned slot and validation URL. If Tank's UI did not update automatically, call the Tank MCP `set_test_environment` tool with the same session id, `active: true`, the slot index, and the URL.
 
-When the environment is up, hot-swap code into the test environment. We want to
-save time, so don't do full image builds if you can avoid it.
+When the environment is up and the branch has a CI-built image, deploy it with
+the Glimmung MCP `deploy_image_to_test_slot` tool. The tool takes the project,
+slot, and pushed `git_ref`, then polls the durable slot operation until the slot
+reports `deployed` or `deploy_failed`.
 
 Use the Glimmung `inspect_browser_url` tool for browser validation and screenshots when appropriate. When you cite an inspection screenshot as evidence, do not cite only the Glimmung artifact URL. Also place a copy in the caller session workspace under `/workspace/screenshots/` and include that local path in the final answer or PR evidence. Prefer the tool's workspace screenshot option when available; if the tool cannot save a local copy, use a local download/copy workaround or state explicitly that the local copy failed.
 
@@ -33,9 +35,9 @@ You are free to come up with a test case for the feature. This is not mandatory,
 
 Once the environment is up, if your tests provide important feedback, you can iterate on any improvements and test them as well. However, the feature is not done when you deem it so. The test environment is explicitly so the user can validate the changes to their satisfaction. This is a very important step when collaborating with coding agents, because the code is not always transparent to the user, but the user experience is.
 
-## Repo-specific hot-swap guidance
+## Repo-specific deploy guidance
 
-Before hot-swapping, look for a repo guide under this skill's local
+Before deploying, look for a repo guide under this skill's local
 `references/repos/` directory. Use the current repo name as the primary key
 and, when needed, the owner/repo pair from `git remote -v` to disambiguate.
 Examples:
@@ -47,36 +49,25 @@ If a matching guide exists, read it before choosing a hot-swap path. That guide
 owns project-specific assumptions such as Glimmung project names, MCP contract
 tools, artifact kinds, pod selectors, copy paths, restart strategy, and
 diagnostics.
+If a matching guide exists, read it before choosing the deploy and validation
+path. That guide owns project-specific assumptions such as Glimmung project
+names, health endpoints, and visible build markers.
 
 If no repo guide exists, use the generic Glimmung flow:
 
 - infer or ask for the Glimmung project
-- inspect any available hot-swap contract/tooling for that project
-- prefer Glimmung MCP hot-swap tools over manual `kubectl`
-- use the fastest faithful live update for the changed artifact
-- record what was applied and how it was verified
-
-**`static` (frontend/webapp) changes go through `apply_test_slot_hot_swap`**,
-`artifact_kind: "static"` — the same MCP tool as the runner kinds. Glimmung
-builds the frontend from the pushed git ref in a Job, clears the app pod's
-static-override dir, and copies the built assets into every ready app replica
-(served live, no restart). Do **not** hand-copy with `kubectl cp`: raw
-write/exec into slot pods is being removed, and copying local un-CI'd build
-output is exactly what this path replaces.
-
-The apply endpoint serves `static` only when the project's static contract
-declares the apply-endpoint fields (`build_command`, `pod_selector`,
-`container`, `builder_image`). tank-operator is configured —
-`references/repos/tank-operator.md` is the worked example. If a project's static
-contract isn't configured for the apply endpoint yet (its static block lacks
-those fields), register them on the project's Glimmung metadata first — that is
-the fix, not a fall back to `kubectl cp`.
+- open or update the PR so CI builds the proof image for the commit
+- call `deploy_image_to_test_slot` with the pushed branch or SHA
+- verify the slot's real surface serves that build
+- return the slot when validation is complete
 
 If the repo looks like it will need repeated testing, add a concise guide under
 `references/repos/` rather than expanding this main skill with project-specific
 details.
 
-If the user reviews the test site and has suggestions/improvements, be sure to continue collaborating with the user by implementing their changes and hot-swapping into the test env as default behavior. The user is counting on you to make this a collaboration, and making your code changes feel alive by making them accessible in the test environment is how we accomplish that.
+If the user reviews the test site and has suggestions/improvements, continue
+collaborating by implementing their changes, pushing them, letting CI build the
+new image, and deploying that image into the test slot.
 
 As you hot swap, push commits to the remote branch as well. That's a backup in case the pod goes down. You should also get latest from main and merge it into your branch.
 
@@ -87,9 +78,7 @@ the normal image-build path for same-repo work: GitHub CI builds the relevant
 images and, when the repo's workflow is trusted to use registry credentials,
 pushes reusable fingerprint/proof images to the registry. Those pushed images
 are useful later for merge/deploy because the expensive build has already been
-primed. Keep hot-swapping for the fast live-test loop, but do not treat
-hot-swap as a substitute for opening the PR and letting CI build the image
-artifacts.
+primed. Do not treat unpushed local artifacts as validation evidence.
 
 You should be checking if PR needs to have merge conflicts resolved. If they're
 unresolvable, that's cause to stop and get input, because the proposed fix

@@ -133,84 +133,15 @@ notifications, tray/menu/global shortcuts, or deeper clipboard integration.
 ArgoCD auto-syncs `k8s/` when changes hit `main`. Image is built and pushed to
 `romainecr.azurecr.io/tank-operator:<sha>` (and `:latest`) by `.github/workflows/build.yml`.
 
-## Glimmung Test-Slot Hot Swap
+## Glimmung Test-Slot Deploy
 
-Tank validation slots run the orchestrator through `/app/tank-supervisor` when
-`renderMode=hot`. The chart mounts `/var/run/tank-operator-hot` for
-backend artifacts and `/var/run/tank-operator-static-override` for frontend
-assets. Production keeps the normal `/app/tank-operator-go` command and image
-rollout path.
+Tank validation slots are updated with Glimmung's `deploy_image_to_test_slot`
+tool. The tool deploys the CI-built image for a pushed, verified git ref and
+polls the slot operation until it reaches `deployed` or `deploy_failed`.
 
-Operational notes:
-
-- Test slots mount `/var/run/tank-operator-static-override` read-write in the
-  app container; write static overrides through the `tank-operator` container.
-  Older slots may still include a `static-writer` sidecar, but the sidecar is
-  not required for hot-swap.
-- `/app/tank-supervisor` does not watch the hot backend artifact. After copying
-  a new backend binary to `/var/run/tank-operator-hot/tank-operator-go`, send
-  `SIGHUP` to PID 1 in the `tank-operator` container. Do not kill the child
-  `tank-operator-go` process directly; the supervisor treats child exit as
-  terminal and exits the container.
-- Hot-swap every ready app pod unless you intentionally scaled the deployment
-  down for a one-off diagnostic.
-
-Project metadata for Glimmung:
-
-```json
-{
-  "test_slot_hot_swap": {
-    "enabled": true,
-    "static": {
-      "enabled": true,
-      "source": "frontend/dist",
-      "target": "/var/run/tank-operator-static-override",
-      "build_command": "cd frontend && npm ci && npm run build",
-      "pod_selector": "app.kubernetes.io/name=tank-operator",
-      "container": "tank-operator",
-      "builder_image": "node:20-alpine"
-    },
-    "backend": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "cd backend-go && go build -o /tmp/tank-operator-go ./cmd/tank-operator",
-      "artifact": "/tmp/tank-operator-go",
-      "target": "/var/run/tank-operator-hot/tank-operator-go",
-      "health_path": "/healthz",
-      "health_port": 8000,
-      "pod_selector": "app.kubernetes.io/name=tank-operator",
-      "container": "tank-operator",
-      "builder_image": "golang:1.26-alpine"
-    },
-    "fidelity_classifier": {
-      "enabled": true,
-      "command": "node scripts/classify-tank-test-fidelity.mjs"
-    },
-    "agent_runner": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "cd claude-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/claude-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/claude-runner-hot/runner-shared/|g' {} +",
-      "source": "claude-runner/hot",
-      "target": "/var/run/claude-runner-hot",
-      "restart": "SIGHUP",
-      "container": "claude-runner",
-      "pod_selector": "tank-operator/session-id,tank-operator/mode in (claude_gui,claude_secondary_gui)",
-      "builder_image": "node:20-alpine"
-    },
-    "codex_runner": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "cd codex-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/codex-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/codex-runner-hot/runner-shared/|g' {} +",
-      "source": "codex-runner/hot",
-      "target": "/var/run/codex-runner-hot",
-      "restart": "SIGHUP",
-      "container": "codex-runner",
-      "pod_selector": "tank-operator/session-id,tank-operator/mode in (codex_gui,codex_exec_gui,codex_app_server)",
-      "builder_image": "node:20-alpine"
-    }
-  }
-}
-```
+Project metadata for slot deployment lives under `test_slot_helm`; there is no
+per-artifact build contract. PR CI is the image-build gate, and slot validation
+uses that same image rather than building or copying artifacts from a session.
 
 Auth: Microsoft sign-in is delegated to auth.romaine.life. The SPA fetches
 an auth.romaine.life JWT (silent if the `.romaine.life` session cookie is
