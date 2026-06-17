@@ -34,6 +34,11 @@ export type SessionEventStreamMetricName =
   | "turn_activity_load_failed"
   | "turn_activity_load_timed_out"
   | "turn_activity_load_stale"
+  // Behavior-free watchdog: the activity body stayed on "Loading activity..."
+  // past the stuck threshold. `_unloaded` = no load ever started (the strand);
+  // `_loading` = a load was in the loading state past the threshold (slow/hung).
+  | "turn_activity_stuck_unloaded"
+  | "turn_activity_stuck_loading"
   | "turn_activity_refresh_failed"
   | "turn_activity_refresh_gave_up"
   | "turn_activity_refresh_recovered"
