@@ -66,6 +66,19 @@ export type PRLaneRequest = {
   proposedBranch?: string;
 };
 
+export type BreakGlassRequest = {
+  eventId: string;
+  invocationId: string;
+  createdAt?: string;
+  kind: "git" | "azure";
+  target: string;
+  repo?: string;
+  repoOwner?: string;
+  repoName?: string;
+  reason?: string;
+  source?: string;
+};
+
 function nonempty(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -276,4 +289,76 @@ export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[]
     if (branchScope.kind === "unlimited") request.unlimited = true;
     return [request];
   });
+}
+
+// pendingBreakGlassRequests surfaces break-glass requests that are still
+// awaiting an admin decision. A grant or deny with payload.request_event_id
+// resolves the exact request; older grant rows without that field also clear
+// matching git repo requests until they expire.
+export function pendingBreakGlassRequests(
+  rows: ControlActionRow[],
+  now: number = Date.now(),
+): BreakGlassRequest[] {
+  const resolvedRequests = new Set<string>();
+  const grantedRepos = new Set<string>();
+  for (const row of rows) {
+    const action = nonempty(row.action);
+    if (
+      action !== "github.break_glass.grant" &&
+      action !== "github.break_glass.deny" &&
+      action !== "azure.break_glass.grant" &&
+      action !== "azure.break_glass.deny"
+    )
+      continue;
+    const payload = payloadObject(row.payload);
+    const requestEventId = nonempty(payload.request_event_id);
+    if (requestEventId) resolvedRequests.add(requestEventId);
+    if (action !== "github.break_glass.grant") continue;
+    if (nonempty(row.status) !== "succeeded") continue;
+    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
+      .filter(Boolean)
+      .join("/");
+    if (!repo) continue;
+    const expiresAt = nonempty(payload.expires_at);
+    if (!expiresAt) continue;
+    const expiry = Date.parse(expiresAt);
+    if (Number.isNaN(expiry) || expiry <= now) continue;
+    grantedRepos.add(repo);
+  }
+  const byTarget = new Map<string, BreakGlassRequest>();
+  for (const row of rows) {
+    const action = nonempty(row.action);
+    if (action !== "github.break_glass.request" && action !== "azure.break_glass.request") continue;
+    if (nonempty(row.status) !== "started") continue;
+    const eventId = nonempty(row.event_id);
+    const invocationId = nonempty(row.invocation_id);
+    if (!eventId || !invocationId) continue;
+    if (resolvedRequests.has(eventId)) continue;
+    const repoOwner = nonempty(row.repo_owner);
+    const repoName = nonempty(row.repo_name);
+    const repo = [repoOwner, repoName].filter(Boolean).join("/");
+    const kind = action === "azure.break_glass.request" ? "azure" : "git";
+    if (kind === "git" && (!repo || grantedRepos.has(repo))) continue;
+    const payload = payloadObject(row.payload);
+    const target = kind === "azure" ? "azure-personal" : repo;
+    const request: BreakGlassRequest = {
+      eventId,
+      invocationId,
+      kind,
+      createdAt: nonempty(row.created_at),
+      target,
+      repo,
+      repoOwner,
+      repoName,
+      reason: nonempty(payload.reason),
+      source: nonempty(payload.source),
+    };
+    const existing = byTarget.get(target);
+    if (!existing || (request.createdAt ?? "") > (existing.createdAt ?? "")) {
+      byTarget.set(target, request);
+    }
+  }
+  return Array.from(byTarget.values()).sort((a, b) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
 }
