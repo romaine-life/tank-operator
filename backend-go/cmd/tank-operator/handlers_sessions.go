@@ -49,6 +49,22 @@ func validateCreateSessionCapabilities(mode string, raw []string) ([]string, int
 	return capabilities, 0, ""
 }
 
+func validateServiceCreateSessionCapabilities(mode string, raw []string) ([]string, int, string) {
+	raw = serviceCreateSessionCapabilities(mode, raw)
+	return validateCreateSessionCapabilities(mode, raw)
+}
+
+func serviceCreateSessionCapabilities(mode string, raw []string) []string {
+	if !sessionModeSupportsRepos(mode) ||
+		sessionmodel.HasSessionCapability(raw, sessionmodel.SessionCapabilityRestrictedGit) {
+		return raw
+	}
+	out := make([]string, 0, len(raw)+1)
+	out = append(out, raw...)
+	out = append(out, sessionmodel.SessionCapabilityRestrictedGit)
+	return out
+}
+
 func validateCreateSessionMode(raw string) (string, int, string) {
 	mode := sessionmodel.NormalizeSessionMode(raw)
 	if !sessionmodel.IsSessionMode(mode) {
@@ -1149,7 +1165,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
-	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
+	capabilities, status, detail := validateServiceCreateSessionCapabilities(mode, body.Capabilities)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
