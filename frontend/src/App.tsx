@@ -12988,6 +12988,16 @@ export function turnActivityShellIdsMissingFromDirectory(
   return missing;
 }
 
+export function selectedActivityRouteSessionMismatch(
+  paneSessionId: string,
+  routeSessionId: string | null | undefined,
+): string | null {
+  const pane = paneSessionId.trim();
+  const route = (routeSessionId ?? "").trim();
+  if (!pane || !route || pane === route) return null;
+  return route;
+}
+
 export function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
@@ -13943,6 +13953,15 @@ function RunTurnActivityScreen({
     selected?.shell != null
       ? turnActivityShellIsDurablyActive(selected.shell.activity)
       : false;
+  const selectedActivityRouteSessionId =
+    typeof window !== "undefined"
+      ? (readSessionRouteFromPath()?.sessionId ?? "")
+      : "";
+  const selectedActivityMismatchedRouteSessionId =
+    selectedActivityRouteSessionMismatch(
+      sessionId,
+      selectedActivityRouteSessionId,
+    );
   const selectedActivityLoadingTelemetryKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!showActivityLoading || !selectedTurnIdForTelemetry) {
@@ -13963,10 +13982,39 @@ function RunTurnActivityScreen({
       selectedHasTurnActivityShell ? "shell" : "no-shell",
       selectedTurnActivityChildCount,
       selectedDurableActiveTurnActivityShell ? "durable-active" : "inactive",
+      selectedActivityMismatchedRouteSessionId ?? "route-match",
     ].join(":");
     if (selectedActivityLoadingTelemetryKeyRef.current === key) return;
     const timer = window.setTimeout(() => {
       selectedActivityLoadingTelemetryKeyRef.current = key;
+      const currentMismatchedRouteSessionId =
+        selectedActivityRouteSessionMismatch(
+          sessionId,
+          typeof window !== "undefined"
+            ? readSessionRouteFromPath()?.sessionId
+            : "",
+        );
+      if (currentMismatchedRouteSessionId) {
+        logChatScrollEvent("turn-activity-selected-route-session-mismatch", {
+          surface: "session",
+          sessionId,
+          sessionMode,
+          previousSessionId: activityLoadingPreviousSessionId ?? undefined,
+          source: activityLoadingTelemetrySource,
+          reason: "route-session-mismatch",
+          key: currentMismatchedRouteSessionId,
+          routeSessionId: currentMismatchedRouteSessionId,
+          selectedTurnId: selectedTurnIdForTelemetry,
+          status: turnActivityLoadStatusMetricCode(selectedLoadStatus),
+          entries: detailEntries.length,
+          groups: detailGroups.length,
+          activityEntries: selectedTurnActivityChildCount,
+          turnActivityShells: selectedHasTurnActivityShell ? 1 : 0,
+          durableActiveTurnActivityShells: selectedDurableActiveTurnActivityShell
+            ? 1
+            : 0,
+        });
+      }
       logChatScrollEvent(event, {
         surface: "session",
         sessionId,
@@ -13991,6 +14039,7 @@ function RunTurnActivityScreen({
     detailGroups.length,
     activityLoadingPreviousSessionId,
     activityLoadingTelemetrySource,
+    selectedActivityMismatchedRouteSessionId,
     selectedDurableActiveTurnActivityShell,
     selectedHasTurnActivityShell,
     selectedLoadStatus,
