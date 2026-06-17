@@ -376,6 +376,8 @@ import {
   turnActivityGroupIsActive,
   turnActivityShouldStartLoad,
   turnActivityShellIsDurablyActive,
+  turnActivityStuckEvent,
+  TURN_ACTIVITY_STUCK_THRESHOLD_MS,
   type TurnActivityLoadProblem,
   type TurnActivityLoadReason,
   type TurnActivityLoadSnapshot as TurnActivityLoadSnapshotModel,
@@ -21900,6 +21902,41 @@ function ChatPane({
     if (!effectiveSelectedTurnId) return;
     ensureTurnActivityLoaded(effectiveSelectedTurnId);
   }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+  // Behavior-free watchdog (telemetry only): report when the selected turn's
+  // activity body stays on "Loading activity..." past the threshold. It emits a
+  // bounded session-event-stream metric and does NOT start a load, touch the
+  // cache, or change any state — it only observes. The existing
+  // turn_activity_load_* events fire only when a load actually runs, so a load
+  // that never started (the selected turn left `unloaded` with nothing
+  // re-triggering it) is invisible today; this fills that gap so the strand is
+  // measurable in prod data before any fix. See turnActivityState.ts.
+  const selectedActivityStatus = effectiveSelectedTurnId
+    ? turnActivityLoadsByTurn[effectiveSelectedTurnId]?.status
+    : undefined;
+  useEffect(() => {
+    if (!visible) return;
+    if (activeTab !== "turns") return;
+    if (!effectiveSelectedTurnId) return;
+    // Arm only while the body shows the spinner (a non-terminal status).
+    if (turnActivityStuckEvent(selectedActivityStatus) === null) return;
+    const turnId = effectiveSelectedTurnId;
+    const timer = window.setTimeout(() => {
+      // Recompute from the ref at fire time so a load that resolved within the
+      // threshold does not produce a false positive.
+      const event = turnActivityStuckEvent(
+        turnActivityLoadsByTurnRef.current[turnId]?.status,
+      );
+      if (!event) return;
+      logSessionEventStreamEvent(event, { sessionMode: session.mode });
+    }, TURN_ACTIVITY_STUCK_THRESHOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    visible,
+    activeTab,
+    effectiveSelectedTurnId,
+    selectedActivityStatus,
+    session.mode,
+  ]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (pendingTurnViewRouteAnchor !== "bottom") return;
