@@ -711,6 +711,60 @@ spec:
               navigation-mode entry — the migration guard blocks
               reintroduction of the symbols by name.
 
+        # The turn-directory loader's level-triggered reconciler
+        # (frontend/src/turnDirectoryLoad.ts) closed the observability hole the
+        # retired edge-triggered loader left: a load that never started recorded
+        # nothing while the Turns view sat on "Loading turns…". turn-directory-stuck
+        # is the user-trust signal that the spinner exceeded the watchdog
+        # threshold; turn-directory-reconcile counts strands the reconciler
+        # auto-healed; turn-directory-timeout counts loads a wedged connection
+        # drove into the retryable error state. A sustained stuck rate means many
+        # users are watching the spinner — the failure the retired latch
+        # (loadTurnDirectoryInFlightRef) produced silently.
+        - alert: TankTurnDirectoryStuck
+          expr: |
+            sum (
+              rate(tank_chat_scroll_client_events_total{event="turn-directory-stuck",surface="session"}[15m])
+            ) > 0.05
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Turns view directory load is stuck for users (spinner exceeded the watchdog threshold at a sustained rate)"
+            runbook: |
+              Browsers report the "Loading turns…" spinner staying up past the
+              client watchdog threshold at >0.05/sec sustained for 15m. This is
+              the user-trust signal for the strand the retired edge-triggered
+              loader recorded nothing for. Triage which cause is in play:
+
+              1. Slow-but-healthy directory endpoint — correlate with the server
+                 side: tank_turn_directory_list_total{result} and the request
+                 latency for GET /turns/directory. If the server is slow (large
+                 sessions, DB pressure) the watchdog is firing on genuinely slow
+                 loads and turn-directory-loaded still follows. The fix is
+                 server-side (TurnDirectoryMaxRows / cursor paging / DB), not the
+                 client loader.
+              2. The strand bug returning — a rising
+                 tank_chat_scroll_client_events_total{event="turn-directory-reconcile"}
+                 (the reconciler repeatedly re-driving vanished loads), or stuck
+                 events NOT followed by turn-directory-loaded, means loads start
+                 and disappear without completing. That is the
+                 edge-triggered/latch failure class the level-triggered
+                 reconciler should make unrepresentable; investigate any recent
+                 change to frontend/src/turnDirectoryLoad.ts or the
+                 reconcile/abort wiring in App.tsx. The
+                 loadTurnDirectoryInFlightRef migration guard in
+                 scripts/check-removed-chat-runtime.mjs blocks the literal latch
+                 by name.
+              3. turn-directory-timeout rate — a wedged connection driven into
+                 the retryable error state. A spike localizes to network /
+                 upstream rather than the loader.
+
+              Source of truth: the durable turn directory
+              (GET /api/sessions/{id}/turns/directory). The client signals here
+              are bounded events on tank_chat_scroll_client_events_total
+              describing how the SPA experienced loading it.
+
         - alert: TankTurnTerminalMissingClientNonce
           expr: |
             sum by (source, event_type) (
