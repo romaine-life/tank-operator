@@ -366,6 +366,35 @@ func TestReconcileStaleCIWatchesReDrivesStuckWatch(t *testing.T) {
 	}
 }
 
+func TestApplyResolvedCIWatchStateAlertsOnOutOfBandHead(t *testing.T) {
+	// The watch is pinned to h1, but GitHub's live head is a foreign h2 with no
+	// governed publish in the ledger: supersede + user-facing alert, never follow
+	// or wake the agent.
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", SessionScope: "tank-operator-slot-3",
+		OwnerEmail: "owner@example.test", PROwner: fakePROwner, PRName: fakePRName,
+		PRNumber: 1234, HeadSHA: "h1", Status: pgstore.CIWatchWatching,
+	}}
+	app := ciWatchTestServer(t, store)
+	app.controlActions = &fakeControlActionStore{listRows: []pgstore.ControlActionEvent{
+		{Action: "github.commit.push", Status: "succeeded", ResultSHA: "h1"},
+	}}
+	read := store.getByPRResult
+	state := mcpgithub.PullRequestState{
+		MergeableState: "clean", HeadSHA: "h2",
+		CheckState: "success", CIStatus: "succeeded", AllChecksSettled: true,
+	}
+	if _, err := app.applyResolvedCIWatchState(context.Background(), read, state, ciWatchReconcileWebhook, 0); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(store.updateObservationCalls) != 1 || store.updateObservationCalls[0].req.Status != pgstore.CIWatchSuperseded {
+		t.Fatalf("out-of-band head should supersede, got %+v", store.updateObservationCalls)
+	}
+	if len(store.updateStatusCalls) != 0 {
+		t.Fatalf("out-of-band head must not wake/auto-merge: %+v", store.updateStatusCalls)
+	}
+}
+
 func TestHandleInternalRegisterCIWatchRejectsNonService(t *testing.T) {
 	store := &fakeCIWatchStore{}
 	app := ciWatchTestServer(t, store)

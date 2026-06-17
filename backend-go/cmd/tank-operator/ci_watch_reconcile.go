@@ -68,6 +68,38 @@ func (s *appServer) applyResolvedCIWatchState(ctx context.Context, watch pgstore
 		return ciWatchReconcileResult{}, errCIWatchReconcileUnavailable("ci watch store unavailable")
 	}
 	result := classifyCIWatchState(watch, state)
+
+	// Head-pin: the watch is pinned to the head it was registered on. Only a
+	// governed publish by the same owner may move it (a legit re-publish that
+	// raced its re-registration); any other live head is an out-of-band push. We
+	// never silently follow it or wake the agent -- we supersede the watch and
+	// emit a user-facing (not agent-facing) alert. See
+	// docs/features/ci-watch/redesign-from-1295-review.md.
+	if headMovedOffPin(watch, state) && !s.headMoveIsGoverned(ctx, watch, state.HeadSHA) {
+		detail := watch.PROwner + "/" + watch.PRName + " #" + strconv.Itoa(watch.PRNumber) +
+			" head moved to " + shortSHAForMessage(state.HeadSHA) +
+			" outside Tank's governed publish path; not following. Investigate the unexpected push to this branch."
+		superseded, err := s.ciWatches.UpdateObservation(ctx, pgstore.UpdateCIWatchObservationRequest{
+			WatchID:         watch.WatchID,
+			ExpectedHeadSHA: watch.HeadSHA,
+			Status:          pgstore.CIWatchSuperseded,
+			HeadSHA:         watch.HeadSHA,
+			MergeableState:  watch.MergeableState,
+			CheckState:      watch.CheckState,
+			Detail:          detail,
+			PRURL:           watch.PRURL,
+		})
+		if errors.Is(err, pgstore.ErrCIWatchObservationStale) {
+			return result, nil
+		}
+		if err != nil {
+			return result, err
+		}
+		recordCITerminal("out_of_band")
+		s.emitCIStatusRecord(ctx, superseded, "out_of_band", "", detail)
+		return result, nil
+	}
+
 	updated, err := s.ciWatches.UpdateObservation(ctx, pgstore.UpdateCIWatchObservationRequest{
 		WatchID:         watch.WatchID,
 		ExpectedHeadSHA: watch.HeadSHA,
@@ -272,4 +304,34 @@ func (e ciWatchReconcileUnavailable) Error() string { return string(e) }
 
 func errCIWatchReconcileUnavailable(message string) error {
 	return ciWatchReconcileUnavailable(message)
+}
+
+func headMovedOffPin(watch pgstore.CIWatch, state mcpgithub.PullRequestState) bool {
+	pinned := strings.TrimSpace(watch.HeadSHA)
+	live := strings.TrimSpace(state.HeadSHA)
+	return pinned != "" && live != "" && !strings.EqualFold(pinned, live)
+}
+
+// headMoveIsGoverned reports whether newHead was produced by a governed publish
+// (control-action ledger) for the same owner -- a legit re-publish that may move
+// the pin. It fails open (true) when the ledger cannot be consulted, so a
+// degraded ledger never raises a false out-of-band alarm.
+func (s *appServer) headMoveIsGoverned(ctx context.Context, watch pgstore.CIWatch, newHead string) bool {
+	newHead = strings.TrimSpace(newHead)
+	if newHead == "" || s.controlActions == nil {
+		return true
+	}
+	rows, err := s.controlActions.ListBySession(ctx, watch.OwnerEmail, watch.SessionScope, watch.SessionID, 200)
+	if err != nil {
+		return true
+	}
+	for _, row := range rows {
+		if row.Action != "github.commit.push" && row.Action != "github.break_glass.push" {
+			continue
+		}
+		if row.Status == "succeeded" && strings.EqualFold(strings.TrimSpace(row.ResultSHA), newHead) {
+			return true
+		}
+	}
+	return false
 }
