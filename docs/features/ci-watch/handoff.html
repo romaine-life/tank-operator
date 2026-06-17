@@ -25,12 +25,12 @@
         <div style="display:flex;flex-direction:column;gap:14px;min-width:0;max-width:780px;margin:0 auto;">
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#d8eef7;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">watch_current_session_pr</strong>
-            <span style="color:#536168;font-size:13px;">Registers the PR handoff after the initial authoritative read.</span>
+            <span style="color:#536168;font-size:13px;">Registers the PR handoff; the backend immediately reconciles live PR, CI, and mergeability state.</span>
           </div>
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f4e4c8;">
             <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Bounded mergeability retry</strong>
-            <span style="color:#536168;font-size:13px;">GET the PR; if mergeable is null or UNKNOWN, sleep about 1.5 seconds and retry, currently up to 6 reads.</span>
+            <span style="color:#536168;font-size:13px;">If mergeable is null or UNKNOWN, schedule a deduped delayed reconcile for this PR head: about 2s, 5s, 10s, 20s, 40s, then 60s.</span>
           </div>
           <div aria-hidden="true" style="height:28px;text-align:center;"><span style="display:inline-block;width:2px;height:28px;background:#9aa8ae;"></span></div>
           <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#eadff4;">

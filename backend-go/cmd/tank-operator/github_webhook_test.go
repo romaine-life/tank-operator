@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -33,19 +35,19 @@ func TestInterpretGitHubWebhook(t *testing.T) {
 			"merged", 12},
 		{"pr conflict", "pull_request",
 			`{"action":"synchronize","pull_request":{"number":12,"mergeable_state":"dirty","head":{"sha":"h1"}}}`,
-			"conflict", 12},
-		{"pr opened clean -> ignore", "pull_request",
+			"trigger", 12},
+		{"pr opened clean -> trigger", "pull_request",
 			`{"action":"opened","pull_request":{"number":12,"mergeable_state":"clean","head":{"sha":"h1"}}}`,
-			"", 0},
-		{"check_suite failure -> red", "check_suite",
+			"trigger", 12},
+		{"check_suite failure -> trigger", "check_suite",
 			`{"action":"completed","check_suite":{"conclusion":"failure","head_sha":"h1","pull_requests":[{"number":12}]}}`,
-			"red", 12},
-		{"check_suite success -> green", "check_suite",
+			"trigger", 12},
+		{"check_suite success -> trigger", "check_suite",
 			`{"action":"completed","check_suite":{"conclusion":"success","head_sha":"h1","pull_requests":[{"number":12}]}}`,
-			"green", 12},
-		{"workflow_run failure -> red", "workflow_run",
+			"trigger", 12},
+		{"workflow_run failure -> trigger", "workflow_run",
 			`{"action":"completed","workflow_run":{"conclusion":"failure","head_sha":"h1","pull_requests":[{"number":12}]}}`,
-			"red", 12},
+			"trigger", 12},
 		{"check_run not completed -> ignore", "check_run",
 			`{"action":"created","check_run":{"head_sha":"h1","pull_requests":[{"number":12}]}}`,
 			"", 0},
@@ -93,6 +95,7 @@ func webhookTestApp(t *testing.T, fake *fakeCIWatchStore) *appServer {
 	app.sessionScope = "default"
 	app.githubWebhookSecret = "topsecret"
 	app.ciWatches = fake
+	app.ciWatchMergeabilityRetryDelays = []time.Duration{}
 	return app
 }
 
@@ -120,20 +123,25 @@ func TestHandleGitHubWebhookRejectsBadSignature(t *testing.T) {
 }
 
 func TestHandleGitHubWebhookWakesOnRed(t *testing.T) {
+	mergeable := true
 	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
 		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
 		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 1234,
 		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
 	}}
 	app := webhookTestApp(t, fake)
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc",
+		CheckState: "failure", CIStatus: "failed", FailingChecks: []string{"build"},
+	}}
 	rec := postWebhook(t, app, "check_suite", redCheckSuiteBody, signWebhook("topsecret", redCheckSuiteBody))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	// UpdateStatus(failed) runs before the wake enqueue, so it proves the red
+	// UpdateObservation(failed) runs before the wake enqueue, so it proves the red
 	// path regardless of enqueue outcome in the test harness.
-	if len(fake.updateStatusCalls) != 1 || fake.updateStatusCalls[0].status != pgstore.CIWatchFailed {
-		t.Fatalf("updateStatus calls = %+v, want one CIWatchFailed", fake.updateStatusCalls)
+	if len(fake.updateObservationCalls) != 1 || fake.updateObservationCalls[0].req.Status != pgstore.CIWatchFailed {
+		t.Fatalf("updateObservation calls = %+v, want one CIWatchFailed", fake.updateObservationCalls)
 	}
 }
 
@@ -161,6 +169,10 @@ func TestHandleGitHubWebhookSuccessDoesNotReadyPendingWatch(t *testing.T) {
 		MergeableState: "unstable", CheckState: "pending",
 	}}
 	app := webhookTestApp(t, fake)
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		MergeableState: "unknown", HeadSHA: "abc",
+		CheckState: "pending", CIStatus: "started", CIError: "checks are pending",
+	}}
 	rec := postWebhook(t, app, "check_run", greenCheckRunBody, signWebhook("topsecret", greenCheckRunBody))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -171,9 +183,13 @@ func TestHandleGitHubWebhookSuccessDoesNotReadyPendingWatch(t *testing.T) {
 	if len(fake.markMergedCalls) != 0 {
 		t.Fatalf("single successful check merged pending watch: %+v", fake.markMergedCalls)
 	}
+	if len(fake.updateObservationCalls) != 1 || fake.updateObservationCalls[0].req.Status != pgstore.CIWatchWatching {
+		t.Fatalf("pending aggregate observation = %+v, want watching", fake.updateObservationCalls)
+	}
 }
 
 func TestHandleGitHubWebhookSuccessCanReadyStoredGreenWatch(t *testing.T) {
+	mergeable := true
 	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
 		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
 		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 1234,
@@ -181,12 +197,67 @@ func TestHandleGitHubWebhookSuccessCanReadyStoredGreenWatch(t *testing.T) {
 		MergeableState: "clean", CheckState: "success",
 	}}
 	app := webhookTestApp(t, fake)
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc",
+		CheckState: "success", CIStatus: "succeeded",
+	}}
 	rec := postWebhook(t, app, "check_run", greenCheckRunBody, signWebhook("topsecret", greenCheckRunBody))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if len(fake.updateStatusCalls) != 1 || fake.updateStatusCalls[0].status != pgstore.CIWatchReady {
 		t.Fatalf("updateStatus calls = %+v, want one CIWatchReady", fake.updateStatusCalls)
+	}
+}
+
+func TestHandleGitHubWebhookPullRequestSynchronizeMovesWatchedHead(t *testing.T) {
+	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 1234,
+		HeadSHA: "old-head", Status: pgstore.CIWatchWatching,
+	}}
+	app := webhookTestApp(t, fake)
+	gh := &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		MergeableState: "unknown", HeadSHA: "new-head",
+		CheckState: "pending", CIStatus: "started", CIError: "checks are pending",
+	}}
+	app.mcpGitHub = gh
+	body := `{"action":"synchronize","repository":{"owner":{"login":"romaine-life"},"name":"tank-operator"},"pull_request":{"number":1234,"head":{"sha":"new-head"}}}`
+	rec := postWebhook(t, app, "pull_request", body, signWebhook("topsecret", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gh.resolvePRCalls != 1 {
+		t.Fatalf("ResolvePullRequestState calls = %d, want 1", gh.resolvePRCalls)
+	}
+	if len(fake.updateObservationCalls) != 1 || fake.updateObservationCalls[0].req.HeadSHA != "new-head" {
+		t.Fatalf("updateObservation calls = %+v, want head new-head", fake.updateObservationCalls)
+	}
+}
+
+func TestHandleGitHubWebhookUnknownMergeabilitySchedulesRetry(t *testing.T) {
+	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+	}}
+	app := webhookTestApp(t, fake)
+	app.ciWatchMergeabilityRetryDelays = []time.Duration{time.Hour}
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		MergeableState: "unknown", HeadSHA: "abc",
+		CheckState: "success", CIStatus: "succeeded",
+	}}
+	rec := postWebhook(t, app, "check_run", greenCheckRunBody, signWebhook("topsecret", greenCheckRunBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	app.ciWatchMergeabilityRetryMu.Lock()
+	defer app.ciWatchMergeabilityRetryMu.Unlock()
+	if len(app.ciWatchMergeabilityRetries) != 1 {
+		t.Fatalf("mergeability retry count = %d, want 1", len(app.ciWatchMergeabilityRetries))
+	}
+	for _, timer := range app.ciWatchMergeabilityRetries {
+		timer.Stop()
 	}
 }
 

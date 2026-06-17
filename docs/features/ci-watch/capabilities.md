@@ -8,8 +8,11 @@ and [../README.md](../README.md) for how capability ledgers are used.
 
 - **Status:** shipped
 - **Intent:** The agent never reads GitHub mergeability itself. `watch_current_session_pr`
-  resolves GitHub's *asynchronous* `mergeable_state` (polling past `unknown`) plus
-  auditable CI evidence, and returns `conflict | failed | ready | watching`. Exact
+  registers the handoff, then the backend reducer reads GitHub's live
+  `mergeable_state` plus auditable CI evidence and returns
+  `conflict | failed | ready | watching`. When GitHub reports
+  `mergeable=null` / `unknown`, the backend schedules a narrow deduped retry for
+  the same PR head instead of treating any webhook payload as terminal. Exact
   head-SHA check runs satisfy a check directly. A missing path-filtered check can
   satisfy only when Tank finds the same PR branch's prior green run and proves no
   commit since that run changed the workflow's `pull_request.paths` inputs. This is
@@ -22,10 +25,10 @@ and [../README.md](../README.md) for how capability ledgers are used.
 ## ci-watch-wake
 
 - **Status:** shipped
-- **Intent:** When a watched PR's *current head SHA* goes red or conflicted, Tank wakes
-  the owning session with an actionable `ci-failure` / `ci-conflict` turn (webhook
-  receiver → `enqueueSDKTurn`). The agent fixes and re-publishes. The agent is **never**
-  woken on success.
+- **Intent:** When a watched PR's *current head SHA* goes red or conflicted after a
+  live reducer read, Tank wakes the owning session with an actionable `ci-failure` /
+  `ci-conflict` turn (webhook/retry trigger → reducer → `enqueueSDKTurn`). The agent
+  fixes and re-publishes. The agent is **never** woken on success.
 - **Durable source:** `POST /webhooks/github` (HMAC-verified) → `session_ci_watches`
   reverse lookup → wake. Stale deliveries (superseded head SHA) and duplicates
   (already-terminal watch) are dropped.

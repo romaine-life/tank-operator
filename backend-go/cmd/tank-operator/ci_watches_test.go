@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -17,14 +18,19 @@ type ciWatchStatusCall struct {
 	status  pgstore.CIWatchStatus
 }
 
+type ciWatchObservationCall struct {
+	req pgstore.UpdateCIWatchObservationRequest
+}
+
 type fakeCIWatchStore struct {
 	registerCalls []pgstore.RegisterCIWatchRequest
 	registerErr   error
 
-	getByPRResult     pgstore.CIWatch
-	getByPRErr        error
-	updateStatusCalls []ciWatchStatusCall
-	markMergedCalls   []string
+	getByPRResult          pgstore.CIWatch
+	getByPRErr             error
+	updateStatusCalls      []ciWatchStatusCall
+	updateObservationCalls []ciWatchObservationCall
+	markMergedCalls        []string
 }
 
 func (s *fakeCIWatchStore) Register(_ context.Context, req pgstore.RegisterCIWatchRequest) (pgstore.CIWatch, error) {
@@ -53,8 +59,25 @@ func (s *fakeCIWatchStore) UpdateStatus(_ context.Context, watchID string, statu
 	return w, nil
 }
 
+func (s *fakeCIWatchStore) UpdateObservation(_ context.Context, req pgstore.UpdateCIWatchObservationRequest) (pgstore.CIWatch, error) {
+	s.updateObservationCalls = append(s.updateObservationCalls, ciWatchObservationCall{req: req})
+	w := s.getByPRResult
+	w.WatchID = req.WatchID
+	if w.WatchID == "" {
+		w.WatchID = "ciwatch_test"
+	}
+	w.Status = req.Status
+	w.HeadSHA = req.HeadSHA
+	w.MergeableState = req.MergeableState
+	w.CheckState = req.CheckState
+	w.Detail = req.Detail
+	w.PRURL = req.PRURL
+	s.getByPRResult = w
+	return w, nil
+}
+
 func (s *fakeCIWatchStore) Get(_ context.Context, _ string) (pgstore.CIWatch, error) {
-	return pgstore.CIWatch{}, nil
+	return s.getByPRResult, s.getByPRErr
 }
 
 func (s *fakeCIWatchStore) GetByPR(_ context.Context, _, _ string, _ int) (pgstore.CIWatch, error) {
@@ -164,6 +187,7 @@ func TestHandleInternalRegisterCIWatchLinksPhasePR(t *testing.T) {
 }
 
 func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testing.T) {
+	mergeable := true
 	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
 		WatchID: "ciwatch_test", SessionID: "47", OwnerEmail: "owner@example.test",
 		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
@@ -174,7 +198,13 @@ func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testi
 		phaseSpec{key: "a", status: pgstore.PhaseRunning, spoke: "47"},
 	)
 	app.orchestrations = newOrchestrationEngine(orch, newRecordingSpawner().spawn)
-	gh := &fakeMCPGitHub{mergeCommit: "merge-sha"}
+	gh := &fakeMCPGitHub{
+		mergeCommit: "merge-sha",
+		prState: mcpgithub.PullRequestState{
+			Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc123",
+			CheckState: "success", CIStatus: "succeeded",
+		},
+	}
 	app.mcpGitHub = gh
 
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/ci-watches", strings.NewReader(`{

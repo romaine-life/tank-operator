@@ -135,6 +135,14 @@ type appServer struct {
 	// alive, and the human merge surface renders it.
 	ciWatches ciWatchStore
 
+	// ciWatchMergeabilityRetries is the narrow non-event-driven escape hatch:
+	// GitHub's PR mergeability can be null/unknown while it computes a trial
+	// merge asynchronously, so a watching PR/head can schedule one deduped
+	// delayed reconcile. The retry re-enters the same reducer as webhooks.
+	ciWatchMergeabilityRetryMu     sync.Mutex
+	ciWatchMergeabilityRetries     map[string]*time.Timer
+	ciWatchMergeabilityRetryDelays []time.Duration
+
 	// githubWebhookSecret verifies X-Hub-Signature-256 on the public
 	// POST /webhooks/github route. Empty -> the receiver fails closed.
 	githubWebhookSecret string
@@ -256,6 +264,7 @@ type scheduledWakeupStore interface {
 type ciWatchStore interface {
 	Register(context.Context, pgstore.RegisterCIWatchRequest) (pgstore.CIWatch, error)
 	UpdateStatus(context.Context, string, pgstore.CIWatchStatus, string) (pgstore.CIWatch, error)
+	UpdateObservation(context.Context, pgstore.UpdateCIWatchObservationRequest) (pgstore.CIWatch, error)
 	Get(context.Context, string) (pgstore.CIWatch, error)
 	GetByPR(context.Context, string, string, int) (pgstore.CIWatch, error)
 	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)

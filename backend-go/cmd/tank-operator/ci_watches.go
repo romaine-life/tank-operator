@@ -69,6 +69,24 @@ func (s *appServer) handleInternalRegisterCIWatch(w http.ResponseWriter, r *http
 			PRURL:    watch.PRURL,
 		})
 	}
+	if s.mcpGitHub != nil {
+		result, err := s.reconcileAndApplyCIWatch(r.Context(), watch, ciWatchReconcileHandoff)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "reconcile CI watch: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"watch":           watch,
+			"state":           ciWatchToolState(result.Status),
+			"detail":          result.Detail,
+			"head_sha":        result.HeadSHA,
+			"mergeable_state": result.MergeableState,
+			"check_state":     result.CheckState,
+			"failing_checks":  result.FailingChecks,
+			"pr_url":          result.PRURL,
+		})
+		return
+	}
 	if ciWatchRegistrationReady(body.Status, body.CheckState, body.MergeableState) {
 		s.handleGreenCIWatch(r.Context(), watch, body.Detail)
 	}
@@ -82,4 +100,19 @@ func ciWatchRegistrationReady(status, checkState, mergeableState string) bool {
 	}
 	return strings.EqualFold(strings.TrimSpace(checkState), "success") &&
 		strings.EqualFold(strings.TrimSpace(mergeableState), "clean")
+}
+
+func ciWatchToolState(status pgstore.CIWatchStatus) string {
+	switch status {
+	case pgstore.CIWatchReady:
+		return "ready"
+	case pgstore.CIWatchFailed:
+		return "failed"
+	case pgstore.CIWatchConflict:
+		return "conflict"
+	case pgstore.CIWatchMerged:
+		return "merged"
+	default:
+		return "watching"
+	}
 }

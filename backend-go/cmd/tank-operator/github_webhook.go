@@ -20,20 +20,6 @@ import (
 
 const maxGitHubWebhookBytes = 2 << 20 // 2 MiB
 
-// ciFailingConclusions are the GitHub check/workflow conclusions that mean a
-// required check is red. Any of them on a watched PR's current head SHA wakes
-// the agent. A spurious wake (a non-required/flaky check) is self-correcting:
-// the woken agent re-runs watch_current_session_pr, sees the PR is fine, and
-// resumes waiting.
-var ciFailingConclusions = map[string]bool{
-	"failure":         true,
-	"timed_out":       true,
-	"cancelled":       true,
-	"action_required": true,
-	"startup_failure": true,
-	"stale":           true,
-}
-
 type githubPRRef struct {
 	Number int `json:"number"`
 }
@@ -79,11 +65,12 @@ type githubWebhookPayload struct {
 
 // ciWebhookSignal is the interpreted, event-type-agnostic result.
 type ciWebhookSignal struct {
-	prNumber    int
-	headSHA     string
-	kind        string // "" (ignore) | "green" | "red" | "conflict" | "merged"
-	mergeCommit string
-	detail      string
+	prNumber      int
+	headSHA       string
+	kind          string // "" (ignore) | "trigger" | "merged"
+	allowHeadMove bool
+	mergeCommit   string
+	detail        string
 }
 
 func firstPRNumber(refs []githubPRRef) int {
@@ -103,14 +90,16 @@ func interpretGitHubWebhook(eventType string, p *githubWebhookPayload) ciWebhook
 		}
 		sig.prNumber = p.PullRequest.Number
 		sig.headSHA = p.PullRequest.Head.SHA
+		sig.allowHeadMove = true
 		switch {
 		case p.Action == "closed" && p.PullRequest.Merged:
 			sig.kind = "merged"
 			sig.mergeCommit = p.PullRequest.MergeCommitSHA
 			sig.detail = "PR was merged."
-		case p.PullRequest.MergeableState == "dirty" || p.PullRequest.MergeableState == "behind":
-			sig.kind = "conflict"
-			sig.detail = "mergeable_state=" + p.PullRequest.MergeableState
+		case p.Action == "opened" || p.Action == "reopened" || p.Action == "synchronize" ||
+			p.Action == "ready_for_review" || p.Action == "converted_to_draft" || p.Action == "edited":
+			sig.kind = "trigger"
+			sig.detail = "pull_request " + p.Action
 		}
 	case "check_suite":
 		if p.CheckSuite == nil || p.Action != "completed" {
@@ -118,39 +107,24 @@ func interpretGitHubWebhook(eventType string, p *githubWebhookPayload) ciWebhook
 		}
 		sig.headSHA = p.CheckSuite.HeadSHA
 		sig.prNumber = firstPRNumber(p.CheckSuite.PullRequests)
-		if strings.EqualFold(p.CheckSuite.Conclusion, "success") {
-			sig.kind = "green"
-			sig.detail = "a check suite concluded success"
-		} else if ciFailingConclusions[p.CheckSuite.Conclusion] {
-			sig.kind = "red"
-			sig.detail = "a check suite concluded " + p.CheckSuite.Conclusion
-		}
+		sig.kind = "trigger"
+		sig.detail = "check suite completed"
 	case "check_run":
 		if p.CheckRun == nil || p.Action != "completed" {
 			return sig
 		}
 		sig.headSHA = p.CheckRun.HeadSHA
 		sig.prNumber = firstPRNumber(p.CheckRun.PullRequests)
-		if strings.EqualFold(p.CheckRun.Conclusion, "success") {
-			sig.kind = "green"
-			sig.detail = "check '" + p.CheckRun.Name + "' concluded success"
-		} else if ciFailingConclusions[p.CheckRun.Conclusion] {
-			sig.kind = "red"
-			sig.detail = "check '" + p.CheckRun.Name + "' concluded " + p.CheckRun.Conclusion
-		}
+		sig.kind = "trigger"
+		sig.detail = "check '" + p.CheckRun.Name + "' completed"
 	case "workflow_run":
 		if p.WorkflowRun == nil || p.Action != "completed" {
 			return sig
 		}
 		sig.headSHA = p.WorkflowRun.HeadSHA
 		sig.prNumber = firstPRNumber(p.WorkflowRun.PullRequests)
-		if strings.EqualFold(p.WorkflowRun.Conclusion, "success") {
-			sig.kind = "green"
-			sig.detail = "workflow '" + p.WorkflowRun.Name + "' concluded success"
-		} else if ciFailingConclusions[p.WorkflowRun.Conclusion] {
-			sig.kind = "red"
-			sig.detail = "workflow '" + p.WorkflowRun.Name + "' concluded " + p.WorkflowRun.Conclusion
-		}
+		sig.kind = "trigger"
+		sig.detail = "workflow '" + p.WorkflowRun.Name + "' completed"
 	}
 	return sig
 }
@@ -172,10 +146,10 @@ func (s *appServer) verifyGitHubWebhookSignature(header string, body []byte) boo
 }
 
 // handleGitHubWebhook is the public inbound GitHub webhook for the CI-watch
-// receiver. It authenticates by HMAC (no JWT), reduces the delivery to a
-// signal, reverse-looks-up the owning session, guards against stale/duplicate
-// deliveries, and wakes the agent on red/conflict or records an external merge.
-// See docs/event-driven-rollout.md.
+// receiver. It authenticates by HMAC (no JWT), reduces the delivery to a PR
+// trigger, reverse-looks-up the owning session, guards against stale check
+// deliveries, and re-enters the authoritative backend reducer. See
+// docs/event-driven-rollout.md.
 func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	eventType := strings.TrimSpace(r.Header.Get("X-GitHub-Event"))
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxGitHubWebhookBytes))
@@ -233,46 +207,27 @@ func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	// Stale-SHA guard: a delivery for a superseded commit (the agent
-	// re-published a new head) is ignored.
-	if sig.headSHA != "" && watch.HeadSHA != "" && !strings.EqualFold(sig.headSHA, watch.HeadSHA) {
+	// Stale-SHA guard: check/workflow deliveries for a superseded commit are
+	// ignored. Pull-request synchronize/opened deliveries are allowed to move
+	// the watched head because they are the event that says the PR head changed.
+	if !sig.allowHeadMove && sig.headSHA != "" && watch.HeadSHA != "" && !strings.EqualFold(sig.headSHA, watch.HeadSHA) {
 		recordCIWebhook(eventType, "stale_sha")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	// A successful check_run/check_suite/workflow_run is only proof that one
-	// GitHub object completed, not that the PR's required-check aggregate is
-	// green and mergeable. The authoritative aggregate is captured by
-	// watch_current_session_pr when it registers/refreshes the row. If the row
-	// still says pending/unstable, keep watching so a later red/conflict delivery
-	// can wake the agent instead of being coalesced behind a false "ready".
-	if sig.kind == "green" && !ciWatchStoredGreen(watch) {
-		recordCIWebhook(eventType, "green_not_ready")
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-		return
-	}
 	recordCIWebhook(eventType, "acted")
-	s.applyCIWebhookSignal(ctx, watch, sig)
+	if sig.kind == "merged" {
+		s.applyCIWebhookSignal(ctx, watch, sig)
+	} else if _, err := s.reconcileAndApplyCIWatch(ctx, watch, ciWatchReconcileWebhook); err != nil {
+		recordCIWebhook(eventType, "reconcile_error")
+		slog.Warn("ci watch webhook reconcile failed", "watch_id", watch.WatchID, "event", eventType, "error", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-func ciWatchStoredGreen(watch pgstore.CIWatch) bool {
-	return strings.EqualFold(strings.TrimSpace(watch.CheckState), "success") &&
-		strings.EqualFold(strings.TrimSpace(watch.MergeableState), "clean")
 }
 
 func (s *appServer) applyCIWebhookSignal(ctx context.Context, watch pgstore.CIWatch, sig ciWebhookSignal) {
 	recordCITerminal(sig.kind)
-	switch sig.kind {
-	case "green":
-		s.handleGreenCIWatch(ctx, watch, sig.detail)
-	case "red":
-		_, _ = s.ciWatches.UpdateStatus(ctx, watch.WatchID, pgstore.CIWatchFailed, sig.detail)
-		s.wakeSessionForCI(ctx, watch, "ci-failure", sig)
-	case "conflict":
-		_, _ = s.ciWatches.UpdateStatus(ctx, watch.WatchID, pgstore.CIWatchConflict, sig.detail)
-		s.wakeSessionForCI(ctx, watch, "ci-conflict", sig)
-	case "merged":
+	if sig.kind == "merged" {
 		_, _ = s.ciWatches.MarkMerged(ctx, watch.WatchID, sig.mergeCommit)
 		s.emitCIStatusRecord(ctx, watch, "merged", sig.mergeCommit, sig.detail)
 	}

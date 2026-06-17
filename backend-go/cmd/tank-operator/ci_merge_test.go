@@ -19,6 +19,9 @@ type fakeMCPGitHub struct {
 	markReadyErr      error
 	createBranchErr   error
 	createPRErr       error
+	prState           mcpgithub.PullRequestState
+	prStateErr        error
+	resolvePRCalls    int
 	mergeCalls        int
 	mergeWithHeadSHA  string
 	createBranchCalls []string
@@ -65,6 +68,30 @@ func (f *fakeMCPGitHub) CreatePullRequest(_ context.Context, _, owner, name, tit
 		url = "https://github.com/" + owner + "/" + name + "/pull/" + strconv.Itoa(number)
 	}
 	return mcpgithub.PullRequest{Number: number, HTMLURL: url, State: "open"}, nil
+}
+
+func (f *fakeMCPGitHub) ResolvePullRequestState(_ context.Context, _ string, owner, name string, number int) (mcpgithub.PullRequestState, error) {
+	f.resolvePRCalls++
+	if f.prStateErr != nil {
+		return mcpgithub.PullRequestState{}, f.prStateErr
+	}
+	state := f.prState
+	if state.PR.Number == 0 {
+		state.PR.Number = number
+	}
+	if state.HTMLURL == "" {
+		state.HTMLURL = "https://github.com/" + owner + "/" + name + "/pull/" + strconv.Itoa(number)
+	}
+	if state.HeadSHA == "" {
+		state.HeadSHA = state.PR.Head.SHA
+	}
+	if state.CheckState == "" {
+		state.CheckState = "pending"
+	}
+	if state.CIStatus == "" {
+		state.CIStatus = "started"
+	}
+	return state, nil
 }
 
 func mergeTestApp(t *testing.T, watches *fakeCIWatchStore, gh *fakeMCPGitHub) *appServer {

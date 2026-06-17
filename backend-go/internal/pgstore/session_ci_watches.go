@@ -82,6 +82,19 @@ type RegisterCIWatchRequest struct {
 	PRURL          string
 }
 
+// UpdateCIWatchObservationRequest carries the latest live GitHub state read by
+// the backend reducer. It refreshes the durable watch without changing watch
+// identity, so every event source re-enters the same state machine.
+type UpdateCIWatchObservationRequest struct {
+	WatchID        string
+	Status         CIWatchStatus
+	HeadSHA        string
+	MergeableState string
+	CheckState     string
+	Detail         string
+	PRURL          string
+}
+
 type CIWatchStore struct {
 	pool  *pgxpool.Pool
 	scope string
@@ -178,6 +191,40 @@ func (s *CIWatchStore) UpdateStatus(ctx context.Context, watchID string, status 
 		WHERE watch_id = $1
 		RETURNING ` + ciWatchColumns
 	return scanCIWatch(s.pool.QueryRow(ctx, q, strings.TrimSpace(watchID), string(status), strings.TrimSpace(detail)))
+}
+
+// UpdateObservation refreshes the watch with the latest live PR/CI evidence and
+// the reducer's current state. last_event_at moves because this represents a
+// webhook/timer/handoff observation, not just metadata churn.
+func (s *CIWatchStore) UpdateObservation(ctx context.Context, req UpdateCIWatchObservationRequest) (CIWatch, error) {
+	if s == nil || s.pool == nil {
+		return CIWatch{}, errors.New("ci watch store unavailable")
+	}
+	status := req.Status
+	if status == "" {
+		status = CIWatchWatching
+	}
+	const q = `
+		UPDATE session_ci_watches
+		SET status = $2,
+			head_sha = $3,
+			mergeable_state = $4,
+			check_state = $5,
+			detail = $6,
+			pr_url = $7,
+			last_event_at = now(),
+			updated_at = now()
+		WHERE watch_id = $1
+		RETURNING ` + ciWatchColumns
+	return scanCIWatch(s.pool.QueryRow(ctx, q,
+		strings.TrimSpace(req.WatchID),
+		string(status),
+		strings.TrimSpace(req.HeadSHA),
+		strings.TrimSpace(req.MergeableState),
+		strings.TrimSpace(req.CheckState),
+		strings.TrimSpace(req.Detail),
+		strings.TrimSpace(req.PRURL),
+	))
 }
 
 // Get returns a single watch by id.

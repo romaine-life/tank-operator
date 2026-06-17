@@ -39,11 +39,11 @@
           </div>
           <div style="margin-top:18px;padding:16px 18px;border-left:4px solid #2d6f82;background:#edf7f4;border-radius:0 8px 8px 0;color:#223338;">
             <strong style="display:block;margin-bottom:4px;">No webhook spin loop</strong>
-            GitHub's UNKNOWN or REST mergeable=null means calculation is not ready. The handler refreshes the watch detail and waits for another event or a deferred backstop instead of spinning.
+            GitHub's UNKNOWN or REST mergeable=null means calculation is not ready. The handler refreshes the watch detail and schedules the narrow mergeability retry instead of deciding from the webhook payload.
           </div>
           <div style="margin-top:18px;padding:16px 18px;border-left:4px solid #94631f;background:#fbf0dc;border-radius:0 8px 8px 0;color:#223338;">
-            <strong style="display:block;margin-bottom:4px;">Current polling surface</strong>
-            publish_current_head also starts a background commit observer that samples CI and mergeability about every 30 seconds, currently up to 60 attempts, until failure, green+mergeable, or timeout. That is a backstop/ledger observer, not the webhook wake path.
+            <strong style="display:block;margin-bottom:4px;">Non-core observer</strong>
+            publish_current_head still has a separate control-action observer for commit ledger/hot-swap evidence. It is not the webhook wake algorithm.
           </div>
         </div>
       </div>
