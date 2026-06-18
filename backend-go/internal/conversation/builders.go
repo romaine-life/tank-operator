@@ -426,6 +426,89 @@ func CIStatusUpdatedEventMap(args CIStatusUpdatedArgs) map[string]any {
 	return event
 }
 
+type TestProvisionUpdatedArgs struct {
+	SessionID         string
+	SessionStorageKey string
+	Email             string
+	Runtime           string
+	// RunID groups the phases of one provision run so they thread together
+	// under one system avatar. Phase distinguishes each record's timeline_id.
+	RunID    string
+	Phase    string
+	Text     string
+	Severity string
+	Repo     string
+	Branch   string
+	// URL, when set on a terminal "ready" phase, becomes a click-through
+	// action on the rendered system message (the test environment URL).
+	URL string
+	Now time.Time
+}
+
+// TestProvisionUpdatedEventMap builds a display-only test_provision.updated event
+// (actor=system, source=tank). It is the dedicated primitive for the
+// deterministic interactive test-slot workflow: each phase (creating →
+// validating → waiting → ready/error) is one record with its own timeline_id, so
+// the projection appends them as a grouped role:system thread the user watches
+// advance. Like scheduled_wakeup.updated it renders inline but is NOT a
+// submit_turn, so it never invokes the agent and never enters the model's
+// replayed context.
+func TestProvisionUpdatedEventMap(args TestProvisionUpdatedArgs) map[string]any {
+	createdAt := args.Now
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	runID := strings.TrimSpace(args.RunID)
+	phase := strings.TrimSpace(args.Phase)
+	severity := strings.TrimSpace(args.Severity)
+	if severity == "" {
+		severity = "info"
+	}
+	timelineID := "test-provision:" + runID + ":" + phase
+	clientNonce := "test-provision-" + runID
+	producer := map[string]any{"name": "tank-operator"}
+	if args.Runtime != "" {
+		producer["runtime"] = args.Runtime
+	}
+	payload := map[string]any{
+		"kind":     "test_provision",
+		"run_id":   runID,
+		"phase":    phase,
+		"text":     strings.TrimSpace(args.Text),
+		"severity": severity,
+		"repo":     strings.TrimSpace(args.Repo),
+		"branch":   strings.TrimSpace(args.Branch),
+		"url":      strings.TrimSpace(args.URL),
+	}
+	event := StampEventMap(map[string]any{
+		"event_id":        timelineID + ":" + fmt.Sprintf("%d", createdAt.UnixNano()),
+		"conversation_id": args.SessionID,
+		"session_id":      args.SessionID,
+		"timeline_id":     timelineID,
+		"client_nonce":    clientNonce,
+		"actor":           string(ActorSystem),
+		"source":          string(SourceTank),
+		"type":            string(EventTestProvisionUpdated),
+		"created_at":      createdAt.Format(time.RFC3339Nano),
+		"producer":        producer,
+		"visibility":      string(VisibilityDurable),
+		"payload":         payload,
+	})
+	if args.SessionStorageKey != "" {
+		event["tank_session_id"] = args.SessionStorageKey
+	}
+	if args.SessionID != "" {
+		event["tank_public_session_id"] = args.SessionID
+	}
+	if args.Email != "" {
+		event["email"] = args.Email
+	}
+	if args.Runtime != "" {
+		event["runtime"] = args.Runtime
+	}
+	return event
+}
+
 // TurnCommandFailedEventMap builds a turn.command_failed event keyed
 // by the same turn_id the failed command targeted, so client renderers
 // associate it with the stranded turn submission.
