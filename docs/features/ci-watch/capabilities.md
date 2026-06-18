@@ -108,8 +108,13 @@ and [../README.md](../README.md) for how capability ledgers are used.
   `provisionOrchestrationReviewSlot`. The handler returns **202 Accepted** immediately
   because validate+wait can take minutes. On a `ready` verdict the gate's `SetTestState`
   marks the slot active + URL (the pill lights via the session-row SSE); on **any refusal**
-  glimmung and test-state are left untouched and the reason is surfaced as a display-only
-  `ci_status.updated` record in the turns view (not only logged). The interactive agent
+  glimmung and test-state are left untouched. The whole run surfaces inline as a grouped
+  role:system thread of display-only `test_provision.updated` records — an opener
+  ("Creating test slot."), intermediate validating/waiting progress, and a terminal
+  ready/refusal record (the refusal carries the reason). This replaced an earlier
+  `ci_status.updated` emission that was **invisible inline**: no projection case exists for
+  `ci_status.updated` in `transcript_projection.go`/`conversationReducer.ts`, so those
+  records never rendered in the turns view (see ci-status-record below). The interactive agent
   provisioning path has since been retired: the `/test` skill was rewritten so it no longer
   instructs manual slot checkout/deploy/pill steps (it now reflects that provisioning is
   deterministic), and the three agent-facing MCP provisioning tools were removed from their
@@ -117,8 +122,9 @@ and [../README.md](../README.md) for how capability ledgers are used.
   mcp-tank-operator). The underlying HTTP endpoints those wrappers called stay — the
   deterministic gate drives them server-side.
 - **Durable source:** no new durable row — reuses the gate's transient in-memory
-  `pgstore.CIWatch` validation and surfaces the outcome as a `ci_status.updated`
-  session-event record. Repo disambiguation reads the durable `session_ci_watches` row.
+  `pgstore.CIWatch` validation and surfaces the outcome as `test_provision.updated`
+  session-event records (display-only; actor=system, source=tank; one per phase, grouped
+  by `run_id`). Repo disambiguation reads the durable `session_ci_watches` row.
   Outcomes are observable via `tank_test_slot_interactive_total{outcome}` (terminal
   outcome of the interactive trigger) plus the shared
   `tank_test_slot_validate_total` / `tank_test_slot_provision_total` gate counters.
@@ -157,11 +163,19 @@ and [../README.md](../README.md) for how capability ledgers are used.
 
 ## ci-status-record
 
-- **Status:** shipped (event + webhook merge path); in-Tank merge surface in progress
-- **Intent:** A merge surfaces as a display-only `ci_status.updated` record in the turns
-  view — it renders and (will) ring, but never invokes the agent and never enters the
-  model's replayed context. External merges are recorded via the `pull_request`
-  closed/merged webhook.
+- **Status:** event + webhook merge path shipped; **inline rendering NOT implemented**
+- **Intent:** A merge is recorded as a display-only `ci_status.updated` event that never
+  invokes the agent and never enters the model's replayed context. External merges are
+  recorded via the `pull_request` closed/merged webhook.
+- **Known gap (corrected 2026-06-18):** `ci_status.updated` does **not** render inline.
+  There is no `ci_status` projection case in `cmd/tank-operator/transcript_projection.go`
+  and no handler in `frontend/src/conversationReducer.ts`, so these records are durable but
+  invisible in the turns view. The earlier claim that a merge "renders (and will ring) in
+  the turns view" was aspirational, not implemented. The interactive test-workflow outcome,
+  which previously rode this invisible event, now uses the dedicated, projected
+  `test_provision.updated` thread instead (see interactive-test-workflow above). A future
+  slice that wants merges visible inline must add the projection + reducer cases (the
+  `test_provision.updated` path is the worked example).
 - **Durable source:** `ci_status.updated` event (actor=system, source=tank).
 
 ## orchestration-advance

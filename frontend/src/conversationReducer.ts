@@ -310,6 +310,8 @@ export function conversationReducer(
       };
     case "session.status":
       return applySessionStatusMessage(next, event);
+    case "test_provision.updated":
+      return applyTestProvisionMessage(next, event);
     case "item.started":
       return upsertItem(next, event, "started");
     case "item.completed":
@@ -640,6 +642,42 @@ function applySessionStatusMessage(
     ...state,
     messages: [...state.messages, message],
   };
+}
+
+// applyTestProvisionMessage reduces a display-only test_provision.updated record
+// (the deterministic interactive test-slot workflow) into a role:system message.
+// Each phase (creating → validating → waiting → ready/error) carries its own
+// timeline_id, so the messages append in order and group under one system
+// avatar; a re-emitted phase replaces its prior entry. A terminal "ready"
+// record may carry the test-environment URL as a click-through action.
+function applyTestProvisionMessage(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  const text = stringPayload(event, "text") ?? "";
+  if (!event.timeline_id || !text) return state;
+  const severity: "info" | "error" =
+    stringPayload(event, "severity") === "error" ? "error" : "info";
+  const url = stringPayload(event, "url");
+  const message: ConversationMessage = {
+    id: event.timeline_id,
+    role: "system",
+    text,
+    orderKey: event.order_key,
+    sourceEventId: event.event_id,
+    createdAt: event.created_at,
+    severity,
+    ...(url ? { action: { label: "Open test environment", href: url } } : {}),
+  };
+  const existingIndex = state.messages.findIndex(
+    (m) => m.id === event.timeline_id,
+  );
+  if (existingIndex >= 0) {
+    const next = [...state.messages];
+    next[existingIndex] = message;
+    return { ...state, messages: next };
+  }
+  return { ...state, messages: [...state.messages, message] };
 }
 
 function sessionStatusAction(

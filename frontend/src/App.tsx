@@ -2534,7 +2534,6 @@ interface ComposerToolButtonsProps {
     readyUrl?: string;
     title: string;
     onCreateHold?: () => void;
-    onCreateAndDrive?: () => void;
     onOpenReady?: () => void;
   };
   glimmungRuns: {
@@ -3322,14 +3321,7 @@ function ComposerToolButtons({
             onSelect={test.onCreateHold}
           >
             <FlaskConicalIcon aria-hidden="true" />
-            <span>Create slot and hold</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            className="run-test-action-menu-item"
-            onSelect={test.onCreateAndDrive}
-          >
-            <PlayIcon aria-hidden="true" />
-            <span>Create slot and run test</span>
+            <span>Create test slot</span>
           </DropdownMenuItem>
           <DropdownMenuSeparator className="run-test-action-menu-separator" />
           {testReadyURL ? (
@@ -21103,12 +21095,6 @@ function ChatPane({
     ta.focus();
   }
 
-  function getComposerValue(): string {
-    const wrap = composerWrapRef.current;
-    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
-    return ta?.value ?? composerText;
-  }
-
   function setComposerValue(value: string) {
     const wrap = composerWrapRef.current;
     const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -21657,45 +21643,24 @@ function ChatPane({
     });
   }
 
-  function startTestSkill(skillName = "test") {
-    if (session.status !== "Active") return;
-    const promptText = getComposerValue().trim();
-    const composed = composePromptWithAttachments(promptText);
-    if (composed == null) return;
-    setComposerValue("");
-    void markTestState({ active: true }).catch((e) => {
-      setEntries((prev) =>
-        appendMeta(
-          prev,
-          nextEntryId("test-state-error"),
-          "test state update failed",
-          String(e),
-          "error",
-        ),
-      );
-    });
-    submitSkillInvocation(skillName, composed.prompt);
-  }
-
   // startInteractiveTestWorkflow is the deterministic, zero-LLM replacement for
   // the retired `/test` skill send. It POSTs to the gated backend endpoint,
   // which validates the session's governed-PR readiness and provisions a
   // Glimmung test slot server-side only on a green/mergeable verdict. The 202
-  // accept is immediate (validation can take minutes); the outcome surfaces
-  // afterward through the existing test-state pill (provisioned → active + URL,
-  // via the session-row SSE) or a `ci_status.updated` record in the turns view
-  // (refused → the reason). We deliberately do NOT optimistically mark the test
-  // pill active here: a refused workflow must not leave a phantom-active pill.
+  // accept is immediate (validation can take minutes).
+  //
+  // Visible feedback is the durable `test_provision.updated` thread the backend
+  // emits — an opener ("Creating test slot.") on kickoff, validating/waiting
+  // progress, and a terminal ready/refusal record — which renders inline as a
+  // grouped role:system thread. We deliberately do NOT append an optimistic
+  // local meta chip for the happy path: that chip was the old silent,
+  // refresh-ephemeral feedback the durable thread now replaces. We also do NOT
+  // mark the test pill active here: a refused workflow must not leave a
+  // phantom-active pill. The only client-side surface is the immediate
+  // pre-gate refusal (e.g. 409 already-active, ambiguous repo), which the
+  // backend rejects synchronously and therefore emits no thread for.
   function startInteractiveTestWorkflow() {
     if (session.status !== "Active") return;
-    setEntries((prev) =>
-      appendMeta(
-        prev,
-        nextEntryId("test-workflow-start"),
-        "Test workflow started",
-        "Validating PR readiness; the test environment will appear here when ready, or a reason if it can't be provisioned.",
-      ),
-    );
     void startTestWorkflow(session.id, authedFetch)
       .then((result) => {
         if (!result.ok) {
@@ -25131,7 +25096,6 @@ function ChatPane({
                       void markTestState({ ...testState, active: true });
                   },
                   onCreateHold: () => startInteractiveTestWorkflow(),
-                  onCreateAndDrive: () => startTestSkill("test-drive"),
                   disabled: !ready,
                   title: testState?.active
                     ? "Choose a test action"

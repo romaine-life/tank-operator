@@ -138,13 +138,17 @@ export function projectConversationState(
         // the authoritative server projection folds into the owning turn's Turn
         // activity; they are not main-transcript messages. Provider credential
         // banners (":provider:" timeline, severity error, or carrying an action —
-        // including the recovery "back online" ready) stay. Mirrors the server's
-        // applySessionStatus marker in transcript_projection.go.
+        // including the recovery "back online" ready) stay, as do the
+        // test_provision workflow thread records (their own "test-provision:"
+        // timeline) which are deliberate conversation-altitude feedback for a
+        // zero-LLM workflow. Mirrors the server's applySessionStatus /
+        // applyTestProvision markers in transcript_projection.go.
         if (
           message.role === "system" &&
           message.severity !== "error" &&
           !message.action &&
-          !message.id.includes(":provider:")
+          !message.id.includes(":provider:") &&
+          !message.id.startsWith("test-provision:")
         ) {
           return [];
         }

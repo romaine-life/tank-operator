@@ -43,6 +43,7 @@ export const TANK_EVENT_TYPES = [
   "shell_task.exited",
   "scheduled_wakeup.updated",
   "ci_status.updated",
+  "test_provision.updated",
   "turn.awaiting_input",
   "turn.awaiting_input.invocation",
 ];
@@ -191,6 +192,13 @@ function isValidEventByType(event) {
         event.source === "tank" &&
         hasStrings(event, ["timeline_id", "client_nonce"]) &&
         isCIStatusPayload(event.payload)
+      );
+    case "test_provision.updated":
+      return (
+        event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["timeline_id", "client_nonce"]) &&
+        isTestProvisionPayload(event.payload)
       );
     case "turn.awaiting_input":
       return (
@@ -414,6 +422,19 @@ function isCIStatusPayload(payload) {
       "superseded",
       "cancelled",
     ].includes(payload.state)
+  );
+}
+
+function isTestProvisionPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    payload.kind === "test_provision" &&
+    ["creating", "validating", "waiting", "ready", "error"].includes(
+      payload.phase,
+    ) &&
+    typeof payload.text === "string" &&
+    payload.text.length > 0
   );
 }
 
