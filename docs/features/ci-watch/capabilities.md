@@ -129,6 +129,39 @@ and [../README.md](../README.md) for how capability ledgers are used.
   outcome of the interactive trigger) plus the shared
   `tank_test_slot_validate_total` / `tank_test_slot_provision_total` gate counters.
 
+## interactive-test-workflow-drive
+
+- **Status:** shipped (deterministic provision + post-ready agent wake)
+- **Intent:** The "Create test slot and test" button is the **drive** sibling of
+  interactive-test-workflow. It runs the **identical** deterministic, **zero-LLM**
+  provision (same `POST /api/sessions/{id}/test-workflow/start`, now with a
+  `{"drive": true}` body flag) and surfaces the **identical** visible
+  `test_provision.updated` role:system thread. The only difference is the
+  terminal: on a **ready** verdict — and only then — the runner wakes the
+  session's agent with a backend-owned turn instructing it to validate its
+  changes against the now-running slot at the slot URL. On **any refusal** no
+  wake is submitted (just the thread's refusal record, identical to the plain
+  button). **The LLM boundary is the whole point:** provisioning stays zero-LLM
+  (the gate), and the agent re-enters only *after* a successful provision, to do
+  the inherently-agent part — exercise the running app.
+- **Mechanism:** `runInteractiveTestWorkflow`'s ready branch, when `req.drive`,
+  calls `driveTestSlot` → `enqueueTestDriveWakeTurn`, which reuses the same
+  backend-owned-turn machinery `ScheduleWakeup` fires: `enqueueSDKTurn` persists
+  durable `user_message.created` + `turn.submitted` boundaries and publishes a
+  `submit_turn` command, tagged payload `source=test-slot-drive`
+  (`conversation.TurnSubmittedSourceTestSlotDrive`, added to the
+  `turn.submitted` payload.source schema enum). The wake turn is
+  `AuthorKind=system` with a deterministic `turn_testdrive_*` client nonce so a
+  re-fire on the same (session, branch, url) collapses under JetStream command
+  dedupe. The woken prompt assumes the slot already exists and tells the agent to
+  validate only — it must NOT reserve/check out a slot; the rewritten
+  `/test-drive` skill carries the same assumption.
+- **Durable source:** no new durable row — the wake rides the existing
+  `session_events` ledger (user_message.created + turn.submitted) like any
+  backend-owned turn. Observable via `tank_test_slot_interactive_total{outcome}`
+  with `outcome="drive_wake"` (wake submitted) / `"drive_wake_error"` (enqueue
+  failed; non-fatal — the slot is up and the ready thread already announced it).
+
 ## pending-provision-backstop
 
 - **Status:** shipped (durable reconcile backstop + double-trigger guard)

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -63,9 +65,13 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Optional `repo` override disambiguates a multi-repo session. The body is
-	// optional: a single-repo session needs none.
+	// optional: a single-repo session needs none. `drive` selects the
+	// "Create test slot and test" variant: provision deterministically (same
+	// zero-LLM gate) and, only on the ready terminal, wake the agent to validate
+	// the running slot.
 	var body struct {
-		Repo string `json:"repo"`
+		Repo  string `json:"repo"`
+		Drive bool   `json:"drive"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -76,6 +82,7 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 		writeError(w, herr.status, herr.msg)
 		return
 	}
+	req.drive = body.Drive
 
 	// Double-trigger guard (Slice-5). A rapid double-click must not start two
 	// gate runs / two glimmung checkouts. Refuse when a test environment is
@@ -270,6 +277,13 @@ func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
 		}
 		s.emitTestProvisionRecord(ctx, req, runID, "ready", "info", text, url)
 		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, strings.TrimSpace(outcome.Detail))
+		// The "drive" variant (and only on a ready terminal) hands back to the
+		// agent: provisioning stayed zero-LLM, and now the agent re-enters to do
+		// the inherently-agent part — exercise the running app. A refusal never
+		// reaches here, so a no-slot outcome never wakes.
+		if req.drive {
+			s.driveTestSlot(ctx, req, url)
+		}
 		return
 	}
 
@@ -306,6 +320,100 @@ func testProvisionOutcomeURL(outcome provisionOutcome) string {
 func (s *appServer) markInteractiveProvisionTerminal(ctx context.Context, req provisionTestSlotRequest, headSHA string, status pgstore.PendingTestProvisionStatus, detail string) {
 	s.markPendingTestProvisionTerminal(ctx, req.SessionID, req.RepoOwner, req.RepoName, req.Branch,
 		pgstore.PendingTestProvisionInteractive, status, detail, headSHA)
+}
+
+// driveTestSlot wakes the session's agent after a successful interactive
+// "drive" provision so it validates its changes against the now-running slot.
+// The LLM boundary is the whole point: provisioning ran zero-LLM through the
+// gate, and the agent re-enters only here — never on a refusal — to exercise
+// the running app. The wake reuses the same backend-owned-turn machinery
+// ScheduleWakeup fires (enqueueSDKTurn → durable user_message.created +
+// turn.submitted + a submit_turn command, tagged source=test-slot-drive); it is
+// not a hand-rolled turn. A wake failure is logged + countered, not fatal: the
+// slot is up and the ready thread already announced it.
+func (s *appServer) driveTestSlot(ctx context.Context, req provisionTestSlotRequest, url string) {
+	resp, status, detail := s.enqueueTestDriveWakeTurn(ctx, req, url)
+	if status != 0 {
+		recordTestSlotInteractive("drive_wake_error")
+		slog.Warn("interactive test workflow drive wake failed",
+			"session_id", req.SessionID, "branch", req.Branch, "status", status, "detail", detail)
+		return
+	}
+	recordTestSlotInteractive("drive_wake")
+	slog.Info("interactive test workflow drive wake submitted",
+		"session_id", req.SessionID, "turn_id", turnIDFromEnqueueResponse(resp), "url", url)
+}
+
+// enqueueTestDriveWakeTurn submits the backend-owned wake turn for the drive
+// variant. Production reuses enqueueSDKTurn (the ScheduleWakeup path); tests
+// inject testDriveWakeSubmit to capture the submission without standing up the
+// full sessionBus/pod machinery enqueueSDKTurn requires.
+func (s *appServer) enqueueTestDriveWakeTurn(ctx context.Context, req provisionTestSlotRequest, url string) (map[string]any, int, string) {
+	if s.testDriveWakeSubmit != nil {
+		return s.testDriveWakeSubmit(ctx, req, url)
+	}
+	seed := req.SessionID + ":" + req.Branch + ":" + url
+	return s.enqueueSDKTurn(ctx, req.OwnerEmail, req.SessionID, sdkTurnRequest{
+		ClientNonce:  testDriveWakeTurnNonce(seed),
+		RequireNonce: true,
+		Prompt:       testDriveWakePrompt(req, url),
+		DisplayText:  testDriveWakeDisplayText(url),
+		Source:       string(conversation.TurnSubmittedSourceTestSlotDrive),
+		CreatedAt:    s.provisionNowTime().UTC(),
+		AuthorKind:   string(conversation.AuthorKindSystem),
+	})
+}
+
+// testDriveWakeTurnNonce derives a deterministic, turn-id-shaped client nonce
+// for a drive wake so a re-fire on the same (session, branch, url) collapses to
+// one turn under JetStream's command dedupe rather than waking twice.
+func testDriveWakeTurnNonce(seed string) string {
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		seed = randomHex(12)
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return "turn_testdrive_" + hex.EncodeToString(sum[:12])
+}
+
+// testDriveWakeDisplayText is the system-authored line the transcript renders
+// for the wake turn (the agent's prompt itself is the larger instruction).
+func testDriveWakeDisplayText(url string) string {
+	if strings.TrimSpace(url) != "" {
+		return "Test slot ready at " + url + " — validating your changes against it."
+	}
+	return "Test slot ready — validating your changes against it."
+}
+
+// testDriveWakePrompt is the instruction the woken agent runs: the slot already
+// exists at url (provisioned deterministically), so it only has to validate —
+// browse it, exercise the changed feature, and report findings. It does NOT ask
+// the agent to reserve or check out a slot; that already happened, zero-LLM.
+func testDriveWakePrompt(req provisionTestSlotRequest, url string) string {
+	repo := strings.Trim(req.RepoOwner+"/"+req.RepoName, "/")
+	var b strings.Builder
+	b.WriteString("A test environment for your changes is already live")
+	if url != "" {
+		b.WriteString(" at ")
+		b.WriteString(url)
+	}
+	b.WriteString(". It was provisioned for you — do NOT reserve, check out, or hot-swap a slot; one already exists and is running your branch")
+	if strings.TrimSpace(req.Branch) != "" {
+		b.WriteString(" (")
+		b.WriteString(req.Branch)
+		b.WriteString(")")
+	}
+	if repo != "" {
+		b.WriteString(" of ")
+		b.WriteString(repo)
+	}
+	b.WriteString(".\n\nValidate your changes against it now: invoke the /test-drive skill (it assumes the slot already exists and only validates), or do it directly — browse the running app")
+	if url != "" {
+		b.WriteString(" at ")
+		b.WriteString(url)
+	}
+	b.WriteString(", exercise the feature you changed end to end, and report concrete findings (what you checked, what worked, what didn't) with evidence. If something is broken, say so plainly.")
+	return b.String()
 }
 
 // emitTestProvisionRecord writes a display-only test_provision.updated event to

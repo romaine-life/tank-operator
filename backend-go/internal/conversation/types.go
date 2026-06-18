@@ -63,6 +63,12 @@ const (
 	TurnSubmittedSourceLaunchDispatch        TurnSubmittedSource = "launch-dispatch"
 	TurnSubmittedSourceBreakGlassApproval    TurnSubmittedSource = "break-glass-approval"
 	TurnSubmittedSourceTestSlotModelApproval TurnSubmittedSource = "test-slot-model-approval"
+	// TurnSubmittedSourceTestSlotDrive marks the backend-owned wake turn the
+	// interactive "Create test slot and test" (drive) variant submits after a
+	// successful, zero-LLM provision: the agent re-enters only here, to validate
+	// its changes against the now-running test slot. Provisioning itself stays
+	// zero-LLM; this source labels the post-ready hand-back to the agent.
+	TurnSubmittedSourceTestSlotDrive TurnSubmittedSource = "test-slot-drive"
 )
 
 type Visibility string
@@ -901,7 +907,8 @@ func validTurnSubmittedSource(source TurnSubmittedSource) bool {
 		TurnSubmittedSourceBackgroundTask,
 		TurnSubmittedSourceLaunchDispatch,
 		TurnSubmittedSourceBreakGlassApproval,
-		TurnSubmittedSourceTestSlotModelApproval:
+		TurnSubmittedSourceTestSlotModelApproval,
+		TurnSubmittedSourceTestSlotDrive:
 		return true
 	default:
 		return false

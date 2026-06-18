@@ -23,17 +23,23 @@ export interface StartTestWorkflowResult {
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 // startTestWorkflow triggers the deterministic test workflow for a session.
-// `options.repo` disambiguates a multi-repo session ("owner/name"). It resolves
-// with `ok: true` on the 202 accept, or `ok: false` plus the server-provided
-// reason on any error response so the caller can surface it.
+// `options.repo` disambiguates a multi-repo session ("owner/name"). `options.drive`
+// selects the "Create test slot and test" variant: the backend runs the same
+// zero-LLM provision and surfaces the same thread, then — only on a ready slot —
+// wakes the agent to validate the running slot. It resolves with `ok: true` on
+// the 202 accept, or `ok: false` plus the server-provided reason on any error
+// response so the caller can surface it.
 export async function startTestWorkflow(
   sessionId: string,
   authedFetch: FetchLike,
-  options: { repo?: string } = {},
+  options: { repo?: string; drive?: boolean } = {},
 ): Promise<StartTestWorkflowResult> {
-  const body: Record<string, string> = {};
+  const body: Record<string, string | boolean> = {};
   if (options.repo && options.repo.trim()) {
     body.repo = options.repo.trim();
+  }
+  if (options.drive) {
+    body.drive = true;
   }
   const res = await authedFetch(testWorkflowStartPath(sessionId), {
     method: "POST",
