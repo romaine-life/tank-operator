@@ -105,10 +105,13 @@ and [../README.md](../README.md) for how capability ledgers are used.
   because validate+wait can take minutes. On a `ready` verdict the gate's `SetTestState`
   marks the slot active + URL (the pill lights via the session-row SSE); on **any refusal**
   glimmung and test-state are left untouched and the reason is surfaced as a display-only
-  `ci_status.updated` record in the turns view (not only logged). The retired `/test` skill
-  and its `checkout_test_slot` / `deploy_image_to_test_slot` / `set_test_environment` tools
-  are intentionally left in place for a later slice; this slice only stops the UI button
-  from invoking the agent path.
+  `ci_status.updated` record in the turns view (not only logged). The interactive agent
+  provisioning path has since been retired: the `/test` skill was rewritten so it no longer
+  instructs manual slot checkout/deploy/pill steps (it now reflects that provisioning is
+  deterministic), and the three agent-facing MCP provisioning tools were removed from their
+  servers (the slot checkout/deploy wrappers in mcp-glimmung and the test-pill wrapper in
+  mcp-tank-operator). The underlying HTTP endpoints those wrappers called stay — the
+  deterministic gate drives them server-side.
 - **Durable source:** no new durable row — reuses the gate's transient in-memory
   `pgstore.CIWatch` validation and surfaces the outcome as a `ci_status.updated`
   session-event record. Repo disambiguation reads the durable `session_ci_watches` row.

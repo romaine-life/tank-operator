@@ -135,9 +135,14 @@ ArgoCD auto-syncs `k8s/` when changes hit `main`. Image is built and pushed to
 
 ## Glimmung Test-Slot Deploy
 
-Tank validation slots are updated with Glimmung's `deploy_image_to_test_slot`
-tool. The tool deploys the CI-built image for a pushed, verified git ref and
-polls the slot operation until it reaches `deployed` or `deploy_failed`.
+Tank validation slots are updated deterministically and server-side: Tank's Test
+button / `POST /api/sessions/{id}/test-workflow/start` endpoint validates branch
+readiness and then drives Glimmung's `/v1/test-slots/checkout` +
+`/v1/test-slots/deploy-image` HTTP APIs from the backend. The deploy step
+deploys the CI-built image for a pushed, verified git ref and polls the slot
+operation until it reaches `deployed` or `deploy_failed`. (The former
+agent-facing slot checkout/deploy MCP tools were retired — the deterministic
+gate replaces them for every project.)
 
 Project metadata for slot deployment lives under `test_slot_helm`; there is no
 per-artifact build contract. PR CI is the image-build gate, and slot validation
