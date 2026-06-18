@@ -67,6 +67,7 @@ import {
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
+import { OrchestrationsDashboard } from "./OrchestrationsDashboard";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -16536,6 +16537,7 @@ function RunSettingsPanel({
     showAdminTab &&
     (adminView === "avatars" ||
       adminView === "break-glass" ||
+      adminView === "orchestrations" ||
       adminView === "report" ||
       adminView === "hidden-transcripts" ||
       adminView === "observability")
@@ -16629,6 +16631,25 @@ function RunSettingsPanel({
                 initialSessionId={session?.id}
                 sessionScope={adminControls.reportScope}
               />
+            </section>
+          </>
+        ) : adminView === "orchestrations" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Orchestrations</h2>
+              </div>
+            </section>
+            <section className="run-settings-section">
+              <OrchestrationsDashboard />
             </section>
           </>
         ) : adminView === "report" ? (
@@ -16793,16 +16814,16 @@ function RunSettingsPanel({
               <button
                 type="button"
                 className="run-settings-link"
-                onClick={() => setSettingsRoute("admin", "break-glass")}
+                onClick={() => setSettingsRoute("admin", "orchestrations")}
               >
                 <span className="run-settings-link-label">
-                  <ShieldAlertIcon
+                  <GitPullRequestIcon
                     className="run-settings-link-icon"
                     aria-hidden="true"
                   />
-                  <span>Break glass</span>
+                  <span>Orchestrations</span>
                 </span>
-                <span className="run-settings-scope-value">Review</span>
+                <span className="run-settings-scope-value">Run</span>
               </button>
               <button
                 type="button"

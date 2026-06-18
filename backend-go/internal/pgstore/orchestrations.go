@@ -483,6 +483,31 @@ func (s *OrchestrationStore) Get(ctx context.Context, orchestrationID string) (O
 	return out, err
 }
 
+// ListByOwner returns all runs owned by an actor, newest first.
+func (s *OrchestrationStore) ListByOwner(ctx context.Context, ownerEmail string) ([]Orchestration, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("orchestration store unavailable")
+	}
+	const q = `SELECT ` + orchestrationColumns + `
+		FROM orchestrations
+		WHERE owner_email = $1
+		ORDER BY updated_at DESC, created_at DESC`
+	rows, err := s.pool.Query(ctx, q, strings.ToLower(strings.TrimSpace(ownerEmail)))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Orchestration
+	for rows.Next() {
+		orch, err := scanOrchestration(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, orch)
+	}
+	return out, rows.Err()
+}
+
 // GetWithPhases returns a run plus all of its phases (with their deps and
 // statuses) ordered by ordinal — the canonical read for an orchestrator that
 // needs the full DAG and current runtime state.
