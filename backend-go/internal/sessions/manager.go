@@ -166,7 +166,7 @@ func resolveIP(host string) string {
 // session-image override when one is set for this orchestrator's scope. This is
 // the test-slot "point the slot at a branch session image" mechanism
 // (docs/testing.md): newly-created sessions boot the override image the same way
-// production boots its chart-pinned image — no runtime overlay, no fidelity gap.
+// production boots its chart-pinned image — no runtime overlay, no accuracy gap.
 //
 // It is a deliberate no-op when no resolver is wired (production never wires
 // one) or for the production scope, so prod always stamps the configured
@@ -235,6 +235,9 @@ type CreateOptions struct {
 	// the registry row and threads them into the pod manifest for the
 	// repo-cloner init container.
 	Repos []string
+	// RepoBases optionally overrides the PR base branch per repo slug. It is
+	// threaded to repo-cloner for orchestration integration-target phases.
+	RepoBases map[string]string
 	// Name is the optional display title supplied by the workspace title
 	// bar before the create request is sent. It is normalized once here
 	// and becomes part of the initial durable sessions row.
@@ -273,6 +276,10 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	repos := opts.Repos
 	if repos == nil {
 		repos = []string{}
+	}
+	repoBases := opts.RepoBases
+	if repoBases == nil {
+		repoBases = map[string]string{}
 	}
 	capabilities := opts.Capabilities
 	if capabilities == nil {
@@ -331,6 +338,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
+	manifestOpts.RepoBases = repoBases
 	manifestOpts.Name = &storedName
 	manifestOpts.Capabilities = capabilities
 	manifestOpts.Model = model

@@ -51,6 +51,11 @@ import (
 // struct for tests + local dev.
 const DefaultMCPGitHubURL = "http://mcp-github.mcp-github.svc:80"
 
+// DefaultGitHubAPIURL is GitHub's public REST API root. Tests can override it
+// through Options so the CI-watch reducer can exercise live-state reads without
+// external network access.
+const DefaultGitHubAPIURL = "https://api.github.com"
+
 // Default exchange URL. The orchestrator deployment mounts the
 // audience-pinned projected SA token at
 // /var/run/secrets/auth.romaine.life/token.
@@ -74,12 +79,21 @@ type Repo struct {
 	Private  bool   `json:"private"`
 }
 
+// PullRequest is the narrow projection returned by mcp-github's
+// create_pull_request tool.
+type PullRequest struct {
+	Number  int
+	HTMLURL string
+	State   string
+}
+
 // Options configures a Client. Zero-value fields use the
 // production-default constants above; tests can override every URL.
 type Options struct {
 	HTTPClient   *http.Client
 	ExchangeURL  string
 	MCPGitHubURL string
+	GitHubAPIURL string
 	SATokenPath  string
 	// ReadToken is the strategy for reading the SA token from disk
 	// each call. Overridable for tests; production passes nil and the
@@ -98,6 +112,7 @@ type Client struct {
 	http      *http.Client
 	exchange  string
 	mcpURL    string
+	githubAPI string
 	saPath    string
 	readToken func(path string) (string, error)
 	now       func() time.Time
@@ -119,6 +134,7 @@ func NewClient(opts Options) *Client {
 		http:      opts.HTTPClient,
 		exchange:  opts.ExchangeURL,
 		mcpURL:    opts.MCPGitHubURL,
+		githubAPI: opts.GitHubAPIURL,
 		saPath:    opts.SATokenPath,
 		readToken: opts.ReadToken,
 		now:       opts.Now,
@@ -135,6 +151,9 @@ func NewClient(opts Options) *Client {
 	}
 	if c.mcpURL == "" {
 		c.mcpURL = DefaultMCPGitHubURL
+	}
+	if c.githubAPI == "" {
+		c.githubAPI = DefaultGitHubAPIURL
 	}
 	if c.saPath == "" {
 		c.saPath = DefaultSATokenPath
@@ -170,19 +189,249 @@ func (c *Client) ListRepos(ctx context.Context, userEmail string) ([]Repo, error
 	return c.callListInstallationRepos(ctx, token)
 }
 
-// MintActorToken exchanges the orchestrator's projected SA token for a fresh
-// auth.romaine.life role=service JWT whose actor_email is the supplied email,
-// returning the token and its expiry. Unlike ListRepos it bypasses the
-// per-email cache so the caller always receives a full-TTL token: the admin
-// break-glass token surface hands this JWT to a stuck agent, so a near-expiry
-// cached entry would be useless. The token shape matches what a session pod's
-// mcp-auth-proxy obtains on its own behalf.
-func (c *Client) MintActorToken(ctx context.Context, actorEmail string) (string, time.Time, error) {
-	actorEmail = strings.ToLower(strings.TrimSpace(actorEmail))
-	if actorEmail == "" {
-		return "", time.Time{}, errors.New("mcpgithub: actor email is empty")
+// MarkPRReady converts a draft PR to ready-for-review on-behalf-of userEmail.
+// GitHub rejects merging a draft, so the human-merge path marks ready first.
+func (c *Client) MarkPRReady(ctx context.Context, userEmail, owner, name string, number int) error {
+	if c == nil {
+		return errors.New("mcpgithub: client unavailable")
 	}
-	return c.mintToken(ctx, actorEmail)
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return errors.New("mcpgithub: user email is empty")
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	_, err = c.callTool(ctx, token, "mark_pull_request_ready_for_review", map[string]any{
+		"owner": owner, "name": name, "number": number,
+	})
+	return err
+}
+
+// MergePR merges a PR via mcp-github's merge_pull_request on-behalf-of
+// userEmail. GitHub itself enforces the green/mergeable gate (an unmergeable PR
+// is rejected), so this is the authoritative merge. Returns the merge commit
+// SHA when available.
+func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod string) (string, error) {
+	return c.MergePRWithHead(ctx, userEmail, owner, name, number, mergeMethod, "")
+}
+
+// MergePRWithHead is MergePR plus mcp-github's expected_head_sha guard. The
+// tool reads the live PR head and refuses to merge if it moved since the CI
+// watch was registered.
+func (c *Client) MergePRWithHead(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, expectedHeadSHA string) (string, error) {
+	if c == nil {
+		return "", errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return "", errors.New("mcpgithub: user email is empty")
+	}
+	if strings.TrimSpace(mergeMethod) == "" {
+		mergeMethod = "squash"
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return "", fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	args := map[string]any{
+		"owner": owner, "name": name, "number": number, "merge_method": mergeMethod,
+	}
+	if expectedHeadSHA = strings.TrimSpace(expectedHeadSHA); expectedHeadSHA != "" {
+		args["expected_head_sha"] = expectedHeadSHA
+	}
+	res, err := c.callTool(ctx, token, "merge_pull_request", args)
+	if err != nil {
+		return "", err
+	}
+	return mergeCommitFromResult(res), nil
+}
+
+// CreateBranch creates a branch in a repository via mcp-github's create_branch
+// tool, using base as the source branch or ref.
+func (c *Client) CreateBranch(ctx context.Context, userEmail, owner, name, branch, base string) error {
+	if c == nil {
+		return errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return errors.New("mcpgithub: user email is empty")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("mcpgithub: branch is empty")
+	}
+	if strings.TrimSpace(base) == "" {
+		base = "main"
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	_, err = c.callTool(ctx, token, "create_branch", map[string]any{
+		"owner": owner, "name": name, "branch": branch, "base": base,
+	})
+	return err
+}
+
+// CreatePullRequest opens a PR through mcp-github's audited tool surface.
+func (c *Client) CreatePullRequest(ctx context.Context, userEmail, owner, name, title, head, base, body string, draft bool) (PullRequest, error) {
+	if c == nil {
+		return PullRequest{}, errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return PullRequest{}, errors.New("mcpgithub: user email is empty")
+	}
+	args := map[string]any{
+		"owner": owner,
+		"name":  name,
+		"title": title,
+		"head":  head,
+		"base":  base,
+		"draft": draft,
+	}
+	if strings.TrimSpace(body) != "" {
+		args["body"] = body
+	}
+	token, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	res, err := c.callTool(ctx, token, "create_pull_request", args)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	return pullRequestFromResult(res), nil
+}
+
+// callTool issues a single MCP JSON-RPC tools/call and returns the decoded
+// result object, surfacing JSON-RPC and tool-level (isError) errors. Tolerates
+// bare-JSON or SSE framing like callListInstallationRepos.
+func (c *Client) callTool(ctx context.Context, token, name string, args map[string]any) (map[string]any, error) {
+	rpc := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  map[string]any{"name": name, "arguments": args},
+	}
+	body, err := json.Marshal(rpc)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.mcpURL+"/", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mcp-github returned %d for %s", resp.StatusCode, name)
+	}
+	return parseToolResult(resp.Body)
+}
+
+func parseToolResult(reader interface {
+	Read(p []byte) (int, error)
+}) (map[string]any, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 1<<16), 1<<22)
+	var rpcRaw []byte
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] == '{' {
+			rpcRaw = append([]byte{}, line...)
+			break
+		}
+		if bytes.HasPrefix(line, []byte("data:")) {
+			data := bytes.TrimSpace(line[len("data:"):])
+			if len(data) > 0 && data[0] == '{' {
+				rpcRaw = append([]byte{}, data...)
+				break
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(rpcRaw) == 0 {
+		return nil, errors.New("mcp-github: empty response")
+	}
+	var rpc struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rpcRaw, &rpc); err != nil {
+		return nil, err
+	}
+	if rpc.Error != nil {
+		return nil, fmt.Errorf("mcp-github: %s", rpc.Error.Message)
+	}
+	if rpc.Result == nil {
+		return nil, errors.New("mcp-github: missing result")
+	}
+	if isErr, _ := rpc.Result["isError"].(bool); isErr {
+		return nil, fmt.Errorf("mcp-github tool error: %s", toolResultText(rpc.Result))
+	}
+	return rpc.Result, nil
+}
+
+func toolResultText(result map[string]any) string {
+	content, _ := result["content"].([]any)
+	for _, item := range content {
+		if m, ok := item.(map[string]any); ok {
+			if text, _ := m["text"].(string); text != "" {
+				return text
+			}
+		}
+	}
+	return "unknown tool error"
+}
+
+func mergeCommitFromResult(result map[string]any) string {
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if sha, _ := sc["sha"].(string); sha != "" {
+		return sha
+	}
+	if sha, _ := sc["merge_commit_sha"].(string); sha != "" {
+		return sha
+	}
+	return ""
+}
+
+func pullRequestFromResult(result map[string]any) PullRequest {
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		return PullRequest{}
+	}
+	var out PullRequest
+	switch n := sc["number"].(type) {
+	case float64:
+		out.Number = int(n)
+	case int:
+		out.Number = n
+	}
+	out.HTMLURL, _ = sc["html_url"].(string)
+	if out.HTMLURL == "" {
+		out.HTMLURL, _ = sc["url"].(string)
+	}
+	out.State, _ = sc["state"].(string)
+	return out
 }
 
 // tokenFor returns a cached or freshly-minted service JWT for the

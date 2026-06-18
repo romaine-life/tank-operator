@@ -24,6 +24,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
 	"github.com/romaine-life/tank-operator/backend-go/internal/avataruploads"
+	"github.com/romaine-life/tank-operator/backend-go/internal/azurepersonal"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversationreadstate"
 	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
@@ -61,6 +62,31 @@ func buildMCPGitHubClient() *mcpgithub.Client {
 		ExchangeURL:  envDefault("MCP_GITHUB_EXCHANGE_URL", mcpgithub.DefaultExchangeURL),
 		MCPGitHubURL: envDefault("MCP_GITHUB_URL", mcpgithub.DefaultMCPGitHubURL),
 		SATokenPath:  saPath,
+	})
+}
+
+// buildAzurePersonalClient wires the azure-personal internal client used to fire
+// /internal/grant-activated when an azure break-glass grant goes active. Returns
+// a true-nil AzurePersonalNotifier (and logs) when the auth.romaine.life-audience
+// projected SA token isn't mounted — the trigger then no-ops and the agent still
+// gets the approval turn. Returning the interface type (not *Client) avoids Go's
+// typed-nil gotcha so s.azurePersonal == nil is honest. Endpoint overrides
+// (AZURE_PERSONAL_INTERNAL_URL, AZURE_PERSONAL_EXCHANGE_URL,
+// AZURE_PERSONAL_SA_TOKEN_PATH) let tests point at fakes.
+func buildAzurePersonalClient() AzurePersonalNotifier {
+	saPath := strings.TrimSpace(os.Getenv("AZURE_PERSONAL_SA_TOKEN_PATH"))
+	if saPath == "" {
+		saPath = azurepersonal.DefaultSATokenPath
+	}
+	if _, err := os.Stat(saPath); err != nil {
+		slog.Warn("azure-personal grant-activated trigger disabled (auth-romaine projected SA token volume not mounted)",
+			"path", saPath, "error", err)
+		return nil
+	}
+	return azurepersonal.NewClient(azurepersonal.Options{
+		BaseURL:     envDefault("AZURE_PERSONAL_INTERNAL_URL", azurepersonal.DefaultBaseURL),
+		ExchangeURL: envDefault("AZURE_PERSONAL_EXCHANGE_URL", azurepersonal.DefaultExchangeURL),
+		SATokenPath: saPath,
 	})
 }
 
@@ -246,12 +272,19 @@ func main() {
 	var backgroundTaskWakeStore *pgstore.BackgroundTaskWakeStore
 	var controlActionStore *pgstore.ControlActionStore
 	var pendingLaunchStore *pgstore.PendingLaunchStore
+	var ciWatchStore *pgstore.CIWatchStore
+	var orchestrationStore *pgstore.OrchestrationStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
 		backgroundTaskWakeStore = pgstore.NewBackgroundTaskWakeStore(pgPool, sessionScope)
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
+		ciWatchStore = pgstore.NewCIWatchStore(pgPool, sessionScope)
+		// The orchestration store carries no session scope — a run is owned by an
+		// email and targets a repo, not bound to a session_scope.
+		orchestrationStore = pgstore.NewOrchestrationStore(pgPool)
 	}
+	githubWebhookSecret := strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET"))
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
 	// NATS session bus (per-email subject), replacing the prior
@@ -615,8 +648,11 @@ func main() {
 		turnActivity:             newTurnActivityCache(),
 		mcpGitHub:                buildMCPGitHubClient(),
 		glimmung:                 buildGlimmungClient(),
+		azurePersonal:            buildAzurePersonalClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
+		ciWatches:                ciWatchStore,
+		githubWebhookSecret:      githubWebhookSecret,
 		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
 		deploymentVersions:       deploymentVersionStore,
@@ -632,6 +668,16 @@ func main() {
 	// non-nil so `s.pendingLaunch == nil` stays true in stub mode.
 	if pendingLaunchStore != nil {
 		srv.pendingLaunch = pendingLaunchStore
+	}
+	// The deterministic orchestration advance engine: bound to the durable
+	// store and the real spoke spawner (mgr.Create + enqueueSDKTurn). The
+	// webhook + CI-watch register handlers call it on the hot path; the
+	// reconcile loop below is the dropped-webhook backstop.
+	if orchestrationStore != nil {
+		srv.orchestrationRuns = orchestrationStore
+		srv.orchestrations = newOrchestrationEngine(orchestrationStore, srv.spawnPhaseSpoke)
+		srv.orchestrations.reviewReady = srv.emitOrchestrationReviewReadyRecord
+		srv.orchestrations.phaseMerged = srv.handleOrchestrationPhaseMerged
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {
@@ -694,6 +740,29 @@ func main() {
 		go func() {
 			if err := runSessionRowReconcileLoop(workerCtx, srv, sessionRegStore, rowWriter, sessionRowReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("session row reconcile loop stopped", "error", err)
+			}
+		}()
+	}
+	// Orchestration advance backstop: re-drive every non-terminal run so a
+	// dropped merged-PR webhook degrades to a delay, never a hung run, and a
+	// freshly-approved run's root phases get dispatched. Per-replica idempotent
+	// (every effect is a guarded write). Needs the engine, which needs both the
+	// durable store and the spoke spawner — nil in stub mode.
+	if srv.orchestrations != nil {
+		go func() {
+			if err := runOrchestrationReconcileLoop(workerCtx, srv.orchestrations, orchestrationReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("orchestration reconcile loop stopped", "error", err)
+			}
+		}()
+	}
+	// Durable stranded-watch backstop: re-drive 'watching' CI watches that have
+	// seen no event past the staleness window, so a dropped webhook (or an
+	// in-memory mergeability retry lost to a restart) degrades to a delay, not a
+	// hung watch that keeps its session reaper-protected and asleep.
+	if srv.ciWatches != nil && srv.mcpGitHub != nil {
+		go func() {
+			if err := runCIWatchReconcileLoop(workerCtx, srv, ciWatchReconcileInterval, ciWatchStaleAfter); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("ci watch reconcile loop stopped", "error", err)
 			}
 		}()
 	}

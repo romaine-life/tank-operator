@@ -12,6 +12,7 @@ export type SessionRouteTab =
   | "chat"
   | "static"
   | "session-data"
+  | "queue-status"
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
@@ -101,8 +102,8 @@ function parseAdminView(value: string | undefined): AdminView {
     case "controls":
       return "controls";
     case "avatars":
-    case "report":
     case "break-glass":
+    case "report":
     case "hidden-transcripts":
     case "observability":
     case "version":
@@ -237,6 +238,22 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
     return {
       sessionId: parts[1],
       tab: "session-data",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "queue-status" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "queue-status",
       turnNumber: null,
       turnSegmentPresent: false,
       pageNumber: null,
@@ -391,6 +408,8 @@ export function buildSessionRouteUrl(
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {
     suffix = "/session-data";
+  } else if (tab === "queue-status") {
+    suffix = "/queue-status";
   } else if (tab === "pull-requests") {
     suffix = "/pull-requests";
   } else if (tab === "break-glass" && breakGlassRequestId) {

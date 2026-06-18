@@ -77,12 +77,8 @@ jobs:
           file: api-proxy/Dockerfile
           push: true
           tags: romainecr.azurecr.io/api-proxy:${{ steps.fingerprint.outputs.proof_tag }}
-          cache-from: |
-            type=registry,ref=romainecr.azurecr.io/api-proxy-build-cache:api-proxy
-            type=gha,scope=api-proxy
-          cache-to: |
-            type=registry,ref=romainecr.azurecr.io/api-proxy-build-cache:api-proxy,mode=max
-            type=gha,mode=max,scope=api-proxy
+          cache-from: type=registry,ref=romainecr.azurecr.io/api-proxy-build-cache:api-proxy
+          cache-to: type=registry,ref=romainecr.azurecr.io/api-proxy-build-cache:api-proxy,mode=max
 
       - name: Bump api-proxy chart tag
         run: |

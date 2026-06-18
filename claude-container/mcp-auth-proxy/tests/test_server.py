@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -33,7 +34,7 @@ from mcp_auth_proxy.server import (
     _first_pr_from_response,
     _filter_github_write_tools,
     _github_tool_block_response,
-    _prepare_glimmung_hot_swap_call,
+    _is_read_only_clone_token_request,
     _handle_tank_break_glass_tool,
     _handle_tank_azure_break_glass_tool,
     _handle_query_tank_db_tool,
@@ -43,6 +44,7 @@ from mcp_auth_proxy.server import (
     _handle_tank_update_pr_body_tool,
     _handle_tank_pr_lane_tool,
     _handle_break_glass_mcp,
+    _handle_break_glass_mint_token,
     _json_objects_from_mcp_body,
     _make_handler,
     _mint_github_installation_token,
@@ -50,6 +52,7 @@ from mcp_auth_proxy.server import (
     _post_tank_control_action,
     _push_head_with_token,
     _repo_slug_from_remote,
+    _resolve_ci_state,
     _watch_published_commit,
 )
 
@@ -145,6 +148,82 @@ class _FakeRawHTTPByMethod:
     def get(self, url: str, *, headers: dict):
         self.calls.append({"method": "GET", "url": url, "headers": headers})
         return self.get_response
+
+
+class _GitHubAPIFake:
+    def __init__(
+        self,
+        *,
+        head_sha: str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        prior_sha: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        changed_paths: list[str] | None = None,
+        workflow_text: str | None = None,
+        workflow_path: str = ".github/workflows/go-backend.yml",
+        run_event: str = "pull_request",
+        prior_conclusion: str = "success",
+        head_runs: list[dict] | None = None,
+    ) -> None:
+        self.head_sha = head_sha
+        self.prior_sha = prior_sha
+        self.changed_paths = changed_paths or []
+        self.workflow_text = workflow_text if workflow_text is not None else (
+            "name: Go backend\n"
+            "on:\n"
+            "  pull_request:\n"
+            "    paths:\n"
+            "      - 'backend-go/**'\n"
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+        )
+        self.workflow_path = workflow_path
+        self.run_event = run_event
+        self.prior_conclusion = prior_conclusion
+        self.head_runs = head_runs or []
+        self.requests: list[dict] = []
+
+    def request(self, method: str, url: str, *, headers: dict, json=None, **kwargs):
+        self.requests.append({"method": method, "url": url, "headers": headers, "json": json, "kwargs": kwargs})
+        path = url.split("https://api.github.com", 1)[-1]
+        if path.endswith(f"/commits/{self.head_sha}/check-runs"):
+            return _FakeRawResponse(200, json_module_dumps({"check_runs": self.head_runs}))
+        if path.endswith(f"/commits/{self.prior_sha}/check-runs"):
+            return _FakeRawResponse(
+                200,
+                json_module_dumps({
+                    "check_runs": [
+                        {
+                            "name": "test",
+                            "status": "completed",
+                            "conclusion": self.prior_conclusion,
+                            "started_at": "2026-06-16T05:18:05Z",
+                            "id": 81586055969,
+                            "details_url": "https://github.com/romaine-life/tank-operator/actions/runs/27595901622/job/81586055969",
+                        }
+                    ]
+                }),
+            )
+        if path.endswith(f"/commits/{self.head_sha}/status") or path.endswith(f"/commits/{self.prior_sha}/status"):
+            return _FakeRawResponse(200, json_module_dumps({"state": "pending", "statuses": []}))
+        if path.endswith("/pulls/1245/commits?per_page=100"):
+            return _FakeRawResponse(
+                200,
+                json_module_dumps([
+                    {"sha": self.prior_sha},
+                    {"sha": self.head_sha},
+                ]),
+            )
+        if path.endswith("/actions/runs/27595901622"):
+            return _FakeRawResponse(200, json_module_dumps({"path": self.workflow_path, "name": "Go backend", "event": self.run_event}))
+        if f"/contents/{self.workflow_path}" in path:
+            encoded = base64.b64encode(self.workflow_text.encode("utf-8")).decode("ascii")
+            return _FakeRawResponse(200, json_module_dumps({"content": encoded}))
+        if f"/compare/{self.prior_sha}...{self.head_sha}" in path:
+            return _FakeRawResponse(
+                200,
+                json_module_dumps({"files": [{"filename": item} for item in self.changed_paths]}),
+            )
+        return _FakeRawResponse(404, b"{}")
 
 
 class _HotSwapHTTP:
@@ -412,14 +491,107 @@ def test_mint_github_installation_token_full_requests_full_scope() -> None:
         )
     )
 
-    # Break-glass mint_full_git_token must ask mcp-github for the App's full
-    # permission set (full=True), not the contents-only clone scope.
+    # Governed GitHub API operations still use the App's full permission set.
     assert token == "full-token"
     assert http.calls[0]["json"]["params"]["arguments"] == {
         "repos": ["romaine-life/tank-operator"],
         "write": True,
         "full": True,
     }
+
+
+def test_break_glass_mint_token_defaults_to_contents_write_scope(monkeypatch) -> None:
+    minted: list[dict] = []
+
+    async def fake_active(_http, _service_token, repo_slug):
+        assert repo_slug == "romaine-life/tank-operator"
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token"],
+            "branch_scope": {"kind": "unlimited"},
+            "expires_at": "2026-06-12T23:00:00Z",
+        }
+
+    async def fake_mint(_http, _service_token, repo_slug, *, workflows=False, full=False):
+        minted.append({"repo": repo_slug, "workflows": workflows, "full": full})
+        return "write-token"
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
+
+    response = asyncio.run(
+        _handle_break_glass_mint_token(
+            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
+            _StaticTokenProvider("service-token"),
+            88,
+            {"repo": "romaine-life/tank-operator"},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["result"]["structuredContent"]["token"] == "write-token"
+    assert minted == [{"repo": "romaine-life/tank-operator", "workflows": False, "full": False}]
+
+
+def test_break_glass_mint_token_rejects_workflows_without_operation(monkeypatch) -> None:
+    async def fake_active(_http, _service_token, _repo_slug):
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token"],
+            "branch_scope": {"kind": "unlimited"},
+        }
+
+    async def fake_mint(*_args, **_kwargs):
+        raise AssertionError("workflow token mint should not run without workflow grant")
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
+
+    response = asyncio.run(
+        _handle_break_glass_mint_token(
+            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
+            _StaticTokenProvider("service-token"),
+            89,
+            {"repo": "romaine-life/tank-operator", "workflows": True},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["error"]["code"] == -32020
+    assert "workflow-file writes" in payload["error"]["message"]
+
+
+def test_break_glass_mint_token_allows_workflows_with_operation(monkeypatch) -> None:
+    minted: list[dict] = []
+
+    async def fake_active(_http, _service_token, _repo_slug):
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token", "workflows"],
+            "branch_scope": {"kind": "unlimited"},
+            "expires_at": "2026-06-12T23:00:00Z",
+        }
+
+    async def fake_mint(_http, _service_token, repo_slug, *, workflows=False, full=False):
+        minted.append({"repo": repo_slug, "workflows": workflows, "full": full})
+        return "workflow-token"
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
+
+    response = asyncio.run(
+        _handle_break_glass_mint_token(
+            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
+            _StaticTokenProvider("service-token"),
+            90,
+            {"repo": "romaine-life/tank-operator", "workflows": True},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["result"]["structuredContent"]["token"] == "workflow-token"
+    assert payload["result"]["structuredContent"]["workflows"] is True
+    assert minted == [{"repo": "romaine-life/tank-operator", "workflows": True, "full": False}]
 
 
 def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path) -> None:
@@ -438,59 +610,6 @@ def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path
     assert args[3] == "HEAD:refs/heads/tank/session/1/repo"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert env["GITHUB_TOKEN"] == "token"
-
-
-def test_glimmung_hot_swap_gate_rewrites_git_ref_to_verified_sha(monkeypatch, tmp_path) -> None:
-    workspace = tmp_path
-    repo = workspace / "tank-operator"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
-    (repo / "README.md").write_text("test\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
-    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    body = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 12,
-        "method": "tools/call",
-        "params": {
-            "name": "apply_test_slot_hot_swap",
-            "arguments": {
-                "project": "tank-operator",
-                "slot_index": 2,
-                "artifact_kind": "codex_runner",
-                "validation_target": "existing_session",
-                "git_ref": "tank/session/95/tank-operator",
-                "repo_path": str(repo),
-            },
-        },
-    }).encode("utf-8")
-
-    prepared = asyncio.run(
-        _prepare_glimmung_hot_swap_call(
-            _HotSwapHTTP(sha),
-            _StaticTokenProvider("service-token"),
-            12,
-            body,
-            json.loads(body)["params"]["arguments"],
-        )
-    )
-
-    assert not hasattr(prepared, "text")
-    forwarded_body, verification = prepared
-    forwarded = json.loads(forwarded_body)
-    forwarded_args = forwarded["params"]["arguments"]
-    assert forwarded_args["git_ref"] == sha
-    assert forwarded_args["project"] == "tank-operator"
-    assert "repo_path" not in forwarded_args
-    assert verification["sha"] == sha
 
 
 def test_tank_merge_tool_merges_verified_session_branch(monkeypatch, tmp_path) -> None:
@@ -764,6 +883,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert names == [
         "read_transcript",
         "publish_current_head",
+        "watch_current_session_pr",
         "request_pr_lane",
         "create_pr_lane",
         "merge_current_session_pr",
@@ -773,58 +893,31 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     ]
     publish = augmented["result"]["tools"][1]
     assert publish["inputSchema"]["properties"]["repo_path"]["type"] == "string"
-    pr_lane = augmented["result"]["tools"][2]
+    watch = augmented["result"]["tools"][2]
+    assert watch["inputSchema"]["properties"]["pr_number"]["type"] == "integer"
+    pr_lane = augmented["result"]["tools"][3]
     assert pr_lane["inputSchema"]["required"] == ["repo_scope", "reason"]
     assert "repo_scope" in pr_lane["inputSchema"]["properties"]
     assert "branch_scope" in pr_lane["inputSchema"]["properties"]
     assert "lane_names" not in pr_lane["inputSchema"]["properties"]
     assert "requested_count" not in pr_lane["inputSchema"]["properties"]
     assert "pull request" in pr_lane["description"]
-    create_lane = augmented["result"]["tools"][3]
+    create_lane = augmented["result"]["tools"][4]
     assert create_lane["inputSchema"]["required"] == ["request_event_id"]
-    merge = augmented["result"]["tools"][4]
+    merge = augmented["result"]["tools"][5]
     assert "pr_number" in merge["inputSchema"]["properties"]
     assert "session branch" in merge["description"]
-    rename = augmented["result"]["tools"][5]
+    rename = augmented["result"]["tools"][6]
     assert rename["inputSchema"]["required"] == ["title"]
-    update_body = augmented["result"]["tools"][6]
+    update_body = augmented["result"]["tools"][7]
     assert update_body["inputSchema"]["required"] == ["body"]
     assert "body" in update_body["inputSchema"]["properties"]
     assert "Feature Contracts" in update_body["description"]
-    break_glass = augmented["result"]["tools"][7]
+    break_glass = augmented["result"]["tools"][8]
     assert "approval URL" in break_glass["description"]
     assert break_glass["inputSchema"]["required"] == ["repo_scope", "branch_scope", "reason"]
     assert "token" not in break_glass["inputSchema"]["properties"]
-
-
-def test_hot_swap_tool_schema_gets_repo_path_for_tank_gate() -> None:
-    raw = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {
-            "tools": [
-                {
-                    "name": "apply_test_slot_hot_swap",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "project": {"type": "string"},
-                            "git_ref": {"type": "string"},
-                        },
-                        "additionalProperties": False,
-                    },
-                }
-            ]
-        },
-    }).encode("utf-8")
-
-    augmented = json.loads(_append_tank_publish_tool(raw))
-
-    hot_swap = augmented["result"]["tools"][0]
-    properties = hot_swap["inputSchema"]["properties"]
-    assert properties["repo"]["type"] == "string"
-    assert properties["repo_path"]["type"] == "string"
-    assert hot_swap["inputSchema"]["additionalProperties"] is False
+    assert break_glass["inputSchema"]["properties"]["workflows"]["type"] == "boolean"
 
 
 def test_break_glass_approval_url_carries_request_context() -> None:
@@ -975,6 +1068,8 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     assert recorded["payload"]["request_event_id"] == recorded["event_id"]
     assert recorded["payload"]["repo_scope"] == {"kind": "current_repo", "repo": "romaine-life/tank-operator"}
     assert recorded["payload"]["branch_scope"] == {"kind": "unlimited"}
+    assert recorded["payload"]["operations"] == ["mint_full_git_token", "push_current_head"]
+    assert recorded["payload"]["workflows"] is False
     parsed_approval = urlparse(structured["approval_url"])
     approval_query = parse_qs(parsed_approval.query)
     assert parsed_approval.path.startswith("/sessions/95/break-glass/")
@@ -982,6 +1077,37 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     assert "branch_scope" not in approval_query
     assert "reason" not in approval_query
     assert recorded_call["headers"]["Authorization"] == "Bearer service-token"
+
+
+def test_tank_break_glass_tool_records_workflows_operation(monkeypatch) -> None:
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b'{"active":false}'),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            9,
+            {
+                "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
+                "branch_scope": {"kind": "unlimited"},
+                "reason": "need workflow repair",
+                "workflows": True,
+            },
+        )
+    )
+
+    payload = json.loads(response.text)
+    structured = payload["result"]["structuredContent"]
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
+    recorded = recorded_call["json"]
+    assert structured["workflows"] is True
+    assert structured["operations"] == ["mint_full_git_token", "push_current_head", "workflows"]
+    assert recorded["payload"]["workflows"] is True
+    assert recorded["payload"]["operations"] == ["mint_full_git_token", "push_current_head", "workflows"]
 
 
 def test_azure_break_glass_approval_url_carries_intent_without_repo() -> None:
@@ -1056,16 +1182,13 @@ def test_handle_query_tank_db_tool_runs_read_query(monkeypatch) -> None:
 
 
 def test_tank_azure_break_glass_tool_records_request_without_granting(monkeypatch) -> None:
-    # RESTRICTED session: GET (grant lookup) returns no active grant; POST
-    # (control-action) is the recorded request; the tool returns an approval URL
-    # and must not grant access or reveal a token. (Non-restricted sessions
-    # self-approve instead — see the auto-grant test below.)
+    # GET (grant lookup) returns no active grant; POST (control-action) is the
+    # recorded request. The tool must not grant access or reveal a token.
     http = _FakeRawHTTPByMethod(
         get_response=_FakeRawResponse(200, b'{"active":false}'),
         post_response=_FakeRawResponse(201, b'{"ok":true}'),
     )
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", True)
 
     response = asyncio.run(
         _handle_tank_azure_break_glass_tool(
@@ -1120,40 +1243,6 @@ def test_tank_azure_break_glass_tool_reports_active_grant(monkeypatch) -> None:
     assert structured["privileged_tools_visible"] is True
     assert structured["expires_at"] == "2999-01-01T00:00:00Z"
     assert "activation" not in structured
-
-
-def test_tank_azure_break_glass_tool_auto_grants_for_non_restricted(monkeypatch) -> None:
-    # NON-restricted (trusted) session: no human approval. With no active grant,
-    # the tool self-approves by POSTing the azure grant endpoint; the returned
-    # grant flips status to approved and the server-side B-auto activation turn
-    # surfaces the tools. Restricted sessions never take this path.
-    http = _FakeRawHTTPByMethod(
-        get_response=_FakeRawResponse(200, b'{"active":false}'),
-        post_response=_FakeRawResponse(
-            201, b'{"active":true,"event_id":"azg-auto","expires_at":"2999-01-01T00:00:00Z"}'
-        ),
-    )
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    monkeypatch.setattr("mcp_auth_proxy.server.RESTRICTED_GIT_ENABLED", False)
-
-    response = asyncio.run(
-        _handle_tank_azure_break_glass_tool(
-            http,
-            _StaticTokenProvider("service-token"),
-            9,
-            {"reason": "inspect ledger"},
-        )
-    )
-
-    structured = json.loads(response.text)["result"]["structuredContent"]
-    assert structured["status"] == "approved"
-    assert structured["privileged_tools_visible"] is True
-    # Self-approval POSTed the azure grant endpoint (not just the request ledger).
-    grant_posts = [
-        c for c in http.calls
-        if c.get("method") == "POST" and "azure-break-glass/grants" in c.get("url", "")
-    ]
-    assert grant_posts, f"expected a POST to the azure grant endpoint; calls={http.calls}"
 
 
 def test_tank_break_glass_tool_records_request_when_active_grant_misses_branch_scope(monkeypatch) -> None:
@@ -1527,7 +1616,7 @@ def test_github_write_tool_block_response_returns_mcp_error() -> None:
         "jsonrpc": "2.0",
         "id": 7,
         "method": "tools/call",
-        "params": {"name": "mint_clone_token", "arguments": {"repos": ["romaine-life/tank-operator"]}},
+        "params": {"name": "mint_clone_token", "arguments": {"repos": ["romaine-life/tank-operator"], "write": True}},
     }).encode()
 
     response = _github_tool_block_response(body, "mint_clone_token")
@@ -1594,6 +1683,103 @@ def test_filter_github_write_tools_removes_denied_tools_from_sse_list() -> None:
     assert names == ["get_pull_request", "list_pull_requests"]
 
 
+def test_is_read_only_clone_token_request() -> None:
+    # No write-capability flags → read-only (mcp-github mints contents:read).
+    assert _is_read_only_clone_token_request({"repos": ["a/b"]}) is True
+    assert _is_read_only_clone_token_request({"repos": ["a/b"], "write": False}) is True
+    assert _is_read_only_clone_token_request({}) is True
+    # Any write-capability flag → not read-only.
+    assert _is_read_only_clone_token_request({"write": True}) is False
+    assert _is_read_only_clone_token_request({"workflows": True}) is False
+    assert _is_read_only_clone_token_request({"full": True}) is False
+    # Defensive: non-dict args are not read-only.
+    assert _is_read_only_clone_token_request("nope") is False  # type: ignore[arg-type]
+
+
+def _mint_clone_token_body(**arguments: object) -> bytes:
+    return json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "mint_clone_token",
+            "arguments": {"repos": ["romaine-life/tank-operator"], **arguments},
+        },
+    }).encode()
+
+
+async def _run_github_write_block_proxy(call_body: bytes) -> tuple[int, str, int]:
+    """POST `call_body` through a proxy built with block_github_write_tools=True
+    (the restricted-git GitHub-port wiring) against a recording upstream.
+    Returns (status, response_text, upstream_call_count)."""
+    upstream_calls = [0]
+
+    async def upstream_handler(request: web.Request) -> web.Response:
+        upstream_calls[0] += 1
+        return web.json_response(
+            {"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": {"token": "ro-token"}}}
+        )
+
+    upstream_app = web.Application()
+    upstream_app.router.add_route("*", "/{tail:.*}", upstream_handler)
+    upstream_server = TestServer(upstream_app)
+    await upstream_server.start_server()
+    try:
+        http = ClientSession(timeout=ClientTimeout(total=10, sock_connect=2))
+        try:
+            upstream_url = f"http://{upstream_server.host}:{upstream_server.port}"
+            proxy_app = web.Application()
+            proxy_app.router.add_route(
+                "*",
+                "/{tail:.*}",
+                _make_handler(
+                    upstream_url,
+                    http,
+                    _StaticTokenProvider("sa-token"),
+                    block_github_write_tools=True,
+                ),
+            )
+            proxy_server = TestServer(proxy_app)
+            client = TestClient(proxy_server)
+            await client.start_server()
+            try:
+                resp = await client.post("/", data=call_body)
+                text = await resp.text()
+                return resp.status, text, upstream_calls[0]
+            finally:
+                await client.close()
+        finally:
+            await http.close()
+    finally:
+        await upstream_server.close()
+
+
+def test_read_only_mint_clone_token_is_forwarded_in_restricted_mode() -> None:
+    # The read-only mint is what makes `gh`/`git fetch` work for reads: it must
+    # reach mcp-github, not get blocked.
+    status, body, upstream_calls = asyncio.run(
+        _run_github_write_block_proxy(_mint_clone_token_body())
+    )
+    assert status == 200
+    assert upstream_calls == 1
+    payload = json.loads(body)
+    assert payload["result"]["structuredContent"]["token"] == "ro-token"
+
+
+def test_write_mint_clone_token_is_blocked_in_restricted_mode() -> None:
+    # write / workflows / full mints would hand the shell a push-capable token —
+    # blocked at the proxy, never reaching mcp-github.
+    for args in ({"write": True}, {"write": True, "workflows": True}, {"full": True}):
+        status, body, upstream_calls = asyncio.run(
+            _run_github_write_block_proxy(_mint_clone_token_body(**args))
+        )
+        assert status == 200, args  # JSON-RPC error rides an HTTP 200
+        assert upstream_calls == 0, args
+        payload = json.loads(body)
+        assert payload["error"]["code"] == -32010, args
+        assert "restricted Git mode" in payload["error"]["message"], args
+
+
 def test_repo_slug_from_remote_accepts_https_and_ssh() -> None:
     assert _repo_slug_from_remote("https://github.com/romaine-life/tank-operator.git") == (
         "romaine-life",
@@ -1653,6 +1839,109 @@ def test_checks_state_latest_pending_run_overrides_old_success() -> None:
     status, _, payload = _checks_state(runs, None)
     assert status == "started"
     assert "test" in payload["pending"]
+
+
+def test_resolve_ci_state_satisfies_missing_path_filtered_check_from_prior_green() -> None:
+    http = _GitHubAPIFake(changed_paths=["docs/features/ci-watch/capabilities.md"])
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "succeeded", error
+    evidence = payload["evidence"]
+    assert evidence[-1]["check"] == "test"
+    assert evidence[-1]["reason"] == "paths_unchanged_since_success"
+    assert evidence[-1]["satisfied_by_sha"] == http.prior_sha
+
+
+def test_resolve_ci_state_blocks_missing_check_when_trigger_paths_changed() -> None:
+    http = _GitHubAPIFake(changed_paths=["backend-go/cmd/tank-operator/ci_merge.go"])
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "started"
+    assert "inputs changed" in error
+    assert payload["evidence"][-1]["status"] == "missing_changed_inputs"
+
+
+def test_resolve_ci_state_blocks_missing_unfiltered_workflow() -> None:
+    http = _GitHubAPIFake(
+        changed_paths=["docs/features/ci-watch/capabilities.md"],
+        workflow_text=(
+            "name: Always runs\n"
+            "on:\n"
+            "  pull_request:\n"
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+        ),
+    )
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "started"
+    assert "has no pull_request path filter" in error
+    assert payload["evidence"][-1]["status"] == "missing_unfiltered_workflow"
+
+
+def test_resolve_ci_state_does_not_expect_prior_manual_workflow_dispatch_run() -> None:
+    http = _GitHubAPIFake(
+        changed_paths=["docs/features/ci-watch/capabilities.md"],
+        workflow_text=(
+            "name: Manual proof image build\n"
+            "on:\n"
+            "  workflow_dispatch:\n"
+            "jobs:\n"
+            "  test:\n"
+            "    runs-on: ubuntu-latest\n"
+        ),
+        run_event="workflow_dispatch",
+    )
+
+    status, error, payload = asyncio.run(
+        _resolve_ci_state(
+            http,
+            "github-token",
+            "romaine-life",
+            "tank-operator",
+            http.head_sha,
+            pr_number=1245,
+            branch="tank/session/989/tank-operator",
+        )
+    )
+
+    assert status == "started"
+    assert error == "checks are pending or have not appeared yet"
+    assert payload["evidence"] == []
 
 
 def test_watch_published_commit_records_clean_mergeability_via_single_pr(monkeypatch) -> None:

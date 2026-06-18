@@ -737,24 +737,27 @@ test("acceptCommandTurn emits turn.claimed before provider output", async () => 
 });
 
 // Break-glass surfacing: an approval turn carries mcp_activate_name; the runner
-// reconnects that (boot-configured) MCP server in place so its now-granted tools
-// surface live. Adding a server to a resumed query doesn't register its tools;
-// reconnecting an existing one does (SDK Query.reconnectMcpServer).
-test("acceptCommandTurn reconnects the break-glass MCP server named on the approval turn", async () => {
+// rebuilds the SDK query so the now-granted server's tools are fetched fresh.
+// Reconnecting an existing server does NOT re-register its tools, and a server
+// written into .mcp.json mid-session is not re-read — only a full rebuild
+// surfaces the granted tools (azure-personal pg_query, tank-git-break-glass
+// mint_full_git_token, ...). The rebuild runs at the idle boundary before the
+// turn is fed, so the tools are live for the very turn the user sees.
+test("acceptCommandTurn rebuilds the query to surface break-glass tools named on the approval turn", async () => {
   const { runner } = makeInterruptHarness();
-  const reconnected: string[] = [];
+  let rebuilds = 0;
   const r = runner as unknown as {
     sink: { findTurnTerminal: () => Promise<null> };
     ensureSdkQuery: () => void;
-    sdkQuery: { reconnectMcpServer: (n: string) => Promise<void> } | null;
+    performRebuild: () => Promise<void>;
+    pendingMcpRebuild: boolean;
     acceptCommandTurn: (record: unknown) => Promise<void>;
   };
   r.sink.findTurnTerminal = async () => null;
   r.ensureSdkQuery = () => undefined;
-  r.sdkQuery = {
-    reconnectMcpServer: async (n: string) => {
-      reconnected.push(n);
-    },
+  r.performRebuild = async () => {
+    rebuilds += 1;
+    r.pendingMcpRebuild = false;
   };
 
   await r.acceptCommandTurn({
@@ -766,7 +769,11 @@ test("acceptCommandTurn reconnects the break-glass MCP server named on the appro
     created_at: new Date(Date.now() - 250).toISOString(),
   });
 
-  assert.deepEqual(reconnected, ["azure-personal"]);
+  assert.equal(
+    rebuilds,
+    1,
+    "a break-glass approval turn must rebuild the query so the granted MCP tools surface",
+  );
 });
 
 // The Tank-owned AskUserQuestion MCP tool publishes durable turn.awaiting_input,

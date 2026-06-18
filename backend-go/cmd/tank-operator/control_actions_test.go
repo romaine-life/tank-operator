@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -197,9 +198,8 @@ func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T
 		"payload": {"head_sha": "abc123"}
 	}`))
 	req.SetPathValue("session_id", "47")
+	// No X-Tank-Caller-* headers: the verified slot subject is the sole authz input.
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
-	req.Header.Set(callerSessionIDHeader, "47")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -225,7 +225,96 @@ func TestHandleInternalAppendControlActionPersistsServiceActorAudit(t *testing.T
 	}
 }
 
-func TestHandleInternalAppendControlActionRejectsMissingCallerSession(t *testing.T) {
+func TestHandleInternalAppendControlActionAcceptsProductionSessionSubjectWithoutHeaders(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	app.sessionScope = prodSessionScope // default-scope (production) backend
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_prod_ci",
+		"invocation_id": "ctrl_prod",
+		"source_service": "mcp-tank-operator",
+		"source_tool": "publish_current_head",
+		"action": "github.commit.ci",
+		"status": "succeeded",
+		"target_kind": "github_commit",
+		"target_ref": "https://github.com/romaine-life/tank-operator/commit/abc123",
+		"result_sha": "abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	// Verified production subject, no X-Tank-Caller-* headers. This is exactly the
+	// path the #1207 header requirement wrongly rejected, freezing the ledger.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsProductionSubjectOnSlotScope(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store) // slot-3 backend
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_xscope",
+		"invocation_id": "ctrl_xscope",
+		"source_service": "mcp-tank-operator",
+		"source_tool": "publish_current_head",
+		"action": "github.commit.ci",
+		"status": "succeeded",
+		"target_kind": "github_commit",
+		"target_ref": "https://github.com/romaine-life/tank-operator/commit/abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	// A production subject (svc:tank:47) must not authorize writes on a slot backend,
+	// even for the same session id — scope is bound to the verified subject, not a header.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsSlotSubjectOnProductionScope(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	app.sessionScope = prodSessionScope // default-scope (production) backend
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
+		"event_id": "ctrl_xscope2",
+		"invocation_id": "ctrl_xscope2",
+		"source_service": "mcp-tank-operator",
+		"source_tool": "publish_current_head",
+		"action": "github.commit.ci",
+		"status": "succeeded",
+		"target_kind": "github_commit",
+		"target_ref": "https://github.com/romaine-life/tank-operator/commit/abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	// A slot subject must not authorize writes on the production backend.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+}
+
+func TestHandleInternalAppendControlActionRejectsNonSessionPrincipal(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
@@ -252,7 +341,7 @@ func TestHandleInternalAppendControlActionRejectsMissingCallerSession(t *testing
 	}
 }
 
-func TestHandleInternalAppendControlActionRejectsMismatchedCallerSession(t *testing.T) {
+func TestHandleInternalAppendControlActionRejectsMismatchedSessionSubject(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
@@ -267,8 +356,6 @@ func TestHandleInternalAppendControlActionRejectsMismatchedCallerSession(t *test
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:95"))
-	req.Header.Set(callerSessionIDHeader, "95")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -281,7 +368,7 @@ func TestHandleInternalAppendControlActionRejectsMismatchedCallerSession(t *test
 	}
 }
 
-func TestHandleInternalAppendControlActionRejectsSpoofedCallerHeaders(t *testing.T) {
+func TestHandleInternalAppendControlActionIgnoresSpoofedCallerHeaders(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
@@ -296,8 +383,9 @@ func TestHandleInternalAppendControlActionRejectsSpoofedCallerHeaders(t *testing
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank-operator:orchestrator-slot-3"))
-	req.Header.Set(callerSessionIDHeader, "47")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
+	// Spoofed caller headers must not grant access — they are not an authz input.
+	req.Header.Set("X-Tank-Caller-Session-Id", "47")
+	req.Header.Set("X-Tank-Caller-Session-Scope", "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -325,8 +413,6 @@ func TestHandleInternalAppendControlActionRejectsUnsupportedActionBeforeStore(t 
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
-	req.Header.Set(callerSessionIDHeader, "47")
-	req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
@@ -443,8 +529,6 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
 			req.SetPathValue("session_id", "47")
 			req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
-			req.Header.Set(callerSessionIDHeader, "47")
-			req.Header.Set(callerSessionScopeHeader, "tank-operator-slot-3")
 			rec := httptest.NewRecorder()
 
 			app.handleInternalAppendControlAction(rec, req)
@@ -1020,11 +1104,63 @@ func TestHandleApproveBreakGlassRequestPersistsGitGrantForRequestOwner(t *testin
 	if payload["approved_by"] != "admin@example.test" {
 		t.Fatalf("approved_by = %v", payload["approved_by"])
 	}
+	ops, _ := payload["operations"].([]any)
+	if len(ops) != 1 || ops[0] != "mint_full_git_token" {
+		t.Fatalf("operations = %v", payload["operations"])
+	}
 	if _, ok := payload["repo_scope"].(map[string]any); !ok {
 		t.Fatalf("repo_scope = %#v", payload["repo_scope"])
 	}
 	if _, ok := payload["branch_scope"].(map[string]any); !ok {
 		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
+	}
+}
+
+func TestHandleApproveBreakGlassRequestPersistsWorkflowGrantOperation(t *testing.T) {
+	store := &fakeControlActionStore{
+		getRow: pgstore.ControlActionEvent{
+			EventID:      "request-workflows",
+			InvocationID: "invocation-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-3",
+			SessionID:    "47",
+			Action:       "github.break_glass.request",
+			Status:       "started",
+			TargetKind:   "github_repository",
+			TargetRef:    "https://github.com/romaine-life/tank-operator",
+			RepoOwner:    "romaine-life",
+			RepoName:     "tank-operator",
+			Payload: []byte(`{
+				"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
+				"branch_scope": {"kind":"unlimited"},
+				"operations": ["mint_full_git_token", "push_current_head", "workflows"],
+				"workflows": true,
+				"reason": "repair workflow"
+			}`),
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/break-glass-requests/request-workflows/approve", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "47")
+	req.SetPathValue("request_event_id", "request-workflows")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleApproveBreakGlassRequest(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(store.appendCalls[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	ops, _ := payload["operations"].([]any)
+	if len(ops) != 3 || ops[0] != "mint_full_git_token" || ops[1] != "push_current_head" || ops[2] != "workflows" {
+		t.Fatalf("operations = %v", payload["operations"])
 	}
 }
 
@@ -1319,7 +1455,7 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	payload, _ := json.Marshal(map[string]any{
 		"expires_at":   expiresAt,
-		"operations":   []string{"mint_full_git_token"},
+		"operations":   []string{"mint_full_git_token", "workflows"},
 		"reason":       "repair branch",
 		"repo_scope":   map[string]any{"kind": "current_repo", "repo": "romaine-life/tank-operator"},
 		"branch_scope": map[string]any{"kind": "unlimited"},
@@ -1352,6 +1488,10 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	}
 	if body["active"] != true || body["event_id"] != "grant-1" {
 		t.Fatalf("body = %#v", body)
+	}
+	ops, _ := body["operations"].([]any)
+	if len(ops) != 2 || ops[0] != "mint_full_git_token" || ops[1] != "workflows" {
+		t.Fatalf("operations = %v", body["operations"])
 	}
 	if store.listOwner != "owner@example.test" || store.listSession != "47" {
 		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
@@ -1882,6 +2022,57 @@ func TestHandleInternalGetAzureBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 	}
 }
 
+func TestHandleInternalGetAzureBreakGlassGrantScopesLookupToSessionOwner(t *testing.T) {
+	// Regression: azure-personal calls this endpoint as its OWN service
+	// principal, whose actor_email is NOT the session owner. The grant is
+	// recorded under the owner, so the lookup must resolve the session owner
+	// (owner@example.test for session 47, seeded by controlActionTestServer) and
+	// query by that — not by the caller's actor_email. Before the fix the gate
+	// never saw the grant and the azure MCP stayed locked for every session.
+	payload, _ := json.Marshal(map[string]any{
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		"operations": []string{"use_azure_personal_mcp"},
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:    "azure-grant-1",
+			Action:     "azure.break_glass.grant",
+			Status:     "succeeded",
+			TargetKind: "azure_mcp",
+			TargetRef:  "azure-personal",
+			Payload:    payload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/azure-break-glass/grant", nil)
+	req.SetPathValue("session_id", "47")
+	// Caller actor_email is the azure-personal service principal — deliberately
+	// NOT the session owner.
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "mcp-azure-personal@service.romaine.life", "mcp-azure-personal@service.romaine.life"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetAzureBreakGlassGrant(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != true {
+		t.Fatalf("expected active grant for non-owner service caller, body = %#v", body)
+	}
+	// The fix: the lookup is scoped to the SESSION OWNER, not the caller's
+	// actor_email (which here is mcp-azure-personal@service.romaine.life).
+	if store.listOwner != "owner@example.test" {
+		t.Fatalf("grant lookup owner = %q, want session owner owner@example.test", store.listOwner)
+	}
+	if store.listSession != "47" {
+		t.Fatalf("grant lookup session = %q, want 47", store.listSession)
+	}
+}
+
 func TestHandleInternalGetAzureBreakGlassGrantInactiveWithoutGrant(t *testing.T) {
 	// An expired grant must not count as active.
 	expiredPayload, _ := json.Marshal(map[string]any{
@@ -2000,9 +2191,8 @@ func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing
 		"repo": "romaine-life/tank-operator",
 		"branch": "`+branch+`",
 		"sha": "`+sha+`",
-		"artifact_kind": "codex_runner",
 		"validation_target": "existing_session",
-		"source_tool": "apply_test_slot_hot_swap"
+		"source_tool": "deploy_image_to_test_slot"
 	}`))
 	req.SetPathValue("session_id", "47")
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
@@ -2025,6 +2215,79 @@ func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing
 	}
 	if store.listOwner != "owner@example.test" || store.listSession != "47" || store.listLimit != 200 {
 		t.Fatalf("list lookup = owner %q session %q limit %d", store.listOwner, store.listSession, store.listLimit)
+	}
+}
+
+func TestHandleInternalVerifyHotSwapBlocksBehindMain(t *testing.T) {
+	prNumber := 1113
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				Action:    "github.pull_request.mergeability",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				PRNumber:  &prNumber,
+				ResultSHA: sha,
+				// Mergeable (no conflicts) but behind its base. A pre-fix watcher
+				// records this as succeeded; the gate must still refuse it, so a
+				// slot never runs (and a merge never lands) stale-relative-to-main
+				// work that changes the moment it's brought current.
+				Payload: []byte(`{"branch":"tank/session/47/tank-operator","mergeable":true,"mergeable_state":"behind"}`),
+			},
+			{
+				Action:    "github.commit.ci",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"completed":3}`),
+			},
+			{
+				Action:    "github.commit.push",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	// A blocked verification returns 409 with the structured body.
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// CI and publish are green — only the behind-main check blocks, proving the
+	// gate refuses a current-with-main failure on its own.
+	if !body.CIVerified || !body.PublishVerified {
+		t.Fatalf("expected CI+publish verified; body = %#v", body)
+	}
+	if body.MergeVerified {
+		t.Fatalf("behind-main head must not be merge-verified; body = %#v", body)
+	}
+	if body.Allowed {
+		t.Fatalf("behind-main head must not be allowed; body = %#v", body)
+	}
+	if joined := strings.Join(body.Reasons, " | "); !strings.Contains(joined, "behind") {
+		t.Fatalf("expected a behind reason; reasons = %q", joined)
 	}
 }
 
@@ -2124,6 +2387,135 @@ func TestHandleInternalVerifyHotSwapBlocksWrongBranchPublish(t *testing.T) {
 		t.Fatalf("wrong-branch publish was accepted: %#v", body)
 	}
 	if got := strings.Join(body.Reasons, "\n"); !strings.Contains(got, "no governed publish record") {
+		t.Fatalf("reasons = %q", got)
+	}
+}
+
+func TestHandleInternalVerifyHotSwapUsesBackendReducer(t *testing.T) {
+	prNumber := 1113
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	mergeable := true
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				Action:    "github.commit.push",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+			},
+			{
+				Action:    "github.commit.ci",
+				Status:    "failed",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Error:     "stale legacy failure",
+				Payload:   []byte(`{"failed":["old"]}`),
+			},
+			{
+				Action:    "github.pull_request.mergeability",
+				Status:    "failed",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				PRNumber:  &prNumber,
+				ResultSHA: sha,
+				Error:     "stale legacy conflict",
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator","mergeable":false,"mergeable_state":"dirty"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	app.ciWatches = &fakeCIWatchStore{}
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		PR:             mcpgithub.PullRequestDetail{Number: prNumber},
+		Mergeable:      &mergeable,
+		MergeableState: "clean",
+		HeadSHA:        sha,
+		CheckState:     "success",
+		CIStatus:       "succeeded",
+		HTMLURL:        "https://github.com/romaine-life/tank-operator/pull/1113",
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`",
+		"source_tool": "deploy_image_to_test_slot"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Allowed || !body.PublishVerified || !body.CIVerified || !body.MergeVerified {
+		t.Fatalf("verification body = %#v", body)
+	}
+	if body.PRNumber == nil || *body.PRNumber != prNumber {
+		t.Fatalf("pr_number = %#v, want %d", body.PRNumber, prNumber)
+	}
+	gh := app.mcpGitHub.(*fakeMCPGitHub)
+	if gh.resolveOpenPRCalls != 1 || gh.resolvePRCalls != 0 {
+		t.Fatalf("resolve calls = open %d by-number %d, want open 1 by-number 0", gh.resolveOpenPRCalls, gh.resolvePRCalls)
+	}
+}
+
+func TestHandleInternalVerifyHotSwapBlocksBackendReducerPendingCI(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	mergeable := true
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			Action:    "github.commit.push",
+			Status:    "succeeded",
+			RepoOwner: "romaine-life",
+			RepoName:  "tank-operator",
+			ResultSHA: sha,
+			Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	app.ciWatches = &fakeCIWatchStore{}
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		PR:             mcpgithub.PullRequestDetail{Number: 1113},
+		Mergeable:      &mergeable,
+		MergeableState: "clean",
+		HeadSHA:        sha,
+		CheckState:     "pending",
+		CIStatus:       "started",
+		CIError:        "pending checks: test",
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Allowed || !body.PublishVerified || body.CIVerified || !body.MergeVerified || body.ReadinessState != "watching" {
+		t.Fatalf("verification body = %#v", body)
+	}
+	if got := strings.Join(body.Reasons, "\n"); !strings.Contains(got, "CI in progress") {
 		t.Fatalf("reasons = %q", got)
 	}
 }

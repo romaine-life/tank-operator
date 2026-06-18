@@ -5,11 +5,14 @@ set -eu
 # scripts once per pod lifetime.
 #
 #   restricted   (TANK_RESTRICTED_GIT truthy): install the governed git hook
-#                templates (post-commit auto-publish + pre-push block). Direct
-#                pushes stay blocked; publishing goes through Tank MCP.
+#                templates (post-commit auto-publish + pre-push block) AND the
+#                mode-aware credential helper, which mints READ-ONLY tokens in
+#                this mode. Direct pushes stay blocked; reads (clone/fetch/pull)
+#                work; publishing goes through Tank MCP. The elevated cluster
+#                kubeconfig stays non-restricted-only.
 #   unrestricted (default): install the auto-minting credential helper so the
 #                agent has full, automatic git access (clone/fetch/push) with no
-#                manual token handling.
+#                manual token handling, plus the elevated cluster kubeconfig.
 
 restricted=false
 case "$(printf '%s' "${TANK_RESTRICTED_GIT:-false}" | tr '[:upper:]' '[:lower:]')" in
@@ -97,6 +100,11 @@ EOF
 
 if [ "$restricted" = "true" ]; then
   install_restricted_hook_templates
+  # The credential helper is mode-aware: in restricted mode it mints a
+  # read-only token, so clone/fetch/pull work for reads. Writes stay governed
+  # (pre-push hook blocks pushes; a read-only token cannot push). The elevated
+  # cluster kubeconfig is intentionally NOT installed here.
+  install_credential_helper
 else
   install_credential_helper
   install_cluster_kubeconfig

@@ -88,6 +88,7 @@ const chatScrollMetricsHandlerSource = readSource(
 );
 const appConfigMapSource = readSource("../../k8s/templates/app-configmap.yaml");
 const appDeploymentSource = readSource("../../k8s/templates/deployment.yaml");
+const observabilitySource = readSource("../../k8s/templates/observability.yaml");
 const tankServerGoSource = readSource(
   "../../backend-go/cmd/tank-operator/server.go",
 );
@@ -106,10 +107,42 @@ const initialModeGoLongSource = readSource(
 const initialModeTestSource = readSource(
   "../../k8s/app-config/initial-mode-test.md",
 );
+const dockerBuildCheckWorkflowSource = readSource(
+  "../../.github/workflows/docker-build-check.yaml",
+);
+const k8sValuesSource = readSource("../../k8s/values.yaml");
+const testingDocsSource = readSource("../../docs/testing.md");
+const tankOperatorTestSkillSource = readSource(
+  "../../k8s/session-config/skills/common/test/references/repos/tank-operator.md",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   expect(appSource.includes("POLL_INTERVAL_MS")).toBe(false);
   expect(/setInterval\(\s*refreshSessionActivity/.test(appSource)).toBe(false);
+});
+
+test("Glimmung app image deploys stay fingerprint-first", () => {
+  expect(dockerBuildCheckWorkflowSource.includes("Compute image fingerprint")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Build and push proof image")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Tag app image by CI run lookup")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource).toMatch(/if: matrix\.name == 'app' &&/);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-pr-${PR_NUMBER}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-ref-${short_ref_hash}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("--source \"romainecr.azurecr.io/${{ matrix.image-repo }}:${src}\"")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("--image \"${{ matrix.image-repo }}:${lookup_tag}\"")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Tag image by commit SHA")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("commit-SHA tag")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("sha='${{ github.event.pull_request.head.sha || github.sha }}'")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource).not.toMatch(/image-repo\s*\}\}:\$\{\{\s*github\.(?:sha|event\.pull_request\.head\.sha)/);
+  expect(dockerBuildCheckWorkflowSource).not.toMatch(/\$\{\{\s*matrix\.image-repo\s*\}\}:\$\{sha\}/);
+
+  expect(k8sValuesSource.includes("Fingerprint-pinned. The build workflow")).toBe(true);
+  expect(k8sValuesSource.includes("SHA-pinned")).toBe(false);
+
+  expect(testingDocsSource.includes("CI-run lookup tag")).toBe(true);
+  expect(testingDocsSource).toMatch(/raw commit-SHA image\s+alias/);
+  expect(tankOperatorTestSkillSource.includes("commit ref")).toBe(true);
+  expect(tankOperatorTestSkillSource.includes("branch or SHA")).toBe(false);
 });
 
 test("App-root holds no periodic React state setters (cascade-prone pattern)", () => {
@@ -289,10 +322,13 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("Next question")).toBe(true);
   expect(appSource.includes("Question set ${selectedPageInfo.questionSet}")).toBe(false);
   expect(appSource.includes("Answer every question before submit.")).toBe(true);
-  // The question page heading is a system-user message (system avatar + label),
-  // not an orphaned full-width banner. It speaks through the same system-avatar
-  // message frame as RunMetaBlock status lines and the background-wake prompt,
-  // so the old pinned page-head template is retired.
+  // The question page heading is an agent-authored message (the session/agent
+  // avatar + label), not an orphaned full-width banner. AskUserQuestion /
+  // ExitPlanMode are agent-invoked, so the question is the agent speaking and is
+  // attributed to the agent avatar (matching how the question shows in the
+  // asking turn), rather than the generic system-avatar frame used by
+  // RunMetaBlock status lines and the background-wake prompt. The old pinned
+  // page-head template is retired.
   expect(appSource.includes(
           "Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}",
         )).toBe(false);
@@ -301,7 +337,7 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("<RunQuestionHeadingMessage")).toBe(true);
   expect(appSource.includes('data-kind="question-heading"')).toBe(true);
   expect(appSource).toMatch(
-    /data-variant="system"\s+data-role="system"\s+data-kind="question-heading"/,
+    /data-variant="assistant"\s+data-role="assistant"\s+data-kind="question-heading"/,
   );
   expect(appSource.includes("${questionIndex} of ${questionCount}")).toBe(true);
 });
@@ -549,6 +585,50 @@ test("historical transcript bootstrap requires server-projected turn activity", 
         )).toBe(true);
   expect(appSource).toMatch(/\/api\/public\/message-links\/\$\{encodeURIComponent\(publicShareTokenValue\)\}\/turns\/\$\{encodeURIComponent\(turnId\)\}\/activity/);
   expect(appSource.includes('kind !== "turn_activity"')).toBe(true);
+});
+
+test("selected turn activity spinner render emits bounded diagnostics", () => {
+  expect(appSource.includes("turnActivityLoadStatusMetricCode")).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-loading-stranded"')).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-loading-slow"')).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-route-session-mismatch"')).toBe(true);
+  expect(appSource.includes("selectedActivityRouteSessionMismatch")).toBe(true);
+  expect(appSource.includes("window.setTimeout")).toBe(true);
+  expect(appSource.includes("TURN_ACTIVITY_STUCK_THRESHOLD_MS")).toBe(true);
+  expect(appSource.includes("activityLoadingSessionSwitchTelemetry")).toBe(true);
+  expect(appSource.includes("activityLoadingTelemetrySource")).toBe(true);
+  expect(appSource.includes("activityLoadingPreviousSessionId")).toBe(true);
+  expect(appSource.includes('"session-switch"')).toBe(true);
+  expect(appSource.includes('"turns-selected"')).toBe(true);
+  expect(appSource.includes("previousSessionId: activityLoadingPreviousSessionId")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("previousSessionId?: string")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("routeSessionId?: string")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("selectedTurnId?: string")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("PreviousSessionID")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("RouteSessionID")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("SelectedTurnID")).toBe(true);
+  expect(appSource.includes("reason: selectedLoadingReason")).toBe(true);
+  expect(appSource.includes("key: selectedTurnIdForTelemetry")).toBe(true);
+  expect(appSource.includes(
+          "status: turnActivityLoadStatusMetricCode(selectedLoadStatus)",
+        )).toBe(true);
+  expect(appSource.includes("activityEntries: selectedTurnActivityChildCount")).toBe(true);
+  expect(appSource.includes("durableActiveTurnActivityShells")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-loading-stranded"',
+        )).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-loading-slow"',
+        )).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-route-session-mismatch"',
+        )).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedLoadingStranded")).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedRouteSessionMismatch")).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedLoadingSlow")).toBe(true);
+  expect(observabilitySource.includes(
+          'tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-stranded",surface="session"}',
+        )).toBe(true);
 });
 
 test("public message links render a read-only unauthenticated transcript shell", () => {
@@ -992,6 +1072,13 @@ test("break-glass composer action owns approval links and quick approval", () =>
   expect(appSource).toMatch(/quickApproveBreakGlassMenuItem/);
   expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
+  expect(appSource.includes("function PRLaneApprovalIndicator")).toBe(false);
+  expect(appSource.includes("<PRLaneApprovalIndicator")).toBe(false);
+  expect(appSource).toMatch(/type BreakGlassApprovalMenuKind = "github" \| "azure" \| "model" \| "pr-lane";/);
+  expect(appSource).toMatch(/pendingPRLaneRequests\(controlActionRows\)/);
+  expect(appSource).toMatch(/prLaneApprovalMenuItems\(sessionId, prLaneRequests\)/);
+  expect(appSource).toMatch(/onApprovePRLane/);
+  expect(indexCssSource.includes(".pr-lane-approval")).toBe(false);
   expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
   expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
   expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
@@ -1363,7 +1450,9 @@ test("mounted chat reactivation resets local timeline state before bootstrap", (
   expect(appSource.includes("reduceTimelineBootstrap")).toBe(true);
   expect(appSource.includes("scrollToLatestOnReady: !hasExplicitTarget")).toBe(true);
   expect(appSource.includes('requestScrollToLatest("auto", source)')).toBe(true);
-  expect(appSource).toMatch(/useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/);
+  expect(appSource).toMatch(
+    /useLayoutEffect\(\(\) => \{[\s\S]{0,500}const previousSessionId = sessionIdRef\.current;[\s\S]{0,500}setActivityLoadingSessionSwitchTelemetry[\s\S]{0,500}sessionIdRef\.current = session\.id;[\s\S]{0,500}resetSdkTimelineBootstrapState\("session-change"/,
+  );
   expect(appSource).toMatch(/if \(timelineBootstrap\.status !== "idle"\) return;/);
 });
 

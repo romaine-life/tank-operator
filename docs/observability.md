@@ -605,6 +605,17 @@ All metric names are prefixed `tank_`. The full namespace:
   many pages it split into (pages seal at `turnPageEventLimit` events). A growing
   tail past the threshold means long (often post-compaction) turns are common,
   signalling the bounded-cost live-page incremental projection is worth landing.
+- `tank_turn_directory_list_total{result}` and `tank_turn_directory_size` — the
+  durable turn directory (`GET /api/sessions/{id}/turns/directory`) that the
+  Turns selector lists its complete turn set from, independent of the bounded
+  `/timeline` window. `result` is `ok` / `truncated` / `error`; the histogram
+  records the per-session turn count returned. The histogram observes the live
+  per-session turn-count distribution so the `TurnDirectoryMaxRows` cap can be
+  revisited (with cursor paging) before it bites, and a sustained `truncated`
+  rate names sessions the cap is eliding. The matching SPA client events
+  (`turn-directory-request` / `-loaded` / `-error`, in the chat-scroll metric
+  allowlist) make a directory load that fails — leaving the retryable Turns
+  error state — diagnosable without browser devtools.
 
 ## Scripted access via Grafana
 

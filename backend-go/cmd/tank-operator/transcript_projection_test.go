@@ -141,6 +141,51 @@ func TestProjectTranscriptEventsClaimedTurnAdvancesActiveShell(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsPreservesSubmittedSourceOnTurnShell(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "Break-glass approval granted.",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{
+			"status": "submitted",
+			"source": string(conversation.TurnSubmittedSourceBreakGlassApproval),
+		}),
+		projectionTestEvent("tool-start", "003", "item.started", "tool", "codex", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind":    "command_execution",
+			"command": "request_git_break_glass",
+		}),
+		projectionTestEvent("tool-done", "004", "item.completed", "tool", "codex", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind":   "command_execution",
+			"output": "activated",
+		}),
+		projectionTestEvent("final", "005", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:final", map[string]any{
+			"kind": "message",
+			"text": "Break-glass tools are active.",
+		}),
+		projectionTestEvent("terminal", "006", "turn.completed", "runner", "codex", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:final")),
+	}
+
+	projection := projectTranscriptEvents(events)
+	var shell map[string]any
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "turn_activity" {
+			shell = entry
+			break
+		}
+	}
+	if shell == nil {
+		t.Fatalf("no turn_activity shell projected: %#v", projection.Entries)
+	}
+	if got, want := shell["submittedSource"], string(conversation.TurnSubmittedSourceBreakGlassApproval); got != want {
+		t.Fatalf("shell submittedSource = %v, want %q: %#v", got, want, shell)
+	}
+	activity, _ := shell["activity"].(map[string]any)
+	if got, want := activity["submittedSource"], string(conversation.TurnSubmittedSourceBreakGlassApproval); got != want {
+		t.Fatalf("activity submittedSource = %v, want %q: %#v", got, want, activity)
+	}
+}
+
 func TestProjectTranscriptEventsRecordsContextCompactedAsTurnActivity(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

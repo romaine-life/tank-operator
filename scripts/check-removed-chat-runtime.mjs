@@ -129,6 +129,11 @@ const blocked = [
     pattern: /optionsOverrideIgnoredTotal|tank_runner_options_override_ignored_total/,
   },
   { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
+  // PR-lane approval requests were moved into the existing shield approval menu
+  // in #1285. The old standalone panel lived in composerAbove and opened just
+  // above the chat composer; keep that separate above-composer popup retired.
+  { name: "retired above-composer PR-lane approval popup", pattern: /\bPRLaneApprovalIndicator\b/ },
+  { name: "retired above-composer PR-lane approval CSS", pattern: /\.pr-lane-approval\b/ },
   // tank-operator#83 — sidebar session-list moved from wake-and-refetch
   // polling onto a durable typed-event ledger + cursor-resumable SSE.
   // Block reintroduction of every name that participated in the prior
@@ -168,6 +173,12 @@ const blocked = [
   // builders use `turns/` + slash and are intentionally not matched).
   { name: "retired array-position turn label", pattern: /`Turn \$\{[^}]*\bindex\b[^}]*\}`/ },
   { name: "retired turn_<uuid> public route segment", pattern: /\/turns\$\{turnId/ },
+  // The Turns selector must source its turn set from the durable turn directory
+  // (turnDirectoryEntries via /turns/directory), never from the bounded
+  // transcript window. buildTurnViewItems(renderedEntries, …) was the window
+  // derivation that hid every turn older than the ~24-row tail; the cutover
+  // feeds it turnViewSourceEntries (directory-owned set, live-overlaid).
+  { name: "window-derived Turns selector", pattern: /buildTurnViewItems\(\s*renderedEntries\b/ },
   { name: "retired runner Cosmos event module", pattern: /\b(?:agent|codex)-runner\/src\/cosmos\.ts\b/ },
   { name: "retired runner Cosmos tests", pattern: /\bcosmos\.test\.ts\b/ },
   { name: "retired session Azure config secret", pattern: /\bSESSION_AZURE_CONFIG_SECRET\b/ },

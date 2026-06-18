@@ -47,7 +47,6 @@ type hotSwapVerificationRequest struct {
 	Repo             string `json:"repo"`
 	Branch           string `json:"branch"`
 	SHA              string `json:"sha"`
-	ArtifactKind     string `json:"artifact_kind,omitempty"`
 	ValidationTarget string `json:"validation_target,omitempty"`
 	SourceTool       string `json:"source_tool,omitempty"`
 }
@@ -59,10 +58,13 @@ type hotSwapVerificationResponse struct {
 	Branch           string   `json:"branch"`
 	SHA              string   `json:"sha"`
 	PRNumber         *int     `json:"pr_number,omitempty"`
+	PRURL            string   `json:"pr_url,omitempty"`
+	ReadinessState   string   `json:"readiness_state,omitempty"`
 	PublishVerified  bool     `json:"publish_verified"`
 	CIVerified       bool     `json:"ci_verified"`
 	MergeVerified    bool     `json:"merge_verified"`
-	ArtifactKind     string   `json:"artifact_kind,omitempty"`
+	CheckState       string   `json:"check_state,omitempty"`
+	MergeableState   string   `json:"mergeable_state,omitempty"`
 	ValidationTarget string   `json:"validation_target,omitempty"`
 	SourceTool       string   `json:"source_tool,omitempty"`
 }
@@ -106,6 +108,12 @@ type branchScope struct {
 	Count    int      `json:"count,omitempty"`
 }
 
+const (
+	gitBreakGlassOpMintToken = "mint_full_git_token"
+	gitBreakGlassOpPushHead  = "push_current_head"
+	gitBreakGlassOpWorkflows = "workflows"
+)
+
 func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/control-actions")
 	if user == nil {
@@ -122,7 +130,7 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
-	if !s.internalCallerMatchesSession(r, user, sessionID) {
+	if !s.internalCallerMatchesSession(user, sessionID) {
 		recordControlActionEvent("", "", "", "", "forbidden")
 		writeError(w, http.StatusForbidden, "control action writes require caller session identity to match the target session")
 		return
@@ -150,36 +158,42 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusCreated, controlActionToJSON(row, true))
 }
 
-func (s *appServer) internalCallerMatchesSession(r *http.Request, user *auth.User, sessionID string) bool {
-	if user == nil || !s.serviceSubjectMatchesSession(user.Sub, sessionID) {
-		return false
-	}
-	callerID := strings.TrimSpace(r.Header.Get(callerSessionIDHeader))
-	if callerID == "" || callerID != strings.TrimSpace(sessionID) {
-		return false
-	}
-	callerScope := normalizeSessionScope(r.Header.Get(callerSessionScopeHeader))
-	return callerScope == s.localSessionScope()
+// internalCallerMatchesSession authorizes a session-scoped internal write by the
+// caller's *verified* per-session service identity. The service-principal subject
+// is minted by auth.romaine.life from the pod's tank-operator/session-id annotation
+// (the same identity nats-auth-callout trusts) and is unforgeable, so it is the sole
+// authorization factor: a caller may write only its own session's ledger, on the
+// backend whose scope its subject encodes. Caller-asserted request headers are not
+// an authorization input — a self-reported session id adds nothing over the verified
+// subject, and requiring one stranded every already-running session pod (the #1207
+// regression that silently froze the control-action ledger on 2026-06-16).
+func (s *appServer) internalCallerMatchesSession(user *auth.User, sessionID string) bool {
+	return user != nil && s.serviceSubjectMatchesSession(user.Sub, sessionID)
 }
 
+// serviceSubjectMatchesSession reports whether the verified service-principal subject
+// is this session's own identity *on this backend's scope*. Production sessions carry
+// subject "svc:tank:<id>" and are valid only on the default-scope backend; test-slot
+// sessions carry "svc:tank:slot-<n>-session-<id>" and are valid only on that slot's
+// backend. Binding scope to the subject (not a caller header) keeps production and
+// slot identities from crossing scopes even though session ids overlap.
 func (s *appServer) serviceSubjectMatchesSession(sub, sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return false
 	}
-	sub = strings.TrimSpace(sub)
-	for _, prefix := range []string{"svc:tank:", "tank:"} {
-		if strings.HasPrefix(sub, prefix) {
-			value := strings.TrimSpace(strings.TrimPrefix(sub, prefix))
-			if value == sessionID {
-				return true
-			}
-			if slotValue := slotServiceSubjectValue(s.localSessionScope(), sessionID); slotValue != "" && value == slotValue {
-				return true
-			}
-		}
+	const subjectPrefix = "svc:tank:"
+	value, ok := strings.CutPrefix(strings.TrimSpace(sub), subjectPrefix)
+	if !ok {
+		return false
 	}
-	return false
+	value = strings.TrimSpace(value)
+	if slotValue := slotServiceSubjectValue(s.localSessionScope(), sessionID); slotValue != "" {
+		// Slot backend: only the matching slot-scoped subject is this session.
+		return value == slotValue
+	}
+	// Default-scope backend: only the plain per-session subject is this session.
+	return s.localSessionScope() == prodSessionScope && value == sessionID
 }
 
 func slotServiceSubjectValue(scope, sessionID string) string {
@@ -826,6 +840,10 @@ func (s *appServer) enqueueAzureBreakGlassApprovalTurn(ctx context.Context, gran
 	if sessionID == "" || ownerEmail == "" {
 		return nil, http.StatusBadRequest, "grant missing session or owner"
 	}
+	// Fire the live tool-surfacing trigger (best-effort, async) alongside the
+	// approval turn: azure-personal pushes tools/list_changed on the session's
+	// stream so the tools appear without the agent re-handshaking.
+	s.notifyAzureGrantActivated(sessionID)
 	seed := controlActionPayloadString(grant.Payload, "request_event_id")
 	if seed == "" {
 		seed = grant.EventID
@@ -844,6 +862,39 @@ func (s *appServer) enqueueAzureBreakGlassApprovalTurn(ctx context.Context, gran
 		MCPActivateName: azureMCPBreakGlassServerName,
 		MCPActivateURL:  azureMCPBreakGlassServerURL,
 	})
+}
+
+// AzurePersonalNotifier triggers mcp-azure-personal's live tool-surfacing on an
+// azure break-glass grant. Satisfied by *azurepersonal.Client; an interface so
+// tests can stub it.
+type AzurePersonalNotifier interface {
+	NotifyGrantActivated(ctx context.Context, sessionID string) error
+}
+
+// notifyAzureGrantActivated fires mcp-azure-personal's /internal/grant-activated
+// out-of-band so the session's azure tools surface live (the tools/list_changed
+// path). Best-effort + async: the agent still receives the approval turn; this
+// only removes the need to re-handshake, and a slow/down azure-personal must
+// never delay or fail the grant.
+func (s *appServer) notifyAzureGrantActivated(sessionID string) {
+	if s == nil || s.azurePersonal == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := s.azurePersonal.NotifyGrantActivated(ctx, sessionID); err != nil {
+			recordAzureGrantActivated("error")
+			slog.Warn("azure grant-activated notify failed",
+				"session_id", sessionID, "error", err.Error())
+			return
+		}
+		recordAzureGrantActivated("ok")
+	}()
 }
 
 func azureBreakGlassApprovalDisplayText(_ pgstore.ControlActionEvent, expiresAt time.Time) string {
@@ -949,6 +1000,189 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, map[string]any{"active": false, "repo": repo, "session_id": sessionID})
 }
 
+func (s *appServer) handleAdminGrantGitBreakGlass(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if s.controlActions == nil {
+		recordControlActionEvent("", "", "", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if sessionScope != s.localSessionScope() {
+		writeError(w, http.StatusBadRequest, "break-glass grants must be issued from the target session scope")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	info, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	var body struct {
+		Repo           string      `json:"repo"`
+		RepoScope      repoScope   `json:"repo_scope"`
+		BranchScope    branchScope `json:"branch_scope"`
+		TTLSeconds     int         `json:"ttl_seconds"`
+		Operations     []string    `json:"operations"`
+		RequestEventID string      `json:"request_event_id"`
+		Reason         string      `json:"reason"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	repoScope, err := normalizeRepoScope(body.RepoScope, body.Repo)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	branchScope, err := normalizeBranchScope(body.BranchScope, sessionID, singleRepoName(repoScopeRepos(repoScope), repoScope.Kind == "all_repos"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	repos := repoScopeRepos(repoScope)
+	allRepos := repoScope.Kind == "all_repos"
+	row, expiresAt, err := s.appendGitBreakGlassGrant(r.Context(), gitBreakGlassGrantInput{
+		SessionID:      sessionID,
+		OwnerEmail:     info.Owner,
+		RepoOwner:      singleRepoOwner(repos, allRepos),
+		RepoName:       singleRepoName(repos, allRepos),
+		RepoScope:      repoScope,
+		BranchScope:    branchScope,
+		TTLSeconds:     body.TTLSeconds,
+		Operations:     body.Operations,
+		RequestEventID: body.RequestEventID,
+		Reason:         body.Reason,
+		ApprovedBy:     user.Email,
+	})
+	if err != nil {
+		recordControlActionEvent("tank-operator", "git_break_glass_approval", "github.break_glass.grant", "succeeded", "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	agentNotification := map[string]any{"delivered": false}
+	if notifyResp, status, detail := s.enqueueGitBreakGlassApprovalTurn(r.Context(), row, expiresAt); status != 0 {
+		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "notify_error")
+		slog.Warn("admin git break-glass grant persisted but agent notification turn failed",
+			"session_id", sessionID, "grant_event_id", row.EventID, "status", status, "detail", detail)
+		writeError(w, http.StatusInternalServerError, "git break-glass grant persisted but agent notification failed: "+strings.TrimSpace(detail))
+		return
+	} else {
+		agentNotification["delivered"] = true
+		if turnID := turnIDFromEnqueueResponse(notifyResp); turnID != "" {
+			agentNotification["turn_id"] = turnID
+		}
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"active":             true,
+		"event_id":           row.EventID,
+		"repo":               strings.Trim(strings.TrimSpace(row.RepoOwner+"/"+row.RepoName), "/"),
+		"repo_scope":         repoScope,
+		"branch_scope":       branchScope,
+		"expires_at":         expiresAt.Format(time.RFC3339),
+		"operations":         normalizeBreakGlassOperations(body.Operations),
+		"session_id":         sessionID,
+		"session_scope":      sessionScope,
+		"owner_email":        info.Owner,
+		"agent_notification": agentNotification,
+	})
+}
+
+func (s *appServer) handleAdminGrantAzureBreakGlass(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if s.controlActions == nil {
+		recordControlActionEvent("", "", "", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if sessionScope != s.localSessionScope() {
+		writeError(w, http.StatusBadRequest, "break-glass grants must be issued from the target session scope")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	info, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	var body struct {
+		TTLSeconds     int      `json:"ttl_seconds"`
+		Operations     []string `json:"operations"`
+		RequestEventID string   `json:"request_event_id"`
+		Reason         string   `json:"reason"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	row, expiresAt, err := s.appendAzureBreakGlassGrant(r.Context(), azureBreakGlassGrantInput{
+		SessionID:      sessionID,
+		OwnerEmail:     info.Owner,
+		TTLSeconds:     body.TTLSeconds,
+		Operations:     body.Operations,
+		RequestEventID: body.RequestEventID,
+		Reason:         body.Reason,
+		ApprovedBy:     user.Email,
+	})
+	if err != nil {
+		recordControlActionEvent("tank-operator", "azure_break_glass_approval", "azure.break_glass.grant", "succeeded", "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	agentNotification := map[string]any{"delivered": false}
+	if notifyResp, status, detail := s.enqueueAzureBreakGlassApprovalTurn(r.Context(), row, expiresAt); status != 0 {
+		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "notify_error")
+		slog.Warn("admin azure break-glass grant persisted but agent activation turn failed",
+			"session_id", sessionID, "grant_event_id", row.EventID, "status", status, "detail", detail)
+	} else {
+		agentNotification["delivered"] = true
+		if turnID := turnIDFromEnqueueResponse(notifyResp); turnID != "" {
+			agentNotification["turn_id"] = turnID
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"active":             true,
+		"event_id":           row.EventID,
+		"resource":           "azure-personal",
+		"expires_at":         expiresAt.Format(time.RFC3339),
+		"operations":         normalizeAzureBreakGlassOperations(body.Operations),
+		"session_id":         sessionID,
+		"session_scope":      sessionScope,
+		"owner_email":        info.Owner,
+		"agent_notification": agentNotification,
+	})
+}
+
 // handleInternalGetAzureBreakGlassGrant returns the active azure-personal MCP
 // break-glass grant for a session, if any. mcp-azure-personal calls this on
 // every tool list/call (short-cached) to decide whether to serve azure tools.
@@ -967,7 +1201,23 @@ func (s *appServer) handleInternalGetAzureBreakGlassGrant(w http.ResponseWriter,
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
-	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	// azure-personal calls this endpoint as its OWN service principal — not as
+	// the session owner — so the grant lookup must be scoped to the SESSION's
+	// owner (the grant is recorded under the owner's email), not the caller's
+	// identity. Without this, azure-personal never sees a user's grant and the
+	// azure MCP stays locked for every session. (The git equivalent is called by
+	// the session pod itself, whose identity already IS the owner, so it can use
+	// the caller's actor_email directly.) Fail closed: if the session/owner can't
+	// be resolved, report no active grant.
+	ownerEmail := ""
+	if info, infoErr := s.mgr.GetByID(r.Context(), sessionID); infoErr == nil {
+		ownerEmail = strings.TrimSpace(info.Owner)
+	}
+	if ownerEmail == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false, "resource": "azure-personal", "session_id": sessionID})
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), ownerEmail, s.sessionScope, sessionID, 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1331,14 +1581,40 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 		return
 	}
 	resp := evaluateHotSwapVerification(rows, owner, name, branch, sha)
+	if s.mcpGitHub != nil && s.ciWatches != nil {
+		resp = evaluateHotSwapPublishVerification(rows, owner, name, branch, sha)
+		registered, err := s.registerAndReconcilePRReadiness(r.Context(), prReadinessRegistration{
+			SessionID:       sessionID,
+			OwnerEmail:      user.ActorEmail,
+			PROwner:         owner,
+			PRName:          name,
+			Branch:          branch,
+			ExpectedHeadSHA: sha,
+			CheckState:      "pending",
+			Detail:          "PR readiness registered for hot-swap/test-slot gate.",
+		}, ciWatchReconcileHandoff)
+		if err != nil {
+			resp.Reasons = append(resp.Reasons, "live PR readiness unavailable: "+err.Error())
+		} else {
+			if registered.Watch.PRNumber > 0 {
+				prNumber := registered.Watch.PRNumber
+				resp.PRNumber = &prNumber
+			}
+			applyHotSwapReadinessResult(&resp, registered.Result, sha)
+		}
+		resp.Allowed = resp.PublishVerified && resp.CIVerified && resp.MergeVerified && len(resp.Reasons) == 0
+	}
 	resp.Repo = repo
 	resp.Branch = branch
 	resp.SHA = sha
-	resp.ArtifactKind = strings.TrimSpace(body.ArtifactKind)
 	resp.ValidationTarget = strings.TrimSpace(body.ValidationTarget)
 	resp.SourceTool = strings.TrimSpace(body.SourceTool)
 	if resp.Allowed {
 		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if resp.ReadinessState == "watching" || strings.EqualFold(resp.CheckState, "pending") || strings.Contains(strings.Join(resp.Reasons, " "), "watching") {
+		writeJSON(w, http.StatusAccepted, resp)
 		return
 	}
 	writeJSON(w, http.StatusConflict, resp)
@@ -1710,7 +1986,18 @@ func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo,
 			sawMerge = true
 			resp.PRNumber = row.PRNumber
 			if row.Status == "succeeded" {
-				resp.MergeVerified = true
+				// A branch that is behind its base has no conflicts, so the
+				// watcher records it mergeable — but testing it validates code
+				// that changes the moment it's brought current, and may
+				// merge-conflict later. Treat behind-as-not-current: the gate
+				// passes only a head that is both mergeable AND current with
+				// main, so a slot never runs (and a merge never lands) stale-
+				// relative-to-base work.
+				if controlActionPayloadString(row.Payload, "mergeable_state") == "behind" {
+					resp.Reasons = append(resp.Reasons, "branch is behind its base (mergeable_state=behind) — rebase/update onto main before testing or merging")
+				} else {
+					resp.MergeVerified = true
+				}
 			} else {
 				reason := "latest PR mergeability observation for this commit is not clean"
 				if row.Error != "" {
@@ -1733,6 +2020,90 @@ func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo,
 	return resp
 }
 
+func evaluateHotSwapPublishVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) hotSwapVerificationResponse {
+	resp := hotSwapVerificationResponse{}
+	sawPublish := false
+	for _, row := range rows {
+		if row.RepoOwner != owner || row.RepoName != repo || !strings.EqualFold(row.ResultSHA, sha) {
+			continue
+		}
+		switch row.Action {
+		case "github.commit.push", "github.break_glass.push":
+			if sawPublish {
+				continue
+			}
+			if controlActionPayloadString(row.Payload, "branch") != branch {
+				continue
+			}
+			sawPublish = true
+			if row.Status == "succeeded" {
+				resp.PublishVerified = true
+			} else {
+				resp.Reasons = append(resp.Reasons, "latest governed publish for this commit has not succeeded")
+			}
+		}
+	}
+	if !sawPublish {
+		resp.Reasons = append(resp.Reasons, "no governed publish record exists for this commit on this branch")
+	}
+	return resp
+}
+
+func applyHotSwapReadinessResult(resp *hotSwapVerificationResponse, result ciWatchReconcileResult, sha string) {
+	resp.ReadinessState = ciWatchToolState(result.Status)
+	resp.CheckState = result.CheckState
+	resp.MergeableState = result.MergeableState
+	resp.PRURL = strings.TrimSpace(result.PRURL)
+
+	headOK := strings.EqualFold(strings.TrimSpace(result.HeadSHA), sha)
+	if !headOK {
+		resp.Reasons = append(resp.Reasons, "open PR head is "+shortSHAForMessage(result.HeadSHA)+", not requested SHA "+shortSHAForMessage(sha))
+	}
+
+	if strings.EqualFold(result.CheckState, "success") && len(result.FailingChecks) == 0 {
+		resp.CIVerified = true
+	} else {
+		detail := strings.TrimSpace(result.Detail)
+		if detail == "" {
+			detail = "checks are pending"
+		}
+		resp.Reasons = append(resp.Reasons, "CI for "+shortSHAForMessage(sha)+" is not green: "+detail)
+	}
+
+	if strings.EqualFold(result.MergeableState, "clean") && result.Status != pgstore.CIWatchConflict {
+		resp.MergeVerified = true
+	} else {
+		stateText := strings.TrimSpace(result.MergeableState)
+		if stateText == "" {
+			stateText = "unknown"
+		}
+		resp.Reasons = append(resp.Reasons, "PR is not confirmed mergeable/current: "+stateText)
+	}
+
+	switch result.Status {
+	case pgstore.CIWatchReady:
+		if headOK {
+			resp.CIVerified = true
+			resp.MergeVerified = true
+		}
+	case pgstore.CIWatchWatching:
+		resp.Reasons = append(resp.Reasons, "PR readiness is watching: "+strings.TrimSpace(result.Detail))
+	case pgstore.CIWatchMerged:
+		resp.Reasons = append(resp.Reasons, "PR is already merged")
+	}
+}
+
+func shortSHAForMessage(sha string) string {
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return "unknown"
+	}
+	if len(sha) <= 12 {
+		return sha
+	}
+	return sha[:12]
+}
+
 func controlActionPayloadString(payload json.RawMessage, key string) string {
 	var body map[string]any
 	if err := json.Unmarshal(payload, &body); err != nil {
@@ -1751,18 +2122,29 @@ func asString(value any) string {
 }
 
 func normalizeBreakGlassOperations(in []string) []string {
-	allowed := map[string]bool{"mint_full_git_token": true, "push_current_head": true, "apply_test_slot_hot_swap": true}
+	canonical := []string{gitBreakGlassOpMintToken, gitBreakGlassOpPushHead, gitBreakGlassOpWorkflows}
+	allowed := map[string]bool{}
 	seen := map[string]bool{}
-	out := []string{}
+	for _, op := range canonical {
+		allowed[op] = true
+	}
 	for _, raw := range in {
 		op := strings.TrimSpace(raw)
-		if allowed[op] && !seen[op] {
-			out = append(out, op)
+		if allowed[op] {
 			seen[op] = true
 		}
 	}
+	if seen[gitBreakGlassOpWorkflows] {
+		seen[gitBreakGlassOpMintToken] = true
+	}
+	out := []string{}
+	for _, op := range canonical {
+		if seen[op] {
+			out = append(out, op)
+		}
+	}
 	if len(out) == 0 {
-		out = []string{"mint_full_git_token", "push_current_head", "apply_test_slot_hot_swap"}
+		out = []string{gitBreakGlassOpMintToken, gitBreakGlassOpPushHead}
 	}
 	return out
 }

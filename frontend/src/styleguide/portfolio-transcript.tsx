@@ -309,13 +309,28 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
           data-section-divider="true"
           data-design-component="TurnPromptContext"
           data-design-state="expanded-with-divider"
+          data-design-scenario="long-prompt-scroll-capped"
           data-inspectable
         >
           <TranscriptMessage variant="user" ownedByActivity>
             <p style={{ margin: 0 }}>
               Please inspect the completed turn with a long initiating prompt.
-              The divider owns section collapse controls while the user avatar
-              identifies the prompt context.
+              The initial request includes repository context, validation
+              expectations, UI constraints, and a detailed description of the
+              failure mode where the prompt message grows tall enough to push
+              the turn section controls below the viewport. The prompt continues
+              with enough detail to model a real operator handoff: keep the
+              prompt visible as the user-authored context for the turn, keep the
+              avatar gutter aligned with activity messages, keep the divider
+              controls directly reachable, and make only the prompt body scroll
+              once it exceeds the bounded view size. This fixture intentionally
+              repeats the kind of dense setup text that appears in long coding
+              sessions, including implementation notes, validation notes,
+              acceptance criteria, and constraints about preserving existing
+              transcript behavior. The long body should not stretch the turn
+              pane until the controls leave the screen; the prompt bubble should
+              remain readable inside its own scroll area while the activity
+              divider stays in place below it.
             </p>
           </TranscriptMessage>
         </div>

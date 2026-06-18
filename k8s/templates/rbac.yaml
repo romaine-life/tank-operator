@@ -123,12 +123,10 @@ roleRef:
 ---
 # Session SA is READ-ONLY on the cluster. An in-cluster agent can `kubectl get`
 # anything transparently, but cannot write or exec — in particular it cannot
-# `kubectl cp`/exec into a test slot to bypass the CI-gated hot-swap path. Slot
-# mutation goes through the gated `apply_test_slot_hot_swap` MCP tool; serious
-# ad-hoc cluster writes go through a gated MCP path / break-glass, never the
-# session's own credential. (Was cluster-admin — removing it is the enforcement
-# half of routing every slot hot-swap through CI. RBAC is allow-only, so
-# read-only is expressed as a grant, not a carve-out from cluster-admin.)
+# `kubectl cp`/exec into a test slot to bypass governed slot validation.
+# Serious ad-hoc cluster writes go through a gated MCP path / break-glass,
+# never the session's own credential. RBAC is allow-only, so read-only is
+# expressed as a grant, not a carve-out from cluster-admin.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

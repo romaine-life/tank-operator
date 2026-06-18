@@ -156,6 +156,34 @@ Named behaviors in the session-bar surface. See
   - Live validation on a Glimmung `tank-operator` test slot via `static`
     hot-swap (keyboard + click + "+" exercised in the browser).
 
+## splash-launch-defaults
+
+- **Status:** shipped
+- **Intent:** Keep the pre-session splash from turning the last created
+  session's launch settings into durable defaults. Fresh splash state defaults
+  to Claude GUI, direct initial message, server-owned best models, max reasoning
+  for Claude, Codex's highest supported reasoning (`xhigh`), and restricted
+  Git. User edits remain a tab-scoped draft while they navigate away and back,
+  but successful session creation clears the draft back to those defaults.
+- **Affected contracts:** Session Bar, Session Lifecycle. The session-create
+  payload still owns the durable session row; this capability only governs how
+  the browser stages the next create.
+- **Mechanism:** splash mode/interaction, model, effort, initial-message mode,
+  and Restricted Git opt-out state use `sessionStorage` draft keys, not
+  profile-backed or `localStorage` defaults. `resetHomeLaunchDefaults()` runs
+  after a successful `POST /api/sessions`, clears those draft keys, resets the
+  in-memory splash state, and writes durable run prefs without launch-model or
+  launch-effort keys so stale profile values retire on the next sync. The
+  boot-time `main.tsx` localStorage reaper no longer allowlists retired
+  durable splash keys (`tank.defaultSessionMode`, `tank.defaultInteraction`,
+  or the old Restricted Git key).
+- **Evidence:** `frontend/src/modelEffortDefaults.test.ts` pins launch
+  model/effort as tab-scoped prefs, default Claude/Codex reasoning, and
+  reset-on-create. `frontend/src/homePreferences.test.tsx` covers the
+  Restricted Git draft key and clear behavior. `frontend/src/main.test.ts`
+  guards that retired durable splash keys are not allowlisted. Full frontend
+  Vitest and production build cover the App integration.
+
 ## session-bug-labels
 
 - **Status:** introduced
@@ -196,7 +224,7 @@ Named behaviors in the session-bar surface. See
   `unreadScanCap` (2000) candidate rows per count and saturates there — the
   badge is a signal, not an audit. Read-state advancement (the cursor) is
   unaffected; only the displayed magnitude is capped.
-- **Non-goal:** per-event emit fidelity. The last event of a class carries
+- **Non-goal:** per-event emit accuracy. The last event of a class carries
   the whole batch by design because every class recomputes from durable
   state; restoring per-event emits restores the unbounded derivation cost.
 

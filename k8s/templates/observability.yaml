@@ -161,6 +161,16 @@ metadata:
     app.kubernetes.io/name: tank-operator
 spec:
   groups:
+    - name: tank-operator.ci-watch
+      rules:
+        - alert: TankCIWatchStalled
+          expr: tank_ci_watch_oldest_stale_age_seconds > 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a governed-PR CI watch has been 'watching' with no event for over an hour"
+            runbook: "A CI watch is stuck: the deciding webhook was likely dropped and the durable backstop's live re-drive did not resolve it (CI genuinely hung, or mergeability never resolved). The owning session stays reaper-protected and asleep by design. Check the PR's real check/mergeable state on GitHub and the tank_ci_webhooks_total{result} breakdown, then resolve or close the PR. The agent is intentionally NOT woken for this infra non-event."
     - name: tank-operator.http
       rules:
         - alert: TankOperatorHTTP5xxRate
@@ -327,6 +337,15 @@ spec:
             summary: "session-events persister terminated an event for schema reasons"
             runbook: "A producer is emitting non-Tank events to the bus. Steady-state expectation is zero. Inspect persister logs for `session bus event terminated: schema rejected`."
 
+        - alert: TankControlActionAuthorizationDenied
+          expr: increase(tank_control_action_events_total{result="forbidden"}[15m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "control-action ledger writes are being authorization-denied"
+            runbook: "A session-pod service principal is being rejected by the per-session authorization gate, so governed-git evidence (publish/CI/mergeability), break-glass requests, and PR control-actions stop landing in control_action_events — silently, because the sidecar swallows the 4xx. Steady-state is zero. A nonzero rate means either a forged-identity attempt or an authorization regression like the 2026-06-16 #1207 incident (writes gated on a caller-asserted header instead of the verified svc:tank:<id> subject). Inspect handleInternalAppendControlAction / serviceSubjectMatchesSession and confirm the exchanged subject matches the target session and scope."
+
         - alert: TankSessionEventWakePublishFailures
           expr: rate(tank_session_event_wake_publish_failure_total[10m]) > 0
             or on() rate(tank_session_list_event_publish_failure_total[10m]) > 0
@@ -465,6 +484,155 @@ spec:
               activity_summary rows and terminal correlation telemetry
               to decide whether the cause was a stale server activity
               projection or a missed local-run finalization.
+
+        - alert: TankTurnDirectoryNewTurnLoop
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-directory-new-turn-loop",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Turns directory new-turn refresh loop on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser repeatedly reloaded /turns/directory with
+              source=new-turn because the live transcript window contained
+              at least one turn_activity shell whose turn_id was still
+              absent from the durable directory after repeated reads.
+              This is the upstream spinner/bootstrap class: the Turns
+              surface is trying to make the selector complete before the
+              selected activity body can load.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-directory-new-turn-loop"
+
+              The log carries session_id, page_path, source, key (the
+              first missing turn_id), event_count (number of missing live
+              shells), canonical_event_count (known directory turn count),
+              entries, and turn_activity_shells.
+
+        - alert: TankTurnDirectoryRouteSessionMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-directory-route-session-mismatch",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Turns directory loaded from a pane whose session does not match the URL on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser was about to load /turns/directory for one
+              mounted Run pane while window.location pointed at a different
+              /sessions/{id} route. That is the route/session desync seen
+              when switching sessions leaves an old pane doing work under
+              the new URL.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-directory-route-session-mismatch"
+
+              The log carries session_id (the pane), key (the route
+              session id), page_path, source, and event_count (directory
+              turn count known before the request).
+
+        - alert: TankTurnActivitySelectedRouteSessionMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-route-session-mismatch",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "selected activity pane belongs to a different session than the route on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              A selected Turns activity body reached the stuck loading
+              watchdog while the mounted pane session id disagreed with
+              the current /sessions/{id} route. This is the explicit
+              selected-activity form of the stale-pane/session ownership
+              bug: an old session component is still participating under
+              a new session URL.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-activity-selected-route-session-mismatch"
+
+              The log carries session_id (the mounted pane),
+              route_session_id (the URL session), selected_turn_id,
+              page_path, source, reason, status, entries, groups,
+              turn_activity_shells, durable_active_turn_activity_shells,
+              and activity_entries. Compare it with the adjacent
+              event="turn-activity-selected-loading-stranded" log for the
+              same timestamp to tell whether the wrong pane is also the
+              one rendering the visible spinner or only a hidden stale
+              participant.
+
+        - alert: TankTurnActivitySelectedLoadingStranded
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-stranded",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "selected Turns pane stayed on Loading activity with no active load state on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser rendered the selected turn's "Loading
+              activity..." body for longer than the stuck threshold
+              while its selected-turn load state was absent or
+              unloaded. That is the hidden strand class: the UI is
+              visibly waiting, but the load lifecycle telemetry has no
+              corresponding in-flight request to observe.
+
+              This alert is intentionally render-side. It fires from
+              the actual condition that puts the spinner on screen, not
+              from an inferred request lifecycle. Inspect structured
+              orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-activity-selected-loading-stranded"
+
+              The log carries session_id, previous_session_id, source
+              (session-switch vs turns-selected), key (selected
+              turn_id), reason (absent/unloaded), status code,
+              turn_activity_shells, durable_active_turn_activity_shells,
+              and activity_entries (the projected shell child count).
+              If source=session-switch, start with the in-place
+              session-change path: tail-bootstrap-reset, turn-directory
+              reload, selected latest turn, then activity detail load.
+              If activity_entries is nonzero, durable projection exists
+              but the selected detail body is disconnected from it. If
+              turn_activity_shells is zero, inspect the turn
+              directory/timeline bootstrap path before the activity
+              endpoint.
+
+        - alert: TankTurnActivitySelectedLoadingSlow
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-slow",surface="session"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: info
+          annotations:
+            summary: "selected Turns pane stayed on Loading activity with an in-flight load on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser rendered the selected turn's "Loading
+              activity..." body for longer than the stuck threshold
+              while a selected-turn activity request was still marked
+              loading. This is not the no-load strand; compare with
+              turn_activity_load_timed_out / turn_activity_load_failed
+              session-event telemetry and the /activity handler logs.
+              Structured chat-scroll logs for
+              event="turn-activity-selected-loading-slow" carry the
+              session_id and selected turn_id.
 
         - alert: TankBrowserTerminalLocalRunMismatch
           expr: |

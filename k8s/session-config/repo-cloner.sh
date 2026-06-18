@@ -3,6 +3,10 @@ set -euo pipefail
 
 WORKSPACE="${WORKSPACE:-/workspace}"
 REPOS_JSON="${TANK_REPOS_JSON:-[]}"
+REPO_BASES_JSON="${TANK_REPO_BASES_JSON:-}"
+if [ -z "$REPO_BASES_JSON" ]; then
+  REPO_BASES_JSON="{}"
+fi
 AUTH_TOKEN_PATH="${AUTH_ROMAINE_TOKEN_PATH:-/var/run/secrets/auth.romaine.life/token}"
 AUTH_EXCHANGE_URL="${AUTH_ROMAINE_EXCHANGE_URL:-https://auth.romaine.life/api/auth/exchange/k8s}"
 MCP_GITHUB_URL="${MCP_GITHUB_URL:-http://mcp-github.mcp-github.svc:80}"
@@ -11,6 +15,7 @@ GIT_CLONE_DEPTH="${GIT_CLONE_DEPTH:-50}"
 TANK_RESTRICTED_GIT="${TANK_RESTRICTED_GIT:-false}"
 
 REPOS_JSON="$(printf '%s' "$REPOS_JSON" | jq -c '[.[] | select(type == "string")]')"
+REPO_BASES_JSON="$(printf '%s' "$REPO_BASES_JSON" | jq -c 'if type == "object" then with_entries(select(.value | type == "string")) else {} end')"
 if [ "$(jq 'length' <<<"$REPOS_JSON")" -eq 0 ]; then
   echo "repo-cloner: no repositories selected"
   exit 0
@@ -194,9 +199,19 @@ create_session_branch_pr() {
     return 0
   fi
 
-  base_branch="$(git -C "$target" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
-  if [ -z "$base_branch" ]; then
-    base_branch="$(git -C "$target" branch --show-current)"
+  base_branch="$(jq -r --arg slug "$slug" --arg lower_slug "$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')" '.[$slug] // .[$lower_slug] // empty' <<<"$REPO_BASES_JSON")"
+  if [ -n "$base_branch" ]; then
+    echo "repo-cloner: using configured base branch $base_branch for $slug"
+    if [ "$GIT_CLONE_DEPTH" != "0" ]; then
+      git -C "$target" fetch --depth="${GIT_CLONE_DEPTH}" origin "$base_branch:refs/remotes/origin/$base_branch" || git -C "$target" fetch origin "$base_branch:refs/remotes/origin/$base_branch"
+    else
+      git -C "$target" fetch origin "$base_branch:refs/remotes/origin/$base_branch"
+    fi
+  else
+    base_branch="$(git -C "$target" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+    if [ -z "$base_branch" ]; then
+      base_branch="$(git -C "$target" branch --show-current)"
+    fi
   fi
   if [ -z "$base_branch" ]; then
     echo "repo-cloner: cannot determine base branch for $slug" >&2
@@ -410,11 +425,14 @@ for slug in "${REPOS[@]}"; do
     git clone "${clone_args[@]}" "https://github.com/${slug}.git" "$tmp_target"; then
     mv "$tmp_target" "$target"
     if [ "$restricted_git" = "true" ]; then
-      # Scrub the local credential helper so the one-shot clone token cannot be
-      # reused and pushes must go through the governed Tank MCP publish path.
-      # Non-restricted clones intentionally keep no local override, so they
-      # inherit the global auto-minting credential helper (full git access).
-      git -C "$target" config --local credential.helper ""
+      # Leave NO local credential.helper override so the clone inherits the
+      # global mode-aware helper, which mints READ-ONLY tokens in restricted
+      # mode — so clone/fetch/pull keep working for reads. (An empty local value
+      # clears the helper list and would disable those reads; that was the old
+      # behavior.) Writes stay governed regardless: the pre-push hook blocks
+      # pushes and a read-only token cannot push, so the one-shot write token
+      # used for this clone is not reusable from the agent shell.
+      git -C "$target" config --local --unset-all credential.helper 2>/dev/null || true
       if ! create_session_branch_pr "$slug" "$target"; then
         msg="governed session branch PR setup failed"
         set_repo_state "$slug" "failed" "$target" "$msg"

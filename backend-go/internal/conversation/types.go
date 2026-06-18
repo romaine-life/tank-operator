@@ -95,6 +95,7 @@ const (
 	EventShellTaskUpdated            EventType = "shell_task.updated"
 	EventShellTaskExited             EventType = "shell_task.exited"
 	EventScheduledWakeupUpdated      EventType = "scheduled_wakeup.updated"
+	EventCIStatusUpdated             EventType = "ci_status.updated"
 	EventTurnAwaitingInput           EventType = "turn.awaiting_input"
 	EventTurnAwaitingInputInvocation EventType = "turn.awaiting_input.invocation"
 )
@@ -293,6 +294,14 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("scheduled_wakeup.updated must be actor=system source=tank")
 		}
 		return validateScheduledWakeupPayload(event)
+	case EventCIStatusUpdated:
+		if err := requireFields(event, "timeline_id", "client_nonce"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("ci_status.updated must be actor=system source=tank")
+		}
+		return validateCIStatusPayload(event)
 	case EventTurnAwaitingInput:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -733,6 +742,25 @@ func validateScheduledWakeupPayload(event map[string]any) error {
 	return nil
 }
 
+func validateCIStatusPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "kind") != "ci_status" {
+		return fmt.Errorf("payload.kind must be ci_status for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "pr_url") == "" {
+		return fmt.Errorf("payload.pr_url is required for %s", stringField(event, "type"))
+	}
+	switch stringField(payload, "state") {
+	case "merged", "ready", "failed", "conflict":
+	default:
+		return fmt.Errorf("payload.state is invalid for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 func validateTurnInputAnsweredPayload(event map[string]any) error {
 	payload, err := requirePayload(event)
 	if err != nil {
@@ -909,6 +937,7 @@ func validEventType(eventType EventType) bool {
 		EventShellTaskUpdated,
 		EventShellTaskExited,
 		EventScheduledWakeupUpdated,
+		EventCIStatusUpdated,
 		EventTurnAwaitingInput,
 		EventTurnAwaitingInputInvocation:
 		return true

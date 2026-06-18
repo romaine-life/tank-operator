@@ -84,9 +84,5 @@ jobs:
           file: agent-container/Dockerfile
           push: true
           tags: romainecr.azurecr.io/agent-container:${{ steps.fingerprint.outputs.proof_tag }}
-          cache-from: |
-            type=registry,ref=romainecr.azurecr.io/agent-container-build-cache:agent-container
-            type=gha,scope=agent-container
-          cache-to: |
-            type=registry,ref=romainecr.azurecr.io/agent-container-build-cache:agent-container,mode=max
-            type=gha,mode=max,scope=agent-container
+          cache-from: type=registry,ref=romainecr.azurecr.io/agent-container-build-cache:agent-container
+          cache-to: type=registry,ref=romainecr.azurecr.io/agent-container-build-cache:agent-container,mode=max

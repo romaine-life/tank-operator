@@ -66,7 +66,7 @@ import {
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
-import { AdminBreakGlassTokenPanel } from "./AdminBreakGlassTokenPanel";
+import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -256,6 +256,7 @@ import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
 import { McpIcon } from "./McpIcon";
 import {
+  clearHomeRestrictedGitPreference,
   readHomeRestrictedGitEnabled,
   writeHomeRestrictedGitEnabled,
 } from "./homePreferences";
@@ -322,6 +323,7 @@ import {
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
   shouldRingForActivityTransition,
+  type ConversationActivityStatus,
   type SessionActivitySummary,
 } from "./sessionActivity";
 import {
@@ -330,7 +332,11 @@ import {
   type SessionBugLabel,
   type SessionRow,
 } from "./sessionStore";
-import { decideFollowupSubmit } from "./submitLatch";
+import {
+  decideFollowupSubmit,
+  describeRunBlock,
+  type RunBlockDescription,
+} from "./submitLatch";
 import {
   insertThinkingGroupByDurableOrder,
   resolveThinkingInsertIndex,
@@ -375,6 +381,8 @@ import {
   turnActivityGroupIsActive,
   turnActivityShouldStartLoad,
   turnActivityShellIsDurablyActive,
+  turnActivityStuckEvent,
+  TURN_ACTIVITY_STUCK_THRESHOLD_MS,
   type TurnActivityLoadProblem,
   type TurnActivityLoadReason,
   type TurnActivityLoadSnapshot as TurnActivityLoadSnapshotModel,
@@ -428,6 +436,7 @@ const CliProcessTerminal = lazy(() =>
 const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
 const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
 const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
+const TURN_DIRECTORY_NEW_TURN_LOOP_THRESHOLD = 3;
 // Minimum spacing between resync_required-triggered full snapshot
 // refreshes on the session-list stream. Each full resync is a snapshot
 // GET plus a near-immediate stream reopen (ticket mint + auth), so a
@@ -462,6 +471,7 @@ type TurnActivitySummary = {
   startOrderKey?: string;
   endOrderKey?: string;
   sourceEventId?: string;
+  submittedSource?: string;
   turnUsage?: unknown;
   usageObservation?: unknown;
   // The model/effort this turn ran on (carried on the shell's activity summary
@@ -637,6 +647,19 @@ type TranscriptTimelineBody = {
   target_timeline_id?: string;
   target_cursor?: string;
 };
+// The durable turn directory: the COMPLETE, submission-ordered set of
+// turn_activity shells (server_turn_directory_v1). It owns the selectable turn
+// set for the Turns view, independent of the bounded /timeline window the chat
+// surface pages. `turns` are the same shell rows /timeline returns, so the SPA
+// reuses normalizeProjectedTranscriptEntries to build the selector.
+type TurnDirectoryBody = {
+  session_id?: string;
+  turns?: unknown[];
+  count?: number;
+  latest_turn_number?: number;
+  truncated?: boolean;
+};
+type TurnDirectoryStatus = "idle" | "loading" | "ready" | "error";
 type SdkHistoryRefreshSource =
   | "history"
   | "projected-refresh"
@@ -1252,8 +1275,10 @@ const DEMO_LANDING_LINES = [
   "Sign in from the lower-left profile area when you want real pods.",
 ];
 
-const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
-const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
+const HOME_DRAFT_SESSION_MODE_KEY = "tank.homeDraftSessionMode.v1";
+const HOME_DRAFT_INTERACTION_KEY = "tank.homeDraftInteraction.v1";
+const DEFAULT_HOME_SESSION_MODE: DefaultSessionMode = "claude_gui";
+const DEFAULT_HOME_INTERACTION: SessionInteraction = "gui";
 const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
 
 function normalizeSessionMode(value: string | null): string | null {
@@ -1263,40 +1288,47 @@ function normalizeSessionMode(value: string | null): string | null {
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(
-      localStorage.getItem(DEFAULT_SESSION_MODE_KEY),
+      sessionStorage.getItem(HOME_DRAFT_SESSION_MODE_KEY),
     );
     if (stored === "codex_app_server" || stored === "codex_exec_gui") {
       return "codex_gui";
     }
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
-    // localStorage can be unavailable in hardened/private browser contexts.
+    // sessionStorage can be unavailable in hardened/private browser contexts.
   }
-  return "claude_gui";
+  return DEFAULT_HOME_SESSION_MODE;
 }
 
 function writeDefaultSessionMode(mode: DefaultSessionMode): void {
   try {
-    localStorage.setItem(DEFAULT_SESSION_MODE_KEY, mode);
+    sessionStorage.setItem(HOME_DRAFT_SESSION_MODE_KEY, mode);
   } catch {
-    // Preference persistence is best-effort; session creation should continue.
+    // Draft persistence is best-effort; session creation should continue.
   }
 }
 
 function readDefaultInteraction(): SessionInteraction {
   try {
-    const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
+    const stored = sessionStorage.getItem(HOME_DRAFT_INTERACTION_KEY);
     if (stored === "gui" || stored === "cli") return stored;
     if (stored === "terminal") return "cli";
   } catch {}
   // Derive from stored session mode when the interaction preference is absent.
   const mode = readDefaultSessionMode();
-  return CHAT_MODES.has(mode) ? "gui" : "cli";
+  return CHAT_MODES.has(mode) ? DEFAULT_HOME_INTERACTION : "cli";
 }
 
 function writeDefaultInteraction(interaction: SessionInteraction): void {
   try {
-    localStorage.setItem(DEFAULT_INTERACTION_KEY, interaction);
+    sessionStorage.setItem(HOME_DRAFT_INTERACTION_KEY, interaction);
+  } catch {}
+}
+
+function clearHomeDraftModePreference(): void {
+  try {
+    sessionStorage.removeItem(HOME_DRAFT_SESSION_MODE_KEY);
+    sessionStorage.removeItem(HOME_DRAFT_INTERACTION_KEY);
   } catch {}
 }
 
@@ -1719,13 +1751,21 @@ interface AdminHiddenSessionsBody {
   sessions?: AdminHiddenSession[];
 }
 
+type AdminBreakGlassFilter = "pending" | "recent" | "all";
+
 interface AdminBreakGlassListItem {
   pending?: boolean;
   request: ControlActionRow;
   decision?: ControlActionRow;
 }
 
-type BreakGlassApprovalMenuKind = "github" | "azure" | "model";
+interface AdminBreakGlassListBody {
+  session_scope?: string;
+  status?: AdminBreakGlassFilter;
+  requests?: AdminBreakGlassListItem[];
+}
+
+type BreakGlassApprovalMenuKind = "github" | "azure" | "model" | "pr-lane";
 
 interface BreakGlassApprovalMenuItem {
   id: string;
@@ -1735,6 +1775,7 @@ interface BreakGlassApprovalMenuItem {
   target: string;
   reason?: string;
   createdAt?: string;
+  prLaneRequest?: PRLaneRequest;
 }
 
 interface TestSlotSessionDefaults {
@@ -2185,6 +2226,20 @@ type BreakGlassRequestLookupResponse = {
 
 type TestSlotModelRequestLookupResponse = BreakGlassRequestLookupResponse;
 
+function approvalNotificationTurnId(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const notification = (body as Record<string, unknown>).agent_notification;
+  if (
+    !notification ||
+    typeof notification !== "object" ||
+    Array.isArray(notification)
+  )
+    return "";
+  const record = notification as Record<string, unknown>;
+  if (record.delivered !== true) return "";
+  return typeof record.turn_id === "string" ? record.turn_id.trim() : "";
+}
+
 // Deep link to a specific message inside a session. Read by
 // readInitialMessageId() on cold start so we can scroll the active
 // session's transcript to the referenced entry. Shape mirrors the
@@ -2482,10 +2537,16 @@ interface ComposerToolButtonsProps {
     items: BreakGlassApprovalMenuItem[];
     approvingId?: string | null;
     onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
+    onApprovePRLane?: (
+      request: PRLaneRequest,
+      override?: "listed" | "count" | "unlimited",
+    ) => void;
+    onDenyPRLane?: (request: PRLaneRequest) => void;
   };
   pullRequest: {
     latestUrl?: string;
     linkedUrl?: string;
+    sessionId?: string | null;
   };
   slash: {
     disabled?: boolean;
@@ -2514,6 +2575,7 @@ interface ComposerToolButtonsProps {
 function PullRequestMenuButton({
   latestUrl,
   linkedUrl,
+  sessionId,
 }: ComposerToolButtonsProps["pullRequest"]) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -2571,6 +2633,42 @@ function PullRequestMenuButton({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
+
+  const [mergeState, setMergeState] = useState<
+    "idle" | "merging" | "merged" | "error"
+  >("idle");
+  const [mergeError, setMergeError] = useState("");
+  const doMerge = useCallback(async () => {
+    if (!sessionId || mergeState === "merging" || mergeState === "merged") return;
+    setMergeState("merging");
+    setMergeError("");
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/merge-pr`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      );
+      if (!res.ok) {
+        let detail = `merge_failed_${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // keep the status-derived detail when the body is not JSON
+        }
+        setMergeState("error");
+        setMergeError(detail);
+        return;
+      }
+      setMergeState("merged");
+    } catch (err) {
+      setMergeState("error");
+      setMergeError(err instanceof Error ? err.message : "merge failed");
+    }
+  }, [sessionId, mergeState]);
 
   const latest = latestUrl?.trim() ?? "";
   const linked = linkedUrl?.trim() ?? "";
@@ -2643,6 +2741,27 @@ function PullRequestMenuButton({
             {!hasLinks && (
               <div className="run-slash-empty">No pull request linked yet</div>
             )}
+            {hasLinks && sessionId ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="run-pr-menu-item"
+                disabled={mergeState === "merging" || mergeState === "merged"}
+                onClick={doMerge}
+                title="Merge this PR in Tank (GitHub enforces the green/mergeable gate)"
+              >
+                <span className="run-pr-menu-name">
+                  {mergeState === "merged"
+                    ? "Merged ✓"
+                    : mergeState === "merging"
+                      ? "Merging…"
+                      : "Merge in Tank"}
+                </span>
+                {mergeState === "error" && mergeError ? (
+                  <span className="run-slash-desc">{mergeError}</span>
+                ) : null}
+              </button>
+            ) : null}
           </div>,
           document.body,
         )}
@@ -2651,7 +2770,12 @@ function PullRequestMenuButton({
 }
 
 function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
-  const Icon = kind === "model" ? FlaskConicalIcon : ShieldAlertIcon;
+  const Icon =
+    kind === "model"
+      ? FlaskConicalIcon
+      : kind === "pr-lane"
+        ? GitBranchIcon
+        : ShieldAlertIcon;
   return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
 }
 
@@ -2659,6 +2783,8 @@ function BreakGlassApprovalMenuButton({
   items,
   approvingId,
   onQuickApprove,
+  onApprovePRLane,
+  onDenyPRLane,
 }: ComposerToolButtonsProps["breakGlass"]) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -2768,57 +2894,127 @@ function BreakGlassApprovalMenuButton({
                 Settings
               </a>
             </div>
-            {items.map((item) => (
-              <div
-                key={item.id}
-                role="group"
-                className="run-pr-menu-item run-pr-menu-breakglass"
-                title={
-                  item.reason
-                    ? `${item.target} — ${item.reason}`
-                    : item.target
-                }
-              >
-                <span className="run-pr-menu-main">
-                  <span className="run-pr-menu-name">
-                    <BreakGlassMenuIcon kind={item.kind} />
-                    {item.label}
+            {items.map((item) => {
+              const prLane = item.prLaneRequest;
+              const busy = approvingId === item.id;
+              return (
+                <div
+                  key={item.id}
+                  role="group"
+                  className="run-pr-menu-item run-pr-menu-breakglass"
+                  title={
+                    item.reason
+                      ? `${item.target} — ${item.reason}`
+                      : item.target
+                  }
+                >
+                  <span className="run-pr-menu-main">
+                    <span className="run-pr-menu-name">
+                      <BreakGlassMenuIcon kind={item.kind} />
+                      {item.label}
+                    </span>
+                    <span className="run-slash-desc">
+                      {item.target}
+                      {item.reason ? ` — ${item.reason}` : ""}
+                    </span>
                   </span>
-                  <span className="run-slash-desc">
-                    {item.target}
-                    {item.reason ? ` — ${item.reason}` : ""}
-                  </span>
-                </span>
-                <span className="run-pr-menu-actions">
-                  <a
-                    role="menuitem"
-                    className="run-pr-menu-action-link"
-                    href={item.href}
-                    onClick={(event) => {
-                      if (!isPlainLeftClick(event)) {
-                        setOpen(false);
-                        return;
-                      }
-                      event.preventDefault();
-                      setOpen(false);
-                      navigateToSessionRoute(new URL(item.href, window.location.href).href);
-                    }}
-                  >
-                    Details
-                  </a>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="run-pr-menu-action-btn"
-                    disabled={!onQuickApprove || approvingId === item.id}
-                    onClick={() => onQuickApprove?.(item)}
-                  >
-                    <CheckIcon aria-hidden="true" />
-                    <span>{approvingId === item.id ? "Approving" : "Quick approve"}</span>
-                  </button>
-                </span>
-              </div>
-            ))}
+                  {item.kind === "pr-lane" && prLane ? (
+                    <span className="run-pr-menu-actions">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="run-pr-menu-action-btn"
+                        disabled={!onApprovePRLane || busy}
+                        onClick={() => onApprovePRLane?.(prLane)}
+                      >
+                        <CheckIcon aria-hidden="true" />
+                        <span>
+                          {busy
+                            ? "Approving"
+                            : prLane.allocationRequest
+                              ? "Approve request"
+                              : "Approve"}
+                        </span>
+                      </button>
+                      {prLane.allocationRequest &&
+                        (prLane.laneNames?.length ||
+                        prLane.proposedBranches?.length ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="run-pr-menu-action-btn"
+                            disabled={!onApprovePRLane || busy}
+                            onClick={() => onApprovePRLane?.(prLane, "listed")}
+                          >
+                            Listed only
+                          </button>
+                        ) : null)}
+                      {prLane.allocationRequest && (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="run-pr-menu-action-btn"
+                            disabled={!onApprovePRLane || busy}
+                            onClick={() => onApprovePRLane?.(prLane, "count")}
+                          >
+                            10
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="run-pr-menu-action-btn"
+                            disabled={!onApprovePRLane || busy}
+                            onClick={() => onApprovePRLane?.(prLane, "unlimited")}
+                          >
+                            Unlimited
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="run-pr-menu-action-btn"
+                        disabled={!onDenyPRLane || busy}
+                        onClick={() => onDenyPRLane?.(prLane)}
+                      >
+                        <XIcon aria-hidden="true" />
+                        <span>Deny</span>
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="run-pr-menu-actions">
+                      <a
+                        role="menuitem"
+                        className="run-pr-menu-action-link"
+                        href={item.href}
+                        onClick={(event) => {
+                          if (!isPlainLeftClick(event)) {
+                            setOpen(false);
+                            return;
+                          }
+                          event.preventDefault();
+                          setOpen(false);
+                          navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                        }}
+                      >
+                        Details
+                      </a>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="run-pr-menu-action-btn"
+                        disabled={!onQuickApprove || busy}
+                        onClick={() => onQuickApprove?.(item)}
+                      >
+                        <CheckIcon aria-hidden="true" />
+                        <span>{busy ? "Approving" : "Quick approve"}</span>
+                      </button>
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>,
           document.body,
         )}
@@ -5237,6 +5433,7 @@ type RunTab =
   | "background"
   | "files"
   | "session-data"
+  | "queue-status"
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
@@ -5519,9 +5716,9 @@ const EFFORT_LABELS: Record<string, Omit<EffortOption, "id">> = {
   max: { label: "Max", hint: "Largest Claude reasoning budget" },
 };
 const DEFAULT_CLAUDE_MODEL_ID = "";
-const DEFAULT_CLAUDE_EFFORT_ID = "";
+const DEFAULT_CLAUDE_EFFORT_ID = "max";
 const DEFAULT_CODEX_MODEL_ID = "";
-const DEFAULT_CODEX_EFFORT_ID = "";
+const DEFAULT_CODEX_EFFORT_ID = "xhigh";
 
 interface SessionRunOptionMode {
   mode: string;
@@ -5837,13 +6034,10 @@ interface RunPrefs {
   // chat-app convention. See docs/product-inspirations.md analysis.
   turnCompleteSoundOnVisible: boolean;
   chatFontScale: number;
-  // Provider model + effort prefs persist the user's last picks across
-  // sessions so a fresh session opens with them pre-selected. They drive
-  // initial selectedModelId / selectedEffort state in RunPane and are
-  // also written back on every change. Once a turn is submitted the
-  // model + effort are sealed for that session pod's lifetime (see
-  // claude-runner/src/runner.ts and codex-runner/src/runner.ts), so these
-  // prefs only affect the *next* session created in this browser.
+  // Provider model + effort are splash launch-draft prefs. They survive
+  // leaving and returning to the splash in the same tab, but a successful
+  // session create resets them to the product defaults instead of turning
+  // the last launch into the next launch's default.
   claudeModelId: string;
   claudeEffort: string;
   codexModelId: string;
@@ -5869,10 +6063,21 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
-const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>(["initialMessageMode"]);
+const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>([
+  "claudeModelId",
+  "claudeEffort",
+  "codexModelId",
+  "codexEffort",
+  "initialMessageMode",
+]);
+const HOME_DRAFT_RUN_PREF_PREFIX = "tank.homeDraftRunPref.v1:";
 
 function isDurableRunPref(key: keyof RunPrefs): boolean {
   return !EPHEMERAL_RUN_PREF_KEYS.has(key);
+}
+
+function isEphemeralRunPref(key: keyof RunPrefs): boolean {
+  return EPHEMERAL_RUN_PREF_KEYS.has(key);
 }
 
 function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
@@ -5887,8 +6092,65 @@ function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
 function persistRunPrefsLocally(prefs: RunPrefs) {
   try {
     for (const key of Object.keys(prefs) as (keyof RunPrefs)[]) {
-      if (!isDurableRunPref(key)) continue;
+      if (!isDurableRunPref(key)) {
+        localStorage.removeItem(RUN_PREF_PREFIX + String(key));
+        continue;
+      }
       localStorage.setItem(RUN_PREF_PREFIX + String(key), String(prefs[key]));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function applySerializedRunPref(
+  out: RunPrefs,
+  key: keyof RunPrefs,
+  raw: string | null,
+) {
+  if (raw == null) return;
+  if (key === "chatFontScale") {
+    out[key] = clampChatFontScale(Number(raw));
+  } else if (key === "turnCompleteSoundVolume") {
+    out[key] = clampTurnCompleteSoundVolume(Number(raw));
+  } else if (key === "claudeModelId") {
+    out[key] = raw.trim();
+  } else if (key === "claudeEffort") {
+    out[key] = raw.trim();
+  } else if (key === "codexModelId") {
+    out[key] = raw.trim();
+  } else if (key === "codexEffort") {
+    out[key] = raw.trim();
+  } else if (key === "initialMessageMode") {
+    if (
+      INITIAL_MESSAGE_MODE_OPTIONS.some((option) => option.id === raw.trim())
+    ) {
+      out[key] = raw.trim() as InitialMessageMode;
+    }
+  } else if (raw === "true" || raw === "false") {
+    (out as unknown as Record<string, unknown>)[key] = raw === "true";
+  }
+}
+
+function writeEphemeralRunPrefForSession<K extends keyof RunPrefs>(
+  key: K,
+  value: RunPrefs[K],
+) {
+  if (!isEphemeralRunPref(key)) return;
+  try {
+    sessionStorage.setItem(
+      HOME_DRAFT_RUN_PREF_PREFIX + String(key),
+      String(value),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearEphemeralRunPrefsForSession() {
+  try {
+    for (const key of EPHEMERAL_RUN_PREF_KEYS) {
+      sessionStorage.removeItem(HOME_DRAFT_RUN_PREF_PREFIX + String(key));
     }
   } catch {
     /* ignore */
@@ -5988,21 +6250,16 @@ function loadRunPrefs(): RunPrefs {
     for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
       if (!isDurableRunPref(key)) continue;
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
-      if (key === "chatFontScale") {
-        if (raw != null) out[key] = clampChatFontScale(Number(raw));
-      } else if (key === "turnCompleteSoundVolume") {
-        if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
-      } else if (key === "claudeModelId") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "claudeEffort") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "codexModelId") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "codexEffort") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (raw === "true" || raw === "false") {
-        (out as unknown as Record<string, unknown>)[key] = raw === "true";
-      }
+      applySerializedRunPref(out, key, raw);
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
+      if (!isEphemeralRunPref(key)) continue;
+      const raw = sessionStorage.getItem(HOME_DRAFT_RUN_PREF_PREFIX + key);
+      applySerializedRunPref(out, key, raw);
     }
   } catch {
     /* ignore */
@@ -6317,6 +6574,7 @@ function normalizeTurnActivitySummary(
     startOrderKey: stringRecordValue(record, "startOrderKey"),
     endOrderKey: stringRecordValue(record, "endOrderKey"),
     sourceEventId: stringRecordValue(record, "sourceEventId"),
+    submittedSource: stringRecordValue(record, "submittedSource") || undefined,
     turnUsage: record.turnUsage,
     usageObservation: record.usageObservation,
     model: stringRecordValue(record, "model") || undefined,
@@ -7985,7 +8243,10 @@ interface QuestionPageNavigation {
 export const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   workspacePathHref: (target: WorkspacePathTarget | string) => string | undefined;
-  submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
+  submitAnswer: (
+    askingTurnId: string,
+    payload: AnswerPayload,
+  ) => Promise<{ answerTurnId: string | null }>;
   askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
   setAskUserQuestionDraft: (
     key: string,
@@ -7998,7 +8259,7 @@ export const RunContext = createContext<{
 }>({
   openWorkspacePath: () => {},
   workspacePathHref: () => undefined,
-  submitAnswer: async () => {},
+  submitAnswer: async () => ({ answerTurnId: null }),
   askUserQuestionDrafts: {},
   setAskUserQuestionDraft: () => {},
   createMessageLink: async (sessionId, entryId) =>
@@ -8547,20 +8808,20 @@ function RunMetaBlock({
 }
 
 // RunQuestionHeadingMessage renders the Turns-view question page's
-// "Question N of M" heading as a system-user message rather than an orphaned
-// banner pinned above the column. AskUserQuestion is the session's system
-// identity asking the user to choose; like session.status banners, RunMetaBlock
-// status lines, and the background-wake prompt that lands "when the timer goes
-// off", it speaks through the shared system-avatar message frame instead of
-// floating in the transcript with no author. See
-// docs/features/transcript/contract.md.
+// "Question N of M" heading as a normal agent-authored message rather than an
+// orphaned banner pinned above the column. AskUserQuestion / ExitPlanMode are
+// agent-invoked tools, so the question is the agent speaking to the user — it
+// is attributed to the session (agent) avatar as its source, the same avatar
+// that fronts the agent's other messages (including the question in the asking
+// turn). As the question turn's turn-starter it occupies the prompt slot a user
+// message normally would. See docs/features/transcript/contract.md.
 function RunQuestionHeadingMessage({
-  systemAvatar,
+  avatar,
   answered,
   questionIndex,
   questionCount,
 }: {
-  systemAvatar: AgentAvatar | null;
+  avatar: AgentAvatar | null;
   answered: boolean;
   questionIndex?: number;
   questionCount?: number;
@@ -8574,20 +8835,13 @@ function RunQuestionHeadingMessage({
     <div
       className="run-transcript-message"
       data-slot="message"
-      data-variant="system"
-      data-role="system"
+      data-variant="assistant"
+      data-role="assistant"
       data-kind="question-heading"
       data-answered={answered ? "true" : "false"}
     >
-      <span
-        className="run-msg-system-avatar"
-        aria-hidden={systemAvatar ? undefined : "true"}
-      >
-        {systemAvatar ? (
-          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
-        ) : (
-          <BotIcon size={16} strokeWidth={2.1} />
-        )}
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
       <div
         className="run-transcript-message-content"
@@ -9874,111 +10128,6 @@ function BackgroundMeta({
   );
 }
 
-function PRLaneApprovalIndicator({
-  requests,
-  busyEventId,
-  onApprove,
-  onDeny,
-}: {
-  requests: PRLaneRequest[];
-  busyEventId: string | null;
-  onApprove: (request: PRLaneRequest, override?: "listed" | "count" | "unlimited") => void;
-  onDeny: (request: PRLaneRequest) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  if (requests.length === 0) return null;
-  const countLabel = `${requests.length} branch request${requests.length === 1 ? "" : "s"}`;
-  return (
-    <div className="pr-lane-approval">
-      <button
-        type="button"
-        className="pr-lane-approval-trigger"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-      >
-        <GitBranchIcon size={14} aria-hidden="true" />
-        <span>{countLabel}</span>
-      </button>
-      {open && (
-        <div className="pr-lane-approval-panel">
-          <div className="pr-lane-approval-head">
-            <span>branch requests</span>
-          </div>
-          <div className="pr-lane-approval-list">
-            {requests.map((request) => {
-              const busy = busyEventId === request.eventId;
-              const repoScope = request.allRepos
-                ? "all repos"
-                : request.repos && request.repos.length > 1
-                  ? request.repos.join(", ")
-                  : request.repo;
-              return (
-                <div className="pr-lane-approval-item" key={request.eventId}>
-                  <div className="pr-lane-approval-main">
-                    <div className="pr-lane-approval-title">
-                      <GitPullRequestIcon size={14} aria-hidden="true" />
-                      <span>{request.laneName}</span>
-                    </div>
-                    <div className="pr-lane-approval-meta">
-                      {[
-                        request.allocationRequest
-                          ? request.unlimited
-                            ? "unlimited"
-                            : request.requestedCount
-                              ? `${request.requestedCount} branches`
-                              : `${request.laneNames?.length || request.proposedBranches?.length || 0} named branches`
-                          : request.relationship,
-                        request.base ? `from ${request.base}` : "",
-                        repoScope,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </div>
-                    {request.laneNames && request.laneNames.length > 0 && (
-                      <div className="pr-lane-approval-branches">
-                        {request.laneNames.join(", ")}
-                      </div>
-                    )}
-                    {request.scope && (
-                      <div className="pr-lane-approval-scope">{request.scope}</div>
-                    )}
-                    {request.reason && (
-                      <div className="pr-lane-approval-reason">{request.reason}</div>
-                    )}
-                  </div>
-                  <div className="pr-lane-approval-actions">
-                    <button type="button" disabled={busy} onClick={() => onApprove(request)}>
-                      {request.allocationRequest ? "approve request" : "approve"}
-                    </button>
-                    {request.allocationRequest && (
-                      <>
-                        {(request.laneNames?.length || request.proposedBranches?.length) ? (
-                          <button type="button" disabled={busy} onClick={() => onApprove(request, "listed")}>
-                            listed only
-                          </button>
-                        ) : null}
-                        <button type="button" disabled={busy} onClick={() => onApprove(request, "count")}>
-                          10
-                        </button>
-                        <button type="button" disabled={busy} onClick={() => onApprove(request, "unlimited")}>
-                          unlimited
-                        </button>
-                      </>
-                    )}
-                    <button type="button" disabled={busy} onClick={() => onDeny(request)}>
-                      deny
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 type BreakGlassRepoScopeKind = "current_repo" | "repos" | "all_repos";
 type BreakGlassBranchScopeKind = "named" | "count" | "unlimited";
 
@@ -10551,10 +10700,61 @@ function pendingTestSlotModelApprovalMenuItems(
     });
 }
 
+function prLaneRepoScopeLabel(request: PRLaneRequest): string {
+  if (request.allRepos) return "all repos";
+  if (request.repos && request.repos.length > 0) {
+    return request.repos.join(", ");
+  }
+  return request.repo ?? "current repo";
+}
+
+function prLaneBranchScopeLabel(request: PRLaneRequest): string {
+  if (!request.allocationRequest) return request.laneName;
+  if (request.unlimited) return "unlimited governed lanes";
+  if (request.requestedCount) {
+    return `${request.requestedCount} governed lane${
+      request.requestedCount === 1 ? "" : "s"
+    }`;
+  }
+  const namedCount =
+    request.laneNames?.length || request.proposedBranches?.length || 0;
+  return `${namedCount} named lane${namedCount === 1 ? "" : "s"}`;
+}
+
+function prLaneApprovalMenuItems(
+  sessionId: string,
+  requests: PRLaneRequest[],
+): BreakGlassApprovalMenuItem[] {
+  return requests.map((request) => {
+    const branchScope = prLaneBranchScopeLabel(request);
+    const meta = [
+      request.allocationRequest ? branchScope : request.relationship,
+      request.base ? `from ${request.base}` : "",
+      prLaneRepoScopeLabel(request),
+      request.scope,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      id: request.eventId,
+      kind: "pr-lane" as const,
+      href: sessionUrl(sessionId),
+      label: request.allocationRequest ? "PR lane allocation" : "PR lane",
+      target: request.allocationRequest
+        ? meta
+        : `${request.laneName}${meta ? ` · ${meta}` : ""}`,
+      reason: request.reason,
+      createdAt: request.createdAt,
+      prLaneRequest: request,
+    };
+  });
+}
+
 function breakGlassApprovalMenuItemsForSession(
   sessionId: string,
   breakGlassRequests: BreakGlassRequest[],
   testSlotModelRows: ControlActionRow[],
+  prLaneRequests: PRLaneRequest[],
 ): BreakGlassApprovalMenuItem[] {
   const breakGlassItems = breakGlassRequests.map((request) => ({
     id: request.eventId,
@@ -10571,6 +10771,7 @@ function breakGlassApprovalMenuItemsForSession(
   return [
     ...breakGlassItems,
     ...pendingTestSlotModelApprovalMenuItems(sessionId, testSlotModelRows),
+    ...prLaneApprovalMenuItems(sessionId, prLaneRequests),
   ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
@@ -11264,6 +11465,12 @@ function RunAwaitingInputCard({
 
   if (!aw || questions.length === 0) return null;
 
+  // Prototype: the run composer is now the single answer input (the send
+  // button becomes Submit; see submitComposerAnswer in ChatPane), so the card
+  // no longer renders its own free-form textarea or Submit/Next row — it is
+  // selection + plan content only.
+  const SHOW_CARD_INPUT = false;
+
   return (
     <div
       className={`run-tool-body run-tool-ask${resolved ? " run-tool-ask-locked" : ""}`}
@@ -11389,7 +11596,7 @@ function RunAwaitingInputCard({
                 </p>
               </div>
             )}
-            {showFreeForm && (
+            {SHOW_CARD_INPUT && showFreeForm && (
               <label className="run-tool-ask-notes-label">
                 <span>
                   {q.options.length === 0
@@ -11422,7 +11629,7 @@ function RunAwaitingInputCard({
           </div>
         );
       })}
-      {!resolved && (
+      {SHOW_CARD_INPUT && !resolved && (
         <div className="run-tool-ask-submit-row">
           {hasPreviousQuestion && (
             <button
@@ -12207,6 +12414,17 @@ type TurnActivityLoadStateByTurn = Record<
   TurnActivityLoadState | undefined
 >;
 
+function turnActivityLoadStatusMetricCode(
+  status: TurnActivityLoadState["status"] | undefined,
+): number {
+  if (status == null) return 0;
+  if (status === "unloaded") return 1;
+  if (status === "loading") return 2;
+  if (status === "loaded") return 3;
+  if (status === "error") return 4;
+  return -1;
+}
+
 type ActivityRefreshProblem = TurnActivityLoadProblem;
 
 type TurnActivityLoadResult = {
@@ -12703,7 +12921,84 @@ function turnActivityLastActivityAt(
   );
 }
 
-function buildTurnViewItems(
+// mergeTurnDirectoryWithLiveShells overlays the live transcript window's fresh
+// turn_activity shells onto the durable directory's complete, ordered turn set.
+// The SET is always the directory's — a turnId only appears here if the
+// directory listed it — so a turn the directory doesn't yet carry is never
+// surfaced from the window alone (no silent fall-back to the bounded window).
+// The live shell wins on a turnId collision so an in-flight turn stays live
+// without re-reading the directory on every terminal. An empty directory yields
+// no turns (an explicit loading/error state renders instead).
+export function mergeTurnDirectoryWithLiveShells(
+  directoryEntries: TranscriptEntry[],
+  liveEntries: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (directoryEntries.length === 0) return directoryEntries;
+  const liveShellByTurn = new Map<string, TranscriptEntry>();
+  for (const entry of liveEntries) {
+    const tid = (entry.turnId ?? "").trim();
+    if (tid && isTurnActivityEntry(entry)) liveShellByTurn.set(tid, entry);
+  }
+  return directoryEntries.map((shell) => {
+    const tid = (shell.turnId ?? "").trim();
+    return (tid && liveShellByTurn.get(tid)) || shell;
+  });
+}
+
+type AutoFollowApprovalTurnCandidate = {
+  turnId?: string;
+  shell?: { activity?: { submittedSource?: string } };
+};
+
+const AUTO_FOLLOW_APPROVAL_SUBMITTED_SOURCES = new Set([
+  "break-glass-approval",
+  "test-slot-model-approval",
+]);
+
+export function latestAutoFollowApprovalTurnId(
+  turns: AutoFollowApprovalTurnCandidate[],
+): string | null {
+  const latest = turns[turns.length - 1];
+  const turnId = latest?.turnId?.trim() ?? "";
+  if (!turnId) return null;
+  const submittedSource = latest.shell?.activity?.submittedSource?.trim() ?? "";
+  return AUTO_FOLLOW_APPROVAL_SUBMITTED_SOURCES.has(submittedSource)
+    ? turnId
+    : null;
+}
+
+export function turnActivityShellIdsMissingFromDirectory(
+  liveEntries: TranscriptEntry[],
+  directoryTurnIds: ReadonlySet<string>,
+): string[] {
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of liveEntries) {
+    const tid = (entry.turnId ?? "").trim();
+    if (
+      tid &&
+      isTurnActivityEntry(entry) &&
+      !directoryTurnIds.has(tid) &&
+      !seen.has(tid)
+    ) {
+      seen.add(tid);
+      missing.push(tid);
+    }
+  }
+  return missing;
+}
+
+export function selectedActivityRouteSessionMismatch(
+  paneSessionId: string,
+  routeSessionId: string | null | undefined,
+): string | null {
+  const pane = paneSessionId.trim();
+  const route = (routeSessionId ?? "").trim();
+  if (!pane || !route || pane === route) return null;
+  return route;
+}
+
+export function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
@@ -13493,12 +13788,15 @@ function RunTurnActivityGroup({
 
 function RunTurnActivityScreen({
   turns,
+  truncated,
   selectedTurnId,
   avatar,
   systemAvatar,
   originSessionAvatarByID,
   sessionId,
   sessionMode,
+  activityLoadingTelemetrySource,
+  activityLoadingPreviousSessionId,
   showThinking,
   autoExpandTools,
   showTimestamps,
@@ -13516,12 +13814,18 @@ function RunTurnActivityScreen({
   onActivitySelectPage,
 }: {
   turns: TurnViewItem[];
+  // True when the durable directory exceeded its cap and the oldest turns were
+  // elided — a >5000-turn session. Surfaced so the list never silently claims
+  // to be complete when it isn't.
+  truncated?: boolean;
   selectedTurnId: string | null;
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   originSessionAvatarByID?: (sessionId: string) => AgentAvatar | null;
   sessionId: string;
   sessionMode: string;
+  activityLoadingTelemetrySource: string;
+  activityLoadingPreviousSessionId?: string | null;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
@@ -13639,6 +13943,113 @@ function RunTurnActivityScreen({
     (selectedLoadState == null ||
       selectedLoadState.status === "unloaded" ||
       selectedLoadState.status === "loading");
+  const selectedTurnIdForTelemetry = selected?.turnId ?? "";
+  const selectedLoadStatus = selectedLoadState?.status;
+  const selectedLoadingReason = selectedLoadStatus ?? "absent";
+  const selectedHasTurnActivityShell = Boolean(selected?.shell);
+  const selectedTurnActivityChildCount =
+    selected?.shell?.activity?.childCount ?? 0;
+  const selectedDurableActiveTurnActivityShell =
+    selected?.shell != null
+      ? turnActivityShellIsDurablyActive(selected.shell.activity)
+      : false;
+  const selectedActivityRouteSessionId =
+    typeof window !== "undefined"
+      ? (readSessionRouteFromPath()?.sessionId ?? "")
+      : "";
+  const selectedActivityMismatchedRouteSessionId =
+    selectedActivityRouteSessionMismatch(
+      sessionId,
+      selectedActivityRouteSessionId,
+    );
+  const selectedActivityLoadingTelemetryKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!showActivityLoading || !selectedTurnIdForTelemetry) {
+      selectedActivityLoadingTelemetryKeyRef.current = null;
+      return;
+    }
+    const event =
+      selectedLoadStatus == null || selectedLoadStatus === "unloaded"
+        ? "turn-activity-selected-loading-stranded"
+        : selectedLoadStatus === "loading"
+          ? "turn-activity-selected-loading-slow"
+          : null;
+    if (!event) return;
+    const key = [
+      event,
+      selectedTurnIdForTelemetry,
+      selectedLoadingReason,
+      selectedHasTurnActivityShell ? "shell" : "no-shell",
+      selectedTurnActivityChildCount,
+      selectedDurableActiveTurnActivityShell ? "durable-active" : "inactive",
+      selectedActivityMismatchedRouteSessionId ?? "route-match",
+    ].join(":");
+    if (selectedActivityLoadingTelemetryKeyRef.current === key) return;
+    const timer = window.setTimeout(() => {
+      selectedActivityLoadingTelemetryKeyRef.current = key;
+      const currentMismatchedRouteSessionId =
+        selectedActivityRouteSessionMismatch(
+          sessionId,
+          typeof window !== "undefined"
+            ? readSessionRouteFromPath()?.sessionId
+            : "",
+        );
+      if (currentMismatchedRouteSessionId) {
+        logChatScrollEvent("turn-activity-selected-route-session-mismatch", {
+          surface: "session",
+          sessionId,
+          sessionMode,
+          previousSessionId: activityLoadingPreviousSessionId ?? undefined,
+          source: activityLoadingTelemetrySource,
+          reason: "route-session-mismatch",
+          key: currentMismatchedRouteSessionId,
+          routeSessionId: currentMismatchedRouteSessionId,
+          selectedTurnId: selectedTurnIdForTelemetry,
+          status: turnActivityLoadStatusMetricCode(selectedLoadStatus),
+          entries: detailEntries.length,
+          groups: detailGroups.length,
+          activityEntries: selectedTurnActivityChildCount,
+          turnActivityShells: selectedHasTurnActivityShell ? 1 : 0,
+          durableActiveTurnActivityShells: selectedDurableActiveTurnActivityShell
+            ? 1
+            : 0,
+        });
+      }
+      logChatScrollEvent(event, {
+        surface: "session",
+        sessionId,
+        sessionMode,
+        previousSessionId: activityLoadingPreviousSessionId ?? undefined,
+        source: activityLoadingTelemetrySource,
+        reason: selectedLoadingReason,
+        key: selectedTurnIdForTelemetry,
+        status: turnActivityLoadStatusMetricCode(selectedLoadStatus),
+        entries: detailEntries.length,
+        groups: detailGroups.length,
+        activityEntries: selectedTurnActivityChildCount,
+        turnActivityShells: selectedHasTurnActivityShell ? 1 : 0,
+        durableActiveTurnActivityShells: selectedDurableActiveTurnActivityShell
+          ? 1
+          : 0,
+      });
+    }, TURN_ACTIVITY_STUCK_THRESHOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    detailEntries.length,
+    detailGroups.length,
+    activityLoadingPreviousSessionId,
+    activityLoadingTelemetrySource,
+    selectedActivityMismatchedRouteSessionId,
+    selectedDurableActiveTurnActivityShell,
+    selectedHasTurnActivityShell,
+    selectedLoadStatus,
+    selectedLoadingReason,
+    selectedTurnActivityChildCount,
+    selectedTurnIdForTelemetry,
+    sessionId,
+    sessionMode,
+    showActivityLoading,
+  ]);
   const selectedThinkingStatus =
     selected?.shell?.activity?.status === "needs_input"
       ? "needs_input"
@@ -13932,6 +14343,12 @@ function RunTurnActivityScreen({
 
   return (
     <div className="run-turn-view" aria-label="Turn view">
+      {truncated && (
+        <div className="run-turn-view-truncation" role="status">
+          This session has more turns than the directory lists; the oldest turns
+          aren’t shown.
+        </div>
+      )}
       {selected ? (
         <>
           {statsExpanded && (
@@ -14002,6 +14419,17 @@ function RunTurnActivityScreen({
                     compact={selectedTurnContextCollapsed}
                     transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
                     onOpenTranscriptMessage={onOpenTranscriptMessage}
+                  />
+                ) : selectedPageInfo?.kind === "question" ? (
+                  // No user message started this turn — the agent did, by
+                  // invoking AskUserQuestion / ExitPlanMode. The question is the
+                  // agent speaking, so the turn-starter is attributed to the
+                  // session (agent) avatar, matching the asking turn.
+                  <RunQuestionHeadingMessage
+                    avatar={avatar}
+                    answered={selectedPageInfo.answered ?? false}
+                    questionIndex={selectedPageInfo.questionIndex}
+                    questionCount={selectedPageInfo.questionCount}
                   />
                 ) : (
                   <div className="run-turn-view-context-unavailable" role="status">
@@ -14170,14 +14598,6 @@ function RunTurnActivityScreen({
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
-            {selectedPageInfo?.kind === "question" && (
-              <RunQuestionHeadingMessage
-                systemAvatar={systemAvatar}
-                answered={selectedPageInfo.answered ?? false}
-                questionIndex={selectedPageInfo.questionIndex}
-                questionCount={selectedPageInfo.questionCount}
-              />
-            )}
             {selected && refreshProblem ? (
               <div className="run-turn-view-alert" role="alert">
                 <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />
@@ -14954,6 +15374,243 @@ export function RunMessages({
   );
 }
 
+function AdminBreakGlassPanel() {
+  const [filter, setFilter] = useState<AdminBreakGlassFilter>("pending");
+  const [items, setItems] = useState<AdminBreakGlassListItem[]>([]);
+  const [sessionScope, setSessionScope] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState("");
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ status: filter, limit: "100" });
+      const res = await authedFetch(`/api/admin/break-glass-requests?${params}`);
+      if (!res.ok) {
+        throw new Error(`break-glass requests returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminBreakGlassListBody;
+      setItems(Array.isArray(body.requests) ? body.requests : []);
+      setSessionScope(body.session_scope ?? "");
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const decide = useCallback(
+    async (item: AdminBreakGlassListItem, decision: "approve" | "deny") => {
+      const sessionID = nonemptyAdminValue(item.request.session_id);
+      const eventID = nonemptyAdminValue(item.request.event_id);
+      if (!sessionID || !eventID || !item.pending) return;
+      const note =
+        decision === "deny"
+          ? window.prompt("Deny note", "")?.trim()
+          : "";
+      if (decision === "deny" && note === undefined) return;
+      setBusyId(`${decision}:${eventID}`);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(sessionID)}/break-glass-requests/${encodeURIComponent(eventID)}/${decision}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note: note ?? "" }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`break-glass ${decision} returned ${res.status}`);
+        }
+        await refresh();
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusyId("");
+      }
+    },
+    [refresh],
+  );
+
+  return (
+    <div className="run-settings-diagnostics admin-break-glass">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <ShieldAlertIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Break glass</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={() => void refresh()}
+          disabled={loading}
+          aria-label="Refresh break-glass requests"
+          title="Refresh"
+        >
+          <RotateCcwIcon
+            aria-hidden="true"
+            className={loading ? "cluster-health-spin" : undefined}
+          />
+        </button>
+      </div>
+      <div className="admin-break-glass-toolbar">
+        {(["pending", "recent", "all"] as AdminBreakGlassFilter[]).map((nextFilter) => (
+          <button
+            key={nextFilter}
+            type="button"
+            className={`admin-break-glass-filter${filter === nextFilter ? " is-active" : ""}`}
+            onClick={() => setFilter(nextFilter)}
+            disabled={loading && filter === nextFilter}
+          >
+            {adminBreakGlassFilterLabel(nextFilter)}
+          </button>
+        ))}
+        {sessionScope && (
+          <span className="admin-break-glass-scope">{sessionScope}</span>
+        )}
+      </div>
+      {error && (
+        <div className="run-settings-observability-note" role="status">
+          {error}
+        </div>
+      )}
+      <div className="admin-break-glass-list">
+        {items.length > 0 ? (
+          items.map((item) => (
+            <AdminBreakGlassRow
+              key={adminBreakGlassItemKey(item)}
+              item={item}
+              busyId={busyId}
+              onDecision={decide}
+            />
+          ))
+        ) : (
+          <div className="admin-break-glass-empty">
+            {loading ? "Loading requests..." : "No break-glass requests"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminBreakGlassRow({
+  item,
+  busyId,
+  onDecision,
+}: {
+  item: AdminBreakGlassListItem;
+  busyId: string;
+  onDecision: (item: AdminBreakGlassListItem, decision: "approve" | "deny") => void;
+}) {
+  const request = item.request;
+  const decision = item.decision;
+  const sessionID = nonemptyAdminValue(request.session_id);
+  const eventID = nonemptyAdminValue(request.event_id);
+  const pending = item.pending === true;
+  const status = adminBreakGlassStatus(item);
+  const target = adminBreakGlassTarget(request);
+  const scope = adminBreakGlassScope(request);
+  const detail = [
+    nonemptyAdminValue(request.owner_email),
+    sessionID ? `session ${sessionID}` : "",
+    nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service),
+    formatToolFullTime(request.created_at),
+  ].filter(Boolean);
+  const sessionHref = sessionID ? `/sessions/${encodeURIComponent(sessionID)}` : "";
+  const focusedHref =
+    sessionID && eventID
+      ? `/sessions/${encodeURIComponent(sessionID)}/break-glass/${encodeURIComponent(eventID)}`
+      : "";
+
+  return (
+    <article className={`admin-break-glass-row is-${status}`}>
+      <div className="admin-break-glass-row-head">
+        <div className="admin-break-glass-title">
+          <span className="admin-break-glass-kind">
+            {adminBreakGlassKind(request)}
+          </span>
+          <span className="admin-break-glass-target" title={target}>
+            {target}
+          </span>
+        </div>
+        <span className={`admin-break-glass-status is-${status}`}>
+          {adminBreakGlassStatusLabel(status)}
+        </span>
+      </div>
+      <div className="admin-break-glass-reason">
+        {adminBreakGlassReason(request)}
+      </div>
+      <div className="admin-break-glass-meta">
+        {detail.map((part) => (
+          <span key={part}>{part}</span>
+        ))}
+      </div>
+      {scope && <div className="admin-break-glass-scope-line">{scope}</div>}
+      {decision && (
+        <div className="admin-break-glass-decision">
+          <span>{adminBreakGlassDecisionSummary(decision)}</span>
+          <span>{formatToolFullTime(decision.created_at)}</span>
+        </div>
+      )}
+      <div className="admin-break-glass-actions">
+        {sessionHref && (
+          <a className="run-settings-test-btn" href={sessionHref}>
+            Open session
+          </a>
+        )}
+        {focusedHref && (
+          <a className="run-settings-test-btn" href={focusedHref}>
+            Focus request
+          </a>
+        )}
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `approve:${eventID}`}
+          onClick={() => onDecision(item, "approve")}
+        >
+          <CheckIcon aria-hidden="true" />
+          <span>Approve</span>
+        </button>
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `deny:${eventID}`}
+          onClick={() => onDecision(item, "deny")}
+        >
+          <XIcon aria-hidden="true" />
+          <span>Deny</span>
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function adminBreakGlassFilterLabel(filter: AdminBreakGlassFilter): string {
+  switch (filter) {
+    case "pending":
+      return "Pending";
+    case "recent":
+      return "Recent";
+    case "all":
+      return "All";
+  }
+}
+
+function adminBreakGlassItemKey(item: AdminBreakGlassListItem): string {
+  return [
+    nonemptyAdminValue(item.request.session_id),
+    nonemptyAdminValue(item.request.event_id),
+    nonemptyAdminValue(item.decision?.event_id),
+  ].filter(Boolean).join(":");
+}
 
 function adminBreakGlassStatus(
   item: AdminBreakGlassListItem,
@@ -14975,12 +15632,16 @@ function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): 
 }
 
 function adminBreakGlassKind(row: ControlActionRow): string {
-  return row.action === "azure.break_glass.request" ? "Azure break glass" : "GitHub break glass";
+  if (row.action === "azure.break_glass.request") return "Azure break glass";
+  return adminBreakGlassIncludesWorkflows(row)
+    ? "GitHub workflows break glass"
+    : "GitHub break glass";
 }
 
 function adminBreakGlassAccessType(row: ControlActionRow): string {
-  return row.action === "azure.break_glass.request"
-    ? "Azure personal MCP access"
+  if (row.action === "azure.break_glass.request") return "Azure personal MCP access";
+  return adminBreakGlassIncludesWorkflows(row)
+    ? "GitHub workflow-file write access"
     : "GitHub write access";
 }
 
@@ -14994,6 +15655,38 @@ function adminBreakGlassTarget(row: ControlActionRow): string {
 
 function adminBreakGlassReason(row: ControlActionRow): string {
   return nonemptyAdminValue(adminBreakGlassPayload(row).reason) || "No reason provided";
+}
+
+function adminBreakGlassScope(row: ControlActionRow): string {
+  const payload = adminBreakGlassPayload(row);
+  const repoScope = adminBreakGlassPayloadObject(payload.repo_scope);
+  const branchScope = adminBreakGlassPayloadObject(payload.branch_scope);
+  const repos = adminBreakGlassStringList(repoScope.repos);
+  const branches = adminBreakGlassStringList(branchScope.branches);
+  const parts = [
+    adminScopeLabel("repos", nonemptyAdminValue(repoScope.kind), repos),
+    adminScopeLabel("branches", nonemptyAdminValue(branchScope.kind), branches),
+    adminBreakGlassIncludesWorkflows(row) ? "workflows: write" : "",
+  ].filter(Boolean);
+  return parts.join(" / ");
+}
+
+function adminBreakGlassIncludesWorkflows(row: ControlActionRow): boolean {
+  const payload = adminBreakGlassPayload(row);
+  const operations = adminBreakGlassStringList(payload.operations);
+  return payload.workflows === true || operations.includes("workflows");
+}
+
+function adminScopeLabel(
+  label: string,
+  kind: string | undefined,
+  values: string[],
+): string {
+  if (kind === "all_repos") return "all repos";
+  if (kind === "unlimited") return "all branches";
+  if (kind === "count") return `${label}: count`;
+  if (values.length > 0) return `${label}: ${values.join(", ")}`;
+  return "";
 }
 
 function adminBreakGlassDecisionSummary(row: ControlActionRow): string {
@@ -15743,6 +16436,7 @@ function RunSettingsPanel({
     settingsTab === "admin" &&
     showAdminTab &&
     (adminView === "avatars" ||
+      adminView === "break-glass" ||
       adminView === "report" ||
       adminView === "hidden-transcripts" ||
       adminView === "observability")
@@ -15813,6 +16507,31 @@ function RunSettingsPanel({
               />
             </DesktopOnly>
           </>
+        ) : adminView === "break-glass" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Break glass</h2>
+              </div>
+            </section>
+            <section className="run-settings-section">
+              <AdminBreakGlassPanel />
+            </section>
+            <section className="run-settings-section">
+              <AdminBreakGlassGrantPanel
+                initialSessionId={session?.id}
+                sessionScope={adminControls.reportScope}
+              />
+            </section>
+          </>
         ) : adminView === "report" ? (
           <>
             <section className="run-settings-section">
@@ -15849,23 +16568,6 @@ function RunSettingsPanel({
               state={adminControls.observability}
               onRefresh={adminControls.onRefreshObservability}
             />
-          </>
-        ) : adminView === "break-glass" ? (
-          <>
-            <section className="run-settings-section">
-              <div className="run-settings-admin-heading">
-                <button
-                  type="button"
-                  className="run-settings-back-btn"
-                  onClick={() => setSettingsRoute("admin", "controls")}
-                >
-                  <ArrowLeftIcon aria-hidden="true" />
-                  <span>Admin</span>
-                </button>
-                <h2 className="run-settings-title">Break glass</h2>
-              </div>
-            </section>
-            <AdminBreakGlassTokenPanel sessionScope={adminControls.reportScope} />
           </>
         ) : adminView === "hidden-transcripts" ? (
           <>
@@ -15960,6 +16662,20 @@ function RunSettingsPanel({
                   {adminControls.observability.summary?.status ??
                     (adminControls.observability.error ? "error" : "Open")}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "break-glass")}
+              >
+                <span className="run-settings-link-label">
+                  <ShieldAlertIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Break glass</span>
+                </span>
+                <span className="run-settings-scope-value">Grant</span>
               </button>
               <button
                 type="button"
@@ -16349,6 +17065,162 @@ function RunHelpScreen() {
   );
 }
 
+// QueueBlockScreen is the focused "why is my typed message queued?" page,
+// reached from the small link on the queued-follow-up panel. The queue gate is
+// session-level (the drain effect submits the head the moment `running` goes
+// false), so this page explains the single live reason the run is still
+// considered active. It is purely diagnostic — it never changes when a message
+// queues. All signal values are passed in from the ChatPane, which owns the
+// client-only run latch the server cannot see.
+function QueueBlockScreen({
+  block,
+  durableActivityStatus,
+  runStatus,
+  running,
+  hasLocalRun,
+  localRunHasTerminal,
+  activeTurnId,
+  queuedMessages,
+  onOpenTranscript,
+}: {
+  block: RunBlockDescription | null;
+  durableActivityStatus: ConversationActivityStatus | null;
+  runStatus: LocalRunStatus;
+  running: boolean;
+  hasLocalRun: boolean;
+  localRunHasTerminal: boolean;
+  activeTurnId: string | null;
+  queuedMessages: QueuedMessage[];
+  onOpenTranscript: () => void;
+}) {
+  const signals: { label: string; value: string; detail: string }[] = [
+    {
+      label: "Run active",
+      value: running ? "Yes" : "No",
+      detail:
+        "While this is Yes, a message you type is queued instead of sent. It drains the moment this turns No.",
+    },
+    {
+      label: "Agent status (durable)",
+      value: durableActivityStatus ?? "—",
+      detail:
+        "The server-side turn state from the activity ledger (streaming, needs_input, stopping, scheduled, …).",
+    },
+    {
+      label: "Local run status",
+      value: runStatus,
+      detail: "The browser's local view of the current run.",
+    },
+    {
+      label: "Local run latch",
+      value: hasLocalRun ? "In flight" : "Clear",
+      detail:
+        "An optimistic run the browser tracks until its durable terminal lands. It holds the run 'active' even after the server goes idle.",
+    },
+    {
+      label: "Latch reconciled",
+      value: hasLocalRun ? (localRunHasTerminal ? "Terminal landed" : "Waiting") : "—",
+      detail:
+        "Whether the latch has seen its durable terminal. 'Terminal landed' while still queued is the 'looks done but won't send' case — a reload clears it.",
+    },
+    {
+      label: "Active turn",
+      value: activeTurnId ?? "—",
+      detail: "The turn id the server currently reports as in flight, if any.",
+    },
+    {
+      label: "Queued messages",
+      value: String(queuedMessages.length),
+      detail: "Messages waiting to auto-send, in order, once the run goes idle.",
+    },
+  ];
+  return (
+    <div className="run-queue-status-screen">
+      <div className="run-queue-status-topbar">
+        <h2 className="run-queue-status-title">Queue status</h2>
+        <button
+          type="button"
+          className="run-queue-status-back"
+          onClick={onOpenTranscript}
+        >
+          Back to transcript
+        </button>
+      </div>
+      <section
+        className="run-queue-status-headline"
+        aria-live="polite"
+        aria-label="Current queue reason"
+      >
+        {block ? (
+          <>
+            <span
+              className={`status-dot status-${block.dotStatus}`}
+              aria-hidden="true"
+            />
+            <div className="run-queue-status-headline-copy">
+              <span className="run-queue-status-headline-label">
+                {block.label}
+              </span>
+              <span className="run-queue-status-headline-detail">
+                {block.detail}
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <span
+              className="status-dot status-agent-waiting"
+              aria-hidden="true"
+            />
+            <div className="run-queue-status-headline-copy">
+              <span className="run-queue-status-headline-label">
+                Nothing is blocking
+              </span>
+              <span className="run-queue-status-headline-detail">
+                The run is idle — a message you send now goes through
+                immediately.
+              </span>
+            </div>
+          </>
+        )}
+      </section>
+      <section className="run-queue-status-section">
+        <h3 className="run-queue-status-section-title">Live signals</h3>
+        <div className="run-queue-status-signals">
+          {signals.map((row) => (
+            <div className="run-queue-status-signal" key={row.label}>
+              <span className="run-queue-status-signal-label">{row.label}</span>
+              <span className="run-queue-status-signal-value">{row.value}</span>
+              <span className="run-queue-status-signal-detail">
+                {row.detail}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+      {queuedMessages.length > 0 && (
+        <section className="run-queue-status-section">
+          <h3 className="run-queue-status-section-title">
+            Queued, in send order
+          </h3>
+          <ol className="run-queue-status-queued">
+            {queuedMessages.map((message) => (
+              <li className="run-queue-status-queued-row" key={message.id}>
+                <span className="run-queue-status-queued-text">
+                  {message.displayText ?? message.text}
+                </span>
+                <span className="run-queue-status-queued-origin">
+                  {message.submitSurface === "turns" ? "Turns" : "Chat"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+    </div>
+  );
+}
+
 // The visible pane reports its current in-session location up to the App so the
 // App-level title chrome can render the breadcrumb trail. Mirrors the
 // onConnectionLabelChange bubble-up; null when the pane isn't the visible one.
@@ -16511,6 +17383,11 @@ function ChatPane({
     turnId: string;
     turnNumber: number;
   } | null>(null);
+  const [pendingApprovalTurnOpenId, setPendingApprovalTurnOpenId] = useState<
+    string | null
+  >(null);
+  const approvalAutoFollowPrimedRef = useRef(false);
+  const approvalAutoFollowKnownTurnIdsRef = useRef<Set<string>>(new Set());
   // The route now carries a durable per-session turn NUMBER, not a turn_id. It
   // is resolved to a turn_id server-side (or from the loaded window) into
   // selectedTurnId; until then it stays pending so the URL isn't overwritten.
@@ -16633,6 +17510,31 @@ function ChatPane({
     },
     [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id],
   );
+  // Durable turn-directory path. Mirrors timelineRequestPathForPane across the
+  // three transcript-read surfaces (public share / admin hidden / owner) so the
+  // Turns selector reads the same complete turn set on every surface.
+  const turnDirectoryRequestPathForPane = useCallback(() => {
+    if (publicView && publicShareTokenValue) {
+      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/directory`;
+    }
+    if (session.read_only_hidden === true) {
+      let path = `/api/admin/hidden-sessions/${encodeURIComponent(session.id)}/turns/directory`;
+      path = appendQueryParam(path, "session_scope", sessionScope);
+      if (session.owner) path = appendQueryParam(path, "owner", session.owner);
+      return path;
+    }
+    return scopedSessionPathForPane(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/directory`,
+    );
+  }, [
+    publicShareTokenValue,
+    publicView,
+    scopedSessionPathForPane,
+    session.id,
+    session.owner,
+    session.read_only_hidden,
+    sessionScope,
+  ]);
   const fetchPaneResource = useCallback(
     (input: RequestInfo, init?: RequestInit) =>
       publicView ? fetch(input, init) : authedFetch(input, init),
@@ -16763,8 +17665,9 @@ function ChatPane({
         session.id,
         breakGlassRequests,
         testSlotModelActionRows,
+        prLaneRequests,
       ),
-    [breakGlassRequests, session.id, testSlotModelActionRows],
+    [breakGlassRequests, prLaneRequests, session.id, testSlotModelActionRows],
   );
   const postPRLaneDecision = useCallback(
     async (
@@ -16827,7 +17730,7 @@ function ChatPane({
       if (publicView || readOnly) return;
       setBreakGlassApprovalBusyId(request.eventId);
       try {
-        await authedFetch(
+        const res = await authedFetch(
           scopedSessionPathForPane(
             `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(request.eventId)}/${decision}`,
           ),
@@ -16837,6 +17740,11 @@ function ChatPane({
             body: JSON.stringify(body),
           },
         );
+        const responseBody = await res.json().catch(() => null);
+        if (decision === "approve") {
+          const turnId = approvalNotificationTurnId(responseBody);
+          if (turnId) setPendingApprovalTurnOpenId(turnId);
+        }
         await fetchControlActionEntries();
         await fetchFocusedBreakGlassRequest();
       } finally {
@@ -16857,7 +17765,7 @@ function ChatPane({
       if (publicView || readOnly) return;
       setTestSlotModelApprovalBusyId(request.eventId);
       try {
-        await authedFetch(
+        const res = await authedFetch(
           scopedSessionPathForPane(
             `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
           ),
@@ -16867,6 +17775,9 @@ function ChatPane({
             body: JSON.stringify({ note }),
           },
         );
+        const responseBody = await res.json().catch(() => null);
+        const turnId = approvalNotificationTurnId(responseBody);
+        if (turnId) setPendingApprovalTurnOpenId(turnId);
         await fetchControlActionEntries();
         await fetchFocusedTestSlotModelRequest();
       } finally {
@@ -16888,9 +17799,15 @@ function ChatPane({
         void postTestSlotModelApproval({ eventId: item.id }, "");
         return;
       }
+      if (item.kind === "pr-lane") {
+        if (item.prLaneRequest) {
+          void postPRLaneDecision(item.prLaneRequest, "approve");
+        }
+        return;
+      }
       void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
     },
-    [postBreakGlassDecision, postTestSlotModelApproval],
+    [postBreakGlassDecision, postPRLaneDecision, postTestSlotModelApproval],
   );
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
@@ -17284,6 +18201,143 @@ function ChatPane({
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+
+  // Durable turn directory (transcript-navigation contract: the selectable turn
+  // set is owned by the durable ledger, not by whatever transcript window the
+  // browser has loaded). The Turns selector lists EVERY turn from here; the
+  // chat surface keeps its own bounded `entries` window. A directory miss
+  // surfaces an explicit error state — it never silently falls back to listing
+  // only the loaded window (that was the bug this replaces).
+  const [turnDirectoryEntries, setTurnDirectoryEntries] = useState<
+    TranscriptEntry[]
+  >([]);
+  const [turnDirectoryStatus, setTurnDirectoryStatus] =
+    useState<TurnDirectoryStatus>("idle");
+  const [turnDirectoryTruncated, setTurnDirectoryTruncated] = useState(false);
+  // Revision bumps after every load attempt so the new-turn refetch effect
+  // re-evaluates against the freshly-known turn-id set (and re-fires if a turn
+  // appeared while a single-flighted load was in progress).
+  const [turnDirectoryRevision, setTurnDirectoryRevision] = useState(0);
+  const turnDirectoryTurnIdsRef = useRef<Set<string>>(new Set());
+  const loadTurnDirectoryInFlightRef = useRef(false);
+  const turnDirectoryNewTurnLoopRef = useRef<{
+    key: string;
+    count: number;
+    reported: boolean;
+  }>({ key: "", count: 0, reported: false });
+  const turnDirectoryRouteMismatchKeyRef = useRef<string | null>(null);
+  const loadTurnDirectory = useCallback(
+    async (source: string): Promise<void> => {
+      // The pre-session splash has no session to read; admin/public read-only
+      // surfaces do load their complete directory.
+      if (publicView && !publicShareTokenValue) return;
+      if (loadTurnDirectoryInFlightRef.current) return;
+      loadTurnDirectoryInFlightRef.current = true;
+      const requestSessionId = session.id;
+      const routeSessionId = readSessionRouteFromPath()?.sessionId ?? "";
+      if (routeSessionId && routeSessionId !== requestSessionId) {
+        const mismatchKey = `${requestSessionId}:${routeSessionId}:${source}`;
+        if (turnDirectoryRouteMismatchKeyRef.current !== mismatchKey) {
+          turnDirectoryRouteMismatchKeyRef.current = mismatchKey;
+          logChatScrollEvent("turn-directory-route-session-mismatch", {
+            surface: "session",
+            sessionId: requestSessionId,
+            sessionMode: session.mode,
+            source,
+            reason: "route-session-mismatch",
+            key: routeSessionId,
+            eventCount: turnDirectoryTurnIdsRef.current.size,
+          });
+        }
+      } else {
+        turnDirectoryRouteMismatchKeyRef.current = null;
+      }
+      setTurnDirectoryStatus((prev) => (prev === "ready" ? prev : "loading"));
+      logChatScrollEvent("turn-directory-request", {
+        surface: "session",
+        sessionId: requestSessionId,
+        sessionMode: session.mode,
+        source,
+      });
+      try {
+        const res = await fetchPaneResource(turnDirectoryRequestPathForPane());
+        if (sessionIdRef.current !== requestSessionId) return;
+        if (!res.ok) {
+          setTurnDirectoryStatus("error");
+          logChatScrollEvent("turn-directory-error", {
+            surface: "session",
+            sessionId: requestSessionId,
+            sessionMode: session.mode,
+            source,
+            status: res.status,
+          });
+          return;
+        }
+        const body = (await res.json()) as TurnDirectoryBody;
+        if (sessionIdRef.current !== requestSessionId) return;
+        const shells = normalizeProjectedTranscriptEntries(
+          Array.isArray(body.turns) ? body.turns : [],
+        );
+        const ids = new Set<string>();
+        for (const shell of shells) {
+          const tid = (shell.turnId ?? "").trim();
+          if (tid) ids.add(tid);
+        }
+        turnDirectoryTurnIdsRef.current = ids;
+        setTurnDirectoryEntries(shells);
+        setTurnDirectoryTruncated(body.truncated === true);
+        setTurnDirectoryStatus("ready");
+        logChatScrollEvent("turn-directory-loaded", {
+          surface: "session",
+          sessionId: requestSessionId,
+          sessionMode: session.mode,
+          source,
+          eventCount: shells.length,
+        });
+      } catch {
+        if (sessionIdRef.current === requestSessionId) {
+          setTurnDirectoryStatus("error");
+        }
+      } finally {
+        loadTurnDirectoryInFlightRef.current = false;
+        setTurnDirectoryRevision((n) => n + 1);
+      }
+    },
+    [
+      fetchPaneResource,
+      publicShareTokenValue,
+      publicView,
+      session.id,
+      session.mode,
+      turnDirectoryRequestPathForPane,
+    ],
+  );
+  // Drop the previous session's directory the instant the pane is pointed at a
+  // new session, so the Turns view never shows a stale turn set during the
+  // cross-session load (harmless if the pane remounts per session).
+  useEffect(() => {
+    setTurnDirectoryEntries([]);
+    setTurnDirectoryStatus("idle");
+    setTurnDirectoryTruncated(false);
+    turnDirectoryTurnIdsRef.current = new Set();
+    setPendingApprovalTurnOpenId(null);
+    approvalAutoFollowPrimedRef.current = false;
+    approvalAutoFollowKnownTurnIdsRef.current = new Set();
+    turnDirectoryNewTurnLoopRef.current = {
+      key: "",
+      count: 0,
+      reported: false,
+    };
+    turnDirectoryRouteMismatchKeyRef.current = null;
+  }, [session.id]);
+  // Load the directory when the pane becomes visible (open / tab switch /
+  // session change). The new-turn refetch effect lives lower, after
+  // renderedEntries is defined.
+  useEffect(() => {
+    if (!visible) return;
+    if (publicView && !publicShareTokenValue) return;
+    void loadTurnDirectory("open");
+  }, [visible, publicView, publicShareTokenValue, loadTurnDirectory]);
   // runningRef is read from the SSE silence watchdog so we can tell
   // whether a silent stream was silent *during a turn* (the
   // candidate-B signature) or just idle. Mirrors the visibleRef
@@ -17329,6 +18383,16 @@ function ChatPane({
   } | null>(null);
   const terminalCorrelationReportedRef = useRef<Set<string>>(new Set());
   const queuedFollowupBlockedReportedRef = useRef<string | null>(null);
+  // Last durable activity status seen from applySdkActivitySummaryToUi.
+  // needs_input/streaming/submitted/claimed/scheduled all collapse into
+  // runStatus "running", so this ref is the only surviving distinction the
+  // "why is my message queued?" diagnostic can read. Read-only signal — it
+  // never feeds the queue gate, only the explanation surface.
+  const latestDurableActivityStatusRef = useRef<ConversationActivityStatus | null>(
+    null,
+  );
+  const [activityLoadingSessionSwitchTelemetry, setActivityLoadingSessionSwitchTelemetry] =
+    useState<{ previousSessionId: string; changedAt: number } | null>(null);
   // Mirror of the durable activity summary's active turn. The main transcript
   // no longer reduces raw item events in the browser; projected row updates and
   // session activity summaries own visible run state.
@@ -17410,6 +18474,10 @@ function ChatPane({
       session_id: session.id,
     });
     if (!activity) return;
+    // Capture the raw durable status before the sdkActive collapse and the
+    // `if (currentRunRef.current) return;` early-out below, so the queued-input
+    // diagnostic can recover needs_input/scheduled/etc. and the latch-lag tail.
+    latestDurableActivityStatusRef.current = activity.status;
     const sdkActive =
       activity.status === "submitted" ||
       activity.status === "claimed" ||
@@ -18338,6 +19406,13 @@ function ChatPane({
     }
     if (route.tab === "session-data") {
       setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "queue-status") {
+      setActiveTab("queue-status");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -19396,6 +20471,15 @@ function ChatPane({
   // When the session id changes, reset transcript state and allow the
   // history sync to run again. The replay paths repopulate from backend.
   useLayoutEffect(() => {
+    const previousSessionId = sessionIdRef.current;
+    if (previousSessionId && previousSessionId !== session.id) {
+      setActivityLoadingSessionSwitchTelemetry({
+        previousSessionId,
+        changedAt: Date.now(),
+      });
+    } else {
+      setActivityLoadingSessionSwitchTelemetry(null);
+    }
     sessionIdRef.current = session.id;
     wasVisibleRef.current = visible;
     resetSdkTimelineBootstrapState("session-change", {
@@ -19406,6 +20490,7 @@ function ChatPane({
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
+    latestDurableActivityStatusRef.current = null;
     setQueuedMessages([]);
     setRunStatus("idle");
     setRunning(false);
@@ -19414,6 +20499,16 @@ function ChatPane({
     // passive timeline bootstrap effects can start.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
+  useEffect(() => {
+    if (!activityLoadingSessionSwitchTelemetry) return;
+    const observed = activityLoadingSessionSwitchTelemetry;
+    const timer = window.setTimeout(() => {
+      setActivityLoadingSessionSwitchTelemetry((current) =>
+        current === observed ? null : current,
+      );
+    }, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [activityLoadingSessionSwitchTelemetry]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
   // Ctrl/⌘+Enter submits. Implemented by intercepting at capture phase
@@ -20724,6 +21819,27 @@ function ChatPane({
         ? "error"
         : undefined;
 
+  // The single, session-level "why is typed input queued?" explanation. The
+  // queue gate is exactly `running`, so when the run is active this is the live
+  // reason the queue won't drain; null when idle (input sends immediately).
+  // These are the same latch inputs handleSubmit feeds decideFollowupSubmit, so
+  // the diagnostic and the gate agree by construction.
+  const queueBlockHasLocalRun = currentRunRef.current !== null;
+  const queueBlockLocalRunHasTerminal =
+    currentRunRef.current !== null &&
+    terminalResultForTurn(
+      sdkServerProjectedEntriesRef.current,
+      currentRunRef.current.turnId,
+    ) !== null;
+  const queueBlock: RunBlockDescription | null = running
+    ? describeRunBlock({
+        durableActivityStatus: latestDurableActivityStatusRef.current,
+        runStatus,
+        hasLocalRun: queueBlockHasLocalRun,
+        localRunHasTerminal: queueBlockLocalRunHasTerminal,
+      })
+    : null;
+
   const sessionAvatar = useMemo(
     () => getSessionAvatarByID(session.agent_avatar_id),
     [avatarCatalogVersion, session.agent_avatar_id],
@@ -20883,10 +21999,25 @@ function ChatPane({
   const appliedModelId = (session.runtime_model ?? "").trim();
   const modelForCostEstimate = appliedModelId || selectedModelId;
   const contextWindow = runtimeContextWindowTokens;
+  // The Turns selector is built from the durable turn directory, NOT the
+  // bounded chat window: the directory owns the COMPLETE turn set so every turn
+  // (Turn 1..N) is listable regardless of how far back the chat window paged.
+  // The live `renderedEntries` window only OVERLAYS fresh status onto the turns
+  // the directory already lists (the active/recent tail), so an in-flight turn
+  // stays live without re-reading the directory on every terminal; the live
+  // shell wins on a turnId collision. The set is always the directory's — a
+  // directory the browser hasn't loaded yields no turns here (an explicit
+  // loading/error state renders), it never falls back to listing the window.
+  // buildTurnViewItems still appends the single active turn (renderedActiveTurnId)
+  // for the sub-second gap between submitting a turn and the directory refetch.
+  const turnViewSourceEntries = useMemo(
+    () => mergeTurnDirectoryWithLiveShells(turnDirectoryEntries, renderedEntries),
+    [turnDirectoryEntries, renderedEntries],
+  );
   const turnViewItems = useMemo(
     () =>
       buildTurnViewItems(
-        renderedEntries,
+        turnViewSourceEntries,
         renderedActiveTurnId,
         activityEntriesByTurn,
         modelForCostEstimate,
@@ -20897,13 +22028,70 @@ function ChatPane({
       contextWindow,
       modelForCostEstimate,
       renderedActiveTurnId,
-      renderedEntries,
+      turnViewSourceEntries,
     ],
   );
+  // Refetch the directory when the live tail surfaces a turn it does not yet
+  // list — a turn was submitted/started after the last directory read. The
+  // directory read is durable (materialize-on-read), so the new turn joins with
+  // its durable number; until then buildTurnViewItems shows it as the active
+  // "Current turn". turnDirectoryRevision re-runs this after each load so a turn
+  // that appeared mid-load is not missed.
+  useEffect(() => {
+    if (turnDirectoryStatus !== "ready") return;
+    const known = turnDirectoryTurnIdsRef.current;
+    const missingTurnIds = turnActivityShellIdsMissingFromDirectory(
+      renderedEntries,
+      known,
+    );
+    if (missingTurnIds.length === 0) {
+      turnDirectoryNewTurnLoopRef.current = {
+        key: "",
+        count: 0,
+        reported: false,
+      };
+      return;
+    }
+    const missingKey = missingTurnIds.join("|");
+    const previous = turnDirectoryNewTurnLoopRef.current;
+    const next =
+      previous.key === missingKey
+        ? { ...previous, count: previous.count + 1 }
+        : { key: missingKey, count: 1, reported: false };
+    if (
+      next.count >= TURN_DIRECTORY_NEW_TURN_LOOP_THRESHOLD &&
+      !next.reported
+    ) {
+      next.reported = true;
+      logChatScrollEvent("turn-directory-new-turn-loop", {
+        surface: "session",
+        sessionId: session.id,
+        sessionMode: session.mode,
+        source: "new-turn",
+        reason: "stable-missing-turn-activity-shell",
+        key: missingTurnIds[0],
+        eventCount: missingTurnIds.length,
+        canonicalEventCount: known.size,
+        entries: renderedEntries.length,
+        turnActivityShells: renderedEntries.filter(isTurnActivityEntry).length,
+      });
+    }
+    turnDirectoryNewTurnLoopRef.current = next;
+    void loadTurnDirectory("new-turn");
+  }, [
+    renderedEntries,
+    session.id,
+    session.mode,
+    turnDirectoryStatus,
+    turnDirectoryRevision,
+    loadTurnDirectory,
+  ]);
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId =
     turnViewItems.find((turn) => turn.active)?.turnId ?? null;
   const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
+  const latestApprovalAutoFollowTurnId =
+    latestAutoFollowApprovalTurnId(turnViewItems);
   const selectedTurnExists =
     selectedTurnId != null &&
     turnViewItems.some((turn) => turn.turnId === selectedTurnId);
@@ -21186,6 +22374,8 @@ function ChatPane({
       replaceAppRoute("cluster");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "queue-status") {
+      replaceSessionRoute(session.id, "queue-status");
     } else if (activeTab === "pull-requests") {
       replaceSessionRoute(session.id, "pull-requests");
     } else if (activeTab === "break-glass") {
@@ -21254,6 +22444,41 @@ function ChatPane({
     if (!effectiveSelectedTurnId) return;
     ensureTurnActivityLoaded(effectiveSelectedTurnId);
   }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+  // Behavior-free watchdog (telemetry only): report when the selected turn's
+  // activity body stays on "Loading activity..." past the threshold. It emits a
+  // bounded session-event-stream metric and does NOT start a load, touch the
+  // cache, or change any state — it only observes. The existing
+  // turn_activity_load_* events fire only when a load actually runs, so a load
+  // that never started (the selected turn left `unloaded` with nothing
+  // re-triggering it) is invisible today; this fills that gap so the strand is
+  // measurable in prod data before any fix. See turnActivityState.ts.
+  const selectedActivityStatus = effectiveSelectedTurnId
+    ? turnActivityLoadsByTurn[effectiveSelectedTurnId]?.status
+    : undefined;
+  useEffect(() => {
+    if (!visible) return;
+    if (activeTab !== "turns") return;
+    if (!effectiveSelectedTurnId) return;
+    // Arm only while the body shows the spinner (a non-terminal status).
+    if (turnActivityStuckEvent(selectedActivityStatus) === null) return;
+    const turnId = effectiveSelectedTurnId;
+    const timer = window.setTimeout(() => {
+      // Recompute from the ref at fire time so a load that resolved within the
+      // threshold does not produce a false positive.
+      const event = turnActivityStuckEvent(
+        turnActivityLoadsByTurnRef.current[turnId]?.status,
+      );
+      if (!event) return;
+      logSessionEventStreamEvent(event, { sessionMode: session.mode });
+    }, TURN_ACTIVITY_STUCK_THRESHOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    visible,
+    activeTab,
+    effectiveSelectedTurnId,
+    selectedActivityStatus,
+    session.mode,
+  ]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (pendingTurnViewRouteAnchor !== "bottom") return;
@@ -21329,6 +22554,43 @@ function ChatPane({
       startTurnActivityLoad,
     ],
   );
+  useEffect(() => {
+    if (!pendingApprovalTurnOpenId) return;
+    if (!turnViewItems.some((turn) => turn.turnId === pendingApprovalTurnOpenId))
+      return;
+    openTurnPage(pendingApprovalTurnOpenId, {
+      anchor: "bottom",
+      resetPage: true,
+    });
+    setPendingApprovalTurnOpenId(null);
+  }, [openTurnPage, pendingApprovalTurnOpenId, turnViewItems]);
+  useEffect(() => {
+    if (turnDirectoryStatus !== "ready") return;
+    const currentTurnIds = new Set(turnViewItems.map((turn) => turn.turnId));
+    const target = latestApprovalAutoFollowTurnId;
+    const wasKnown = target
+      ? approvalAutoFollowKnownTurnIdsRef.current.has(target)
+      : false;
+    const wasPrimed = approvalAutoFollowPrimedRef.current;
+    approvalAutoFollowKnownTurnIdsRef.current = currentTurnIds;
+    approvalAutoFollowPrimedRef.current = true;
+    if (!wasPrimed || !target || wasKnown || pendingApprovalTurnOpenId === target)
+      return;
+    if (
+      activeTab !== "turns" &&
+      activeTab !== "break-glass" &&
+      activeTab !== "test-slot-model"
+    )
+      return;
+    openTurnPage(target, { anchor: "bottom", resetPage: true });
+  }, [
+    activeTab,
+    latestApprovalAutoFollowTurnId,
+    openTurnPage,
+    pendingApprovalTurnOpenId,
+    turnDirectoryStatus,
+    turnViewItems,
+  ]);
 
   // T opens the turn-detail view from the focused transcript; Escape returns
   // from Turns to the transcript. The T side uses the same "highlighted
@@ -21933,7 +23195,7 @@ function ChatPane({
   async function submitAnswer(
     askingTurnId: string,
     payload: AnswerPayload,
-  ): Promise<void> {
+  ): Promise<{ answerTurnId: string | null }> {
     const turnID = askingTurnId.trim();
     const providerItemID = payload.providerItemId.trim();
     const timelineID = payload.timelineId.trim();
@@ -21974,10 +23236,221 @@ function ChatPane({
     // the affected question turn directly; this is the same projection manual
     // refresh would load, scoped to the card the user just answered. Mark it
     // pending first so an already-running live refresh schedules one more pass.
+    // The answer creates the next durable turn (the user's answer message +
+    // the agent's continuation). Surface its id so the Turns view can advance
+    // there, ready for the ensuing conversation.
+    let answerTurnId: string | null = null;
+    try {
+      const data = await res.json();
+      if (typeof data?.turn_id === "string" && data.turn_id.trim()) {
+        answerTurnId = data.turn_id.trim();
+      }
+    } catch {
+      // Non-JSON success body — nothing to navigate to.
+    }
     if (!activityLiveRefreshPendingCursorRef.current.has(turnID)) {
       activityLiveRefreshPendingCursorRef.current.set(turnID, "");
     }
     silentlyRefreshCachedTurnActivity(turnID);
+    return { answerTurnId };
+  }
+
+  // --- AskUserQuestion answering mode ------------------------------------
+  // The single run composer doubles as the answer box for a pending synthetic
+  // AskUserQuestion turn, so the question screen never shows two text inputs.
+  // It reads the same askUserQuestionDrafts the option chips write to; its send
+  // button becomes "Submit answer" and posts the assembled answer to /answer.
+  const answeringContext = useMemo(() => {
+    if (publicView || readOnly) return null;
+    const pendingTurn = turnViewItems.find(
+      (turn) => turn.shell?.activity?.status === "needs_input",
+    );
+    if (!pendingTurn) return null;
+    const snapshot = turnActivityLoadVisibleSnapshot(
+      turnActivityLoadsByTurn[pendingTurn.turnId],
+    );
+    const awEntry = (snapshot?.entries ?? []).find(
+      (entry) =>
+        entry.metaKind === "awaiting_input" &&
+        entry.awaitingInput &&
+        !(entry.awaitingInput.answered || entry.awaitingInput.dismissed),
+    );
+    const aw = awEntry?.awaitingInput;
+    if (!awEntry || !aw) return null;
+    const questions = parseAskUserQuestions({ questions: aw.questions });
+    if (questions.length === 0) return null;
+    const draftKey = (aw.timelineId || awEntry.id || "").trim();
+    const draft =
+      askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft();
+    const selections = draft.selections;
+    const visibleIndex =
+      aw.questionIndex && aw.questionIndex >= 1 ? aw.questionIndex - 1 : 0;
+    const visibleQuestion = questions[visibleIndex] ?? questions[0] ?? null;
+    // The composer holds the live free-form text for the currently visible
+    // question, so a typed custom answer counts toward that question being
+    // answered. Without this, typing (with no option picked) left Submit
+    // disabled and the box read as frozen.
+    const composerFree = composerText.trim();
+    const hasResponse = (q: AskUserQuestion): boolean => {
+      if ((selections[q.question]?.length ?? 0) > 0) return true;
+      if (!q.allowFreeForm) return false;
+      if ((draft.notes[q.question]?.trim().length ?? 0) > 0) return true;
+      if (q === visibleQuestion && composerFree.length > 0) return true;
+      return false;
+    };
+    const pager = turnActivityPagerState(snapshot?.pageInfo);
+    return {
+      questionTurnId: (
+        aw.questionTurnId ||
+        awEntry.turnId ||
+        aw.askingTurnId ||
+        ""
+      ).trim(),
+      providerItemId: aw.providerItemId,
+      timelineId: aw.timelineId,
+      draftKey,
+      questions,
+      visibleQuestion,
+      multiQuestion: questions.length > 1,
+      // visibleAnswered gates the per-question forward action; allAnswered gates
+      // the final submit; hasNextPage/nextPage drive multi-question paging so a
+      // 2-question set can move from one question to the next.
+      visibleAnswered: visibleQuestion ? hasResponse(visibleQuestion) : false,
+      allAnswered: questions.every(hasResponse),
+      hasNextPage: pager.page < pager.pageCount,
+      nextPage: pager.page + 1,
+    };
+  }, [
+    askUserQuestionDrafts,
+    composerText,
+    publicView,
+    readOnly,
+    turnActivityLoadsByTurn,
+    turnViewItems,
+  ]);
+
+  // Refs to the latest composer text + drafts so the page-change effect below
+  // reads current values without re-running on every keystroke.
+  const composerTextRef = useRef(composerText);
+  composerTextRef.current = composerText;
+  const askUserQuestionDraftsRef = useRef(askUserQuestionDrafts);
+  askUserQuestionDraftsRef.current = askUserQuestionDrafts;
+  // Persist + restore free-form text per question while paging through a
+  // multi-question set. Leaving a question saves whatever is in the box for it;
+  // entering one restores its saved text. Covers the composer's Next button AND
+  // the header page arrows. Without this, typing on question 1, moving to
+  // question 2, and coming back showed an empty box (and a re-type overwrote).
+  const prevAnsweringVisibleRef = useRef<{
+    draftKey: string;
+    question: string;
+  } | null>(null);
+  const answeringDraftKey = answeringContext?.draftKey ?? null;
+  const answeringVisibleQuestion =
+    answeringContext?.visibleQuestion?.question ?? null;
+  useEffect(() => {
+    // Do NOT clear the binding on a transient null (the gap while the next
+    // question's activity page loads). Dropping it there is what leaked the
+    // previous question's text into the next one — the box was never saved or
+    // cleared. Keep the last binding and act only on a real question change.
+    if (!answeringDraftKey || !answeringVisibleQuestion) return;
+    const prev = prevAnsweringVisibleRef.current;
+    const cur = {
+      draftKey: answeringDraftKey,
+      question: answeringVisibleQuestion,
+    };
+    if (
+      prev &&
+      (prev.draftKey !== cur.draftKey || prev.question !== cur.question)
+    ) {
+      // Capture eagerly: the setComposerValue("") seed below fires a synchronous
+      // setComposerText(""), which flips composerTextRef before this updater
+      // runs — reading the ref inside the updater would save "" over the text.
+      const leavingText = composerTextRef.current;
+      setAskUserQuestionDraft(prev.draftKey, (d) => ({
+        ...(d ?? emptyAskUserQuestionDraft()),
+        notes: { ...(d?.notes ?? {}), [prev.question]: leavingText },
+      }));
+      const draft = askUserQuestionDraftsRef.current[cur.draftKey];
+      setComposerValue(draft?.notes?.[cur.question] ?? "");
+    }
+    prevAnsweringVisibleRef.current = cur;
+  }, [answeringDraftKey, answeringVisibleQuestion, setAskUserQuestionDraft]);
+
+  // After answering, advance the Turns view to the new answer turn so the user
+  // is where the conversation continues. That turn is brand new and unnumbered,
+  // so navigating immediately falls back to the latest loaded turn; instead we
+  // hold the target id and navigate once it appears in the loaded turn list.
+  const [pendingAnswerNavTurnId, setPendingAnswerNavTurnId] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (!pendingAnswerNavTurnId) return;
+    if (turnViewItems.some((t) => t.turnId === pendingAnswerNavTurnId)) {
+      selectTurnViewTurn(pendingAnswerNavTurnId);
+      setPendingAnswerNavTurnId(null);
+    }
+  }, [pendingAnswerNavTurnId, turnViewItems, selectTurnViewTurn]);
+
+  async function submitComposerAnswer(): Promise<void> {
+    const ctx = answeringContext;
+    if (!ctx || !ctx.allAnswered) return;
+    const typed = composerText.trim();
+    const draft =
+      askUserQuestionDrafts[ctx.draftKey] ?? emptyAskUserQuestionDraft();
+    const selections = draft.selections;
+    const notes: Record<string, string> = { ...draft.notes };
+    if (typed && ctx.visibleQuestion?.allowFreeForm) {
+      notes[ctx.visibleQuestion.question] = typed;
+    }
+    const answers: Record<string, string[]> = {};
+    const annotations: Record<
+      string,
+      { preview?: string; notes?: string }
+    > = {};
+    for (const q of ctx.questions) {
+      const labels = selections[q.question] ?? [];
+      const noteText = q.allowFreeForm ? (notes[q.question]?.trim() ?? "") : "";
+      if (labels.length > 0) answers[q.question] = labels;
+      else if (noteText) answers[q.question] = ["Other"];
+      else continue;
+      const preview = q.options.find((opt) =>
+        labels.includes(opt.label),
+      )?.preview;
+      const ann: { preview?: string; notes?: string } = {};
+      if (preview) ann.preview = preview;
+      if (noteText) ann.notes = noteText;
+      if (ann.preview || ann.notes) annotations[q.question] = ann;
+    }
+    if (Object.keys(answers).length === 0) return;
+    try {
+      const { answerTurnId } = await submitAnswer(ctx.questionTurnId, {
+        providerItemId: ctx.providerItemId,
+        timelineId: ctx.timelineId,
+        answers,
+        annotations,
+      });
+      setComposerValue("");
+      // Advance the Turns view to the new answer turn so the user lands where
+      // the conversation continues, not stranded on the answered question. The
+      // turn isn't loaded yet, so hold it; the effect above navigates once it
+      // streams into the turn list.
+      if (answerTurnId) {
+        setPendingAnswerNavTurnId(answerTurnId);
+      }
+    } catch (err) {
+      // Surface failures instead of swallowing them — a silent failure here is
+      // exactly what reads as a frozen box.
+      console.error("AskUserQuestion answer submit failed", err);
+    }
+  }
+
+  function advanceToNextQuestion(): void {
+    const ctx = answeringContext;
+    if (!ctx || !ctx.hasNextPage) return;
+    // Navigation only — the page-change effect above persists the current
+    // question's text and restores the next one's, so this button and the
+    // header page arrows behave identically.
+    selectTurnAndPage(ctx.questionTurnId, ctx.nextPage);
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
@@ -22599,15 +24072,60 @@ function ChatPane({
                     </div>
                   </div>
                 </div>
+              ) : turnViewItems.length === 0 &&
+                turnDirectoryStatus === "error" ? (
+                <div className="run-turn-view" aria-label="Turn view">
+                  <div className="run-turn-view-body run-transcript run-transcript-claude">
+                    <div className="run-turn-view-alert" role="alert">
+                      <span>Couldn’t load this session’s turns.</span>
+                      <button
+                        type="button"
+                        className="btn-secondary run-turn-view-alert-action"
+                        onClick={() => void loadTurnDirectory("retry")}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : turnViewItems.length === 0 &&
+                (turnDirectoryStatus === "loading" ||
+                  turnDirectoryStatus === "idle") ? (
+                <div className="run-turn-view" aria-label="Turn view">
+                  <div className="run-turn-view-body run-transcript run-transcript-claude">
+                    <div
+                      className="run-shell-loading"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <Loader2Icon
+                        size={18}
+                        className="run-spin"
+                        aria-hidden="true"
+                      />
+                      <span>Loading turns...</span>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <RunTurnActivityScreen
                   turns={turnViewItems}
+                  truncated={turnDirectoryTruncated}
                   selectedTurnId={effectiveSelectedTurnId}
                   avatar={sessionAvatar}
                   systemAvatar={systemAvatar}
                   originSessionAvatarByID={originSessionAvatarByID}
                   sessionId={session.id}
                   sessionMode={session.mode}
+                  activityLoadingTelemetrySource={
+                    activityLoadingSessionSwitchTelemetry
+                      ? "session-switch"
+                      : "turns-selected"
+                  }
+                  activityLoadingPreviousSessionId={
+                    activityLoadingSessionSwitchTelemetry?.previousSessionId ??
+                    null
+                  }
                   showThinking={runPrefs.showThinking}
                   autoExpandTools={runPrefs.autoExpandTools}
                   showTimestamps={runPrefs.showTimestamps}
@@ -22679,6 +24197,24 @@ function ChatPane({
                       }
                 }
                 readOnly={readOnly}
+              />
+            ) : activeTab === "queue-status" ? (
+              <QueueBlockScreen
+                block={queueBlock}
+                durableActivityStatus={latestDurableActivityStatusRef.current}
+                runStatus={runStatus}
+                running={running}
+                hasLocalRun={queueBlockHasLocalRun}
+                localRunHasTerminal={queueBlockLocalRunHasTerminal}
+                activeTurnId={renderedActiveTurnId}
+                queuedMessages={queuedMessages}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
               />
             ) : activeTab === "pull-requests" ? (
               <AgentGitActivityScreen
@@ -22964,16 +24500,6 @@ function ChatPane({
                 Drop to attach
               </div>
             )}
-            <PRLaneApprovalIndicator
-              requests={prLaneRequests}
-              busyEventId={prLaneApprovalBusyId}
-              onApprove={(request, override) => {
-                void postPRLaneDecision(request, "approve", override);
-              }}
-              onDeny={(request) => {
-                void postPRLaneDecision(request, "deny");
-              }}
-            />
             {attachments.length > 0 && (
               <div className="run-composer-attachments">
                 {attachments.map((a) => (
@@ -23150,6 +24676,36 @@ function ChatPane({
                   <span>Queued follow-up inputs</span>
                   <span>{queuedMessages.length}</span>
                 </div>
+                <div className="run-queued-followups-reason">
+                  <span
+                    className={`status-dot status-${queueBlock?.dotStatus ?? "agent-working"}`}
+                    aria-hidden="true"
+                  />
+                  <span className="run-queued-followups-reason-label">
+                    {queueBlock?.label ?? "Finishing up"}
+                  </span>
+                  <a
+                    className="run-queued-followups-reason-link"
+                    href={sessionRouteUrl(session.id, "queue-status")}
+                    title="See why this is queued"
+                    onClick={(e) => {
+                      if (
+                        e.button !== 0 ||
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey
+                      )
+                        return;
+                      e.preventDefault();
+                      navigateToSessionRoute(
+                        sessionRouteUrl(session.id, "queue-status"),
+                      );
+                    }}
+                  >
+                    Why queued?
+                  </a>
+                </div>
                 <div className="run-queued-followups-list">
                   {queuedMessages.map((message, index) => (
                     <div className="run-queued-followup" key={message.id}>
@@ -23201,7 +24757,38 @@ function ChatPane({
         composer={
           <ChatComposer
             className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
-            placeholder={RUN_COMPOSER_PLACEHOLDER}
+            placeholder={
+              answeringContext
+                ? "Type a custom answer, or pick an option above — ⏎ to submit"
+                : RUN_COMPOSER_PLACEHOLDER
+            }
+            answerMode={
+              answeringContext
+                ? {
+                    label: answeringContext.allAnswered
+                      ? answeringContext.multiQuestion
+                        ? "Submit answers"
+                        : "Submit answer"
+                      : answeringContext.hasNextPage
+                        ? "Next"
+                        : answeringContext.multiQuestion
+                          ? "Submit answers"
+                          : "Submit answer",
+                    canSubmit: answeringContext.allAnswered
+                      ? true
+                      : answeringContext.hasNextPage
+                        ? answeringContext.visibleAnswered
+                        : false,
+                    onSubmit: () => {
+                      if (answeringContext.allAnswered) {
+                        void submitComposerAnswer();
+                      } else if (answeringContext.hasNextPage) {
+                        advanceToNextQuestion();
+                      }
+                    },
+                  }
+                : undefined
+            }
             onSubmit={(args) => {
               if (readOnly) return;
               handleSubmit({ text: args.text, files: [] });
@@ -23260,13 +24847,29 @@ function ChatPane({
                 }}
                 breakGlass={{
                   items: breakGlassApprovalMenuItems,
-                  approvingId: breakGlassApprovalBusyId ?? testSlotModelApprovalBusyId,
+                  approvingId:
+                    breakGlassApprovalBusyId ??
+                    testSlotModelApprovalBusyId ??
+                    prLaneApprovalBusyId,
                   onQuickApprove:
                     publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
+                  onApprovePRLane:
+                    publicView || readOnly
+                      ? undefined
+                      : (request, override) => {
+                          void postPRLaneDecision(request, "approve", override);
+                        },
+                  onDenyPRLane:
+                    publicView || readOnly
+                      ? undefined
+                      : (request) => {
+                          void postPRLaneDecision(request, "deny");
+                        },
                 }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,
                   linkedUrl: linkedPullRequestURL,
+                  sessionId: session.id,
                 }}
                 slash={{
                   title: "Show slash commands",
@@ -23731,6 +25334,8 @@ function AuthenticatedApp() {
       if (isDurableRunPref(key)) {
         persistRunPrefsLocally(next);
         persistRunPrefs(next);
+      } else {
+        writeEphemeralRunPrefForSession(key, value);
       }
       return next;
     });
@@ -24798,16 +26403,6 @@ function AuthenticatedApp() {
       setHomeSpireLensMcpEnabled(false);
     }
   }, [defaultSessionMode, spireLensMcpAvailable]);
-
-  // Persist the Restricted Git choice so it survives reloads and mode switches
-  // and is actually used on the next session create. The create-time
-  // REPO_SUPPORTED_MODES guard already withholds the capability for modes that
-  // can't use it (and the toggle is hidden for them), so there is no reason to
-  // silently clear the user's stored choice when the default mode changes —
-  // that silent reset is what dropped restricted_git from sessions 927/929.
-  useEffect(() => {
-    writeHomeRestrictedGitEnabled(homeRestrictedGitEnabled);
-  }, [homeRestrictedGitEnabled]);
 
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
@@ -26026,6 +27621,34 @@ function AuthenticatedApp() {
     setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
   }
 
+  function resetHomeLaunchDefaults() {
+    clearHomeDraftModePreference();
+    setDefaultInteraction(DEFAULT_HOME_INTERACTION);
+    setDefaultSessionMode(DEFAULT_HOME_SESSION_MODE);
+
+    clearEphemeralRunPrefsForSession();
+    setRunPrefs((prev) => {
+      const base: RunPrefs = {
+        ...prev,
+        claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
+        claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
+        codexModelId: DEFAULT_CODEX_MODEL_ID,
+        codexEffort: DEFAULT_CODEX_EFFORT_ID,
+        initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
+      };
+      const next = sessionRunOptions
+        ? reconcileRunPrefsWithRunOptions(base, sessionRunOptions)
+        : base;
+      persistRunPrefsLocally(next);
+      persistRunPrefs(next);
+      return next;
+    });
+
+    clearHomeRestrictedGitPreference();
+    setHomeRestrictedGitEnabled(true);
+    setHomeModelMenuOpen(false);
+  }
+
   async function createSession(
     mode: SessionMode = defaultSessionMode,
     initialPrompt?: string,
@@ -26160,6 +27783,7 @@ function AuthenticatedApp() {
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
+      resetHomeLaunchDefaults();
       recordSessionListDebugEvent({
         kind: "create-response",
         source: "createSession",
@@ -27728,9 +29352,13 @@ function AuthenticatedApp() {
                           <button
                             type="button"
                             className={`home-quick-action home-capability-action${!homeRestrictedGitEnabled ? " is-selected" : ""}`}
-                            onClick={() =>
-                              setHomeRestrictedGitEnabled((value) => !value)
-                            }
+                            onClick={() => {
+                              setHomeRestrictedGitEnabled((value) => {
+                                const next = !value;
+                                writeHomeRestrictedGitEnabled(next);
+                                return next;
+                              });
+                            }}
                             disabled={busy}
                             aria-pressed={!homeRestrictedGitEnabled}
                             title="Disable Tank-governed Git for this session and use standard git access"

@@ -4,10 +4,9 @@
 //
 // The Tank session ServiceAccount must be READ-ONLY on the cluster — never
 // bound to cluster-admin. That grant was the kubectl-cp/exec bypass of the
-// CI-gated hot-swap path (an agent could copy un-CI'd code straight into a test
-// slot). Removing it is the enforcement half of routing every slot hot-swap
-// through `apply_test_slot_hot_swap`. Serious ad-hoc cluster writes go through a
-// gated MCP path / break-glass, not the session's own credential.
+// governed slot validation path (an agent could copy un-CI'd code straight into
+// a test slot). Serious ad-hoc cluster writes go through a gated MCP path /
+// break-glass, not the session's own credential.
 //
 // This renders the chart and asserts: the BASE session SA binds
 // `tank-session-readonly`, and NO ClusterRoleBinding maps it to cluster-admin.

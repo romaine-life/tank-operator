@@ -38,6 +38,8 @@ auth POST that this proxy already injects.
 from __future__ import annotations
 
 import asyncio
+import base64
+import fnmatch
 import json
 import logging
 import os
@@ -54,6 +56,7 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from .metrics import (
     record_auth_romaine_exchange,
+    record_github_write_tool_decision,
     record_proxy_request,
     record_proxy_retry,
     record_sa_token_read,
@@ -100,7 +103,7 @@ _TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
 _TANK_MERGE_TOOL = "merge_current_session_pr"
 _TANK_RENAME_PR_TOOL = "rename_current_session_pr"
 _TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
-_GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
+_TANK_WATCH_PR_TOOL = "watch_current_session_pr"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
 # azure-personal is absent from the default session .mcp.json (locked by
@@ -111,6 +114,7 @@ _BREAK_GLASS_MCP_PORT = 9999
 # mcp-azure-personal still re-checks the grant on every call.
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
+_BREAK_GLASS_WORKFLOWS_OPERATION = "workflows"
 _GITHUB_WRITE_TOOL_DENYLIST = {
     "mint_clone_token",
     "create_pull_request",
@@ -119,6 +123,28 @@ _GITHUB_WRITE_TOOL_DENYLIST = {
     "merge_pull_request",
     "update_issue",
 }
+# mint_clone_token is on the denylist because a write-capable token in the
+# session shell would bypass the governed publish path. A *read-only* mint
+# (contents:read, the mcp-github default) is different: it grants nothing the
+# session can't already do through the GitHub read MCP tools, and it cannot
+# push. We allow that one shape through in restricted mode so `gh` and
+# `git fetch`/`clone` keep working for reads; write/workflows/full stay blocked.
+_GITHUB_READ_ONLY_MINTABLE_TOOL = "mint_clone_token"
+
+
+def _is_read_only_clone_token_request(arguments: dict) -> bool:
+    """True for a mint_clone_token call that requests no write capability.
+
+    mcp-github mints {contents: read, metadata: read} unless write/workflows/full
+    is set, so the absence of all three is exactly a read-only token.
+    """
+    if not isinstance(arguments, dict):
+        return False
+    return not (
+        bool(arguments.get("write"))
+        or bool(arguments.get("workflows"))
+        or bool(arguments.get("full"))
+    )
 _CI_ENFORCEMENT_TEXT = (
     "Tank quality gate: watch the PR's current HEAD CI checks until they pass, "
     "confirm there are no merge conflicts, and do not hand work back as complete "
@@ -484,10 +510,8 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     has_merge = any(isinstance(tool, dict) and tool.get("name") == _TANK_MERGE_TOOL for tool in tools)
     has_rename_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_RENAME_PR_TOOL for tool in tools)
     has_update_pr_body = any(isinstance(tool, dict) and tool.get("name") == _TANK_UPDATE_PR_BODY_TOOL for tool in tools)
+    has_watch_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_WATCH_PR_TOOL for tool in tools)
     changed = False
-    for tool in tools:
-        if isinstance(tool, dict) and tool.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
-            changed = _augment_glimmung_hot_swap_tool_schema(tool) or changed
     if not has_publish:
         tools.append(
             {
@@ -515,6 +539,38 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         "source": {
                             "type": "string",
                             "description": "Caller source such as post-commit or agent.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    if not has_watch_pr:
+        tools.append(
+            {
+                "name": _TANK_WATCH_PR_TOOL,
+                "description": (
+                    "Register the current session's governed PR head with Tank's "
+                    "PR-readiness process. Tank performs the authoritative GitHub read "
+                    "(resolving GitHub's asynchronous mergeable_state and reading the "
+                    "check rollup) so you do not poll check status yourself. Returns "
+                    "'conflict', 'failed', 'watching', or 'ready'."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Optional GitHub slug, for example romaine-life/tank-operator.",
+                        },
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional absolute or /workspace-relative path to the repo.",
+                        },
+                        "pr_number": {
+                            "type": "integer",
+                            "description": "Optional PR number; defaults to the open governed PR for the current session branch.",
                         },
                     },
                     "additionalProperties": False,
@@ -751,6 +807,10 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         "type": "string",
                         "description": "Short reason the governed publish path is insufficient.",
                     },
+                    "workflows": {
+                        "type": "boolean",
+                        "description": "Also request approval to push edits under .github/workflows/.",
+                    },
                     "source": {
                         "type": "string",
                         "description": "Caller source such as agent.",
@@ -873,32 +933,6 @@ def _append_azure_break_glass_tool_to_json(value) -> bool:
                 },
             }
         )
-        changed = True
-    return changed
-
-
-def _augment_glimmung_hot_swap_tool_schema(tool: dict) -> bool:
-    schema = tool.get("inputSchema")
-    if not isinstance(schema, dict):
-        schema = {"type": "object", "properties": {}}
-        tool["inputSchema"] = schema
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        properties = {}
-        schema["properties"] = properties
-
-    changed = False
-    if "repo" not in properties:
-        properties["repo"] = {
-            "type": "string",
-            "description": "Optional GitHub slug, for example romaine-life/tank-operator. Used by Tank to verify the governed branch before hot-swap.",
-        }
-        changed = True
-    if "repo_path" not in properties:
-        properties["repo_path"] = {
-            "type": "string",
-            "description": "Optional absolute or /workspace-relative path to the repo. Used by Tank to verify branch, publish, PR, CI, and mergeability before hot-swap.",
-        }
         changed = True
     return changed
 
@@ -1483,26 +1517,18 @@ async def _verify_github_hot_swap_head(
             else:
                 mergeable = detail_body.get("mergeable")
                 mergeable_state = str(detail_body.get("mergeable_state") or "")
-                if mergeable is not True or mergeable_state == "dirty":
-                    reasons.append(f"PR #{pr_number} is not confirmed mergeable: {mergeable_state or mergeable}")
+                if mergeable is not True or mergeable_state in {"dirty", "behind"}:
+                    reasons.append(f"PR #{pr_number} is not confirmed mergeable/current: {mergeable_state or mergeable}")
 
-    check_status, check_body = await _github_api_json(
+    ci_status, ci_error, ci_payload = await _resolve_ci_state(
         http,
         github_token,
-        "GET",
-        f"/repos/{owner}/{repo}/commits/{sha}/check-runs",
+        owner,
+        repo,
+        sha,
+        pr_number=pr_number,
+        branch=branch,
     )
-    status_status, status_body = await _github_api_json(
-        http,
-        github_token,
-        "GET",
-        f"/repos/{owner}/{repo}/commits/{sha}/status",
-    )
-    check_runs = []
-    if check_status < 400 and isinstance(check_body, dict) and isinstance(check_body.get("check_runs"), list):
-        check_runs = check_body["check_runs"]
-    combined_status = status_body if status_status < 400 and isinstance(status_body, dict) else None
-    ci_status, ci_error, ci_payload = _checks_state(check_runs, combined_status)
     if ci_status != "succeeded":
         reasons.append(f"CI for {sha[:12]} is not green: {ci_error}")
     return {
@@ -1592,36 +1618,6 @@ async def _active_azure_break_glass_grant(http: ClientSession, service_jwt: str)
     return None
 
 
-async def _auto_grant_azure_break_glass(http: ClientSession, service_jwt: str, reason: str) -> dict | None:
-    # Non-restricted (trusted) sessions are pre-approved for azure-personal: create
-    # the grant directly via Tank's internal grant endpoint instead of returning an
-    # approval URL. This reuses the exact grant + B-auto activation-turn machinery
-    # the admin-approval path uses; the non-restricted session policy is simply the
-    # approver. Restricted sessions never call this — they keep the approval flow.
-    if not ORIGIN_SESSION_ID:
-        return None
-    url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/azure-break-glass/grants"
-    payload = {
-        "reason": (reason or "non-restricted session: azure-personal pre-approved"),
-        "request_event_id": f"tank-azure-auto-{ORIGIN_SESSION_ID}-{uuid4().hex}",
-    }
-    async with http.post(
-        url,
-        headers={"Authorization": f"Bearer {service_jwt}", "Content-Type": "application/json"},
-        json=payload,
-    ) as resp:
-        body = await resp.text()
-        if resp.status >= 400:
-            raise RuntimeError(f"Tank azure auto-grant failed with HTTP {resp.status}: {body[:500]}")
-    try:
-        value = json.loads(body)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(value, dict) and value.get("active") is True:
-        return value
-    return None
-
-
 async def _active_pr_lane_auto_approval(
     http: ClientSession,
     service_jwt: str,
@@ -1669,6 +1665,17 @@ def _grant_allows(grant: dict | None, operation: str) -> bool:
     if not isinstance(operations, list):
         return False
     return operation in {str(item) for item in operations}
+
+
+def _grant_allows_workflows(grant: dict | None) -> bool:
+    return _grant_allows(grant, _BREAK_GLASS_WORKFLOWS_OPERATION)
+
+
+def _break_glass_operations(*, workflows: bool) -> list[str]:
+    operations = [_BREAK_GLASS_MINT_TOKEN_TOOL, _BREAK_GLASS_PUSH_HEAD_TOOL]
+    if workflows:
+        operations.append(_BREAK_GLASS_WORKFLOWS_OPERATION)
+    return operations
 
 
 def _grant_branch_allows(grant: dict | None, branch: str) -> bool:
@@ -1844,10 +1851,9 @@ async def _mint_github_installation_token(http: ClientSession, service_token: st
     if workflows:
         arguments["workflows"] = True
     if full:
-        # Break-glass mint_full_git_token: request the App's entire granted
-        # permission set (not just contents) so the approved token is a genuine
-        # escape hatch. The internal governed-publish callers deliberately omit
-        # this and stay contents-only.
+        # Request the App's entire granted permission set for governed GitHub API
+        # operations that need non-git permissions. Break-glass raw git tokens
+        # leave this false and use contents/workflows scopes instead.
         arguments["full"] = True
     payload = {
         "jsonrpc": "2.0",
@@ -2035,6 +2041,318 @@ def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, 
     return "succeeded", "all observed checks passed", {"pending": pending, "failed": failed, "completed": completed, "statuses": len(statuses)}
 
 
+def _check_run_name(run: dict) -> str:
+    return str(run.get("name") or run.get("app", {}).get("slug") or "check")
+
+
+def _check_run_actions_run_id(run: dict) -> int:
+    for key in ("details_url", "html_url"):
+        match = re.search(r"/actions/runs/([0-9]+)", str(run.get(key) or ""))
+        if match:
+            return int(match.group(1))
+    return 0
+
+
+def _check_run_is_green(run: dict) -> bool:
+    return str(run.get("status") or "") == "completed" and str(run.get("conclusion") or "") in {"success", "skipped", "neutral"}
+
+
+def _check_run_failure(run: dict) -> str:
+    name = _check_run_name(run)
+    status = str(run.get("status") or "")
+    conclusion = str(run.get("conclusion") or "")
+    if status != "completed":
+        return f"{name}: pending"
+    if conclusion not in {"success", "skipped", "neutral"}:
+        return f"{name}: {conclusion or 'failed'}"
+    return ""
+
+
+def _workflow_path_filters_from_yaml(text: str) -> tuple[list[str] | None, list[str] | None, str]:
+    """Extract the simple pull_request paths subset Tank can prove safely.
+
+    This intentionally supports the workflow shape this repo uses and returns a
+    reason for anything more complex. Unknown syntax requires exact-HEAD CI.
+    """
+    lines = text.splitlines()
+    pull_request_indent: int | None = None
+    paths_indent: int | None = None
+    paths_ignore_indent: int | None = None
+    paths: list[str] | None = None
+    paths_ignore: list[str] | None = None
+    in_on = False
+    on_indent = 0
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if re.match(r"^on:\s*$", stripped):
+            in_on = True
+            on_indent = indent
+            continue
+        if re.match(r"^on:\s*\[.*pull_request.*\]\s*$", stripped):
+            return None, None, ""
+        if re.match(r"^on:\s*\{", stripped):
+            return None, None, "workflow uses inline on: syntax Tank cannot inspect"
+        if in_on and indent <= on_indent and not stripped.startswith("-"):
+            break
+        if not in_on:
+            continue
+        if pull_request_indent is None:
+            if re.match(r"^pull_request:\s*$", stripped):
+                pull_request_indent = indent
+                continue
+            if stripped == "pull_request":
+                return None, None, ""
+            continue
+        if indent <= pull_request_indent:
+            break
+        if re.match(r"^paths:\s*$", stripped):
+            paths = []
+            paths_indent = indent
+            paths_ignore_indent = None
+            continue
+        if re.match(r"^paths-ignore:\s*$", stripped):
+            paths_ignore = []
+            paths_ignore_indent = indent
+            paths_indent = None
+            continue
+        if paths_indent is not None:
+            if indent <= paths_indent:
+                paths_indent = None
+            elif stripped.startswith("- "):
+                paths.append(stripped[2:].strip().strip("'\""))
+                continue
+        if paths_ignore_indent is not None:
+            if indent <= paths_ignore_indent:
+                paths_ignore_indent = None
+            elif stripped.startswith("- "):
+                paths_ignore.append(stripped[2:].strip().strip("'\""))
+                continue
+    return paths, paths_ignore, ""
+
+
+def _path_pattern_supported(pattern: str) -> bool:
+    return not re.search(r"[\{\}\(\)\+@]", pattern)
+
+
+def _path_matches_any(path: str, patterns: list[str]) -> bool:
+    matched = False
+    for raw in patterns:
+        pattern = raw.strip()
+        if not pattern:
+            continue
+        negated = pattern.startswith("!")
+        if negated:
+            pattern = pattern[1:]
+        if not _path_pattern_supported(pattern):
+            # Unknown syntax must be handled by the caller as ambiguous.
+            return True
+        hit = fnmatch.fnmatchcase(path, pattern) or fnmatch.fnmatchcase(path, pattern.rstrip("/") + "/**")
+        if hit and negated:
+            matched = False
+        elif hit:
+            matched = True
+    return matched
+
+
+def _workflow_would_run_for_paths(paths: list[str], include: list[str] | None, ignore: list[str] | None) -> bool:
+    if not paths:
+        return False
+    if include is not None:
+        return any(_path_matches_any(path, include) for path in paths)
+    if ignore is not None:
+        return not all(_path_matches_any(path, ignore) for path in paths)
+    return True
+
+
+async def _github_check_runs_for_sha(http: ClientSession, token: str, owner: str, repo: str, sha: str) -> list:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/commits/{sha}/check-runs")
+    if status < 400 and isinstance(body, dict) and isinstance(body.get("check_runs"), list):
+        return body["check_runs"]
+    return []
+
+
+async def _github_combined_status_for_sha(http: ClientSession, token: str, owner: str, repo: str, sha: str) -> dict | None:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/commits/{sha}/status")
+    return body if status < 400 and isinstance(body, dict) else None
+
+
+async def _github_pr_commit_shas(http: ClientSession, token: str, owner: str, repo: str, pr_number: int, head_sha: str) -> list[str]:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/commits?per_page=100")
+    if status >= 400 or not isinstance(body, list):
+        return []
+    out: list[str] = []
+    for item in body:
+        if isinstance(item, dict):
+            sha = str(item.get("sha") or "")
+            if sha and sha != head_sha:
+                out.append(sha)
+    return out
+
+
+async def _github_action_run_info(http: ClientSession, token: str, owner: str, repo: str, run_id: int) -> dict:
+    if run_id <= 0:
+        return {}
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/actions/runs/{run_id}")
+    if status < 400 and isinstance(body, dict):
+        return {"path": str(body.get("path") or ""), "event": str(body.get("event") or "")}
+    return {}
+
+
+async def _github_file_text_at_ref(http: ClientSession, token: str, owner: str, repo: str, path: str, ref: str) -> str:
+    status, body = await _github_api_json(
+        http,
+        token,
+        "GET",
+        f"/repos/{owner}/{repo}/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}",
+    )
+    if status >= 400 or not isinstance(body, dict):
+        return ""
+    content = str(body.get("content") or "")
+    if not content:
+        return ""
+    try:
+        return base64.b64decode(content, validate=False).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+async def _github_changed_paths(http: ClientSession, token: str, owner: str, repo: str, base_sha: str, head_sha: str) -> list[str]:
+    status, body = await _github_api_json(http, token, "GET", f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}")
+    if status >= 400 or not isinstance(body, dict) or not isinstance(body.get("files"), list):
+        return []
+    out: list[str] = []
+    for item in body["files"]:
+        if isinstance(item, dict):
+            path = str(item.get("filename") or "")
+            if path:
+                out.append(path)
+    return out
+
+
+async def _resolve_ci_state(
+    http: ClientSession,
+    token: str,
+    owner: str,
+    repo: str,
+    sha: str,
+    *,
+    pr_number: int | None = None,
+    branch: str = "",
+) -> tuple[str, str, dict]:
+    check_runs = await _github_check_runs_for_sha(http, token, owner, repo, sha)
+    combined_status = await _github_combined_status_for_sha(http, token, owner, repo, sha)
+    head_latest = {_check_run_name(run): run for run in _latest_check_runs(check_runs)}
+    ci_status, ci_error, base_payload = _checks_state(check_runs, combined_status)
+    evidence: list[dict] = []
+    failed: list[str] = []
+    pending: list[str] = []
+    for name, run in sorted(head_latest.items()):
+        problem = _check_run_failure(run)
+        if problem:
+            if problem.endswith(": pending"):
+                pending.append(name)
+                evidence.append({"check": name, "status": "pending", "head_sha": sha, "reason": "observed_on_head"})
+            else:
+                failed.append(problem)
+                evidence.append({"check": name, "status": "failed", "head_sha": sha, "reason": problem})
+        else:
+            evidence.append({"check": name, "status": "satisfied", "head_sha": sha, "satisfied_by_sha": sha, "reason": "exact_head_success"})
+    if failed:
+        return "failed", "; ".join(failed), base_payload | {"evidence": evidence, "policy_source": "observed_head_checks"}
+    if pending:
+        return "started", "pending checks: " + ", ".join(pending), base_payload | {"evidence": evidence, "policy_source": "observed_head_checks"}
+
+    prior_latest: dict[str, dict] = {}
+    prior_runs_by_name: dict[str, tuple[str, dict]] = {}
+    if pr_number:
+        for prior_sha in await _github_pr_commit_shas(http, token, owner, repo, pr_number, sha):
+            for run in await _github_check_runs_for_sha(http, token, owner, repo, prior_sha):
+                if not isinstance(run, dict):
+                    continue
+                name = _check_run_name(run)
+                existing = prior_latest.get(name)
+                if existing is None or _check_run_recency(run) >= _check_run_recency(existing):
+                    prior_latest[name] = run
+                    prior_runs_by_name[name] = (prior_sha, run)
+
+    missing_blockers: list[str] = []
+    run_info_cache: dict[int, dict] = {}
+    workflow_cache: dict[str, tuple[list[str] | None, list[str] | None, str]] = {}
+    changed_cache: dict[str, list[str]] = {}
+    for name, (prior_sha, prior_run) in sorted(prior_runs_by_name.items()):
+        if name in head_latest:
+            continue
+        if not _check_run_is_green(prior_run):
+            problem = _check_run_failure(prior_run) or f"{name}: prior run was not green"
+            missing_blockers.append(f"{name} missing on HEAD after non-green prior run ({problem})")
+            evidence.append({"check": name, "status": "missing_no_prior_success", "head_sha": sha, "satisfied_by_sha": prior_sha, "reason": problem})
+            continue
+        run_id = _check_run_actions_run_id(prior_run)
+        if run_id not in run_info_cache:
+            run_info_cache[run_id] = await _github_action_run_info(http, token, owner, repo, run_id)
+        run_info = run_info_cache[run_id]
+        run_event = str(run_info.get("event") or "")
+        if run_event and run_event not in {"pull_request", "pull_request_target"}:
+            continue
+        workflow_path = str(run_info.get("path") or "")
+        if not workflow_path:
+            missing_blockers.append(f"{name} missing on HEAD; could not identify the prior run's workflow")
+            evidence.append({"check": name, "status": "missing_no_workflow", "head_sha": sha, "satisfied_by_sha": prior_sha, "reason": "workflow_path_unavailable"})
+            continue
+        if workflow_path not in workflow_cache:
+            workflow_text = await _github_file_text_at_ref(http, token, owner, repo, workflow_path, sha)
+            if not workflow_text:
+                workflow_cache[workflow_path] = (None, None, "workflow file is absent on HEAD")
+            else:
+                workflow_cache[workflow_path] = _workflow_path_filters_from_yaml(workflow_text)
+        include, ignore, parse_reason = workflow_cache[workflow_path]
+        if parse_reason:
+            missing_blockers.append(f"{name} missing on HEAD; {parse_reason}")
+            evidence.append({"check": name, "status": "missing_uninspectable_inputs", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "reason": parse_reason})
+            continue
+        if include is None and ignore is None:
+            missing_blockers.append(f"{name} missing on HEAD; workflow {workflow_path} has no pull_request path filter")
+            evidence.append({"check": name, "status": "missing_unfiltered_workflow", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "reason": "exact_head_run_required"})
+            continue
+        if prior_sha not in changed_cache:
+            changed_cache[prior_sha] = await _github_changed_paths(http, token, owner, repo, prior_sha, sha)
+        changed_paths = changed_cache[prior_sha]
+        if workflow_path in changed_paths:
+            missing_blockers.append(f"{name} missing on HEAD; workflow file {workflow_path} changed since {prior_sha[:12]}")
+            evidence.append({"check": name, "status": "missing_changed_inputs", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "changed_paths": changed_paths, "reason": "workflow_file_changed"})
+            continue
+        if _workflow_would_run_for_paths(changed_paths, include, ignore):
+            matching = [path for path in changed_paths if include is None or _path_matches_any(path, include)]
+            missing_blockers.append(f"{name} missing on HEAD; inputs changed since {prior_sha[:12]}: {', '.join(matching[:8]) or ', '.join(changed_paths[:8])}")
+            evidence.append({"check": name, "status": "missing_changed_inputs", "head_sha": sha, "satisfied_by_sha": prior_sha, "workflow_path": workflow_path, "changed_paths": changed_paths, "reason": "trigger_paths_changed"})
+            continue
+        evidence.append({
+            "check": name,
+            "status": "satisfied",
+            "head_sha": sha,
+            "satisfied_by_sha": prior_sha,
+            "workflow_path": workflow_path,
+            "changed_paths": changed_paths,
+            "reason": "paths_unchanged_since_success",
+        })
+
+    payload = base_payload | {
+        "evidence": evidence,
+        "policy_source": "pr_check_history_with_workflow_paths" if pr_number else "observed_head_checks",
+        "branch": branch,
+    }
+    if missing_blockers:
+        return "started", "; ".join(missing_blockers), payload | {"missing": missing_blockers}
+    if evidence:
+        return "succeeded", "all required checks satisfied", payload
+    if ci_status != "succeeded":
+        return ci_status, ci_error, payload
+    return "succeeded", "all observed checks passed", payload
+
+
 async def _watch_published_commit(
     http: ClientSession,
     auth_romaine_provider,
@@ -2053,25 +2371,15 @@ async def _watch_published_commit(
         try:
             service_token = await auth_romaine_provider.token()
             github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
-            check_status, check_body = await _github_api_json(
+            ci_status, ci_error, ci_payload = await _resolve_ci_state(
                 http,
                 github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/commits/{sha}/check-runs",
+                owner,
+                repo,
+                sha,
+                pr_number=pr_number,
+                branch=branch,
             )
-            status_status, status_body = await _github_api_json(
-                http,
-                github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/commits/{sha}/status",
-            )
-            check_runs = []
-            if check_status < 400 and isinstance(check_body, dict):
-                raw_runs = check_body.get("check_runs")
-                if isinstance(raw_runs, list):
-                    check_runs = raw_runs
-            combined_status = status_body if status_status < 400 and isinstance(status_body, dict) else None
-            ci_status, ci_error, ci_payload = _checks_state(check_runs, combined_status)
             headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
             await _post_tank_control_action(
                 http,
@@ -2088,7 +2396,7 @@ async def _watch_published_commit(
                     "repo_owner": owner,
                     "repo_name": repo,
                     "result_sha": sha,
-                    "error": "" if ci_status != "failed" else ci_error,
+                    "error": "" if ci_status == "succeeded" else ci_error,
                     "payload": ci_payload | {"attempt": attempt},
                 },
             )
@@ -2126,7 +2434,15 @@ async def _watch_published_commit(
                             pr_url = str(detail_body.get("html_url") or pr_url)
                     merge_status = "started"
                     merge_error = "mergeability is still unknown"
-                    if mergeable is True and mergeable_state not in {"dirty", "blocked"}:
+                    if mergeable_state == "behind":
+                        # A behind branch has no conflicts (mergeable=True) but is
+                        # stale relative to its base: testing it validates code that
+                        # changes the moment it's brought current, and may conflict
+                        # on the eventual merge. Record it as not mergeable so the
+                        # governed gate refuses it until it's rebased onto main.
+                        merge_status = "failed"
+                        merge_error = "branch is behind its base; rebase/update onto main before testing or merging"
+                    elif mergeable is True and mergeable_state not in {"dirty", "blocked"}:
                         merge_status = "succeeded"
                         merge_error = ""
                     elif mergeable is False or mergeable_state == "dirty":
@@ -2273,6 +2589,102 @@ async def _handle_tank_publish_tool(
         )
 
 
+async def _handle_tank_watch_pr_tool(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    arguments: dict,
+) -> web.Response:
+    invocation_id = f"tank-watch-pr-{uuid4().hex}"
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for Tank PR watch")
+        repo_path = _repo_path_from_arguments(arguments)
+        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
+        if not git_dir:
+            raise ValueError(f"{repo_path} is not a git repository")
+        branch = await _git_output(repo_path, "branch", "--show-current")
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
+        owner, repo = slug
+        requested_repo = str(arguments.get("repo") or "").strip()
+        if requested_repo and requested_repo != f"{owner}/{repo}":
+            raise ValueError(f"repo argument {requested_repo!r} does not match origin {owner}/{repo}")
+
+        # Tank resolves the PR number from branch when the caller does not pass one.
+        raw_pr_number = arguments.get("pr_number")
+        try:
+            pr_number = int(raw_pr_number) if raw_pr_number is not None else 0
+        except (TypeError, ValueError):
+            raise ValueError("pr_number must be an integer")
+        service_token = await auth_romaine_provider.token()
+        head_sha = await _git_output(repo_path, "rev-parse", "HEAD")
+        pr_url = ""
+
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        watch_url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pr-readiness"
+        watch_payload = {
+            "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "expected_head_sha": head_sha,
+            "mergeable_state": "",
+            "check_state": "pending",
+            "detail": "PR readiness registered; backend reconcile owns live state.",
+            "pr_url": pr_url,
+            "status": "watching",
+        }
+        if pr_number > 0:
+            watch_payload["pr_number"] = pr_number
+        async with http.post(watch_url, headers=headers, json=watch_payload) as resp:
+            body_text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(f"could not register PR readiness: HTTP {resp.status}: {body_text[:300]}")
+        try:
+            watch_body = json.loads(body_text) if body_text else {}
+        except Exception:
+            watch_body = {}
+        state = str(watch_body.get("state") or watch_body.get("status") or "watching")
+        detail = str(watch_body.get("detail") or "PR readiness registered; backend reconcile is watching.")
+        try:
+            pr_number = int(watch_body.get("pr_number") or pr_number or 0)
+        except (TypeError, ValueError):
+            pr_number = 0
+        head_sha = str(watch_body.get("head_sha") or head_sha)
+        pr_url = str(watch_body.get("pr_url") or pr_url)
+        mergeable_state = str(watch_body.get("mergeable_state") or "")
+        check_state = str(watch_body.get("check_state") or "pending")
+        failing = [str(item) for item in watch_body.get("failing_checks", []) if str(item).strip()] if isinstance(watch_body.get("failing_checks"), list) else []
+        ci_payload = watch_body.get("ci") if isinstance(watch_body.get("ci"), dict) else {}
+
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": f"{state}: {detail}"}],
+                "structuredContent": {
+                    "repo": f"{owner}/{repo}",
+                    "pr_number": pr_number,
+                    "head_sha": head_sha,
+                    "pr_url": pr_url,
+                    "state": state,
+                    "mergeable_state": mergeable_state,
+                    "check_state": check_state,
+                    "failing_checks": failing,
+                    "ci": ci_payload,
+                },
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank watch_current_session_pr failed", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32011,
+            str(exc),
+            {"tool": _TANK_WATCH_PR_TOOL, "invocation_id": invocation_id},
+        )
+
+
 async def _mark_pull_request_ready_for_review(
     http: ClientSession,
     github_token: str,
@@ -2380,22 +2792,19 @@ async def _handle_tank_merge_tool(
                 "source_tool": _TANK_MERGE_TOOL,
             },
         )
-        live_verify = await _verify_github_hot_swap_head(http, github_token, owner, repo, branch, sha)
+        # The backend PR-readiness reducer (tank_verify) is the single authority
+        # for governed publish + green CI + clean mergeability. The proxy no
+        # longer runs a second, divergent CI/mergeability reducer here; the exact
+        # head/draft re-check below remains as the only local safety gate.
         reasons: list[str] = []
         if tank_verify.get("allowed") is not True:
             tank_reasons = tank_verify.get("reasons")
             if isinstance(tank_reasons, list):
-                reasons.extend(f"Tank ledger: {reason}" for reason in tank_reasons)
+                reasons.extend(f"Tank readiness: {reason}" for reason in tank_reasons)
             else:
-                reasons.append("Tank ledger did not confirm governed publish, green CI, and clean mergeability")
-        if live_verify.get("allowed") is not True:
-            live_reasons = live_verify.get("reasons")
-            if isinstance(live_reasons, list):
-                reasons.extend(f"GitHub live state: {reason}" for reason in live_reasons)
-            else:
-                reasons.append("GitHub live state did not confirm latest branch head, open PR, green CI, and clean mergeability")
-        pr_number = int(live_verify.get("pr_number") or tank_verify.get("pr_number") or 0) or None
-        pr_url = str(live_verify.get("pr_url") or "")
+                reasons.append("Tank did not confirm governed publish, green CI, and clean mergeability")
+        pr_number = int(tank_verify.get("pr_number") or 0) or None
+        pr_url = str(tank_verify.get("pr_url") or "")
         if requested_pr_number is not None and pr_number != requested_pr_number:
             reasons.append(f"requested PR #{requested_pr_number} does not match governed branch PR #{pr_number or 'unknown'}")
         if pr_number is None:
@@ -2936,102 +3345,6 @@ async def _handle_tank_update_pr_body_tool(
         )
 
 
-async def _prepare_glimmung_hot_swap_call(
-    http: ClientSession,
-    auth_romaine_provider,
-    request_id: object,
-    body: bytes,
-    arguments: dict,
-) -> tuple[bytes, dict] | web.Response:
-    try:
-        if not ORIGIN_SESSION_ID:
-            raise ValueError("SESSION_ID is required for governed hot-swap")
-        repo_path = _repo_path_for_hot_swap(arguments)
-        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
-        if not git_dir:
-            raise ValueError(f"{repo_path} is not a git repository")
-        branch = await _git_output(repo_path, "branch", "--show-current")
-        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
-        slug = _repo_slug_from_remote(remote_url)
-        if slug is None:
-            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
-        owner, repo = slug
-        if not _is_tank_session_branch(branch, repo):
-            raise ValueError(f"current branch is {branch!r}; expected Tank session branch {_default_tank_session_branch(repo)!r} or one of its approved lanes")
-        rc, stdout, stderr = await _run_git(repo_path, "status", "--porcelain")
-        if rc != 0:
-            raise RuntimeError(stderr or stdout or "git status failed")
-        if stdout.strip():
-            raise ValueError("worktree has uncommitted changes; commit and publish before hot-swapping")
-        sha = await _git_output(repo_path, "rev-parse", "HEAD")
-        requested_ref = str(arguments.get("git_ref") or "").strip()
-        allowed_requested_refs = {sha, branch, f"refs/heads/{branch}", "HEAD"}
-        if requested_ref and requested_ref not in allowed_requested_refs:
-            raise ValueError(f"git_ref {requested_ref!r} does not match local governed branch HEAD {sha[:12]}")
-        requested_repo = str(arguments.get("repo") or "").strip()
-        if requested_repo and requested_repo != f"{owner}/{repo}":
-            raise ValueError(f"repo argument {requested_repo!r} does not match origin {owner}/{repo}")
-
-        service_token = await auth_romaine_provider.token()
-        github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
-        tank_verify = await _post_tank_hot_swap_verify(
-            http,
-            service_token,
-            {
-                "repo": f"{owner}/{repo}",
-                "branch": branch,
-                "sha": sha,
-                "artifact_kind": str(arguments.get("artifact_kind") or ""),
-                "validation_target": str(arguments.get("validation_target") or ""),
-                "source_tool": _GLIMMUNG_HOT_SWAP_TOOL,
-            },
-        )
-        live_verify = await _verify_github_hot_swap_head(http, github_token, owner, repo, branch, sha)
-        reasons: list[str] = []
-        if tank_verify.get("allowed") is not True:
-            tank_reasons = tank_verify.get("reasons")
-            if isinstance(tank_reasons, list):
-                reasons.extend(f"Tank ledger: {reason}" for reason in tank_reasons)
-            else:
-                reasons.append("Tank ledger did not confirm governed publish, green CI, and clean mergeability")
-        if live_verify.get("allowed") is not True:
-            live_reasons = live_verify.get("reasons")
-            if isinstance(live_reasons, list):
-                reasons.extend(f"GitHub live state: {reason}" for reason in live_reasons)
-            else:
-                reasons.append("GitHub live state did not confirm latest branch head, open PR, green CI, and clean mergeability")
-        if reasons:
-            raise ValueError("hot-swap blocked:\n- " + "\n- ".join(reasons))
-
-        forwarded_arguments = {
-            key: value
-            for key, value in arguments.items()
-            if key not in {"repo", "repo_path"}
-        }
-        forwarded_arguments["git_ref"] = sha
-        return _rewrite_mcp_tool_arguments(body, forwarded_arguments), {
-            "repo": f"{owner}/{repo}",
-            "branch": branch,
-            "sha": sha,
-            "pr_number": live_verify.get("pr_number") or tank_verify.get("pr_number"),
-            "artifact_kind": arguments.get("artifact_kind"),
-            "validation_target": arguments.get("validation_target"),
-        }
-    except Exception as exc:
-        log.warning("Glimmung hot-swap gate failed", exc_info=True)
-        return _mcp_error_response(
-            request_id,
-            -32030,
-            str(exc),
-            {
-                "tool": _GLIMMUNG_HOT_SWAP_TOOL,
-                "replacement_tool": _TANK_PUBLISH_TOOL,
-                "break_glass_tool": _TANK_BREAK_GLASS_TOOL,
-                "ci_enforcement": _CI_ENFORCEMENT_TEXT,
-            },
-        )
-
-
 async def _handle_tank_break_glass_tool(
     http: ClientSession,
     auth_romaine_provider,
@@ -3049,11 +3362,14 @@ async def _handle_tank_break_glass_tool(
             raise ValueError("reason is required")
         if len(reason) > 400:
             reason = reason[:400]
+        workflows = bool(arguments.get("workflows"))
         source = str(arguments.get("source") or "agent").strip() or "agent"
         owner, repo = repo_slug.split("/", 1) if repo_slug else ("", "")
         service_token = await auth_romaine_provider.token()
         grant = await _active_break_glass_grant(http, service_token, repo_slug)
         if grant and not _grant_covers_branch_scope(grant, branch_scope):
+            grant = None
+        if grant and workflows and not _grant_allows_workflows(grant):
             grant = None
         activation = _activate_break_glass_mcp_config(repo_slug, grant) if grant else None
         event_id = f"tank-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
@@ -3084,6 +3400,8 @@ async def _handle_tank_break_glass_tool(
                     "source": source,
                     "repo_scope": repo_scope,
                     "branch_scope": branch_scope,
+                    "operations": _break_glass_operations(workflows=workflows),
+                    "workflows": workflows,
                     "repo_path": str(repo_path) if repo_path is not None else "",
                 },
             },
@@ -3098,6 +3416,8 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "operations": _break_glass_operations(workflows=workflows),
+                "workflows": workflows,
                 "request_event_id": event_id,
                 "status": "approved",
                 "approval_url": approval_url,
@@ -3115,6 +3435,8 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
+                "operations": _break_glass_operations(workflows=workflows),
+                "workflows": workflows,
                 "request_event_id": event_id,
                 "approval_url": approval_url,
                 "status": "approval_required",
@@ -3160,11 +3482,6 @@ async def _handle_tank_azure_break_glass_tool(
         service_token = await auth_romaine_provider.token()
         grant = await _active_azure_break_glass_grant(http, service_token)
         event_id = f"tank-azure-break-glass-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
-        if grant is None and not RESTRICTED_GIT_ENABLED:
-            # Non-restricted (trusted) sessions are pre-approved for azure-personal:
-            # self-approve now (no human break-glass) so the B-auto activation turn
-            # surfaces the tools. Restricted sessions fall through to the approval URL.
-            grant = await _auto_grant_azure_break_glass(http, service_token, reason)
         approval_url = _azure_break_glass_approval_url(ORIGIN_SESSION_ID, event_id)
         await _post_tank_control_action(
             http,
@@ -3188,7 +3505,7 @@ async def _handle_tank_azure_break_glass_tool(
         )
         if grant:
             text = (
-                "Azure access is approved and active for this session; the "
+                "Azure break-glass access is already approved and active; the "
                 "azure-personal tools surface automatically for this session "
                 "(Tank sends an approval turn that activates them — no re-request "
                 "needed).\n"
@@ -3717,14 +4034,14 @@ def _break_glass_tools_result() -> dict:
             {
                 "name": _BREAK_GLASS_MINT_TOKEN_TOOL,
                 "description": (
-                    "Mint an approved short-lived full GitHub git token for one repo. "
+                    "Mint an approved short-lived GitHub git token for one repo. "
                     "Requires an active Tank break-glass grant and records an audit event."
                 ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "repo": {"type": "string", "description": "GitHub slug, for example romaine-life/tank-operator."},
-                        "workflows": {"type": "boolean", "description": "Also request workflow-file write permission when approved."},
+                        "workflows": {"type": "boolean", "description": "Also request workflow-file write permission; requires a grant whose operations include workflows."},
                         "reason": {"type": "string", "description": "Why the token is needed."},
                     },
                     "required": ["repo"],
@@ -3802,8 +4119,15 @@ async def _handle_break_glass_mint_token(http: ClientSession, auth_romaine_provi
             {"repo": repo_slug, "grant_event_id": grant.get("event_id")},
         )
     workflows = bool(arguments.get("workflows"))
+    if workflows and not _grant_allows_workflows(grant):
+        return _mcp_error_response(
+            request_id,
+            -32020,
+            "active break-glass grant does not allow workflow-file writes; request GitHub break-glass with workflows=true",
+            {"repo": repo_slug, "grant_event_id": grant.get("event_id")},
+        )
     try:
-        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows, full=True)
+        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows)
         await _record_break_glass_use(
             http,
             service_token,
@@ -4317,7 +4641,6 @@ def _make_handler(
     github_activity_provider=None,
     tank_publish_provider=None,
     azure_break_glass_provider=None,
-    glimmung_hot_swap_provider=None,
     block_github_write_tools: bool = False,
 ):
     """Build the request handler for an MCP upstream.
@@ -4386,8 +4709,16 @@ def _make_handler(
         if block_github_write_tools:
             parsed_tool = _parse_mcp_tool_call(body)
             if parsed_tool is not None and parsed_tool[0] in _GITHUB_WRITE_TOOL_DENYLIST:
-                record_proxy_request(mcp_label, 200)
-                return _github_tool_block_response(body, parsed_tool[0])
+                tool_name, tool_args = parsed_tool
+                if tool_name == _GITHUB_READ_ONLY_MINTABLE_TOOL and _is_read_only_clone_token_request(tool_args):
+                    # Read-only clone token (no write/workflows/full): allowed in
+                    # restricted mode so `gh` and `git fetch`/`clone` work for
+                    # reads. Falls through to the normal upstream forward below.
+                    record_github_write_tool_decision(tool_name, "allowed_read_only")
+                else:
+                    record_github_write_tool_decision(tool_name, "blocked")
+                    record_proxy_request(mcp_label, 200)
+                    return _github_tool_block_response(body, tool_name)
 
         parsed_method = _parse_mcp_method(body)
         if tank_publish_provider is not None and parsed_method is not None:
@@ -4400,6 +4731,7 @@ def _make_handler(
                 _TANK_MERGE_TOOL,
                 _TANK_RENAME_PR_TOOL,
                 _TANK_UPDATE_PR_BODY_TOOL,
+                _TANK_WATCH_PR_TOOL,
             }:
                 arguments = params.get("arguments") or {}
                 if not isinstance(arguments, dict):
@@ -4417,6 +4749,8 @@ def _make_handler(
                     return await _handle_tank_rename_pr_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_UPDATE_PR_BODY_TOOL:
                     return await _handle_tank_update_pr_body_tool(http, tank_publish_provider, request_id, arguments)
+                if params.get("name") == _TANK_WATCH_PR_TOOL:
+                    return await _handle_tank_watch_pr_tool(http, tank_publish_provider, request_id, arguments)
                 return await _handle_tank_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
 
         # azure-personal break-glass is independent of restricted-git mode:
@@ -4440,25 +4774,6 @@ def _make_handler(
                     return _mcp_error_response(request_id, -32602, "arguments must be an object")
                 record_proxy_request(mcp_label, 200)
                 return await _handle_query_tank_db_tool(http, azure_break_glass_provider, request_id, arguments)
-
-        if glimmung_hot_swap_provider is not None and parsed_method is not None:
-            method, params, request_id = parsed_method
-            if method == "tools/call" and params.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
-                arguments = params.get("arguments") or {}
-                if not isinstance(arguments, dict):
-                    return _mcp_error_response(request_id, -32602, "arguments must be an object")
-                prepared = await _prepare_glimmung_hot_swap_call(
-                    http,
-                    glimmung_hot_swap_provider,
-                    request_id,
-                    body,
-                    arguments,
-                )
-                if isinstance(prepared, web.Response):
-                    record_proxy_request(mcp_label, 200)
-                    return prepared
-                body, _verification = prepared
-
         github_tool_call = _parse_mcp_tool_call(body) if github_activity_provider is not None else None
         tank_tools_list = tank_publish_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
         azure_tools_list = azure_break_glass_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
@@ -4764,11 +5079,6 @@ async def run() -> None:
                     # locked by default for every session.
                     azure_break_glass_provider=(
                         auth_romaine_provider if port == TANK_OPERATOR_MCP_PORT else None
-                    ),
-                    glimmung_hot_swap_provider=(
-                        auth_romaine_provider
-                        if RESTRICTED_GIT_ENABLED and port == GLIMMUNG_MCP_PORT
-                        else None
                     ),
                     block_github_write_tools=RESTRICTED_GIT_ENABLED and port == GITHUB_MCP_PORT,
                 ),

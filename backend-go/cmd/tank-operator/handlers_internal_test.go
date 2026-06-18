@@ -582,6 +582,9 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	if info.RequestedAt != nil && *info.RequestedAt == "My Recovery Session" {
 		t.Fatalf("RequestedAt = %q; inline name must never leak into requested_at", *info.RequestedAt)
 	}
+	if !sessionmodel.HasSessionCapability(info.Capabilities, sessionmodel.SessionCapabilityRestrictedGit) {
+		t.Fatalf("Info.Capabilities = %#v, want internal service create to default restricted git", info.Capabilities)
+	}
 	rec2, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
@@ -589,8 +592,21 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	if rec2.Name != "My Recovery Session" {
 		t.Fatalf("registry record Name = %q, want \"My Recovery Session\"", rec2.Name)
 	}
+	if !sessionmodel.HasSessionCapability(rec2.Capabilities, sessionmodel.SessionCapabilityRestrictedGit) {
+		t.Fatalf("registry Capabilities = %#v, want internal service create to default restricted git", rec2.Capabilities)
+	}
 	if !rec2.Visible {
 		t.Fatalf("registry record Visible = false, want true")
+	}
+	if info.PodName == nil || *info.PodName == "" {
+		t.Fatalf("created session missing pod name: %#v", info)
+	}
+	pod, err := k8s.CoreV1().Pods(server.namespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pod.Annotations["tank-operator/capabilities"], `["restricted_git"]`; got != want {
+		t.Fatalf("pod capabilities annotation = %q, want %q", got, want)
 	}
 	if got := len(server.sessionEvents.(*recordingSessionEventStore).upserts); got != 2 {
 		t.Fatalf("session-event upserts = %d, want 2", got)

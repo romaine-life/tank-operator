@@ -11,13 +11,11 @@ test("main.tsx does not allowlist retired local repo pins", () => {
   expect(mainSource).not.toMatch(/"tank\.homePinnedRepos"/);
 });
 
-test("main.tsx allowlists the home Restricted Git preference key (else it is reaped on boot and the toggle never persists)", () => {
-  // Regression guard: the persisted toggle silently broke because the
-  // tank.homeRestrictedGit key was not in TANK_KEY_ALLOWLIST and main.tsx's
-  // boot-time reaper deleted it before the home composer could read it.
-  expect(mainSource).toMatch(
-    /TANK_KEY_ALLOWLIST\s*=\s*\[[^\]]*RESTRICTED_GIT_PREF_KEY/s,
-  );
+test("main.tsx reaps retired durable splash default keys", () => {
+  expect(mainSource).not.toMatch(/"tank\.defaultSessionMode"/);
+  expect(mainSource).not.toMatch(/"tank\.defaultInteraction"/);
+  expect(mainSource).not.toMatch(/RESTRICTED_GIT_PREF_KEY/);
+  expect(mainSource).not.toMatch(/"tank\.homeRestrictedGit/);
 });
 
 test("main.tsx no longer allowlists retired local tank auth token", () => {

@@ -4,7 +4,6 @@ import { App } from "./App";
 import { LongChatDebugPage } from "./LongChatDebugPage";
 import { SessionListDebugPage } from "./SessionListDebugPage";
 import { AvatarPreviewHost } from "./avatarPreview";
-import { RESTRICTED_GIT_PREF_KEY } from "./homePreferences";
 import { noteUserScroll, startLongTaskObserver } from "./longTaskTelemetry";
 import { StyleguideAvatars } from "./styleguide/avatars";
 import { StyleguideBootState } from "./styleguide/boot-state";
@@ -54,11 +53,8 @@ if (typeof document !== "undefined") {
 // Non-tank keys are left alone — other libs/sites share this origin.
 const TANK_KEY_ALLOWLIST = [
   "tank-run-pref-",         // run-pane prefs (App.tsx)
-  "tank.defaultSessionMode",
-  "tank.defaultInteraction",
   "tank.homeSelectedRepos",
   "tank.sessionInteraction:",
-  RESTRICTED_GIT_PREF_KEY,  // home Restricted Git toggle (homePreferences.ts)
 ];
 function isAllowedTankKey(key: string): boolean {
   for (const allowed of TANK_KEY_ALLOWLIST) {

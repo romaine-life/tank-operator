@@ -112,6 +112,8 @@ var sessionEventStreamClientEventLabels = map[string]struct{}{
 	"turn_activity_load_failed":                  {},
 	"turn_activity_load_timed_out":               {},
 	"turn_activity_load_stale":                   {},
+	"turn_activity_stuck_unloaded":               {},
+	"turn_activity_stuck_loading":                {},
 	"turn_activity_refresh_failed":               {},
 	"turn_activity_refresh_gave_up":              {},
 	"turn_activity_refresh_recovered":            {},

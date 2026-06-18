@@ -199,10 +199,10 @@ Status: in progress
 
 Intent:
 Let a developer iterating in a Glimmung test slot make NEWLY-created sessions
-boot branch-built session-runner code, not just hot-swap the already-running
+boot branch-built session-runner code, not just update the already-running
 pods. The slot's orchestrator stamps a per-scope override image onto new pods
 the same way production stamps its chart-pinned image — no runtime overlay, full
-fidelity. Production is never affected.
+accuracy. Production is never affected.
 
 Affected contracts:
 - Session Lifecycle
@@ -351,13 +351,36 @@ Affected contracts:
 Contract impact:
 - `repo-cloner` prepares the governed branch and draft PR before the repo is
   marked cloned.
+- Service-principal session creation (`spawn_run_session`,
+  `spawn_test_slot_session`, and the backing `/api/internal/sessions` route)
+  defaults every repo-capable session into `restricted_git`, even when the
+  agent omits `capabilities` or supplies only unrelated capabilities. Direct
+  orchestration phase spokes do the same before calling the session manager.
+  Agents that need privileged Git use the audited Git break-glass request/grant
+  flow inside a governed session instead of spawning an unrestricted child
+  session. The browser splash's human opt-out remains a deliberate
+  create-time exception and is surfaced in the session bar as unrestricted Git.
 - The user-facing sandbox has no normal direct-push path. The `pre-push` hook
-  fails loudly, and the localhost GitHub MCP proxy denies raw write-token and
-  file/PR write tools in normal mode.
+  fails loudly, and the localhost GitHub MCP proxy denies write-capable
+  `mint_clone_token` and file/PR write tools in restricted mode (a read-only
+  `mint_clone_token` is allowed through so reads keep working — see "Restricted
+  Session Read-Only Git Access").
 - The `post-commit` hook calls the Tank MCP publish tool rather than printing
   reminder-only guidance.
 - Commit publication, CI state, PR creation, and mergeability are durable
   `control_action_events`, so the UI can show PR/commit evidence after reload.
+- Control-action ledger writes (`POST /api/internal/sessions/{id}/control-actions`)
+  are authorized solely off the caller's **verified per-session service-principal
+  subject** — `svc:tank:<id>` for production sessions, `svc:tank:slot-<n>-session-<id>`
+  for test-slot sessions — which auth.romaine.life mints from the pod's
+  `tank-operator/session-id` annotation (the same identity `nats-auth-callout`
+  trusts). The subject is scope-bound to the backend (`localSessionScope`), so a
+  production identity cannot write a slot session's ledger or vice versa. A
+  caller-asserted request header is never an authorization input: requiring one
+  (#1207) silently 403'd every already-running session pod and froze the ledger
+  system-wide on 2026-06-16 — the `TankControlActionAuthorizationDenied` alert
+  (`result="forbidden"`) and the `check-control-action-authz` guard exist so that
+  regression cannot recur silently.
 - The governed PR's title, body, and merge are mutated only through Tank MCP
   tools — `rename_current_session_pr`, `update_current_session_pr_body`, and
   `merge_current_session_pr` — each recorded as a `github.pull_request.*`
@@ -381,6 +404,11 @@ Open hardening:
   minting or revealing a token. Grants are stored as
   `github.break_glass.grant` control-action events with repo, operation, request
   event id, and TTL scope. Denials are stored as `github.break_glass.deny`.
+  Workflow-file pushes are an explicit GitHub break-glass flavor:
+  `request_git_break_glass(workflows=true)` records the extra `workflows`
+  operation, and `mint_full_git_token(workflows=true)` is refused unless the
+  active grant includes it. Ordinary break-glass git tokens are contents-write
+  only, not full App-scope tokens.
   Once an active grant exists, calling
   `request_git_break_glass` again activates a separate `tank-git-break-glass`
   MCP server for the session/repo and writes runtime MCP config for Codex and
@@ -440,16 +468,11 @@ Enforcement is in the server we own, not the sidecar:
 Contract impact:
 - The visible normal-mode surface is the narrow `request_azure_break_glass`
   tool (proxy-injected into the mcp-tank-operator surface, independent of
-  restricted-git). For **restricted** sessions it records an
-  `azure.break_glass.request` control-action event and returns the same Tank
-  approval deep-link shape (`/sessions/{id}?break_glass_request={event_id}`)
-  without granting access or revealing a token.
-- **Non-restricted (trusted) sessions are pre-approved for Azure.** When the
-  agent calls `request_azure_break_glass`, the proxy self-approves by POSTing the
-  grant endpoint directly (no human approval), so the existing B-auto activation
-  turn surfaces the tools. It only fires when the agent actually requests Azure
-  (no per-session noise), and restricted/test sessions keep the approval-URL
-  flow. See `_auto_grant_azure_break_glass` in mcp-auth-proxy.
+  restricted-git). For **every** session it records an
+  `azure.break_glass.request` control-action event and returns the Tank approval
+  deep-link shape (`/sessions/{id}?break_glass_request={event_id}`) without
+  granting access or revealing a token. Approval is always an explicit human
+  admin action — there is no auto-approval path for any session.
 - Grants are stored as `azure.break_glass.grant` control-action events
   (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
   same `control_action_events` ledger as git break-glass. They are not
@@ -473,6 +496,17 @@ Contract impact:
   (`.mcp.json` activation) are separate concerns and the design needs both: a
   server-side gate alone is invisible to the harness, with no event to reconnect
   on after a grant.
+- **Live surfacing (event-driven).** A mid-session SDK reconnect does *not*
+  re-register an MCP server's tools, so on grant the orchestrator also POSTs
+  `mcp-azure-personal`'s `/internal/grant-activated {session_id}`
+  (`internal/azurepersonal`, fired from `enqueueAzureBreakGlassApprovalTurn` —
+  best-effort + async, counter `tank_azure_grant_activated_total`). The stateful
+  azure-personal server emits `notifications/tools/list_changed` on that session's
+  live stream and the SDK auto-refreshes `tools/list`, so the tools surface with
+  no reconnect or re-request. That endpoint is off the kube-rbac SA gate
+  (kube-rbac-proxy `--ignore-paths`) and authorized by the orchestrator's
+  auth.romaine.life service principal (`svc:tank-operator:orchestrator`), keeping
+  it on the same identity plane as the rest of the ecosystem.
 
 Open hardening:
 - Hermes (the only other subject on `mcp-azure-personal`'s RoleBinding) was
@@ -510,29 +544,81 @@ Contract impact:
   the session cannot already mint through the MCP tool surface; it removes the
   manual step.
 - `gh` is durable the same way: the session image bakes a `gh` wrapper at
-  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that, for
-  non-restricted sessions, mints a fresh token (scoped to the `/workspace` repos
-  plus any `--repo`/`-R` arg) and execs the real gh — so `gh` never needs a
-  manual re-auth. Restricted sessions pass straight through (gh stays
-  unauthenticated; the governed path owns credentials). See
+  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that mints a fresh
+  token (scoped to the `/workspace` repos plus any `--repo`/`-R` arg) and execs
+  the real gh — so `gh` never needs a manual re-auth. The scope is mode-aware:
+  full read/write in non-restricted mode, read-only in restricted mode (see
+  "Restricted Session Read-Only Git Access" below). See
   `session-images/gh-tank-wrapper.sh`.
-- `repo-cloner` only scrubs the cloned repo's local `credential.helper` in
-  restricted mode. In non-restricted mode the clone keeps no local override, so
-  it inherits the global auto-minting helper. (An empty local `credential.helper`
-  clears the helper list and was the reason a non-restricted clone could not
-  push.)
+- `repo-cloner` keeps no local `credential.helper` override in either mode, so
+  the clone inherits the global mode-aware helper (full in non-restricted,
+  read-only in restricted). (An empty local `credential.helper` clears the helper
+  list — it was the reason a non-restricted clone could not push, and would also
+  disable restricted-mode reads, so it is no longer written.)
 - The helper ships in the `tank-session-config` ConfigMap and is mounted into
-  every session pod under `/opt/tank/session-config/`; it is only wired up in
-  non-restricted mode.
+  every session pod under `/opt/tank/session-config/`; it is wired up in both
+  modes (mode-aware scope).
 
 Evidence:
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
   (`TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedGit`)
   covers non-restricted⇒helper-wired / no governed hooks, and
-  (`TestInstallAgentGitTemplateScriptRunsUnderSh`) keeps restricted⇒hooks.
+  (`TestInstallAgentGitTemplateScriptRunsUnderSh`) covers restricted⇒hooks **and**
+  the read-only helper wired alongside them.
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
-  (`TestGitCredentialTankHelperMintsToken`) covers the helper's mint request
-  shape, SSE reply parsing, and non-github bail.
+  (`TestGitCredentialTankHelperMintsToken`) covers the helper's mode-aware mint
+  request shape (full vs read-only), SSE reply parsing, and non-github bail.
+
+## Restricted Session Read-Only Git Access
+
+Status: complete
+
+Intent:
+A restricted session (`TANK_RESTRICTED_GIT=true`) governs *writes* — pushes go
+through `publish_current_head` / break-glass, not a raw token in the shell — but
+it must not feel like *reads* are disabled. The agent already has full GitHub
+read access through the GitHub read MCP tools and the pre-cloned `/workspace`
+repos; restricted sessions additionally get automatic **read-only** git/`gh`
+access so the familiar tools (`gh pr view`, `gh run view`, `git fetch`/`clone`)
+just work and an agent does not wrongly conclude "read is disabled here". A
+read-only token grants nothing the session can't already do via the read MCP
+tools and cannot push, so it does not weaken the governed-write invariant.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `git-credential-tank.sh` and the `gh` wrapper are **mode-aware**: in restricted
+  mode they request `mint_clone_token` with no `write`/`workflows`/`full`, so
+  mcp-github mints a `{contents: read, metadata: read}` token. Non-restricted
+  mode is unchanged (full read/write).
+- `install-agent-git-template.sh` installs the credential helper in **both**
+  modes; the elevated cluster kubeconfig stays non-restricted-only.
+- `repo-cloner.sh` no longer writes an empty local `credential.helper` in
+  restricted mode, so cloned repos inherit the global read-only helper.
+- The mcp-auth-proxy keeps `mint_clone_token` and the file/PR write tools on the
+  restricted-mode denylist, but **allows a read-only `mint_clone_token`** through
+  to mcp-github (`_is_read_only_clone_token_request`); `write`/`workflows`/`full`
+  mints are still blocked with the governed-path error. This carve-out is the
+  only thing that lets the mode-aware helper/wrapper mint at all.
+- Writes stay governed regardless: the `pre-push` hook still fails direct pushes
+  and a read-only token cannot push even if the hook is bypassed.
+- Observability:
+  `tank_mcp_auth_proxy_github_write_tool_decision_total{tool,decision}` counts
+  `allowed_read_only` vs `blocked` decisions on the denylist.
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_read_only_mint_clone_token_is_forwarded_in_restricted_mode`,
+  `test_write_mint_clone_token_is_blocked_in_restricted_mode`,
+  `test_is_read_only_clone_token_request`).
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperMintsToken`, `TestGhTankWrapperMintsModeAwareToken`
+  assert the read-only request shape in restricted mode;
+  `TestInstallAgentGitTemplateScriptRunsUnderSh` asserts the helper installs in
+  restricted mode).
 
 ## Non-Restricted Session Read-Only DB Access
 

@@ -236,6 +236,15 @@ var (
 		Help:    "Number of pages a turn-activity projection split into (sealed at turnPageEventLimit events).",
 		Buckets: []float64{1, 2, 3, 5, 10, 25, 50},
 	})
+	turnDirectoryListTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_turn_directory_list_total",
+		Help: "Durable turn-directory (GET /turns/directory) responses, labeled by bounded result (ok / truncated / error). The directory is what lets the Turns selector list every turn independent of the /timeline window; truncated means a session exceeded TurnDirectoryMaxRows and the oldest shells were elided.",
+	}, []string{"result"})
+	turnDirectorySize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_turn_directory_size",
+		Help:    "Number of turns returned in one durable turn-directory response. Observes the live per-session turn-count distribution so the TurnDirectoryMaxRows cap can be revisited (with cursor paging) before it bites.",
+		Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000},
+	})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -476,6 +485,21 @@ var serviceRoleRequestsTotal = promauto.NewCounterVec(
 
 func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
+}
+
+// azureGrantActivatedTotal counts the orchestrator's POSTs to mcp-azure-personal
+// /internal/grant-activated on azure break-glass grant activation (the live
+// tools/list_changed surfacing trigger). result: ok | error.
+var azureGrantActivatedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_azure_grant_activated_total",
+		Help: "Outcomes of the orchestrator POST to mcp-azure-personal /internal/grant-activated on azure break-glass grant activation.",
+	},
+	[]string{"result"},
+)
+
+func recordAzureGrantActivated(result string) {
+	azureGrantActivatedTotal.WithLabelValues(result).Inc()
 }
 
 // sessionImageOverrideAppliedTotal counts NEW session pods stamped with a
@@ -1213,7 +1237,7 @@ func controlActionSourceServiceLabel(sourceService string) string {
 
 func controlActionSourceToolLabel(sourceTool string) string {
 	switch sourceTool {
-	case "merge_pull_request", "merge_current_session_pr", "rename_current_session_pr", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_pr_lane", "create_pr_lane", "pr_lane_approval", "request_git_break_glass", "git_break_glass_approval", "break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare", "request_azure_break_glass", "azure_break_glass_approval", "azure_personal_mcp", "create_session", "test_slot_model_approval", "auth_break_glass_token":
+	case "merge_pull_request", "merge_current_session_pr", "rename_current_session_pr", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_pr_lane", "create_pr_lane", "pr_lane_approval", "request_git_break_glass", "git_break_glass_approval", "break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare", "request_azure_break_glass", "azure_break_glass_approval", "azure_personal_mcp", "create_session", "test_slot_model_approval":
 		return sourceTool
 	default:
 		return "other"
@@ -1241,7 +1265,6 @@ func controlActionActionLabel(action string) string {
 		"github.break_glass.deny",
 		"github.break_glass.token",
 		"github.break_glass.push",
-		"auth.break_glass.token",
 		"azure.break_glass.request",
 		"azure.break_glass.grant",
 		"azure.break_glass.deny",
@@ -1265,7 +1288,7 @@ func controlActionStatusLabel(status string) string {
 
 func controlActionResultLabel(result string) string {
 	switch result {
-	case "ok", "bad_request", "denied", "not_found", "store_unavailable", "store_error":
+	case "ok", "bad_request", "forbidden", "denied", "not_found", "store_unavailable", "store_error":
 		return result
 	default:
 		return "other"
@@ -2527,6 +2550,23 @@ func turnNumberResolveResultLabel(raw string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func recordTurnDirectoryList(result string) {
+	turnDirectoryListTotal.WithLabelValues(turnDirectoryListResultLabel(result)).Inc()
+}
+
+func turnDirectoryListResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "truncated", "error":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
+}
+
+func recordTurnDirectorySize(size int) {
+	turnDirectorySize.Observe(float64(size))
 }
 
 func recordSessionBackgroundTasksList(result string) {

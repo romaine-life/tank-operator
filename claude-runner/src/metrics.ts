@@ -371,6 +371,21 @@ export const optionsRepinnedTotal = new Counter({
   registers: [registry],
 });
 
+// breakGlassMcpRebuildTotal increments when the runner rebuilds the SDK query
+// to surface a newly-granted break-glass MCP server's tools. A break-glass
+// approval turn carries mcp_activate_name; the granted server's tools only
+// appear in a freshly built query — reconnectMcpServer on the live query does
+// NOT re-register tools, and a server written into .mcp.json mid-session is not
+// re-read. The rebuild re-reads .mcp.json + re-handshakes every server so the
+// now-unlocked azure-personal / tank-git-break-glass tools become callable.
+// Steady state is one increment per approved break-glass activation; a flat
+// zero while grants are being approved means surfacing has regressed again.
+export const breakGlassMcpRebuildTotal = new Counter({
+  name: "tank_runner_break_glass_mcp_rebuild_total",
+  help: "SDK query rebuilds triggered by a break-glass approval turn to surface newly-granted MCP tools.",
+  registers: [registry],
+});
+
 // turnStartTimes tracks turn.started timestamps so we can observe a
 // duration when the terminal turn event arrives. The map is per-runner-
 // process and unbounded only if turns leak (no terminal event ever

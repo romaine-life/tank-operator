@@ -351,6 +351,81 @@ func ScheduledWakeupUpdatedEventMap(args ScheduledWakeupUpdatedArgs) map[string]
 	return event
 }
 
+type CIStatusUpdatedArgs struct {
+	SessionID         string
+	SessionStorageKey string
+	Email             string
+	Runtime           string
+	Repo              string
+	PRNumber          int
+	PRURL             string
+	HeadSHA           string
+	State             string
+	MergeCommit       string
+	Detail            string
+	ClientNonce       string
+	Now               time.Time
+}
+
+// CIStatusUpdatedEventMap builds a display-only ci_status.updated event
+// (actor=system, source=tank). Like scheduled_wakeup.updated it renders in the
+// turns view but is NOT a submit_turn, so it never invokes the agent and never
+// enters the model's replayed context. See docs/event-driven-rollout.md.
+func CIStatusUpdatedEventMap(args CIStatusUpdatedArgs) map[string]any {
+	createdAt := args.Now
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	state := strings.TrimSpace(args.State)
+	repo := strings.TrimSpace(args.Repo)
+	timelineID := fmt.Sprintf("ci-status:%s:%d", repo, args.PRNumber)
+	clientNonce := strings.TrimSpace(args.ClientNonce)
+	if clientNonce == "" {
+		clientNonce = "ci-status-" + timelineID
+	}
+	producer := map[string]any{"name": "tank-operator"}
+	if args.Runtime != "" {
+		producer["runtime"] = args.Runtime
+	}
+	payload := map[string]any{
+		"kind":         "ci_status",
+		"repo":         repo,
+		"pr_number":    args.PRNumber,
+		"pr_url":       strings.TrimSpace(args.PRURL),
+		"head_sha":     strings.TrimSpace(args.HeadSHA),
+		"state":        state,
+		"merge_commit": strings.TrimSpace(args.MergeCommit),
+		"detail":       strings.TrimSpace(args.Detail),
+	}
+	event := StampEventMap(map[string]any{
+		"event_id":        timelineID + ":" + state + ":" + fmt.Sprintf("%d", createdAt.UnixNano()),
+		"conversation_id": args.SessionID,
+		"session_id":      args.SessionID,
+		"timeline_id":     timelineID,
+		"client_nonce":    clientNonce,
+		"actor":           string(ActorSystem),
+		"source":          string(SourceTank),
+		"type":            string(EventCIStatusUpdated),
+		"created_at":      createdAt.Format(time.RFC3339Nano),
+		"producer":        producer,
+		"visibility":      string(VisibilityDurable),
+		"payload":         payload,
+	})
+	if args.SessionStorageKey != "" {
+		event["tank_session_id"] = args.SessionStorageKey
+	}
+	if args.SessionID != "" {
+		event["tank_public_session_id"] = args.SessionID
+	}
+	if args.Email != "" {
+		event["email"] = args.Email
+	}
+	if args.Runtime != "" {
+		event["runtime"] = args.Runtime
+	}
+	return event
+}
+
 // TurnCommandFailedEventMap builds a turn.command_failed event keyed
 // by the same turn_id the failed command targeted, so client renderers
 // associate it with the stranded turn submission.

@@ -49,15 +49,28 @@ test("Codex run mode helper follows the session mode contract", () => {
   );
 });
 
-test("RunPrefs persists provider model and effort across page reloads", () => {
+test("splash launch model and effort defaults are tab-scoped, not durable profile prefs", () => {
   expect(appSource).toMatch(/claudeModelId:\s*string;/);
   expect(appSource).toMatch(/claudeEffort:\s*string;/);
   expect(appSource).toMatch(/codexModelId:\s*string;/);
   expect(appSource).toMatch(/codexEffort:\s*string;/);
+  expect(appSource).toMatch(/const DEFAULT_CLAUDE_MODEL_ID = "";/);
+  expect(appSource).toMatch(/const DEFAULT_CLAUDE_EFFORT_ID = "max";/);
+  expect(appSource).toMatch(/const DEFAULT_CODEX_MODEL_ID = "";/);
+  expect(appSource).toMatch(/const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
   expect(appSource).toMatch(/claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
   expect(appSource).toMatch(/claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
   expect(appSource).toMatch(/codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
   expect(appSource).toMatch(/codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
+  expect(appSource).toMatch(
+    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\[[\s\S]{0,180}"claudeModelId"[\s\S]{0,180}"claudeEffort"[\s\S]{0,180}"codexModelId"[\s\S]{0,180}"codexEffort"/,
+  );
+  expect(appSource).toMatch(
+    /const HOME_DRAFT_RUN_PREF_PREFIX = "tank\.homeDraftRunPref\.v1:";/,
+  );
+  expect(appSource).toMatch(
+    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,520}localStorage\.getItem\(RUN_PREF_PREFIX \+ key\)[\s\S]{0,520}sessionStorage\.getItem\(HOME_DRAFT_RUN_PREF_PREFIX \+ key\)/,
+  );
 });
 
 test("Claude secondary uses the shared Claude run options and prefs", () => {
@@ -82,19 +95,19 @@ test("Claude secondary uses the shared Claude run options and prefs", () => {
   );
 });
 
-test("initialMessageMode is an ephemeral run preference that resets to direct on fresh loads", () => {
+test("initialMessageMode is an ephemeral run preference that resets to direct after create", () => {
   expect(appSource).toMatch(/initialMessageMode:\s*InitialMessageMode;/);
   expect(appSource).toMatch(
     /initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/,
   );
   expect(appSource).toMatch(
-    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\["initialMessageMode"\]\);/,
+    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\([\s\S]{0,220}"initialMessageMode"/,
   );
   expect(appSource).toMatch(
     /function durableRunPrefs\(prefs: RunPrefs\): Record<string, unknown> \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;/,
   );
   expect(appSource).toMatch(
-    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}localStorage\.getItem/,
+    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,620}if \(!isEphemeralRunPref\(key\)\) continue;[\s\S]{0,140}sessionStorage\.getItem/,
   );
   expect(appSource).toMatch(
     /function mergeServerRunPrefs\([\s\S]{0,220}prev: RunPrefs,[\s\S]{0,220}server: Record<string, unknown>,[\s\S]{0,420}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,180}const raw = server\[key\];/,
@@ -103,7 +116,13 @@ test("initialMessageMode is an ephemeral run preference that resets to direct on
     /JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/,
   );
   expect(appSource).toMatch(
-    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,120}persistRunPrefsLocally\(next\);[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}/,
+    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,120}persistRunPrefsLocally\(next\);[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\} else \{[\s\S]{0,80}writeEphemeralRunPrefForSession\(key, value\);/,
+  );
+  expect(appSource).toMatch(
+    /function resetHomeLaunchDefaults\(\) \{[\s\S]{0,520}initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,[\s\S]{0,460}clearHomeRestrictedGitPreference\(\);/,
+  );
+  expect(appSource).toMatch(
+    /writeSessionInteraction\(created\.id, defaultInteraction\);[\s\S]{0,80}resetHomeLaunchDefaults\(\);/,
   );
   expect(appSource).not.toMatch(/pickInitialMessageMode\(raw/);
 });

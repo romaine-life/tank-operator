@@ -1,20 +1,20 @@
 image:
   repository: romainecr.azurecr.io/tank-operator
-  # SHA-pinned. The build workflow rewrites this line on every push to main
-  # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
-  # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-aba24e828f779c1f6c89a221a10a5742a14a9d7f8453a58d76b80af3e00ff36e"
+  # Fingerprint-pinned. The build workflow rewrites this line on every push
+  # to main via a `[skip ci]` follow-up commit, so the cluster reconciles to
+  # the exact image CI just produced â€” no implicit `:latest` drift.
+  tag: "app-8d96ee3ffd64540eef25107dbf1770193c398f4ad50cc7121e35c7cdc9675822"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-16T08:09:58Z"
-    git_sha: "0a1deabb08e46aa089b6693d43e2c721ed8c6d46"
+    built_at: "2026-06-18T02:39:49Z"
+    git_sha: "c486fc5bf1485cf6bc53fc8a778533f1fe8d3029"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/0a1deabb08e46aa089b6693d43e2c721ed8c6d46"
-    pr_number: "1250"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1250"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27603581425"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/c486fc5bf1485cf6bc53fc8a778533f1fe8d3029"
+    pr_number: "1290"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1290"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27733094982"
     repository: "romaine-life/tank-operator"
-    actor: "tank-operator-host[bot]"
+    actor: "nelsong6"
 
 # normal: regular chart render
 # warm: per-slot baseline resources, no long-running app/proxy pods
@@ -70,29 +70,29 @@ orchestrator:
     minAvailable: 1
 
 session:
-  # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
-  # every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-e0256e083c4d944c01f8af60cb5a47b8d8ec9a81b2ba88e6b2a2c96165edade6"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-b5af519c97d42e7f6b7ba52e27ee10f0d3bb4a80c3c9e6a9b637b86c5984f475"
+  # Fingerprint-pinned. claude-container-build.yml rewrites these tag
+  # suffixes on every push to main via a `[skip ci]` follow-up commit.
+  image: "romainecr.azurecr.io/claude-container:claude-8c4ad8c6a50aa22875f0ee32539caf0d8ec847bd30576ce07669473eea7902fb"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-b4c4b42ef2cd9a4c60431301cd39fdf33cb1c7c20af22272fbc8e15aa49d3686"
   imageMetadata:
     claude:
-      built_at: "2026-06-16T05:32:30Z"
-      git_sha: "113f8a7f6309070cf9ce26f79f046315f9de9fc0"
+      built_at: "2026-06-18T00:40:00Z"
+      git_sha: "face26e71b202c84beae513b1444efa7a47d59ab"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/113f8a7f6309070cf9ce26f79f046315f9de9fc0"
-      pr_number: ""
-      pr_url: ""
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27596335665"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/face26e71b202c84beae513b1444efa7a47d59ab"
+      pr_number: "1295"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1295"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27728992563"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
     codex:
-      built_at: "2026-06-16T05:32:30Z"
-      git_sha: "113f8a7f6309070cf9ce26f79f046315f9de9fc0"
+      built_at: "2026-06-18T00:40:00Z"
+      git_sha: "face26e71b202c84beae513b1444efa7a47d59ab"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/113f8a7f6309070cf9ce26f79f046315f9de9fc0"
-      pr_number: ""
-      pr_url: ""
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27596335665"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/face26e71b202c84beae513b1444efa7a47d59ab"
+      pr_number: "1295"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1295"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27728992563"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
   configMap: tank-session-config
@@ -193,8 +193,8 @@ oauthGateway:
 apiProxy:
   image:
     repository: romainecr.azurecr.io/api-proxy
-    # SHA-pinned. The api-proxy build workflow rewrites this line on every
-    # push to main via a `[skip ci]` follow-up commit. The 4-space indent
+    # Fingerprint-pinned. The api-proxy build workflow rewrites this line on
+    # every push to main via a `[skip ci]` follow-up commit. The 4-space indent
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
@@ -378,6 +378,16 @@ externalSecret:
     # Key inside the K8s Secret. The proxy mounts this as
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
+  # HMAC secret for the inbound GitHub CI-watch webhook (POST /webhooks/github).
+  # The orchestrator reads it as GITHUB_WEBHOOK_SECRET and rejects every delivery
+  # when empty (fail-closed), so a watched PR's CI never wakes its session until
+  # this is set. Seeded out-of-band: the SAME value must be configured as the
+  # webhook secret on the tank-operator-host GitHub App. Production only — test
+  # slots receive no deliveries, so the deployment env reference is optional.
+  githubWebhook:
+    secretName: github-webhook-secret
+    secretKey: secret
+    kvKey: tank-operator-github-webhook-secret
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

@@ -111,6 +111,22 @@ test("session routes parse only session-scoped pages", () => {
     adminView: "controls",
   });
   expect(readSessionRouteFromPathname("/sessions/s-1/session-data/extra")).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/queue-status")).toEqual({
+    sessionId: "s-1",
+    tab: "queue-status",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    filePath: null,
+    fileLine: null,
+    breakGlassRequestId: null,
+    testSlotModelRequestId: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  expect(readSessionRouteFromPathname("/sessions/s-1/queue-status/extra")).toBe(null);
   expect(readSessionRouteFromPathname("/sessions/s-1/pull-requests")).toEqual({
     sessionId: "s-1",
     tab: "pull-requests",
@@ -262,6 +278,7 @@ test("session route urls broadcast only session-owned pages", () => {
   // turns tab with no selected number stays on the root session page.
   expect(buildSessionRouteUrl(current, "s 1", "turns")).toBe("https://tank.example.test/sessions/s%201");
   expect(buildSessionRouteUrl(current, "s 1", "session-data")).toBe("https://tank.example.test/sessions/s%201/session-data");
+  expect(buildSessionRouteUrl(current, "s 1", "queue-status")).toBe("https://tank.example.test/sessions/s%201/queue-status");
   expect(buildSessionRouteUrl(current, "s 1", "pull-requests")).toBe("https://tank.example.test/sessions/s%201/pull-requests");
   expect(buildSessionRouteUrl(current, "s 1", "break-glass", null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/break-glass/request%201");
   expect(buildSessionRouteUrl(current, "s 1", "test-slot-model", null, null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/test-slot-model/request%201");
@@ -328,15 +345,15 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
         settingsTab: "admin",
         adminView: "report",
       });
-  expect(readAppRouteFromPathname("/settings/admin/break-glass")).toEqual({
-        tab: "settings",
-        settingsTab: "admin",
-        adminView: "break-glass",
-      });
   expect(readAppRouteFromPathname("/settings/admin/version")).toEqual({
         tab: "settings",
         settingsTab: "admin",
         adminView: "version",
+      });
+  expect(readAppRouteFromPathname("/settings/admin/break-glass")).toEqual({
+        tab: "settings",
+        settingsTab: "admin",
+        adminView: "break-glass",
       });
   expect(readAppRouteFromPathname("/settings/admin/hidden-transcripts")).toEqual({
         tab: "settings",

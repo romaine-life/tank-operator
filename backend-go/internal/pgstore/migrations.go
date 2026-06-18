@@ -2009,6 +2009,130 @@ var schemaMigrations = []migration{
 		)
 		  AND payload ? 'request_event_id'
 		  AND payload->>'request_event_id' <> ''`},
+
+	// The durable turn directory (GET /api/sessions/{id}/turns/directory) reads
+	// the COMPLETE, submission-ordered set of turn_activity shell rows so the
+	// Turns selector lists every turn independent of the bounded /timeline
+	// window (transcript-navigation contract: the durable ledger, not the
+	// loaded window, owns the selectable turn set). This partial index serves
+	// that "all shells for one session, ordered" scan without touching the
+	// per-turn child rows the cursor index also covers. Owned by
+	// internal/store/session_transcript_rows.go ListTurnDirectory.
+	{ID: "0164", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_turn_directory
+		ON session_transcript_rows (tank_session_id, row_cursor)
+		WHERE row_kind = 'turn_activity'`},
+
+	// session_ci_watches - durable per-session GitHub PR CI/mergeability watch
+	// (docs/event-driven-rollout.md). One row per (session, PR). The status
+	// column drives three consumers: the webhook receiver wakes the agent on a
+	// red/conflict transition, the idle reaper keeps a 'watching' session alive
+	// so that wake can land, and the human merge surface renders live PR state.
+	{ID: "0165", SQL: `CREATE TABLE IF NOT EXISTS session_ci_watches (
+		watch_id        text PRIMARY KEY,
+		session_scope   text NOT NULL,
+		session_id      text NOT NULL,
+		tank_session_id text NOT NULL,
+		owner_email     text NOT NULL,
+		pr_owner        text NOT NULL,
+		pr_name         text NOT NULL,
+		pr_number       integer NOT NULL,
+		head_sha        text NOT NULL DEFAULT '',
+		status          text NOT NULL,
+		required_checks jsonb NOT NULL DEFAULT '[]'::jsonb,
+		mergeable_state text NOT NULL DEFAULT '',
+		check_state     text NOT NULL DEFAULT '',
+		detail          text NOT NULL DEFAULT '',
+		pr_url          text NOT NULL DEFAULT '',
+		merge_commit    text NOT NULL DEFAULT '',
+		registered_at   timestamptz NOT NULL,
+		last_event_at   timestamptz,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		updated_at      timestamptz NOT NULL DEFAULT now(),
+		CHECK (status IN ('watching', 'ready', 'failed', 'conflict', 'merged', 'superseded', 'cancelled'))
+	)`},
+	{ID: "0166", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_ci_watches_pr
+		ON session_ci_watches (tank_session_id, pr_owner, pr_name, pr_number)`},
+	{ID: "0167", SQL: `CREATE INDEX IF NOT EXISTS session_ci_watches_lookup
+		ON session_ci_watches (pr_owner, pr_name, pr_number)`},
+	{ID: "0168", SQL: `CREATE INDEX IF NOT EXISTS session_ci_watches_active
+		ON session_ci_watches (session_scope, status, updated_at)
+		WHERE status IN ('watching', 'ready')`},
+	// `orchestrations` — one durable row per deterministic multi-phase
+	// orchestration run, the state a future orchestrator executes a
+	// human-approved plan against. `plan` is the frozen, approved plan captured
+	// as an immutable jsonb snapshot and `plan_hash` is its content-addressed
+	// schema_ref (sha256 of the canonical plan document, same freeze idiom as
+	// the schema_migrations checksum): a later edit to the logical plan template
+	// produces a different hash and cannot mutate an already-frozen run's
+	// history. The mutable runtime DAG lives in `orchestration_phases`; this row
+	// owns identity, ownership, target repo, the shared integration branch
+	// (nullable), the run state machine, and approval provenance.
+	{ID: "0169", SQL: `CREATE TABLE IF NOT EXISTS orchestrations (
+		orchestration_id   text PRIMARY KEY,
+		owner_email        text NOT NULL,
+		approver_email     text NOT NULL DEFAULT '',
+		repo_owner         text NOT NULL,
+		repo_name          text NOT NULL,
+		integration_branch text,
+		state              text NOT NULL,
+		plan               jsonb NOT NULL,
+		plan_hash          text NOT NULL,
+		phase_count        integer NOT NULL,
+		created_at         timestamptz NOT NULL DEFAULT now(),
+		updated_at         timestamptz NOT NULL DEFAULT now(),
+		approved_at        timestamptz,
+		CHECK (state IN ('draft', 'approved', 'running', 'awaiting_review', 'done', 'failed'))
+	)`},
+	// `orchestration_phases` — one materialized row per DAG node. The plan
+	// columns (ordinal, phase_key, brief, depends_on, target) are write-once,
+	// materialized from the frozen plan at create time so the DAG is queryable
+	// and the PR->phase reverse lookup can be indexed; the runtime columns
+	// (status, spoke_session_id, pr_*, merge_sha) are the only mutable state.
+	// depends_on holds the phase_keys this node waits on (the DAG edges), jsonb
+	// like session_ci_watches.required_checks. The FK to orchestrations cascades
+	// so a deleted run takes its phases with it.
+	{ID: "0170", SQL: `CREATE TABLE IF NOT EXISTS orchestration_phases (
+		phase_id         text PRIMARY KEY,
+		orchestration_id text NOT NULL REFERENCES orchestrations (orchestration_id) ON DELETE CASCADE,
+		ordinal          integer NOT NULL,
+		phase_key        text NOT NULL,
+		brief            text NOT NULL,
+		depends_on       jsonb NOT NULL DEFAULT '[]'::jsonb,
+		target           text NOT NULL,
+		status           text NOT NULL DEFAULT 'pending',
+		spoke_session_id text NOT NULL DEFAULT '',
+		pr_owner         text NOT NULL DEFAULT '',
+		pr_name          text NOT NULL DEFAULT '',
+		pr_number        integer NOT NULL DEFAULT 0,
+		pr_url           text NOT NULL DEFAULT '',
+		merge_sha        text NOT NULL DEFAULT '',
+		created_at       timestamptz NOT NULL DEFAULT now(),
+		updated_at       timestamptz NOT NULL DEFAULT now(),
+		CHECK (target IN ('main', 'integration')),
+		CHECK (status IN ('pending', 'ready', 'running', 'pr_open', 'merged', 'blocked', 'skipped'))
+	)`},
+	// phase_key uniqueness within a run: depends_on edges reference these keys,
+	// so a duplicate key would make the DAG ambiguous.
+	{ID: "0171", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS orchestration_phases_key
+		ON orchestration_phases (orchestration_id, phase_key)`},
+	// ordinal uniqueness + the canonical parent read order (GetWithPhases reads
+	// a run's phases ordered by ordinal off this index).
+	{ID: "0172", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS orchestration_phases_ordinal
+		ON orchestration_phases (orchestration_id, ordinal)`},
+	// PR -> phase reverse lookup for the eventual merged-PR webhook handler
+	// (repo + PR number -> owning phase), mirroring session_ci_watches_lookup.
+	// Partial: only phases that have actually opened a PR carry pr coordinates.
+	{ID: "0173", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_pr
+		ON orchestration_phases (pr_owner, pr_name, pr_number)
+		WHERE pr_number > 0`},
+	// session -> phase reverse lookup for the advance loop's phase->PR linking:
+	// when a phase's spoke session registers a PR (the CI-watch handoff path),
+	// the orchestrator joins session id back to its owning phase to copy the PR
+	// coordinates on. Partial: only phases that have actually been dispatched
+	// carry a spoke_session_id. Mirrors orchestration_phases_pr.
+	{ID: "0174", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_spoke
+		ON orchestration_phases (spoke_session_id)
+		WHERE spoke_session_id <> ''`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

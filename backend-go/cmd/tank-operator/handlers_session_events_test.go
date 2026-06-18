@@ -162,6 +162,8 @@ type fakeSessionTranscriptRowStore struct {
 	needsCalls      int
 	replaceSessions []string
 	maxEndOrderKey  string
+	directory       store.TurnDirectoryPage
+	directoryMax    int
 }
 
 func (s *fakeSessionTranscriptRowStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
@@ -200,6 +202,11 @@ func (s *fakeSessionTranscriptRowStore) ListLatest(_ context.Context, _ string, 
 func (s *fakeSessionTranscriptRowStore) ListOldest(_ context.Context, _ string, rows int) (store.TranscriptRowPage, error) {
 	s.oldestRows = rows
 	return s.pages["oldest"], nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ListTurnDirectory(_ context.Context, _ string, maxRows int) (store.TurnDirectoryPage, error) {
+	s.directoryMax = maxRows
+	return s.directory, nil
 }
 
 func (s *fakeSessionTranscriptRowStore) ListBefore(_ context.Context, _ string, beforeCursor string, rows int) (store.TranscriptRowPage, error) {
