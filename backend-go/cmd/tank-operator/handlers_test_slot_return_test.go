@@ -26,6 +26,8 @@ type fakeGlimmungClient struct {
 	state            glimmung.StateSnapshot
 	checkoutResult   glimmung.CheckoutTestSlotResult
 	deployResult     glimmung.DeployImageToTestSlotResult
+	checkoutCalls    int
+	deployCalls      int
 }
 
 func (f *fakeGlimmungClient) State(_ context.Context, actorEmail string) (glimmung.StateSnapshot, error) {
@@ -40,6 +42,7 @@ func (f *fakeGlimmungClient) ReturnTestSlot(_ context.Context, actorEmail string
 }
 
 func (f *fakeGlimmungClient) CheckoutTestSlot(_ context.Context, actorEmail string, body glimmung.CheckoutTestSlotRequest) (glimmung.CheckoutTestSlotResult, error) {
+	f.checkoutCalls++
 	f.checkoutReqEmail = actorEmail
 	f.checkoutReq = body
 	if f.checkoutResult.Lease == "" {
@@ -55,6 +58,7 @@ func (f *fakeGlimmungClient) CheckoutTestSlot(_ context.Context, actorEmail stri
 }
 
 func (f *fakeGlimmungClient) DeployImageToTestSlot(_ context.Context, actorEmail string, body glimmung.DeployImageToTestSlotRequest) (glimmung.DeployImageToTestSlotResult, error) {
+	f.deployCalls++
 	f.deployReqEmail = actorEmail
 	f.deployReq = body
 	if f.deployResult.Job == "" {

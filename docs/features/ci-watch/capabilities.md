@@ -65,6 +65,29 @@ and [../README.md](../README.md) for how capability ledgers are used.
   durable `session_ci_watches` readiness row plus live reducer output from GitHub PR
   state.
 
+## gated-test-slot-provisioning
+
+- **Status:** shipped (shared server-side gate + orchestration-review path); interactive
+  endpoint and agent-tool retirement land in later slices.
+- **Intent:** Provisioning a Tank test slot is deterministic and gated with **zero LLM
+  involvement**. The shared `appServer.provisionTestSlotForSession` helper validates a
+  session's PR-readiness through a **one-shot live read** (no durable `session_ci_watches`
+  row, no wake side effects) classified by the *same* `classifyCIWatchState` reducer the
+  CI-watch path uses, and only runs `glimmung.CheckoutTestSlot` →
+  `DeployImageToTestSlot` → `mgr.SetTestState` on a `ready` (green + mergeable) verdict.
+  Every other verdict refuses without touching glimmung: `failed` lists the failing
+  checks, `conflict` asks for a rebase onto main, `merged` is a no-op, a still-`watching`
+  PR is re-polled on a bounded settle-wait (interval + hard cap, both injectable) before
+  refusing on timeout, and an `expectedSHA` pin that the live head has moved past refuses
+  ("redeploy latest") rather than greenlight a superseded commit. The settle-wait runs in
+  a background context, never a blocked HTTP handler. `checkoutAndDeployOrchestrationReview`
+  is the first caller — its previously **ungated** checkout+deploy now runs behind this
+  gate.
+- **Durable source:** no new durable row — the gate is a transient in-memory
+  `pgstore.CIWatch` fed to the reducer against live `mcpgithub.PullRequestState`. Outcomes
+  are observable via `tank_test_slot_validate_total{outcome}` and
+  `tank_test_slot_provision_total{outcome}`.
+
 ## ci-status-record
 
 - **Status:** shipped (event + webhook merge path); in-Tank merge surface in progress

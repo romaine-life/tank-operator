@@ -147,6 +147,16 @@ type appServer struct {
 	// POST /webhooks/github route. Empty -> the receiver fails closed.
 	githubWebhookSecret string
 
+	// provisionSettleInterval / provisionSettleTimeout tune the deterministic
+	// test-slot provisioning gate's settle-wait (provision_test_slot.go): how
+	// often it re-polls a still-'watching' PR and the hard cap before it
+	// refuses. Zero -> defaults. provisionNow / provisionSleepFunc are the
+	// injectable clock + sleep so tests advance without real sleeps.
+	provisionSettleInterval time.Duration
+	provisionSettleTimeout  time.Duration
+	provisionNow            func() time.Time
+	provisionSleepFunc      func(ctx context.Context, d time.Duration) error
+
 	// orchestrations is the deterministic multi-phase advance engine
 	// (docs/event-driven-rollout.md sibling): the merged-PR webhook calls
 	// advanceOnMerge to walk the DAG and dispatch the next ready phase's spoke,
