@@ -179,6 +179,64 @@ func TestValidateEventMapAcceptsScheduledWakeupUpdated(t *testing.T) {
 	}
 }
 
+func TestValidateEventMapAcceptsTestProvisionUpdated(t *testing.T) {
+	event := TestProvisionUpdatedEventMap(TestProvisionUpdatedArgs{
+		SessionID:         "77",
+		SessionStorageKey: "77",
+		Email:             "human@example.com",
+		RunID:             "run-1",
+		Phase:             "ready",
+		Severity:          "info",
+		Text:              "Test environment ready at https://slot-1.example/",
+		Repo:              "romaine-life/tank-operator",
+		Branch:            "tank/session/77/tank-operator",
+		URL:               "https://slot-1.example/",
+		Now:               time.Date(2026, 6, 18, 15, 20, 0, 0, time.UTC),
+	})
+
+	if err := ValidateEventMap(event); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := event["type"].(string); got != "test_provision.updated" {
+		t.Fatalf("event type = %q, want test_provision.updated", got)
+	}
+	if got, _ := event["timeline_id"].(string); got != "test-provision:run-1:ready" {
+		t.Fatalf("timeline_id = %q, want test-provision:run-1:ready", got)
+	}
+	if got, _ := event["actor"].(string); got != string(ActorSystem) {
+		t.Fatalf("actor = %q, want system", got)
+	}
+	if got, _ := event["source"].(string); got != string(SourceTank) {
+		t.Fatalf("source = %q, want tank", got)
+	}
+}
+
+func TestValidateEventMapRejectsInvalidTestProvisionPhase(t *testing.T) {
+	event := TestProvisionUpdatedEventMap(TestProvisionUpdatedArgs{
+		SessionID: "77",
+		RunID:     "run-1",
+		Phase:     "bogus",
+		Text:      "hi",
+		Now:       time.Date(2026, 6, 18, 15, 20, 0, 0, time.UTC),
+	})
+	if err := ValidateEventMap(event); err == nil {
+		t.Fatal("ValidateEventMap accepted an invalid test_provision phase")
+	}
+}
+
+func TestValidateEventMapRejectsEmptyTestProvisionText(t *testing.T) {
+	event := TestProvisionUpdatedEventMap(TestProvisionUpdatedArgs{
+		SessionID: "77",
+		RunID:     "run-1",
+		Phase:     "creating",
+		Text:      "",
+		Now:       time.Date(2026, 6, 18, 15, 20, 0, 0, time.UTC),
+	})
+	if err := ValidateEventMap(event); err == nil {
+		t.Fatal("ValidateEventMap accepted an empty test_provision text")
+	}
+}
+
 func TestValidateEventMapRejectsInvalidTurnSubmittedSource(t *testing.T) {
 	tests := []struct {
 		name string

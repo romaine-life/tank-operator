@@ -73,6 +73,13 @@ type provisionTestSlotRequest struct {
 	// has moved off it, the gate refuses rather than greenlight a superseded
 	// commit. Empty disables the pin.
 	ExpectedSHA string
+	// progress, when set, is invoked by the gate as it advances through its
+	// phases — "validating" before the first live read, "waiting" on each
+	// settle-wait. The interactive path uses it to surface intermediate
+	// test_provision.updated progress records (the callback dedupes per phase);
+	// the autonomous path leaves it nil. Not persisted; never copied into the
+	// durable pending-provision row.
+	progress func(phase string)
 }
 
 // provisionOutcome is the structured result the gate returns. Verdict is
@@ -136,6 +143,10 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 		repoPR += "@" + branch
 	}
 
+	if req.progress != nil {
+		req.progress("validating")
+	}
+
 	for {
 		state, err := s.resolveProvisionState(ctx, req)
 		if err != nil {
@@ -175,6 +186,9 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 			recordTestSlotValidate(string(provisionVerdictMerged))
 			return provisionOutcome{Verdict: provisionVerdictMerged, Detail: detail, HeadSHA: result.HeadSHA}, nil
 		case pgstore.CIWatchWatching:
+			if req.progress != nil {
+				req.progress("waiting")
+			}
 			if !s.provisionNowTime().Before(deadline) {
 				minutes := int(s.provisionSettleTimeoutDuration().Round(time.Minute) / time.Minute)
 				detail := "Checks did not settle for " + repoPR + " within " + strconv.Itoa(minutes) + " min."

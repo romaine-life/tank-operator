@@ -19,8 +19,8 @@ import (
 // testWorkflowApp wires an appServer for the interactive test-workflow endpoint:
 // a real Manager over a fake clientset (so SetTestState exercises the
 // patch+registry path), a verifier for owner-scoped auth, an in-memory session
-// event store (so ci_status refusal records persist), and the supplied GitHub +
-// glimmung doubles. The interactive launcher is replaced with a synchronous
+// event store (so test_provision progress records persist), and the supplied
+// GitHub + glimmung doubles. The interactive launcher is replaced with a synchronous
 // capture that records each launched request, so a handler test asserts the
 // resolved coordinates without goroutine races; the gate's behavior is exercised
 // directly via runInteractiveTestWorkflow.
@@ -212,8 +212,9 @@ func TestStartTestWorkflow_NoRepoRefuses(t *testing.T) {
 
 // TestRunInteractiveTestWorkflow_ReadyProvisionsAndAnnounces drives the
 // background runner directly on a ready verdict: glimmung is checked out +
-// deployed, the session test-state is marked active, and a ci_status "ready"
-// record is announced.
+// deployed, the session test-state is marked active, and the provision thread
+// opens ("creating") and closes with a terminal "ready" record carrying the
+// test-environment URL.
 func TestRunInteractiveTestWorkflow_ReadyProvisionsAndAnnounces(t *testing.T) {
 	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
 	glim := &fakeGlimmungClient{}
@@ -242,14 +243,29 @@ func TestRunInteractiveTestWorkflow_ReadyProvisionsAndAnnounces(t *testing.T) {
 	if active, _ := rec.TestState["active"].(bool); !active {
 		t.Fatalf("ready verdict should mark test-state active: %#v", rec.TestState)
 	}
-	if got := ciStatusState(events); got != "ready" {
-		t.Fatalf("announced ci_status state=%q, want ready", got)
+	phases := testProvisionPhases(events)
+	if len(phases) == 0 || phases[0] != "creating" {
+		t.Fatalf("first provision record should be the 'creating' opener, got %v", phases)
+	}
+	terminal := latestTestProvision(events)
+	if got, _ := terminal["phase"].(string); got != "ready" {
+		t.Fatalf("terminal provision phase=%q, want ready (all phases: %v)", got, phases)
+	}
+	if got, _ := terminal["url"].(string); got == "" {
+		t.Fatalf("ready record should carry the test-environment URL, got payload %#v", terminal)
+	}
+	if got, _ := terminal["text"].(string); !strings.Contains(got, "ready") {
+		t.Fatalf("ready text=%q, want it to announce the environment is ready", got)
+	}
+	// All records share the run id so they thread under one system avatar.
+	if !testProvisionSingleRun(events) {
+		t.Fatalf("all provision records of one run must share a run_id: %v", testProvisionEvents(events))
 	}
 }
 
 // TestRunInteractiveTestWorkflow_RefusalSurfacesReason drives a failed verdict:
-// glimmung is never touched, the refusal reason is announced via ci_status, and
-// the session test-state stays inactive.
+// glimmung is never touched, the refusal reason is the terminal error record's
+// text, and the session test-state stays inactive.
 func TestRunInteractiveTestWorkflow_RefusalSurfacesReason(t *testing.T) {
 	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{{
 		CheckState:       "failure",
@@ -275,12 +291,20 @@ func TestRunInteractiveTestWorkflow_RefusalSurfacesReason(t *testing.T) {
 	if glim.checkoutCalls != 0 || glim.deployCalls != 0 {
 		t.Fatalf("refusal must not touch glimmung; checkout=%d deploy=%d", glim.checkoutCalls, glim.deployCalls)
 	}
-	if got := ciStatusState(events); got != "failed" {
-		t.Fatalf("refusal ci_status state=%q, want failed", got)
+	phases := testProvisionPhases(events)
+	if len(phases) == 0 || phases[0] != "creating" {
+		t.Fatalf("first provision record should be the 'creating' opener, got %v", phases)
 	}
-	detail := ciStatusDetail(events)
+	terminal := latestTestProvision(events)
+	if got, _ := terminal["phase"].(string); got != "error" {
+		t.Fatalf("refusal terminal phase=%q, want error", got)
+	}
+	if got, _ := terminal["severity"].(string); got != "error" {
+		t.Fatalf("refusal terminal severity=%q, want error", got)
+	}
+	detail, _ := terminal["text"].(string)
 	if !strings.Contains(detail, "build") || !strings.Contains(detail, "lint") {
-		t.Fatalf("refusal detail should list failing checks, got %q", detail)
+		t.Fatalf("refusal text should list failing checks, got %q", detail)
 	}
 	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
 	if !ok {
@@ -300,32 +324,53 @@ func TestSessionGlimmungProjectMapping(t *testing.T) {
 	}
 }
 
-// ciStatusState returns the `state` of the most-recent persisted ci_status event.
-func ciStatusState(events *recordingSessionEventStore) string {
-	if payload := latestCIStatusPayload(events); payload != nil {
-		s, _ := payload["state"].(string)
-		return s
-	}
-	return ""
-}
-
-func ciStatusDetail(events *recordingSessionEventStore) string {
-	if payload := latestCIStatusPayload(events); payload != nil {
-		d, _ := payload["detail"].(string)
-		return d
-	}
-	return ""
-}
-
-func latestCIStatusPayload(events *recordingSessionEventStore) map[string]any {
-	for i := len(events.upserts) - 1; i >= 0; i-- {
-		ev := events.upserts[i]
-		if t, _ := ev["type"].(string); t != "ci_status.updated" {
+// testProvisionEvents returns the payloads of every persisted
+// test_provision.updated event, in emission order.
+func testProvisionEvents(events *recordingSessionEventStore) []map[string]any {
+	var out []map[string]any
+	for _, ev := range events.upserts {
+		if t, _ := ev["type"].(string); t != "test_provision.updated" {
 			continue
 		}
 		if payload, ok := ev["payload"].(map[string]any); ok {
-			return payload
+			out = append(out, payload)
 		}
 	}
-	return nil
+	return out
+}
+
+// testProvisionPhases returns the ordered phase names of the provision thread.
+func testProvisionPhases(events *recordingSessionEventStore) []string {
+	payloads := testProvisionEvents(events)
+	phases := make([]string, 0, len(payloads))
+	for _, p := range payloads {
+		phase, _ := p["phase"].(string)
+		phases = append(phases, phase)
+	}
+	return phases
+}
+
+// latestTestProvision returns the payload of the most-recent provision record.
+func latestTestProvision(events *recordingSessionEventStore) map[string]any {
+	payloads := testProvisionEvents(events)
+	if len(payloads) == 0 {
+		return nil
+	}
+	return payloads[len(payloads)-1]
+}
+
+// testProvisionSingleRun reports whether every provision record shares one run_id.
+func testProvisionSingleRun(events *recordingSessionEventStore) bool {
+	runID := ""
+	for _, p := range testProvisionEvents(events) {
+		id, _ := p["run_id"].(string)
+		if runID == "" {
+			runID = id
+			continue
+		}
+		if id != runID {
+			return false
+		}
+	}
+	return runID != ""
 }
