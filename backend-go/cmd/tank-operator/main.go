@@ -755,6 +755,17 @@ func main() {
 			}
 		}()
 	}
+	// Durable stranded-watch backstop: re-drive 'watching' CI watches that have
+	// seen no event past the staleness window, so a dropped webhook (or an
+	// in-memory mergeability retry lost to a restart) degrades to a delay, not a
+	// hung watch that keeps its session reaper-protected and asleep.
+	if srv.ciWatches != nil && srv.mcpGitHub != nil {
+		go func() {
+			if err := runCIWatchReconcileLoop(workerCtx, srv, ciWatchReconcileInterval, ciWatchStaleAfter); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("ci watch reconcile loop stopped", "error", err)
+			}
+		}()
+	}
 	if sessionRegStore != nil {
 		idleTimeout := time.Duration(envInt("IDLE_TIMEOUT_SECONDS", 0)) * time.Second
 		reapInterval := time.Duration(envInt("REAPER_INTERVAL_SECONDS", 900)) * time.Second

@@ -51,6 +51,11 @@ import (
 // struct for tests + local dev.
 const DefaultMCPGitHubURL = "http://mcp-github.mcp-github.svc:80"
 
+// DefaultGitHubAPIURL is GitHub's public REST API root. Tests can override it
+// through Options so the CI-watch reducer can exercise live-state reads without
+// external network access.
+const DefaultGitHubAPIURL = "https://api.github.com"
+
 // Default exchange URL. The orchestrator deployment mounts the
 // audience-pinned projected SA token at
 // /var/run/secrets/auth.romaine.life/token.
@@ -88,6 +93,7 @@ type Options struct {
 	HTTPClient   *http.Client
 	ExchangeURL  string
 	MCPGitHubURL string
+	GitHubAPIURL string
 	SATokenPath  string
 	// ReadToken is the strategy for reading the SA token from disk
 	// each call. Overridable for tests; production passes nil and the
@@ -106,6 +112,7 @@ type Client struct {
 	http      *http.Client
 	exchange  string
 	mcpURL    string
+	githubAPI string
 	saPath    string
 	readToken func(path string) (string, error)
 	now       func() time.Time
@@ -127,6 +134,7 @@ func NewClient(opts Options) *Client {
 		http:      opts.HTTPClient,
 		exchange:  opts.ExchangeURL,
 		mcpURL:    opts.MCPGitHubURL,
+		githubAPI: opts.GitHubAPIURL,
 		saPath:    opts.SATokenPath,
 		readToken: opts.ReadToken,
 		now:       opts.Now,
@@ -143,6 +151,9 @@ func NewClient(opts Options) *Client {
 	}
 	if c.mcpURL == "" {
 		c.mcpURL = DefaultMCPGitHubURL
+	}
+	if c.githubAPI == "" {
+		c.githubAPI = DefaultGitHubAPIURL
 	}
 	if c.saPath == "" {
 		c.saPath = DefaultSATokenPath

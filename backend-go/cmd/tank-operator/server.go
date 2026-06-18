@@ -135,6 +135,14 @@ type appServer struct {
 	// alive, and the human merge surface renders it.
 	ciWatches ciWatchStore
 
+	// ciWatchMergeabilityRetries is the narrow non-event-driven escape hatch:
+	// GitHub's PR mergeability can be null/unknown while it computes a trial
+	// merge asynchronously, so a watching PR/head can schedule one deduped
+	// delayed reconcile. The retry re-enters the same reducer as webhooks.
+	ciWatchMergeabilityRetryMu     sync.Mutex
+	ciWatchMergeabilityRetries     map[string]*time.Timer
+	ciWatchMergeabilityRetryDelays []time.Duration
+
 	// githubWebhookSecret verifies X-Hub-Signature-256 on the public
 	// POST /webhooks/github route. Empty -> the receiver fails closed.
 	githubWebhookSecret string
@@ -256,11 +264,13 @@ type scheduledWakeupStore interface {
 type ciWatchStore interface {
 	Register(context.Context, pgstore.RegisterCIWatchRequest) (pgstore.CIWatch, error)
 	UpdateStatus(context.Context, string, pgstore.CIWatchStatus, string) (pgstore.CIWatch, error)
+	UpdateObservation(context.Context, pgstore.UpdateCIWatchObservationRequest) (pgstore.CIWatch, error)
 	Get(context.Context, string) (pgstore.CIWatch, error)
 	GetByPR(context.Context, string, string, int) (pgstore.CIWatch, error)
 	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)
 	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
 	HasActiveForSession(context.Context, string, string) (bool, error)
+	ListStaleWatching(context.Context, time.Duration, int) ([]pgstore.CIWatch, error)
 }
 
 type pendingLaunchStore interface {
@@ -559,6 +569,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pr-readiness", s.handleInternalRegisterPRReadiness)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/ci-watches", s.handleInternalRegisterCIWatch)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/orchestration/blocked", s.handleInternalOrchestrationBlocked)
 	// Public inbound GitHub webhook; authenticated by HMAC inside the handler.

@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -17,14 +20,20 @@ type ciWatchStatusCall struct {
 	status  pgstore.CIWatchStatus
 }
 
+type ciWatchObservationCall struct {
+	req pgstore.UpdateCIWatchObservationRequest
+}
+
 type fakeCIWatchStore struct {
 	registerCalls []pgstore.RegisterCIWatchRequest
 	registerErr   error
 
-	getByPRResult     pgstore.CIWatch
-	getByPRErr        error
-	updateStatusCalls []ciWatchStatusCall
-	markMergedCalls   []string
+	getByPRResult          pgstore.CIWatch
+	getByPRErr             error
+	staleWatching          []pgstore.CIWatch
+	updateStatusCalls      []ciWatchStatusCall
+	updateObservationCalls []ciWatchObservationCall
+	markMergedCalls        []string
 }
 
 func (s *fakeCIWatchStore) Register(_ context.Context, req pgstore.RegisterCIWatchRequest) (pgstore.CIWatch, error) {
@@ -53,8 +62,35 @@ func (s *fakeCIWatchStore) UpdateStatus(_ context.Context, watchID string, statu
 	return w, nil
 }
 
+func (s *fakeCIWatchStore) UpdateObservation(_ context.Context, req pgstore.UpdateCIWatchObservationRequest) (pgstore.CIWatch, error) {
+	s.updateObservationCalls = append(s.updateObservationCalls, ciWatchObservationCall{req: req})
+	current := s.getByPRResult
+	// Emulate the store's conditional write: only a row still in 'watching' (on
+	// the head the observation was based on) can be updated.
+	if current.Status != "" && current.Status != pgstore.CIWatchWatching {
+		return pgstore.CIWatch{}, pgstore.ErrCIWatchObservationStale
+	}
+	if req.ExpectedHeadSHA != "" && strings.TrimSpace(current.HeadSHA) != "" &&
+		strings.TrimSpace(current.HeadSHA) != strings.TrimSpace(req.ExpectedHeadSHA) {
+		return pgstore.CIWatch{}, pgstore.ErrCIWatchObservationStale
+	}
+	w := current
+	w.WatchID = req.WatchID
+	if w.WatchID == "" {
+		w.WatchID = "ciwatch_test"
+	}
+	w.Status = req.Status
+	w.HeadSHA = req.HeadSHA
+	w.MergeableState = req.MergeableState
+	w.CheckState = req.CheckState
+	w.Detail = req.Detail
+	w.PRURL = req.PRURL
+	s.getByPRResult = w
+	return w, nil
+}
+
 func (s *fakeCIWatchStore) Get(_ context.Context, _ string) (pgstore.CIWatch, error) {
-	return pgstore.CIWatch{}, nil
+	return s.getByPRResult, s.getByPRErr
 }
 
 func (s *fakeCIWatchStore) GetByPR(_ context.Context, _, _ string, _ int) (pgstore.CIWatch, error) {
@@ -75,6 +111,10 @@ func (s *fakeCIWatchStore) MarkMerged(_ context.Context, watchID, _ string) (pgs
 
 func (s *fakeCIWatchStore) HasActiveForSession(_ context.Context, _, _ string) (bool, error) {
 	return false, nil
+}
+
+func (s *fakeCIWatchStore) ListStaleWatching(_ context.Context, _ time.Duration, _ int) ([]pgstore.CIWatch, error) {
+	return s.staleWatching, nil
 }
 
 func ciWatchTestServer(t *testing.T, store ciWatchStore) *appServer {
@@ -164,6 +204,7 @@ func TestHandleInternalRegisterCIWatchLinksPhasePR(t *testing.T) {
 }
 
 func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testing.T) {
+	mergeable := true
 	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
 		WatchID: "ciwatch_test", SessionID: "47", OwnerEmail: "owner@example.test",
 		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
@@ -174,7 +215,13 @@ func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testi
 		phaseSpec{key: "a", status: pgstore.PhaseRunning, spoke: "47"},
 	)
 	app.orchestrations = newOrchestrationEngine(orch, newRecordingSpawner().spawn)
-	gh := &fakeMCPGitHub{mergeCommit: "merge-sha"}
+	gh := &fakeMCPGitHub{
+		mergeCommit: "merge-sha",
+		prState: mcpgithub.PullRequestState{
+			Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc123",
+			CheckState: "success", CIStatus: "succeeded", AllChecksSettled: true,
+		},
+	}
 	app.mcpGitHub = gh
 
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/ci-watches", strings.NewReader(`{
@@ -204,6 +251,179 @@ func TestHandleInternalRegisterCIWatchReadyAutoMergesOrchestrationPhase(t *testi
 	}
 	if got := orch.snapshot(phaseID("a")).Status; got != pgstore.PhaseMerged {
 		t.Fatalf("phase status = %q, want merged", got)
+	}
+}
+
+func TestHandleInternalRegisterPRReadinessResolvesBranchInBackend(t *testing.T) {
+	mergeable := true
+	store := &fakeCIWatchStore{}
+	app := ciWatchTestServer(t, store)
+	gh := &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		PR:             mcpgithub.PullRequestDetail{Number: 1234},
+		Mergeable:      &mergeable,
+		MergeableState: "clean",
+		HeadSHA:        "abc123",
+		CheckState:     "success",
+		CIStatus:       "succeeded",
+		HTMLURL:        "https://github.com/romaine-life/tank-operator/pull/1234",
+	}}
+	app.mcpGitHub = gh
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/pr-readiness", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "tank/session/47/tank-operator",
+		"expected_head_sha": "abc123"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterPRReadiness(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gh.resolveOpenPRCalls != 1 || gh.resolvePRCalls != 0 {
+		t.Fatalf("resolve calls = open %d by-number %d, want open 1 by-number 0", gh.resolveOpenPRCalls, gh.resolvePRCalls)
+	}
+	if len(store.registerCalls) != 1 {
+		t.Fatalf("register calls = %d, want 1", len(store.registerCalls))
+	}
+	got := store.registerCalls[0]
+	if got.PROwner != "romaine-life" || got.PRName != "tank-operator" || got.PRNumber != 1234 || got.HeadSHA != "abc123" {
+		t.Fatalf("registered readiness = %#v", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["state"] != "ready" || body["pr_number"] != float64(1234) {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestApplyResolvedCIWatchStateSkipsSideEffectsOnLostRace(t *testing.T) {
+	// We read a 'watching' row and computed a terminal result, but a concurrent
+	// reconcile already moved the row out of 'watching'. The conditional write
+	// matches no row, so we must not fire side effects (no second wake / no
+	// re-ready) and must not surface an error.
+	mergeable := true
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchFailed,
+	}}
+	app := ciWatchTestServer(t, store)
+
+	read := pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+	}
+	state := mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc",
+		CheckState: "success", CIStatus: "succeeded",
+	}
+	result, err := app.applyResolvedCIWatchState(context.Background(), read, state, ciWatchReconcileWebhook, 0)
+	if err != nil {
+		t.Fatalf("lost-race observation should not error, got %v", err)
+	}
+	if result.Status != pgstore.CIWatchReady {
+		t.Fatalf("classify result = %q, want ready", result.Status)
+	}
+	if len(store.updateStatusCalls) != 0 {
+		t.Fatalf("side effects fired on a lost race: updateStatus=%+v", store.updateStatusCalls)
+	}
+	if store.getByPRResult.Status != pgstore.CIWatchFailed {
+		t.Fatalf("losing observation clobbered the row to %q, want it left failed", store.getByPRResult.Status)
+	}
+}
+
+func TestReconcileStaleCIWatchesReDrivesStuckWatch(t *testing.T) {
+	// A 'watching' watch went stale (its deciding webhook was dropped). The
+	// durable backstop must re-drive it with a fresh live read instead of
+	// leaving the session stranded asleep.
+	mergeable := true
+	stale := pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234,
+		HeadSHA: "abc", Status: pgstore.CIWatchWatching,
+	}
+	store := &fakeCIWatchStore{staleWatching: []pgstore.CIWatch{stale}, getByPRResult: stale}
+	app := ciWatchTestServer(t, store)
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc",
+		CheckState: "success", CIStatus: "succeeded", AllChecksSettled: true,
+	}}
+	if err := app.reconcileStaleCIWatches(context.Background(), time.Minute); err != nil {
+		t.Fatalf("backstop pass: %v", err)
+	}
+	if len(store.updateObservationCalls) != 1 {
+		t.Fatalf("backstop did not re-drive the stale watch: %+v", store.updateObservationCalls)
+	}
+	if store.updateObservationCalls[0].req.Status != pgstore.CIWatchReady {
+		t.Fatalf("re-drive resolved to %q, want ready", store.updateObservationCalls[0].req.Status)
+	}
+}
+
+func TestApplyResolvedCIWatchStateAlertsOnOutOfBandHead(t *testing.T) {
+	// The watch is pinned to h1, but GitHub's live head is a foreign h2 with no
+	// governed publish in the ledger: supersede + user-facing alert, never follow
+	// or wake the agent.
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", SessionScope: "tank-operator-slot-3",
+		OwnerEmail: "owner@example.test", PROwner: fakePROwner, PRName: fakePRName,
+		PRNumber: 1234, HeadSHA: "h1", Status: pgstore.CIWatchWatching,
+	}}
+	app := ciWatchTestServer(t, store)
+	app.controlActions = &fakeControlActionStore{listRows: []pgstore.ControlActionEvent{
+		{Action: "github.commit.push", Status: "succeeded", ResultSHA: "h1"},
+	}}
+	read := store.getByPRResult
+	state := mcpgithub.PullRequestState{
+		MergeableState: "clean", HeadSHA: "h2",
+		CheckState: "success", CIStatus: "succeeded", AllChecksSettled: true,
+	}
+	if _, err := app.applyResolvedCIWatchState(context.Background(), read, state, ciWatchReconcileWebhook, 0); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(store.updateObservationCalls) != 1 || store.updateObservationCalls[0].req.Status != pgstore.CIWatchSuperseded {
+		t.Fatalf("out-of-band head should supersede, got %+v", store.updateObservationCalls)
+	}
+	if len(store.updateStatusCalls) != 0 {
+		t.Fatalf("out-of-band head must not wake/auto-merge: %+v", store.updateStatusCalls)
+	}
+}
+
+func TestAutoMergeWithheldUntilChecksConfirmedSettled(t *testing.T) {
+	// GitHub reports clean and Tank classifies Ready, but the confirm read shows
+	// the checks are not all settled yet (the partial/transient-clean window).
+	// Auto-merge must withhold and un-latch to 'watching' for retry, not merge.
+	mergeable := true
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "ciwatch_test", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: fakePROwner, PRName: fakePRName, PRNumber: 1234, HeadSHA: "abc123",
+	}}
+	app := ciWatchTestServer(t, store)
+	orch := newFakeOrchStore(pgstore.OrchestrationRunning,
+		phaseSpec{key: "a", status: pgstore.PhaseRunning, spoke: "47"},
+	)
+	app.orchestrations = newOrchestrationEngine(orch, newRecordingSpawner().spawn)
+	gh := &fakeMCPGitHub{mergeCommit: "merge-sha", prState: mcpgithub.PullRequestState{
+		Mergeable: &mergeable, MergeableState: "clean", HeadSHA: "abc123",
+		CheckState: "success", CIStatus: "succeeded", AllChecksSettled: false,
+	}}
+	app.mcpGitHub = gh
+
+	watch := store.getByPRResult
+	watch.Status = pgstore.CIWatchWatching
+	app.handleGreenCIWatch(context.Background(), watch, "ready")
+
+	if gh.mergeCalls != 0 {
+		t.Fatalf("auto-merge should withhold on unconfirmed settle, mergeCalls=%d", gh.mergeCalls)
+	}
+	if len(store.updateStatusCalls) != 1 || store.updateStatusCalls[0].status != pgstore.CIWatchWatching {
+		t.Fatalf("withheld auto-merge should un-latch to watching, got %+v", store.updateStatusCalls)
 	}
 }
 
