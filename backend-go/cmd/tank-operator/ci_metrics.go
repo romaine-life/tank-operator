@@ -32,7 +32,34 @@ var (
 		Name: "tank_ci_watch_oldest_stale_age_seconds",
 		Help: "Age of the oldest 'watching' CI watch with no recent event; the durable stall backstop's signal (0 when none).",
 	})
+
+	// Deterministic test-slot provisioning gate (provision_test_slot.go). The
+	// gate validates PR-readiness with the same classifyCIWatchState reducer the
+	// CI-watch path uses, then provisions only on a green/mergeable verdict.
+	testSlotValidateTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_test_slot_validate_total",
+		Help: "Deterministic test-slot provisioning gate validate verdicts, by bounded outcome.",
+	}, []string{"outcome"})
+
+	testSlotProvisionTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_test_slot_provision_total",
+		Help: "Deterministic test-slot provisioning attempts after a ready verdict, by bounded outcome.",
+	}, []string{"outcome"})
 )
+
+func recordTestSlotValidate(outcome string) {
+	if outcome == "" {
+		outcome = "error"
+	}
+	testSlotValidateTotal.WithLabelValues(outcome).Inc()
+}
+
+func recordTestSlotProvision(outcome string) {
+	if outcome == "" {
+		outcome = "error"
+	}
+	testSlotProvisionTotal.WithLabelValues(outcome).Inc()
+}
 
 func recordCIWebhook(event, result string) {
 	if event == "" {

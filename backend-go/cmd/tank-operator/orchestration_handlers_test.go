@@ -10,6 +10,7 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
+	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
@@ -222,7 +223,12 @@ func TestCheckoutAndDeployOrchestrationReviewUsesIntegrationBranch(t *testing.T)
 		State: "active", Project: "tank-operator", SlotIndex: &slotIndex, SlotName: &slotName,
 		URL: &slotURL, Lease: "lease-1", Usable: true,
 	}}
-	app := &appServer{glimmung: glim}
+	// The orchestration-review path is now gated by the shared deterministic
+	// provisioning helper: a green/mergeable live verdict is required before
+	// checkout+deploy run. Provide a ready PR state so the gate greenlights and
+	// the integration-branch deploy assertions below still hold.
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
+	app := &appServer{glimmung: glim, mcpGitHub: gh}
 	orch := pgstore.Orchestration{
 		OrchestrationID:   "orch-1",
 		OwnerEmail:        "owner@example.test",

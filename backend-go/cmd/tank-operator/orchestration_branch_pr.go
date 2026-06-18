@@ -144,19 +144,41 @@ func (s *appServer) emitOrchestrationReviewReadyRecord(ctx context.Context, orch
 	if !ok {
 		return
 	}
-	detail := "Orchestration " + orch.OrchestrationID + " is awaiting review on integration branch " + orch.IntegrationBranch + "."
-	if checkout, deploy, err := s.checkoutAndDeployOrchestrationReview(ctx, orch, target.SpokeSessionID); err != nil {
-		detail += " Test environment setup failed: " + err.Error()
-		slog.Warn("orchestration review gate setup failed", "orchestration_id", orch.OrchestrationID, "error", err)
-	} else {
-		if checkout.URL != nil && strings.TrimSpace(*checkout.URL) != "" {
-			detail += " Test environment: " + strings.TrimSpace(*checkout.URL) + "."
-		}
-		if deploy.Job != "" {
-			detail += " Deploy job: " + deploy.Job + "."
-		}
-	}
 	target.PRURL = "https://github.com/" + orch.RepoOwner + "/" + orch.RepoName + "/tree/" + orch.IntegrationBranch
+	detail := "Orchestration " + orch.OrchestrationID + " is awaiting review on integration branch " + orch.IntegrationBranch + "."
+	// Emit the awaiting-review signal immediately. The gated test-slot
+	// provisioning now validates PR-readiness and may wait minutes for CI to
+	// settle, so it runs off this reconcile path (below) and reports the test
+	// environment outcome in a follow-up status record.
+	s.emitOrchestrationPhaseStatusRecord(ctx, orch, target, orch.OwnerEmail, "ready", detail)
+	go s.provisionOrchestrationReviewSlot(orch, target)
+}
+
+// provisionOrchestrationReviewSlot runs the gated checkout+deploy for the
+// orchestration review environment in the background (it can wait minutes for
+// CI to settle) and emits a follow-up phase status record with the outcome. It
+// uses a fresh background context budgeted for the settle cap plus deploy
+// grace, deliberately not the reconcile ctx which may already be canceled.
+func (s *appServer) provisionOrchestrationReviewSlot(orch pgstore.Orchestration, target pgstore.OrchestrationPhase) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.provisionBackgroundTimeout())
+	defer cancel()
+	detail := "Test environment for orchestration " + orch.OrchestrationID + ": "
+	checkout, deploy, err := s.checkoutAndDeployOrchestrationReview(ctx, orch, target.SpokeSessionID)
+	if err != nil {
+		detail += "setup failed: " + err.Error()
+		slog.Warn("orchestration review gate setup failed", "orchestration_id", orch.OrchestrationID, "error", err)
+		s.emitOrchestrationPhaseStatusRecord(ctx, orch, target, orch.OwnerEmail, "ready", detail)
+		return
+	}
+	if checkout.URL != nil && strings.TrimSpace(*checkout.URL) != "" {
+		detail += strings.TrimSpace(*checkout.URL)
+	} else {
+		detail += "provisioned"
+	}
+	if deploy.Job != "" {
+		detail += " (deploy job: " + deploy.Job + ")"
+	}
+	detail += "."
 	s.emitOrchestrationPhaseStatusRecord(ctx, orch, target, orch.OwnerEmail, "ready", detail)
 }
 
@@ -169,38 +191,38 @@ func latestPhaseWithSpoke(phases []pgstore.OrchestrationPhase) (pgstore.Orchestr
 	return pgstore.OrchestrationPhase{}, false
 }
 
+// checkoutAndDeployOrchestrationReview provisions the orchestration-review test
+// environment, now gated by the shared deterministic provisioning helper: it
+// validates the integration branch's live PR-readiness with the same
+// classifyCIWatchState reducer the CI-watch path uses and only checks out +
+// deploys on a green/mergeable verdict. A refusal verdict (failed CI, conflict,
+// merged, settle timeout, head moved) is surfaced as an error so the caller's
+// status record reflects that no environment was provisioned.
+//
+// The integration branch is validated by branch (no PR number) with the SHA
+// pin disabled: the merge-forward path can re-head the branch between awaiting
+// review and this run, and refusing on that movement would be a false negative
+// for a branch we are deploying wholesale, not pinning to one commit.
 func (s *appServer) checkoutAndDeployOrchestrationReview(ctx context.Context, orch pgstore.Orchestration, sessionID string) (glimmung.CheckoutTestSlotResult, glimmung.DeployImageToTestSlotResult, error) {
 	if s.glimmung == nil {
 		return glimmung.CheckoutTestSlotResult{}, glimmung.DeployImageToTestSlotResult{}, errors.New("glimmung client not configured")
 	}
-	project := orchestrationGlimmungProject(orch)
-	workflow := "orchestration-review"
-	checkout, err := s.glimmung.CheckoutTestSlot(ctx, orch.OwnerEmail, glimmung.CheckoutTestSlotRequest{
-		Project:       project,
-		Workflow:      &workflow,
-		TankSessionID: &sessionID,
+	outcome, err := s.provisionTestSlotForSession(ctx, provisionTestSlotRequest{
+		OwnerEmail: orch.OwnerEmail,
+		SessionID:  sessionID,
+		Project:    orchestrationGlimmungProject(orch),
+		Workflow:   "orchestration-review",
+		RepoOwner:  orch.RepoOwner,
+		RepoName:   orch.RepoName,
+		Branch:     orch.IntegrationBranch,
 	})
 	if err != nil {
-		return checkout, glimmung.DeployImageToTestSlotResult{}, err
+		return outcome.Checkout, outcome.Deploy, err
 	}
-	if checkout.SlotIndex == nil && checkout.SlotName == nil {
-		return checkout, glimmung.DeployImageToTestSlotResult{}, errors.New("glimmung checkout returned no slot identity")
+	if !outcome.Provisioned {
+		return outcome.Checkout, outcome.Deploy, provisionRefusalError(outcome)
 	}
-	deploy, err := s.glimmung.DeployImageToTestSlot(ctx, orch.OwnerEmail, glimmung.DeployImageToTestSlotRequest{
-		Project:   project,
-		SlotIndex: checkout.SlotIndex,
-		SlotName:  checkout.SlotName,
-		GitRef:    orch.IntegrationBranch,
-	})
-	if err != nil {
-		return checkout, deploy, err
-	}
-	if s.mgr != nil && checkout.URL != nil {
-		if _, err := s.mgr.SetTestState(ctx, orch.OwnerEmail, sessionID, true, checkout.SlotIndex, checkout.URL, nil); err != nil {
-			slog.Warn("orchestration review gate set test state failed", "session_id", sessionID, "error", err)
-		}
-	}
-	return checkout, deploy, nil
+	return outcome.Checkout, outcome.Deploy, nil
 }
 
 func orchestrationGlimmungProject(orch pgstore.Orchestration) string {
