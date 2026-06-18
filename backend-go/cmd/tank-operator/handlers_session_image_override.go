@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
+
+const sessionImageOverrideLeaseExtendSeconds = 1800
 
 // imageOverrideAdapter adapts the pgstore session-image override store to the
 // sessions.SessionImageOverrides resolver interface the Manager consumes,
@@ -119,6 +123,14 @@ func (s *appServer) handleInternalSetSessionImageOverride(w http.ResponseWriter,
 		writeError(w, http.StatusBadRequest, "at least one of claude_image / codex_image is required")
 		return
 	}
+	if err := s.extendSessionImageOverrideLease(r.Context(), user, scope); err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, errGlimmungClientNotConfigured) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, err.Error())
+		return
+	}
 	setBy := user.ActorEmail
 	if setBy == "" {
 		setBy = user.Email
@@ -141,6 +153,42 @@ func (s *appServer) handleInternalSetSessionImageOverride(w http.ResponseWriter,
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionImageOverrideResponse(ov))
+}
+
+var errGlimmungClientNotConfigured = errors.New("glimmung client not configured")
+
+func (s *appServer) extendSessionImageOverrideLease(ctx context.Context, user *auth.User, scope string) error {
+	match := glimmungSlotNamePattern.FindStringSubmatch(scope)
+	if len(match) != 3 {
+		return nil
+	}
+	if s.glimmung == nil {
+		return errGlimmungClientNotConfigured
+	}
+	project := strings.TrimSpace(match[1])
+	slotName := strings.TrimSpace(scope)
+	if project == "" || slotName == "" {
+		return nil
+	}
+	actorEmail := ""
+	if user != nil {
+		actorEmail = user.ActorEmail
+		if actorEmail == "" {
+			actorEmail = user.Email
+		}
+	}
+	extendSeconds := sessionImageOverrideLeaseExtendSeconds
+	_, err := s.glimmung.ExtendTestSlotLease(ctx, actorEmail, glimmung.ExtendTestSlotRequest{
+		Project:       project,
+		SlotName:      &slotName,
+		ExtendSeconds: &extendSeconds,
+		Source:        "tank-operator.session-image-override",
+		Reason:        "session image override updated",
+	})
+	if err != nil {
+		return fmt.Errorf("refreshing Glimmung test-slot lease for session image override: %w", err)
+	}
+	return nil
 }
 
 // handleInternalDeleteSessionImageOverride clears a scope's override so new

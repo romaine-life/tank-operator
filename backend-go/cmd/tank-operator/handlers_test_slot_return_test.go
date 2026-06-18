@@ -20,14 +20,18 @@ type fakeGlimmungClient struct {
 	returnReqEmail   string
 	checkoutReqEmail string
 	deployReqEmail   string
+	extendReqEmail   string
 	returnReq        glimmung.ReturnTestSlotRequest
 	checkoutReq      glimmung.CheckoutTestSlotRequest
 	deployReq        glimmung.DeployImageToTestSlotRequest
+	extendReq        glimmung.ExtendTestSlotRequest
 	state            glimmung.StateSnapshot
 	checkoutResult   glimmung.CheckoutTestSlotResult
 	deployResult     glimmung.DeployImageToTestSlotResult
+	extendResult     glimmung.ExtendTestSlotResult
 	checkoutCalls    int
 	deployCalls      int
+	extendCalls      int
 }
 
 func (f *fakeGlimmungClient) State(_ context.Context, actorEmail string) (glimmung.StateSnapshot, error) {
@@ -65,6 +69,16 @@ func (f *fakeGlimmungClient) DeployImageToTestSlot(_ context.Context, actorEmail
 		f.deployResult = glimmung.DeployImageToTestSlotResult{Lease: "lease-1", Job: "deploy-1", Status: "running", GitRef: body.GitRef}
 	}
 	return f.deployResult, nil
+}
+
+func (f *fakeGlimmungClient) ExtendTestSlotLease(_ context.Context, actorEmail string, body glimmung.ExtendTestSlotRequest) (glimmung.ExtendTestSlotResult, error) {
+	f.extendCalls++
+	f.extendReqEmail = actorEmail
+	f.extendReq = body
+	if f.extendResult.Lease == "" {
+		f.extendResult = glimmung.ExtendTestSlotResult{Lease: "lease-1", Project: body.Project, State: "claimed", ExtendedBy: 1800}
+	}
+	return f.extendResult, nil
 }
 
 func TestHandleReturnTestSlotReturnsOwnedLeaseAndClearsState(t *testing.T) {
