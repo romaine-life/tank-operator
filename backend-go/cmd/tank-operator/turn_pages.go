@@ -497,6 +497,18 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 				flushPendingQuestionPages(event)
 				continue
 			}
+			// Stop drives a question turn to its dismissing turn.interrupted via a
+			// preceding turn.interrupt_requested on the same turn. That pre-terminal
+			// marker is not itself a dismissal terminal, so without this guard it
+			// breaks the pending-question fold below and spills the Stop sequence
+			// into a spurious trailing activity page — which then becomes the
+			// dismissed turn's default page and strands the Turns prompt slot on
+			// "Prompt context unavailable" (#1312). Hold the fold open across it so
+			// the dismissal terminal still seals the question page; the turn shell
+			// folds the marker from the complete event set regardless.
+			if isQuestionInterruptRequested(event, pendingQuestionTurnID) {
+				continue
+			}
 			flushPendingQuestionPages(nil)
 		}
 		if isTurnAwaitingInputEvent(event) {
@@ -609,6 +621,17 @@ func isQuestionDismissalTerminal(event map[string]any, questionTurnID string) bo
 		return true
 	}
 	return false
+}
+
+// isQuestionInterruptRequested reports whether event is the turn.interrupt_requested
+// that Stop emits on the question turn before the dismissing turn.interrupted. It is
+// a pre-terminal control marker, not a dismissal terminal, so the page fold must
+// hold the pending question pages open across it instead of spilling it (and the
+// terminal that follows) into a spurious trailing activity page.
+func isQuestionInterruptRequested(event map[string]any, questionTurnID string) bool {
+	return questionTurnID != "" &&
+		transcriptString(event, "turn_id") == questionTurnID &&
+		transcriptString(event, "type") == "turn.interrupt_requested"
 }
 
 func isTurnInputAnsweredForQuestion(event map[string]any, questionTimelineID string) bool {

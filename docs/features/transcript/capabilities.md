@@ -773,6 +773,12 @@ Contract impact:
   speak through the system identity instead of floating in the column unauthored.
 - A pending `needs_input` turn defaults to the first unanswered `question_set`
   page; normal turns still default to the latest activity page.
+- A stopped or dismissed question turn folds its terminal sequence — the Stop
+  `turn.interrupt_requested` plus the dismissing `turn.interrupted`, or any other
+  non-answer terminal — onto its question page(s) rather than a trailing
+  `activity` page. Without this the Stop pre-terminal marker spilled a spurious
+  `activity` page that a dismissed turn (defaulting to its last page) opened on,
+  stranding the Turns prompt slot on "Prompt context unavailable" (#1312).
 - `answered` is derived from a durable fact (a later `turn.input_answered` event
   whose `payload.question_timeline_id` matches), never a local "I submitted"
   flag, so historical replay matches live.
@@ -784,6 +790,10 @@ Evidence:
   `turn.awaiting_input` creates the compact invocation marker page, starts a
   `question_set` page for each question, keeps a shared durable answer set, and
   seals an answered set before resumed activity.
+  `TestProjectTurnPagesQuestionOnlyTurnStopFoldsIntoSingleQuestionPage` proves a
+  Stopped question turn (`turn.interrupt_requested` → `turn.interrupted`) folds
+  onto a single question page with no spurious trailing activity page, so the
+  dismissed turn still defaults to its question page.
 - Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   proves an unanswered `needs_input` turn defaults to the question page.
 - Frontend: `frontend/src/migrationPolicy.test.ts` proves the main transcript
