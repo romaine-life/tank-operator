@@ -96,6 +96,7 @@ const (
 	EventShellTaskExited             EventType = "shell_task.exited"
 	EventScheduledWakeupUpdated      EventType = "scheduled_wakeup.updated"
 	EventCIStatusUpdated             EventType = "ci_status.updated"
+	EventTestProvisionUpdated        EventType = "test_provision.updated"
 	EventTurnAwaitingInput           EventType = "turn.awaiting_input"
 	EventTurnAwaitingInputInvocation EventType = "turn.awaiting_input.invocation"
 )
@@ -302,6 +303,14 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("ci_status.updated must be actor=system source=tank")
 		}
 		return validateCIStatusPayload(event)
+	case EventTestProvisionUpdated:
+		if err := requireFields(event, "timeline_id", "client_nonce"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("test_provision.updated must be actor=system source=tank")
+		}
+		return validateTestProvisionPayload(event)
 	case EventTurnAwaitingInput:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -761,6 +770,29 @@ func validateCIStatusPayload(event map[string]any) error {
 	return nil
 }
 
+// validateTestProvisionPayload enforces the test_provision.updated payload: a
+// display-only progress record for the deterministic interactive test-slot
+// workflow. Each record is one phase of one provision run (grouped by run_id),
+// projected to a role:system message so the user sees the workflow advance.
+func validateTestProvisionPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "kind") != "test_provision" {
+		return fmt.Errorf("payload.kind must be test_provision for %s", stringField(event, "type"))
+	}
+	switch stringField(payload, "phase") {
+	case "creating", "validating", "waiting", "ready", "error":
+	default:
+		return fmt.Errorf("payload.phase is invalid for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "text") == "" {
+		return fmt.Errorf("payload.text is required for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 func validateTurnInputAnsweredPayload(event map[string]any) error {
 	payload, err := requirePayload(event)
 	if err != nil {
@@ -938,6 +970,7 @@ func validEventType(eventType EventType) bool {
 		EventShellTaskExited,
 		EventScheduledWakeupUpdated,
 		EventCIStatusUpdated,
+		EventTestProvisionUpdated,
 		EventTurnAwaitingInput,
 		EventTurnAwaitingInputInvocation:
 		return true

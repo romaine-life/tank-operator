@@ -1911,6 +1911,50 @@ func TestProjectTranscriptEventsHidesFailedBackgroundWakeContinuationFromMainTra
 	}
 }
 
+// TestProjectTranscriptEventsRendersTestProvisionThread proves the
+// test_provision.updated records project to top-level role:system messages with
+// distinct timeline_ids (so they append + group under one system avatar) and
+// that the terminal ready record carries a click-through action to the
+// test-environment URL.
+func TestProjectTranscriptEventsRendersTestProvisionThread(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("p1", "001", "test_provision.updated", "system", "tank", "", "test-provision:run-1:creating", map[string]any{
+			"kind": "test_provision", "run_id": "run-1", "phase": "creating", "severity": "info", "text": "Creating test slot.",
+		}),
+		projectionTestEvent("p2", "002", "test_provision.updated", "system", "tank", "", "test-provision:run-1:validating", map[string]any{
+			"kind": "test_provision", "run_id": "run-1", "phase": "validating", "severity": "info", "text": "Validating PR readiness…",
+		}),
+		projectionTestEvent("p3", "003", "test_provision.updated", "system", "tank", "", "test-provision:run-1:ready", map[string]any{
+			"kind": "test_provision", "run_id": "run-1", "phase": "ready", "severity": "info",
+			"text": "Test environment ready at https://slot-1.example/", "url": "https://slot-1.example/",
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	var msgs []map[string]any
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "message" && entry["role"] == "system" {
+			msgs = append(msgs, entry)
+		}
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("projected system messages = %d, want 3: %#v", len(msgs), projection.Entries)
+	}
+	wantIDs := []string{"test-provision:run-1:creating", "test-provision:run-1:validating", "test-provision:run-1:ready"}
+	for i, want := range wantIDs {
+		if got, _ := msgs[i]["id"].(string); got != want {
+			t.Fatalf("message[%d] id=%q, want %q", i, got, want)
+		}
+	}
+	action, ok := msgs[2]["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("ready message should carry an action: %#v", msgs[2])
+	}
+	if href, _ := action["href"].(string); href != "https://slot-1.example/" {
+		t.Fatalf("ready action href=%q, want the test-environment URL", href)
+	}
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,

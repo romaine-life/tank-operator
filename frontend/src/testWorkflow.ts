@@ -6,8 +6,9 @@
 // governed-PR readiness server-side and provisions a Glimmung test slot only on
 // a green/mergeable verdict. The endpoint returns 202 immediately (validation
 // can take minutes); the outcome then surfaces through the existing test-state
-// pill (provisioned) or a `ci_status.updated` record in the turns view
-// (refused, with the reason).
+// pill (provisioned) and the durable `test_provision.updated` thread the backend
+// emits — opener → validating/waiting → terminal ready/refusal — which renders
+// inline as a grouped role:system thread in the turns view.
 
 export function testWorkflowStartPath(sessionId: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}/test-workflow/start`;

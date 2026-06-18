@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
@@ -213,24 +214,48 @@ func (s *appServer) pickTestWorkflowRepo(ctx context.Context, sessionID string, 
 
 // runInteractiveTestWorkflow runs the gated validate→wait→provision sequence for
 // the interactive trigger off the request path (it can wait minutes for CI to
-// settle) and surfaces the outcome durably. On a ready verdict the gate's
-// SetTestState already marked the slot active + URL; on any refusal the gate
-// left glimmung and test-state untouched, so the refusal reason is surfaced as a
-// display-only ci_status.updated record the turns view renders. It uses a fresh
+// settle) and surfaces the outcome durably as a grouped role:system thread of
+// test_provision.updated records: an opener on kickoff, intermediate
+// validating/waiting updates as the gate advances, and a terminal ready/refusal
+// record. On a ready verdict the gate's SetTestState already marked the slot
+// active + URL; on any refusal the gate left glimmung and test-state untouched,
+// so the refusal reason is the terminal record's text. It uses a fresh
 // background context budgeted for the settle cap plus deploy grace, not a
 // possibly-canceled request ctx.
 func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.provisionBackgroundTimeout())
 	defer cancel()
 
-	outcome, err := s.provisionTestSlotForSession(ctx, req)
+	runID := s.newTestProvisionRunID()
 	repo := req.RepoOwner + "/" + req.RepoName
+
+	// Opener: the user sees the workflow start immediately, before the gate's
+	// (potentially minutes-long) validate+wait runs.
+	s.emitTestProvisionRecord(ctx, req, runID, "creating", "info", "Creating test slot.", "")
+
+	// Intermediate progress: the gate calls back as it advances. Each phase is
+	// emitted at most once per run (the closure dedupes).
+	emitted := map[string]bool{}
+	req.progress = func(phase string) {
+		if emitted[phase] {
+			return
+		}
+		emitted[phase] = true
+		switch phase {
+		case "validating":
+			s.emitTestProvisionRecord(ctx, req, runID, "validating", "info", "Validating PR readiness…", "")
+		case "waiting":
+			s.emitTestProvisionRecord(ctx, req, runID, "waiting", "info", "Waiting for CI to settle…", "")
+		}
+	}
+
+	outcome, err := s.provisionTestSlotForSession(ctx, req)
 	if err != nil {
 		recordTestSlotInteractive("error")
 		slog.Warn("interactive test workflow gate failed",
 			"session_id", req.SessionID, "repo", repo, "branch", req.Branch, "error", err)
-		s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, "failed",
-			"Could not start the test workflow for "+req.Branch+": "+err.Error())
+		s.emitTestProvisionRecord(ctx, req, runID, "error", "error",
+			"Couldn't create test slot: "+err.Error(), "")
 		// Infra error: terminalize 'failed' so the backstop only recovers a
 		// restart-stranded record, not a deterministic infra failure loop.
 		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionFailed, "gate error: "+err.Error())
@@ -238,25 +263,42 @@ func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
 	}
 	if outcome.Provisioned {
 		recordTestSlotInteractive(provisionStepProvisioned)
-		detail := strings.TrimSpace(outcome.Detail)
-		if detail == "" {
-			detail = "Test environment provisioned for " + req.Branch + "."
+		url := testProvisionOutcomeURL(outcome)
+		text := "Test environment ready."
+		if url != "" {
+			text = "Test environment ready at " + url
 		}
-		s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, "ready", detail)
-		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, detail)
+		s.emitTestProvisionRecord(ctx, req, runID, "ready", "info", text, url)
+		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, strings.TrimSpace(outcome.Detail))
 		return
 	}
 
 	// Refusal: surface the reason so the user sees why no environment came up.
 	recordTestSlotInteractive(string(outcome.Verdict))
-	detail := strings.TrimSpace(outcome.Detail)
-	if detail == "" {
-		detail = "Test environment not provisioned for " + req.Branch + " (" + string(outcome.Verdict) + ")."
+	reason := strings.TrimSpace(outcome.Detail)
+	if reason == "" {
+		reason = "no test environment for " + req.Branch + " (" + string(outcome.Verdict) + ")"
 	}
-	s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, testWorkflowStatusState(outcome.Verdict), detail)
+	s.emitTestProvisionRecord(ctx, req, runID, "error", "error", "Couldn't create test slot: "+reason, "")
 	// A gate refusal is a reached verdict, not a strand: terminalize 'done' so
 	// the backstop does not re-drive a legitimately-refused provision.
-	s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, detail)
+	s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, reason)
+}
+
+// newTestProvisionRunID derives a per-run identifier so the phases of one
+// interactive provision run thread together (and a later re-run renders as a
+// fresh thread). Uses the gate's clock so a fake clock keeps tests stable.
+func (s *appServer) newTestProvisionRunID() string {
+	return strconv.FormatInt(s.provisionNowTime().UTC().UnixNano(), 36)
+}
+
+// testProvisionOutcomeURL returns the provisioned test-environment URL from a
+// ready outcome, if the glimmung checkout reported one.
+func testProvisionOutcomeURL(outcome provisionOutcome) string {
+	if outcome.Checkout.URL != nil {
+		return strings.TrimSpace(*outcome.Checkout.URL)
+	}
+	return ""
 }
 
 // markInteractiveProvisionTerminal closes the durable pending record for an
@@ -266,61 +308,34 @@ func (s *appServer) markInteractiveProvisionTerminal(ctx context.Context, req pr
 		pgstore.PendingTestProvisionInteractive, status, detail, headSHA)
 }
 
-// emitTestWorkflowStatusRecord writes a display-only ci_status.updated event to
-// the session ledger so the interactive test-workflow outcome (and especially a
-// refusal reason) is visible in the turns view — not only in logs. Mirrors
-// emitCIStatusRecord / emitOrchestrationPhaseStatusRecord. PR number/URL are
-// best-effort from the session's CI-watch record; absent one, the branch tree
-// URL is used.
-func (s *appServer) emitTestWorkflowStatusRecord(ctx context.Context, req provisionTestSlotRequest, headSHA, state, detail string) {
+// emitTestProvisionRecord writes a display-only test_provision.updated event to
+// the session ledger so one phase of the interactive test-workflow run is
+// visible inline as a grouped role:system thread — not only in logs. Each phase
+// (creating → validating → waiting → ready/error) carries its own timeline_id
+// keyed by runID, so the records append in order and group under one system
+// avatar. The ci_status.updated emission this replaced never rendered inline
+// (no projection case existed for it), so the prior outcome records were
+// invisible.
+func (s *appServer) emitTestProvisionRecord(ctx context.Context, req provisionTestSlotRequest, runID, phase, severity, text, url string) {
 	if s.sessionEvents == nil {
 		return
 	}
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, req.SessionID)
-	repo := req.RepoOwner + "/" + req.RepoName
-	prNumber := 0
-	prURL := "https://github.com/" + repo + "/tree/" + req.Branch
-	if s.ciWatches != nil {
-		if watch, err := s.ciWatches.GetLatestForSession(ctx, s.sessionScope, req.SessionID); err == nil &&
-			strings.EqualFold(strings.TrimSpace(watch.PROwner), req.RepoOwner) &&
-			strings.EqualFold(strings.TrimSpace(watch.PRName), req.RepoName) {
-			if watch.PRNumber > 0 {
-				prNumber = watch.PRNumber
-			}
-			if strings.TrimSpace(watch.PRURL) != "" {
-				prURL = strings.TrimSpace(watch.PRURL)
-			}
-		}
-	}
-	event := conversation.CIStatusUpdatedEventMap(conversation.CIStatusUpdatedArgs{
+	event := conversation.TestProvisionUpdatedEventMap(conversation.TestProvisionUpdatedArgs{
 		SessionID:         req.SessionID,
 		SessionStorageKey: storageKey,
 		Email:             req.OwnerEmail,
-		Repo:              repo,
-		PRNumber:          prNumber,
-		PRURL:             prURL,
-		HeadSHA:           strings.TrimSpace(headSHA),
-		State:             state,
-		Detail:            detail,
+		RunID:             runID,
+		Phase:             phase,
+		Severity:          severity,
+		Text:              text,
+		Repo:              req.RepoOwner + "/" + req.RepoName,
+		Branch:            req.Branch,
+		URL:               url,
 	})
 	if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
-		slog.Warn("interactive test workflow status record persist failed",
-			"session", req.SessionID, "error", err)
-	}
-}
-
-// testWorkflowStatusState maps a refusal verdict to the ci_status.updated `state`
-// the turns view renders. Conflict and merged keep their own states; every other
-// refusal (failed checks, settle timeout, head moved, infra error) surfaces as
-// "failed" so the UI reflects that no environment came up.
-func testWorkflowStatusState(v provisionVerdict) string {
-	switch v {
-	case provisionVerdictConflict:
-		return "conflict"
-	case provisionVerdictMerged:
-		return "merged"
-	default:
-		return "failed"
+		slog.Warn("interactive test workflow provision record persist failed",
+			"session", req.SessionID, "phase", phase, "error", err)
 	}
 }
 

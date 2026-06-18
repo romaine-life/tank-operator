@@ -130,6 +130,7 @@
         "shell_task.exited",
         "scheduled_wakeup.updated",
         "ci_status.updated",
+        "test_provision.updated",
         "turn.awaiting_input",
         "turn.awaiting_input.invocation"
       ]
@@ -704,6 +705,24 @@
             "properties": {
               "kind": { "const": "ci_status" },
               "state": { "enum": ["merged", "ready", "failed", "conflict"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "test_provision.updated" } }, "required": ["type"] },
+      "then": {
+        "required": ["timeline_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" },
+          "payload": {
+            "type": "object",
+            "required": ["kind", "phase", "text"],
+            "properties": {
+              "kind": { "const": "test_provision" },
+              "phase": { "enum": ["creating", "validating", "waiting", "ready", "error"] }
             }
           }
         }

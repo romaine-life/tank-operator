@@ -339,6 +339,8 @@ func (s *projectionState) apply(event map[string]any) {
 		s.upsertBackgroundTask(event, status)
 	case "scheduled_wakeup.updated":
 		s.upsertScheduledWakeup(event)
+	case "test_provision.updated":
+		s.applyTestProvision(event)
 	case "turn.awaiting_input":
 		// The agent asked the user a question as the Tank-visible response.
 		// The durable question set owns the Turn question page; the main
@@ -619,6 +621,47 @@ func (s *projectionState) applySessionStatus(event map[string]any) {
 	}
 	if action := transcriptPayloadMap(event, "action"); action != nil {
 		entry["action"] = action
+	}
+	s.messages = append(s.messages, projectedEntryItem{
+		entry:    entry,
+		orderKey: transcriptString(event, "order_key"),
+		index:    len(s.messages),
+	})
+}
+
+// applyTestProvision projects a display-only test_provision.updated record as a
+// top-level role:system message. Each phase of one interactive test-slot
+// provision run (creating → validating → waiting → ready/error) carries its own
+// timeline_id, so the messages append in order and group under one system
+// avatar (the adjacent-system-message grouping path). Unlike happy-path
+// session.status lifecycle these are NOT marked with sessionStatus, so they are
+// never folded into a turn — they are deliberate, conversation-altitude
+// feedback for a zero-LLM workflow that has no owning turn. A terminal "ready"
+// record may carry the test-environment URL as a click-through action.
+func (s *projectionState) applyTestProvision(event map[string]any) {
+	text := transcriptPayloadString(event, "text")
+	if transcriptString(event, "timeline_id") == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	entry := map[string]any{
+		"id":            transcriptString(event, "timeline_id"),
+		"kind":          "message",
+		"role":          "system",
+		"text":          strings.TrimSpace(text),
+		"time":          transcriptString(event, "created_at"),
+		"sourceEventId": transcriptString(event, "event_id"),
+		"orderKey":      transcriptString(event, "order_key"),
+	}
+	if transcriptPayloadString(event, "severity") == "error" {
+		entry["severity"] = "error"
+	} else {
+		entry["severity"] = "info"
+	}
+	if url := strings.TrimSpace(transcriptPayloadString(event, "url")); url != "" {
+		entry["action"] = map[string]any{
+			"label": "Open test environment",
+			"href":  url,
+		}
 	}
 	s.messages = append(s.messages, projectedEntryItem{
 		entry:    entry,

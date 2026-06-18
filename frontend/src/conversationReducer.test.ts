@@ -125,6 +125,83 @@ test("session status events replay as durable system messages", () => {
   expect(state.runStatus).toBe("ready");
 });
 
+function provisionEv(
+  phase: string,
+  fields: Partial<TankConversationEvent> = {},
+): TankConversationEvent {
+  return ev(`test-provision:run-1:${phase}`, "test_provision.updated", {
+    actor: "system",
+    source: "tank",
+    timeline_id: `test-provision:run-1:${phase}`,
+    client_nonce: "test-provision-run-1",
+    payload: { kind: "test_provision", run_id: "run-1", phase, text: phase },
+    ...fields,
+  });
+}
+
+test("test_provision.updated records are valid Tank envelopes", () => {
+  expect(isTankConversationEvent(provisionEv("creating"))).toBe(true);
+  // Bogus phase is rejected.
+  expect(
+    isTankConversationEvent(
+      provisionEv("creating", {
+        payload: { kind: "test_provision", run_id: "run-1", phase: "bogus", text: "x" },
+      }),
+    ),
+  ).toBe(false);
+});
+
+test("test_provision thread replays as a grouped role:system thread", () => {
+  const state = reduceConversationEvents([
+    provisionEv("creating", {
+      created_at: "2026-06-18T10:00:00.000Z",
+      payload: { kind: "test_provision", run_id: "run-1", phase: "creating", text: "Creating test slot." },
+    }),
+    provisionEv("validating", {
+      created_at: "2026-06-18T10:00:01.000Z",
+      payload: { kind: "test_provision", run_id: "run-1", phase: "validating", text: "Validating PR readiness…" },
+    }),
+    provisionEv("ready", {
+      created_at: "2026-06-18T10:00:30.000Z",
+      payload: {
+        kind: "test_provision",
+        run_id: "run-1",
+        phase: "ready",
+        severity: "info",
+        text: "Test environment ready at https://slot-1.example/",
+        url: "https://slot-1.example/",
+      },
+    }),
+  ]);
+
+  expect(state.messages.map((m) => m.role)).toEqual(["system", "system", "system"]);
+  expect(state.messages.map((m) => m.id)).toEqual([
+    "test-provision:run-1:creating",
+    "test-provision:run-1:validating",
+    "test-provision:run-1:ready",
+  ]);
+  expect(state.messages[2].action).toEqual({
+    label: "Open test environment",
+    href: "https://slot-1.example/",
+  });
+});
+
+test("test_provision error phase carries error severity", () => {
+  const state = reduceConversationEvents([
+    provisionEv("error", {
+      payload: {
+        kind: "test_provision",
+        run_id: "run-1",
+        phase: "error",
+        severity: "error",
+        text: "Couldn't create test slot: CI failed.",
+      },
+    }),
+  ]);
+  expect(state.messages).toHaveLength(1);
+  expect(state.messages[0].severity).toBe("error");
+});
+
 test("Normal turn reaches ready with one user message and assistant item", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {
