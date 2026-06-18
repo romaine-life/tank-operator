@@ -59,6 +59,18 @@ export interface ChatComposerProps {
   initialText?: string;
   /** Fires whenever the textarea's content changes — including programmatic clears. */
   onTextChange?: (text: string) => void;
+  /**
+   * When set, the composer is bound to a pending AskUserQuestion as the single
+   * answer input — so the question screen never shows two text boxes. The send
+   * button becomes a labelled Submit, Enter submits the assembled answer, the
+   * placeholder teaches the mechanic, and the selected option chips render
+   * above the field so it is obvious the picker fills this one box.
+   */
+  answerMode?: {
+    label: string;
+    canSubmit: boolean;
+    onSubmit: () => void;
+  };
 }
 
 function ComposerTextPreview({ text }: { text: string }) {
@@ -91,6 +103,7 @@ export function ChatComposer({
   toolButtons,
   initialText,
   onTextChange,
+  answerMode,
 }: ChatComposerProps) {
   // Internal mirror of the textarea's value so the hint can fade without
   // making the textarea itself controlled
@@ -142,13 +155,22 @@ export function ChatComposer({
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
       if (!canSubmit) return;
+      if (answerMode) {
+        // Answering a pending question: Enter submits the assembled answer
+        // (current selections + this typed text), not a new chat turn.
+        if (!answerMode.canSubmit) return;
+        answerMode.onSubmit();
+        setText("");
+        onTextChange?.("");
+        return;
+      }
       onSubmit({ text: message.text });
       // PromptInput auto-clears after a sync onSubmit; reflect that in our
       // mirror so the hint un-fades.
       setText("");
       onTextChange?.("");
     },
-    [canSubmit, onSubmit, onTextChange],
+    [answerMode, canSubmit, onSubmit, onTextChange],
   );
 
   const handleSubmitCapture = useCallback<FormEventHandler<HTMLFormElement>>(
@@ -214,20 +236,53 @@ export function ChatComposer({
               {hintText}
             </span>
           )}
-          <PromptInputSubmit
-            className="run-submit-btn"
-            status={submitStatus}
-            onStop={onStop}
-            isStopping={isStopping}
-            disabled={disabled}
-          >
-            {submitStatus ? undefined : (
-              <SendHorizontalIcon
-                className="run-submit-icon"
-                aria-hidden="true"
-              />
-            )}
-          </PromptInputSubmit>
+          {answerMode ? (
+            <button
+              type="button"
+              className="run-answer-submit"
+              onClick={() => {
+                if (answerMode.canSubmit) answerMode.onSubmit();
+              }}
+              disabled={!answerMode.canSubmit}
+              aria-label={answerMode.label}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                height: "32px",
+                width: "auto",
+                padding: "0 16px",
+                borderRadius: "8px",
+                fontSize: "13px",
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+                color: answerMode.canSubmit
+                  ? "rgb(255,255,255)"
+                  : "rgb(150,150,150)",
+                background: answerMode.canSubmit
+                  ? "rgb(37,99,235)"
+                  : "rgba(255,255,255,0.06)",
+                border: "none",
+                cursor: answerMode.canSubmit ? "pointer" : "not-allowed",
+              }}
+            >
+              {answerMode.label}
+            </button>
+          ) : (
+            <PromptInputSubmit
+              className="run-submit-btn"
+              status={submitStatus}
+              onStop={onStop}
+              isStopping={isStopping}
+              disabled={disabled}
+            >
+              {submitStatus ? undefined : (
+                <SendHorizontalIcon
+                  className="run-submit-icon"
+                  aria-hidden="true"
+                />
+              )}
+            </PromptInputSubmit>
+          )}
         </PromptInputFooter>
       </PromptInput>
     </div>
