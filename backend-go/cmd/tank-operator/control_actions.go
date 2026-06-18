@@ -58,9 +58,13 @@ type hotSwapVerificationResponse struct {
 	Branch           string   `json:"branch"`
 	SHA              string   `json:"sha"`
 	PRNumber         *int     `json:"pr_number,omitempty"`
+	PRURL            string   `json:"pr_url,omitempty"`
+	ReadinessState   string   `json:"readiness_state,omitempty"`
 	PublishVerified  bool     `json:"publish_verified"`
 	CIVerified       bool     `json:"ci_verified"`
 	MergeVerified    bool     `json:"merge_verified"`
+	CheckState       string   `json:"check_state,omitempty"`
+	MergeableState   string   `json:"mergeable_state,omitempty"`
 	ValidationTarget string   `json:"validation_target,omitempty"`
 	SourceTool       string   `json:"source_tool,omitempty"`
 }
@@ -1577,6 +1581,29 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 		return
 	}
 	resp := evaluateHotSwapVerification(rows, owner, name, branch, sha)
+	if s.mcpGitHub != nil && s.ciWatches != nil {
+		resp = evaluateHotSwapPublishVerification(rows, owner, name, branch, sha)
+		registered, err := s.registerAndReconcilePRReadiness(r.Context(), prReadinessRegistration{
+			SessionID:       sessionID,
+			OwnerEmail:      user.ActorEmail,
+			PROwner:         owner,
+			PRName:          name,
+			Branch:          branch,
+			ExpectedHeadSHA: sha,
+			CheckState:      "pending",
+			Detail:          "PR readiness registered for hot-swap/test-slot gate.",
+		}, ciWatchReconcileHandoff)
+		if err != nil {
+			resp.Reasons = append(resp.Reasons, "live PR readiness unavailable: "+err.Error())
+		} else {
+			if registered.Watch.PRNumber > 0 {
+				prNumber := registered.Watch.PRNumber
+				resp.PRNumber = &prNumber
+			}
+			applyHotSwapReadinessResult(&resp, registered.Result, sha)
+		}
+		resp.Allowed = resp.PublishVerified && resp.CIVerified && resp.MergeVerified && len(resp.Reasons) == 0
+	}
 	resp.Repo = repo
 	resp.Branch = branch
 	resp.SHA = sha
@@ -1584,6 +1611,10 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 	resp.SourceTool = strings.TrimSpace(body.SourceTool)
 	if resp.Allowed {
 		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if resp.ReadinessState == "watching" || strings.EqualFold(resp.CheckState, "pending") || strings.Contains(strings.Join(resp.Reasons, " "), "watching") {
+		writeJSON(w, http.StatusAccepted, resp)
 		return
 	}
 	writeJSON(w, http.StatusConflict, resp)
@@ -1987,6 +2018,90 @@ func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo,
 	}
 	resp.Allowed = resp.PublishVerified && resp.CIVerified && resp.MergeVerified
 	return resp
+}
+
+func evaluateHotSwapPublishVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) hotSwapVerificationResponse {
+	resp := hotSwapVerificationResponse{}
+	sawPublish := false
+	for _, row := range rows {
+		if row.RepoOwner != owner || row.RepoName != repo || !strings.EqualFold(row.ResultSHA, sha) {
+			continue
+		}
+		switch row.Action {
+		case "github.commit.push", "github.break_glass.push":
+			if sawPublish {
+				continue
+			}
+			if controlActionPayloadString(row.Payload, "branch") != branch {
+				continue
+			}
+			sawPublish = true
+			if row.Status == "succeeded" {
+				resp.PublishVerified = true
+			} else {
+				resp.Reasons = append(resp.Reasons, "latest governed publish for this commit has not succeeded")
+			}
+		}
+	}
+	if !sawPublish {
+		resp.Reasons = append(resp.Reasons, "no governed publish record exists for this commit on this branch")
+	}
+	return resp
+}
+
+func applyHotSwapReadinessResult(resp *hotSwapVerificationResponse, result ciWatchReconcileResult, sha string) {
+	resp.ReadinessState = ciWatchToolState(result.Status)
+	resp.CheckState = result.CheckState
+	resp.MergeableState = result.MergeableState
+	resp.PRURL = strings.TrimSpace(result.PRURL)
+
+	headOK := strings.EqualFold(strings.TrimSpace(result.HeadSHA), sha)
+	if !headOK {
+		resp.Reasons = append(resp.Reasons, "open PR head is "+shortSHAForMessage(result.HeadSHA)+", not requested SHA "+shortSHAForMessage(sha))
+	}
+
+	if strings.EqualFold(result.CheckState, "success") && len(result.FailingChecks) == 0 {
+		resp.CIVerified = true
+	} else {
+		detail := strings.TrimSpace(result.Detail)
+		if detail == "" {
+			detail = "checks are pending"
+		}
+		resp.Reasons = append(resp.Reasons, "CI for "+shortSHAForMessage(sha)+" is not green: "+detail)
+	}
+
+	if strings.EqualFold(result.MergeableState, "clean") && result.Status != pgstore.CIWatchConflict {
+		resp.MergeVerified = true
+	} else {
+		stateText := strings.TrimSpace(result.MergeableState)
+		if stateText == "" {
+			stateText = "unknown"
+		}
+		resp.Reasons = append(resp.Reasons, "PR is not confirmed mergeable/current: "+stateText)
+	}
+
+	switch result.Status {
+	case pgstore.CIWatchReady:
+		if headOK {
+			resp.CIVerified = true
+			resp.MergeVerified = true
+		}
+	case pgstore.CIWatchWatching:
+		resp.Reasons = append(resp.Reasons, "PR readiness is watching: "+strings.TrimSpace(result.Detail))
+	case pgstore.CIWatchMerged:
+		resp.Reasons = append(resp.Reasons, "PR is already merged")
+	}
+}
+
+func shortSHAForMessage(sha string) string {
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return "unknown"
+	}
+	if len(sha) <= 12 {
+		return sha
+	}
+	return sha[:12]
 }
 
 func controlActionPayloadString(payload json.RawMessage, key string) string {

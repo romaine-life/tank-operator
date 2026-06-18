@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Terminal Action</title>
+</head>
+<body style="margin:0;font-family:Arial,Helvetica,sans-serif;color:#172126;background:#eef4f5;line-height:1.45;">
+  <main style="max-width:1180px;margin:0 auto;padding:32px 16px 48px;">
+    <header style="margin-bottom:24px;">
+      <h1 style="margin:0 0 8px;font-size:36px;line-height:1.1;">Terminal Action</h1>
+      <p style="max-width:860px;margin:0;color:#536168;font-size:17px;">Reconcile only acts on aggregate state transitions. Red and conflict wake the agent; ready allows human merge or orchestration auto-merge; pending leaves the watch active.</p>
+      <div aria-label="CI watch diagram pages" style="display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0;">
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Overview</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Agent handoff</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Webhook trigger</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #c7d3d7;border-radius:8px;padding:7px 11px;background:#ffffff;color:#172126;font-size:13px;font-weight:700;">Aggregate reconcile</span>
+        <span style="display:inline-flex;align-items:center;min-height:36px;border:1px solid #9aa8ae;border-radius:8px;padding:7px 11px;background:#eef4f5;color:#172126;font-size:13px;font-weight:700;">Terminal action</span>
+      </div>
+      <p style="margin:12px 0 0;color:#536168;font-size:13px;">Tank renders each HTML file as an isolated sandboxed page. Open lane files directly from the file list or from chat links outside this preview; in-page navigation is intentionally plain text.</p>
+    </header>
+
+    <section aria-label="Terminal action lane" style="border:1px solid #c7d3d7;background:#ffffff;border-radius:8px;box-shadow:0 18px 50px rgba(30,47,55,0.10);">
+      <div style="display:block;padding:22px;">
+        <div style="display:flex;flex-direction:column;gap:14px;min-width:0;max-width:780px;margin:0 auto;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f8d9d4;">
+            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Red</strong>
+            <span style="color:#536168;font-size:13px;">Set watch status=failed and wake the session to fix CI.</span>
+          </div>
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#f8d9d4;">
+            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Conflict</strong>
+            <span style="color:#536168;font-size:13px;">Set watch status=conflict and wake the session to rebase or resolve.</span>
+          </div>
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#dcebe0;">
+            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Ready</strong>
+            <span style="color:#536168;font-size:13px;">Set watch status=ready for human merge or orchestration auto-merge.</span>
+          </div>
+            <div style="border:1px solid #c7d3d7;border-radius:8px;padding:14px;min-height:86px;background:#ffffff;background:#fff3cc;">
+            <strong style="display:block;font-size:16px;line-height:1.2;margin-bottom:6px;">Pending</strong>
+            <span style="color:#536168;font-size:13px;">Refresh watch detail and last_event_at; keep status=watching.</span>
+          </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+  </main>
+</body>
+</html>

@@ -4,28 +4,33 @@ Named behaviors for the event-driven rollout / CI-watch surface. See
 [../../event-driven-rollout.md](../../event-driven-rollout.md) for the design,
 and [../README.md](../README.md) for how capability ledgers are used.
 
-## authoritative-pr-read
+## pr-readiness-request
 
 - **Status:** shipped
-- **Intent:** The agent never reads GitHub mergeability itself. `watch_current_session_pr`
-  resolves GitHub's *asynchronous* `mergeable_state` (polling past `unknown`) plus
-  auditable CI evidence, and returns `conflict | failed | ready | watching`. Exact
+- **Intent:** Tank owns a neutral PR/head readiness process. `watch_current_session_pr`
+  and the hot-swap/test-slot gate both register the same readiness request via
+  `POST /api/internal/sessions/{id}/pr-readiness`; older `/ci-watches` callers are
+  compatibility facades. The backend reducer reads GitHub's live
+  `mergeable_state` plus auditable CI evidence and returns
+  `conflict | failed | ready | watching`. When GitHub reports
+  `mergeable=null` / `unknown`, the backend schedules a narrow deduped retry for
+  the same PR head instead of treating any webhook payload as terminal. Exact
   head-SHA check runs satisfy a check directly. A missing path-filtered check can
   satisfy only when Tank finds the same PR branch's prior green run and proves no
   commit since that run changed the workflow's `pull_request.paths` inputs. This is
   the fix for both the "reports it's good while the PR actually has a conflict" class
   and the "path-filtered checks never appear on unchanged HEAD" class.
-- **Durable source:** `session_ci_watches` row (status `watching`) registered via
-  `POST /api/internal/sessions/{id}/ci-watches`; per-check CI evidence is recorded in
-  the `github.commit.ci` control-action payload.
+- **Durable source:** `session_ci_watches` row (status `watching`) registered by the
+  Tank PR-readiness endpoint; legacy `github.commit.ci` control-action payloads
+  remain publish/ledger evidence, not the canonical readiness reducer.
 
 ## ci-watch-wake
 
 - **Status:** shipped
-- **Intent:** When a watched PR's *current head SHA* goes red or conflicted, Tank wakes
-  the owning session with an actionable `ci-failure` / `ci-conflict` turn (webhook
-  receiver → `enqueueSDKTurn`). The agent fixes and re-publishes. The agent is **never**
-  woken on success.
+- **Intent:** When a watched PR's *current head SHA* goes red or conflicted after a
+  live reducer read, Tank wakes the owning session with an actionable `ci-failure` /
+  `ci-conflict` turn (webhook/retry trigger → reducer → `enqueueSDKTurn`). The agent
+  fixes and re-publishes. The agent is **never** woken on success.
 - **Durable source:** `POST /webhooks/github` (HMAC-verified) → `session_ci_watches`
   reverse lookup → wake. Stale deliveries (superseded head SHA) and duplicates
   (already-terminal watch) are dropped.
@@ -46,6 +51,19 @@ and [../README.md](../README.md) for how capability ledgers are used.
   red/conflict wake can land. Once `ready`/terminal, protection drops — the originating
   session may reap, and the human merges independently.
 - **Durable source:** `ClaimIdleForReap` `NOT EXISTS (session_ci_watches ... status='watching')`.
+
+## test-slot-ci-gate
+
+- **Status:** shipped
+- **Intent:** Glimmung test-slot deployment still requires a governed publish record for
+  the exact branch/commit, but it no longer owns a separate CI/mergeability gate.
+  `/api/internal/sessions/{id}/hot-swap/verify` is now a compatibility facade over
+  the same Tank PR-readiness registration/reconcile process used by
+  `watch_current_session_pr`.
+- **Durable source:** publish proof remains the control-action ledger
+  (`github.commit.push` / `github.break_glass.push`); CI and mergeability are the
+  durable `session_ci_watches` readiness row plus live reducer output from GitHub PR
+  state.
 
 ## ci-status-record
 
@@ -82,7 +100,7 @@ and [../README.md](../README.md) for how capability ledgers are used.
 - **Intent:** Joins a phase's spoke session to the PR it opened so the merged-PR
   reverse lookup resolves at merge time. When a `running` phase's spoke registers
   its PR via the existing `watch_current_session_pr` / `POST
-  /api/internal/sessions/{id}/ci-watches` handoff, the orchestrator copies the PR
+  /api/internal/sessions/{id}/pr-readiness` handoff, the orchestrator copies the PR
   coordinates onto the phase (`MarkPhasePROpen`, status → `pr_open`). A no-op for
   ordinary (non-orchestration) sessions; never drags a `merged` phase back.
 - **Durable source:** `orchestration_phases` `pr_owner/pr_name/pr_number/pr_url`,
