@@ -80,6 +80,12 @@ type provisionTestSlotRequest struct {
 	// the autonomous path leaves it nil. Not persisted; never copied into the
 	// durable pending-provision row.
 	progress func(phase string)
+	// drive, when true, marks the interactive "Create test slot and test"
+	// variant: after a successful (ready) provision the runner wakes the
+	// session's agent with a backend-owned turn to validate the running slot.
+	// A refusal never wakes. Like progress, this is a runtime-only flag — never
+	// persisted and never copied into the durable pending-provision row.
+	drive bool
 }
 
 // provisionOutcome is the structured result the gate returns. Verdict is

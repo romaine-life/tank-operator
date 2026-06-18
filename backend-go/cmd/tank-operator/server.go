@@ -165,6 +165,14 @@ type appServer struct {
 	// launcher.
 	interactiveTestWorkflowLaunch func(provisionTestSlotRequest)
 
+	// testDriveWakeSubmit, when non-nil, replaces the real backend-owned wake
+	// turn the interactive "drive" variant submits after a ready provision
+	// (handlers_test_workflow.go → enqueueTestDriveWakeTurn). Production leaves it
+	// nil so the wake reuses enqueueSDKTurn (the ScheduleWakeup path); tests
+	// inject a capture to assert a wake was (or was not) submitted without the
+	// full sessionBus/pod machinery enqueueSDKTurn requires.
+	testDriveWakeSubmit func(ctx context.Context, req provisionTestSlotRequest, url string) (map[string]any, int, string)
+
 	// orchestrations is the deterministic multi-phase advance engine
 	// (docs/event-driven-rollout.md sibling): the merged-PR webhook calls
 	// advanceOnMerge to walk the DAG and dispatch the next ready phase's spoke,
