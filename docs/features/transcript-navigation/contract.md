@@ -146,6 +146,22 @@ yanking the viewport away from a user reading history.
   state; it never silently lists only the loaded window. The just-submitted turn
   appears immediately as the active "Current turn" (from `renderedActiveTurnId`)
   and gains its durable number when the directory refresh lands.
+- A selected turn's activity body always loads, regardless of how the turn became
+  selected. Selection is set from several paths — explicit gestures (selecting a
+  turn, opening a turn/page), the live-run follow, the deep-link route match, the
+  server route-number resolver, and the default-to-latest fallback — and the load
+  must follow the selection, not the path. Whether a load runs for the selected
+  turn is owned by a single pure, **level-triggered** gate
+  (`frontend/src/turnActivityLoadReconcile.ts`): a visible Turns pane with a
+  selected, non-terminal turn that is not already loading ALWAYS has a load
+  running. A selection path that sets the selected turn without starting a load
+  is therefore not a strand — the reconcile starts it — and the "Loading
+  activity…" body can never sit permanently with no in-flight request. This is
+  the activity-side mirror of the durable-directory load: both decide "should a
+  load be running" by reconciling desired-vs-actual, so neither can strand on a
+  selection/visibility edge it forgot to wire. Hidden panes (the tabs view keeps
+  non-routed session panes mounted) do not eagerly load; they reconcile when they
+  next become the visible Turns surface.
 - The Turns view exposes a dedicated **Page dropdown** beside the turn selector.
   It is present whenever a turn is selected; a single-page turn renders it
   **disabled** ("Page 1 of 1") rather than omitting it, and a turn that crosses
@@ -177,6 +193,13 @@ yanking the viewport away from a user reading history.
 - Reconnect and visibility changes continue from the current navigation mode:
   live-tail mode follows the tail, while historical mode preserves the anchor
   and surfaces new activity separately.
+- The selected turn's "Loading activity…" body is a transient state with a
+  guaranteed exit: it resolves to loaded content or to a retryable error, and is
+  never a permanent spinner. A selected, visible, non-terminal turn with no load
+  in flight self-heals by starting one (the level-triggered activity reconcile);
+  a hung load aborts to a retryable error via the per-load timeout. A visible
+  pane whose body stays on "Loading activity…" past the stuck threshold is a
+  user-trust failure and is reported (see Observability), not absorbed.
 - If a target message is absent from the durable transcript projection or is
   outside the durability boundary, the UI should show a clear
   unavailable-target state. Sidebar deletion by itself is not such a boundary.
@@ -228,6 +251,23 @@ yanking the viewport away from a user reading history.
   SPA emits bounded `turn-directory-request` / `turn-directory-loaded` /
   `turn-directory-error` client events so a directory load that fails (leaving
   the retryable Turns error state) is diagnosable without browser devtools.
+- A selected-turn activity body stuck on "Loading activity…" past the stuck
+  threshold is observable on the render side. The SPA emits
+  `turn-activity-selected-loading-stranded` (the body is up with the load state
+  absent/unloaded — no in-flight request) versus
+  `turn-activity-selected-loading-slow` (a load is genuinely in flight but slow),
+  and `turn-activity-selected-route-session-mismatch` when the rendering pane's
+  session id disagrees with the `/sessions/{id}` route. The named alerts are
+  `TankTurnActivitySelectedLoadingStranded` and
+  `TankTurnActivitySelectedRouteSessionMismatch`. These emit only from the
+  **visible** routed pane: a hidden pane (the tabs view keeps non-routed session
+  panes mounted) renders this screen too, but a spinner the user cannot see is
+  not a strand and a hidden pane never matches the live route, so emitting from
+  it would count one long-lived background pane's mismatches against every URL
+  the user visited. The distinction is load-bearing for diagnosis: the stranded
+  class names a load that never started (a selection path that did not reconcile)
+  and the slow class names a load that started but is slow — different fixes,
+  per `docs/diagnostic-discipline.md`.
 
 - Normal session open lands at the live tail.
 - A copied message link resolves through a durable cursor and lands on the
