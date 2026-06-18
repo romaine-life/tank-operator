@@ -8,9 +8,9 @@ and [../README.md](../README.md) for how capability ledgers are used.
 
 - **Status:** shipped
 - **Intent:** Tank owns a neutral PR/head readiness process. `watch_current_session_pr`
-  and the hot-swap/test-slot gate both register the same readiness request via
-  `POST /api/internal/sessions/{id}/pr-readiness`; older `/ci-watches` callers are
-  compatibility facades. The backend reducer reads GitHub's live
+  and the governed-merge gate both register the same readiness request via
+  `POST /api/internal/sessions/{id}/pr-readiness`; the legacy `/ci-watches`
+  registration drives the same process. The backend reducer reads GitHub's live
   `mergeable_state` plus auditable CI evidence and returns
   `conflict | failed | ready | watching`. When GitHub reports
   `mergeable=null` / `unknown`, the backend schedules a narrow deduped retry for
@@ -52,15 +52,19 @@ and [../README.md](../README.md) for how capability ledgers are used.
   session may reap, and the human merges independently.
 - **Durable source:** `ClaimIdleForReap` `NOT EXISTS (session_ci_watches ... status='watching')`.
 
-## test-slot-ci-gate
+## governed-merge-gate
 
 - **Status:** shipped
-- **Intent:** Glimmung test-slot deployment still requires a governed publish record for
-  the exact branch/commit, but it no longer owns a separate CI/mergeability gate.
-  `/api/internal/sessions/{id}/hot-swap/verify` is now a compatibility facade over
-  the same Tank PR-readiness registration/reconcile process used by
-  `watch_current_session_pr`.
-- **Durable source:** publish proof remains the control-action ledger
+- **Intent:** `POST /api/internal/sessions/{id}/governed-merge/verify` is the
+  server-side governed-merge gate. It composes the shared Tank PR-readiness
+  registration/reconcile process (same one `watch_current_session_pr` drives)
+  with governed-publish-proof for the exact branch/commit, and returns an
+  `allowed` / `reasons` decision. It is **not** a compatibility facade and is
+  not a test-slot deploy path — the test-slot deploy is provisioned server-side
+  by the deterministic gate. Its sole caller is the governed `merge` MCP tool in
+  the mcp-auth-proxy sidecar, which refuses to merge unless the gate returns
+  `allowed=true`.
+- **Durable source:** governed-publish-proof remains the control-action ledger
   (`github.commit.push` / `github.break_glass.push`); CI and mergeability are the
   durable `session_ci_watches` readiness row plus live reducer output from GitHub PR
   state.
@@ -118,6 +122,38 @@ and [../README.md](../README.md) for how capability ledgers are used.
   Outcomes are observable via `tank_test_slot_interactive_total{outcome}` (terminal
   outcome of the interactive trigger) plus the shared
   `tank_test_slot_validate_total` / `tank_test_slot_provision_total` gate counters.
+
+## pending-provision-backstop
+
+- **Status:** shipped (durable reconcile backstop + double-trigger guard)
+- **Intent:** The two background provisioning entry points
+  (`provisionOrchestrationReviewSlot`, `runInteractiveTestWorkflow`) run the
+  validate→settle-wait→provision gate in a fire-and-forget goroutine that can
+  wait ~23m for CI to settle. An orchestrator restart mid-wait previously dropped
+  that provision with **no retry**. This capability closes that gap, mirroring
+  the #1295 CI-watch reconcile backstop: a durable `pending_test_provisions` row
+  is written `'pending'` at kickoff (deterministic `provision_id` per
+  session/repo/branch/kind) and terminalized (`'done'` on any reached verdict
+  including a gate refusal, `'failed'` on an infra error) at finish. A reconcile
+  loop (`runPendingTestProvisionReconcileLoop`, 5m ticker, wired in `main.go`)
+  re-drives any record stranded in `'pending'` past the settle cap + grace
+  (~25m) **idempotently**: it takes a conditional `ClaimForRedrive` (attempt-gated
+  so two replicas / a double pass cannot both fire the gate — the
+  `ErrPendingTestProvisionStale` lost-race pattern), short-circuits to `'done'`
+  when a test environment is already active for the session (never
+  double-provisions), then re-invokes the same entry point. The **double-trigger
+  guard** on the interactive endpoint rides the same row: `Register`'s atomic
+  conditional `ON CONFLICT ... WHERE status <> 'pending'` admits one winner, so a
+  rapid double-click (or an already-active test environment) is refused **409**
+  instead of launching a second gate run / second glimmung checkout.
+- **Durable source:** new `pending_test_provisions` table (migrations
+  0175–0177; bounded `kind`/`status` CHECK constraints, partial index on the
+  stale-pending scan). Observable via
+  `tank_test_slot_pending_provision_oldest_age_seconds` (gauge),
+  `tank_test_slot_provision_redrive_total{kind}` (backstop re-drives), and
+  `tank_test_slot_provision_guard_total{result}` (double-trigger outcomes). The
+  `TankTestSlotProvisionStuck` alert fires on the gauge, mirroring
+  `TankCIWatchStalled`.
 
 ## ci-status-record
 

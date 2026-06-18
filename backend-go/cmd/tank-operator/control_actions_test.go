@@ -2251,7 +2251,7 @@ func TestHandleInternalGetGitBreakGlassGrantMatchesExplicitRepoListAndBranchLimi
 	}
 }
 
-func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing.T) {
+func TestHandleInternalVerifyGovernedMergeAllowsPublishedGreenMergeableHead(t *testing.T) {
 	prNumber := 1113
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	branch := "tank/session/47/tank-operator"
@@ -2285,7 +2285,7 @@ func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing
 		},
 	}
 	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/governed-merge/verify", strings.NewReader(`{
 		"repo": "romaine-life/tank-operator",
 		"branch": "`+branch+`",
 		"sha": "`+sha+`",
@@ -2296,12 +2296,12 @@ func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalVerifyHotSwap(rec, req)
+	app.handleInternalVerifyGovernedMerge(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var body hotSwapVerificationResponse
+	var body governedMergeVerificationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
@@ -2316,7 +2316,7 @@ func TestHandleInternalVerifyHotSwapAllowsPublishedGreenMergeableHead(t *testing
 	}
 }
 
-func TestHandleInternalVerifyHotSwapBlocksBehindMain(t *testing.T) {
+func TestHandleInternalVerifyGovernedMergeBlocksBehindMain(t *testing.T) {
 	prNumber := 1113
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	branch := "tank/session/47/tank-operator"
@@ -2354,7 +2354,7 @@ func TestHandleInternalVerifyHotSwapBlocksBehindMain(t *testing.T) {
 		},
 	}
 	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/governed-merge/verify", strings.NewReader(`{
 		"repo": "romaine-life/tank-operator",
 		"branch": "`+branch+`",
 		"sha": "`+sha+`"
@@ -2363,13 +2363,13 @@ func TestHandleInternalVerifyHotSwapBlocksBehindMain(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalVerifyHotSwap(rec, req)
+	app.handleInternalVerifyGovernedMerge(rec, req)
 
 	// A blocked verification returns 409 with the structured body.
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var body hotSwapVerificationResponse
+	var body governedMergeVerificationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
@@ -2389,7 +2389,7 @@ func TestHandleInternalVerifyHotSwapBlocksBehindMain(t *testing.T) {
 	}
 }
 
-func TestHandleInternalVerifyHotSwapBlocksPendingCI(t *testing.T) {
+func TestHandleInternalVerifyGovernedMergeBlocksPendingCI(t *testing.T) {
 	prNumber := 1113
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	branch := "tank/session/47/tank-operator"
@@ -2424,7 +2424,7 @@ func TestHandleInternalVerifyHotSwapBlocksPendingCI(t *testing.T) {
 		},
 	}
 	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/governed-merge/verify", strings.NewReader(`{
 		"repo": "romaine-life/tank-operator",
 		"branch": "`+branch+`",
 		"sha": "`+sha+`"
@@ -2433,12 +2433,12 @@ func TestHandleInternalVerifyHotSwapBlocksPendingCI(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalVerifyHotSwap(rec, req)
+	app.handleInternalVerifyGovernedMerge(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var body hotSwapVerificationResponse
+	var body governedMergeVerificationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
@@ -2450,7 +2450,7 @@ func TestHandleInternalVerifyHotSwapBlocksPendingCI(t *testing.T) {
 	}
 }
 
-func TestHandleInternalVerifyHotSwapBlocksWrongBranchPublish(t *testing.T) {
+func TestHandleInternalVerifyGovernedMergeBlocksWrongBranchPublish(t *testing.T) {
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	store := &fakeControlActionStore{
 		listRows: []pgstore.ControlActionEvent{{
@@ -2463,7 +2463,7 @@ func TestHandleInternalVerifyHotSwapBlocksWrongBranchPublish(t *testing.T) {
 		}},
 	}
 	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/governed-merge/verify", strings.NewReader(`{
 		"repo": "romaine-life/tank-operator",
 		"branch": "tank/session/47/tank-operator",
 		"sha": "`+sha+`"
@@ -2472,12 +2472,12 @@ func TestHandleInternalVerifyHotSwapBlocksWrongBranchPublish(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalVerifyHotSwap(rec, req)
+	app.handleInternalVerifyGovernedMerge(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var body hotSwapVerificationResponse
+	var body governedMergeVerificationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
@@ -2489,7 +2489,7 @@ func TestHandleInternalVerifyHotSwapBlocksWrongBranchPublish(t *testing.T) {
 	}
 }
 
-func TestHandleInternalVerifyHotSwapUsesBackendReducer(t *testing.T) {
+func TestHandleInternalVerifyGovernedMergeUsesBackendReducer(t *testing.T) {
 	prNumber := 1113
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	branch := "tank/session/47/tank-operator"
@@ -2536,7 +2536,7 @@ func TestHandleInternalVerifyHotSwapUsesBackendReducer(t *testing.T) {
 		CIStatus:       "succeeded",
 		HTMLURL:        "https://github.com/romaine-life/tank-operator/pull/1113",
 	}}
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/governed-merge/verify", strings.NewReader(`{
 		"repo": "romaine-life/tank-operator",
 		"branch": "`+branch+`",
 		"sha": "`+sha+`",
@@ -2546,12 +2546,12 @@ func TestHandleInternalVerifyHotSwapUsesBackendReducer(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalVerifyHotSwap(rec, req)
+	app.handleInternalVerifyGovernedMerge(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var body hotSwapVerificationResponse
+	var body governedMergeVerificationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
@@ -2567,7 +2567,7 @@ func TestHandleInternalVerifyHotSwapUsesBackendReducer(t *testing.T) {
 	}
 }
 
-func TestHandleInternalVerifyHotSwapBlocksBackendReducerPendingCI(t *testing.T) {
+func TestHandleInternalVerifyGovernedMergeBlocksBackendReducerPendingCI(t *testing.T) {
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	branch := "tank/session/47/tank-operator"
 	mergeable := true
@@ -2592,7 +2592,7 @@ func TestHandleInternalVerifyHotSwapBlocksBackendReducerPendingCI(t *testing.T) 
 		CIStatus:       "started",
 		CIError:        "pending checks: test",
 	}}
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/governed-merge/verify", strings.NewReader(`{
 		"repo": "romaine-life/tank-operator",
 		"branch": "`+branch+`",
 		"sha": "`+sha+`"
@@ -2601,12 +2601,12 @@ func TestHandleInternalVerifyHotSwapBlocksBackendReducerPendingCI(t *testing.T) 
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalVerifyHotSwap(rec, req)
+	app.handleInternalVerifyGovernedMerge(rec, req)
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var body hotSwapVerificationResponse
+	var body governedMergeVerificationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}

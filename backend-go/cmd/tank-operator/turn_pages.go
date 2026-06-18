@@ -697,6 +697,15 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		status = activityBody.Status
 	}
 	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(ownEvents), turnCompletedTerminalCount(ownEvents) > 1)
+	// An asking turn that paused on AskUserQuestion / ExitPlanMode never reaches
+	// turn.completed (the answer rotates execution onto a separate continuation
+	// turn), so the turn.completed.final_answer path above yields nothing and the
+	// Turns view would render "No turn activity". Its hand-off IS its final
+	// answer: the agent's preamble prose plus the AskUserQuestion card carrying
+	// the shortcut to the question turn.
+	if len(finalAnswerEntries) == 0 && activityBody.Summary["awaitingInputHandoff"] == true {
+		finalAnswerEntries = awaitingInputHandoffFinalAnswerEntries(activityBody.Entries, turnID, askingTurnHandoffPreambleIDs(ownEvents, turnID))
+	}
 	finalAnswerIDs = mergeFinalAnswerEntryIDs(finalAnswerIDs, finalAnswerEntries)
 	collapse := turnActivityCollapseSummary(activityBody, finalAnswerEntries, finalAnswerIDs)
 	live := turnPageStatusIsLive(status)
@@ -848,6 +857,74 @@ func turnFinalAnswerEntries(entries []map[string]any, turnID string, finalAnswer
 	}
 	if len(out) == 0 && fallback != nil {
 		next := cloneAnyMap(fallback)
+		next["turnDetailRole"] = "final_answer"
+		out = append(out, next)
+	}
+	return out
+}
+
+// askingTurnHandoffPreambleIDs returns the timeline ids of the asking turn's
+// preamble — the assistant prose the runner snapshotted as
+// asking_turn_final_answer when it handed off to the question turn. The asking
+// turn's own assistant_message.created hand-off event carries that snapshot in
+// payload.awaiting_input.asking_turn_final_answer, using the same
+// final_answer.timeline_ids shape turn.completed uses. Empty when the agent
+// paused with no preceding prose.
+func askingTurnHandoffPreambleIDs(events []map[string]any, turnID string) map[string]bool {
+	if turnID == "" {
+		return nil
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if transcriptString(event, "turn_id") != turnID {
+			continue
+		}
+		if transcriptString(event, "type") != "assistant_message.created" {
+			continue
+		}
+		awaiting := transcriptAnyMap(transcriptPayload(event)["awaiting_input"])
+		if len(awaiting) == 0 {
+			continue
+		}
+		if ids := finalAnswerTimelineIDsFromPayload(awaiting, "asking_turn_final_answer"); len(ids) > 0 {
+			return ids
+		}
+	}
+	return nil
+}
+
+// awaitingInputHandoffFinalAnswerEntries builds the final-answer bundle for an
+// asking turn that paused on AskUserQuestion / ExitPlanMode. The hand-off is the
+// turn's terminal Tank-visible response, so it plays the final-answer role: the
+// agent's preamble prose (the asking_turn_final_answer items named by
+// preambleIDs) followed by the AskUserQuestion card, whose awaitingInput carries
+// the shortcut to the question turn. Entries are returned in display order
+// (preamble, then card) and tagged turnDetailRole=final_answer like any other
+// final answer. Returns nil when no hand-off card is present.
+func awaitingInputHandoffFinalAnswerEntries(entries []map[string]any, turnID string, preambleIDs map[string]bool) []map[string]any {
+	var preamble []map[string]any
+	var card map[string]any
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") != turnID || !isProjectedAssistantMessage(entry) {
+			continue
+		}
+		if awaiting, _ := entry["awaitingInput"].(map[string]any); len(awaiting) > 0 {
+			questionTurnID := transcriptMapString(awaiting, "questionTurnId")
+			askingTurnID := transcriptMapString(awaiting, "askingTurnId")
+			if questionTurnID != "" && questionTurnID != turnID && (askingTurnID == "" || askingTurnID == turnID) {
+				card = entry
+			}
+			continue
+		}
+		if preambleIDs[transcriptMapString(entry, "id")] {
+			preamble = append(preamble, entry)
+		}
+	}
+	if card == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(preamble)+1)
+	for _, entry := range append(preamble, card) {
+		next := cloneAnyMap(entry)
 		next["turnDetailRole"] = "final_answer"
 		out = append(out, next)
 	}

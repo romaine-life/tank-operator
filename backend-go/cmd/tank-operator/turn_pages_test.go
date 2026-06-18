@@ -487,6 +487,182 @@ func TestProjectTurnPagesAskingTurnKeepsInvocationAndQuestionProseTogether(t *te
 	if activityPage.Entries[2]["kind"] != "message" || activityPage.Entries[2]["role"] != "assistant" {
 		t.Fatalf("last activity entry = %#v, want assistant question prose", activityPage.Entries[2])
 	}
+
+	// The asking turn pauses without a turn.completed, so its hand-off plays the
+	// final-answer role: with no preamble snapshot here, the bundle is the
+	// AskUserQuestion card alone, which makes the turn collapsible.
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("hand-off final answer = %d entries, want the AskUserQuestion card: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	if awaiting, _ := proj.FinalAnswerEntries[0]["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("hand-off final answer = %#v, want the question card carrying the turn-2 shortcut", proj.FinalAnswerEntries[0])
+	}
+	if collapsible, _ := proj.Collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = false, want true once the hand-off final answer exists: %#v", proj.Collapse)
+	}
+}
+
+func TestProjectTurnPagesAskingTurnHandoffFinalAnswerIsPreamblePlusQuestionCard(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "go", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("tool-a", "00000003", "item.completed", "tool", "claude", "turn-1", "turn-1:item:a", map[string]any{
+			"kind": "tool_result", "name": "Read", "output": "x",
+		}),
+		projectionTestEvent("preamble", "00000004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:preamble", map[string]any{
+			"kind": "message", "text": "I found two deployment paths. The safer one is the staged rollout.",
+		}),
+		projectionTestEvent("invoke", "00000005", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:ask",
+			"question_turn_id": "turn-2",
+			"questions": []any{
+				map[string]any{"question": "Which path?", "options": []any{map[string]any{"label": "A"}, map[string]any{"label": "B"}}},
+			},
+		}),
+		projectionTestEvent("msg", "00000006", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+			"text":    "1. Which path?",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":       "turn-1",
+				"question_turn_id":     "turn-2",
+				"provider_item_id":     "toolu_ask",
+				"timeline_id":          "turn-2:item:ask",
+				"provider_timeline_id": "turn-1:item:ask",
+				"asking_turn_final_answer": map[string]any{
+					"timeline_ids":      []any{"turn-1:item:preamble"},
+					"provider_item_ids": []any{"assistant:preamble"},
+				},
+				"questions": []any{map[string]any{"question": "Which path?"}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+
+	// The asking turn never reaches turn.completed, but its hand-off is its final
+	// answer: the agent's preamble prose then the AskUserQuestion card.
+	if len(proj.FinalAnswerEntries) != 2 {
+		t.Fatalf("final answer entries = %d, want preamble + question card: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	preamble := proj.FinalAnswerEntries[0]
+	if got := transcriptMapString(preamble, "id"); got != "turn-1:item:preamble" {
+		t.Fatalf("first final answer id = %q, want the preamble item", got)
+	}
+	if got := transcriptMapString(preamble, "text"); got != "I found two deployment paths. The safer one is the staged rollout." {
+		t.Fatalf("preamble text = %q", got)
+	}
+	if got := transcriptMapString(preamble, "turnDetailRole"); got != "final_answer" {
+		t.Fatalf("preamble role = %q, want final_answer", got)
+	}
+	card := proj.FinalAnswerEntries[1]
+	if transcriptMapString(card, "turnDetailRole") != "final_answer" {
+		t.Fatalf("card role = %#v, want final_answer", card)
+	}
+	if awaiting, _ := card["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("second final answer = %#v, want the AskUserQuestion card with the turn-2 shortcut", card)
+	}
+
+	// Hand-off promotion makes the turn collapsible to that bundle.
+	if got := proj.Collapse["final_answer_count"]; got != 2 {
+		t.Fatalf("collapse final_answer_count = %#v, want 2", got)
+	}
+	if collapsible, _ := proj.Collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = false, want true: %#v", proj.Collapse)
+	}
+	if got := transcriptMapString(proj.Collapse, "reason"); got != "final_answer" {
+		t.Fatalf("collapse reason = %q, want final_answer", got)
+	}
+
+	// Page body and event counts are untouched — the hand-off final answer is a
+	// projection of existing rows, not a new page or durable event (contract).
+	if len(proj.Pages) != 1 || proj.Pages[0].Kind != "activity" {
+		t.Fatalf("pages = %#v, want a single activity page", proj.Pages)
+	}
+	if proj.TotalEventCount != len(events) {
+		t.Fatalf("total event count = %d, want %d (unchanged)", proj.TotalEventCount, len(events))
+	}
+}
+
+func TestProjectTurnPagesAskingTurnHandoffFinalAnswerWithoutPreambleIsCardOnly(t *testing.T) {
+	// The agent paused with no preceding prose: no asking_turn_final_answer
+	// snapshot. The bundle is the card alone — still better than "No turn
+	// activity".
+	events := []map[string]any{
+		projectionTestEvent("submitted", "00000001", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("invoke", "00000002", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:ask",
+			"question_turn_id": "turn-2",
+			"questions":        []any{map[string]any{"question": "Which path?", "options": []any{map[string]any{"label": "A"}}}},
+		}),
+		projectionTestEvent("msg", "00000003", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+			"text":    "1. Which path?",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":   "turn-1",
+				"question_turn_id": "turn-2",
+				"provider_item_id": "toolu_ask",
+				"questions":        []any{map[string]any{"question": "Which path?"}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("final answer entries = %d, want the question card only: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	if awaiting, _ := proj.FinalAnswerEntries[0]["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("final answer = %#v, want the AskUserQuestion card", proj.FinalAnswerEntries[0])
+	}
+}
+
+func TestProjectTurnPagesExitPlanModeHandoffPromotesPlanCardFinalAnswer(t *testing.T) {
+	// Plan-approval reuses the AskUserQuestion hand-off (one Approve/Request-
+	// changes question plus a plan body). Its asking turn must get the same
+	// final-answer bundle so the Turns view shows the plan + shortcut, not "No
+	// turn activity".
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "plan it", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("preamble", "00000002", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:lead", map[string]any{
+			"kind": "message", "text": "Plan written. Here it is for approval.",
+		}),
+		projectionTestEvent("invoke", "00000003", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:plan", map[string]any{
+			"provider_item_id": "toolu_plan",
+			"timeline_id":      "turn-1:item:plan",
+			"question_turn_id": "turn-2",
+			"questions":        []any{map[string]any{"question": "Approve this plan?", "options": []any{map[string]any{"label": "Approve"}, map[string]any{"label": "Request changes"}}}},
+		}),
+		projectionTestEvent("msg", "00000004", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:plan", map[string]any{
+			"text":    "1. Approve this plan?",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":   "turn-1",
+				"question_turn_id": "turn-2",
+				"provider_item_id": "toolu_plan",
+				"plan":             "## Plan\n\nDo the thing.",
+				"asking_turn_final_answer": map[string]any{
+					"timeline_ids": []any{"turn-1:item:lead"},
+				},
+				"questions": []any{map[string]any{"question": "Approve this plan?"}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.FinalAnswerEntries) != 2 {
+		t.Fatalf("final answer entries = %d, want lead-in + plan card: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	if got := transcriptMapString(proj.FinalAnswerEntries[0], "text"); got != "Plan written. Here it is for approval." {
+		t.Fatalf("first final answer text = %q, want the plan lead-in", got)
+	}
+	if awaiting, _ := proj.FinalAnswerEntries[1]["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("second final answer = %#v, want the plan-approval card", proj.FinalAnswerEntries[1])
+	}
 }
 
 func TestProjectTurnPagesQuestionOnlyTurnOwnsOnlyQuestionPages(t *testing.T) {
@@ -616,6 +792,13 @@ func TestProjectTurnPagesQuestionOnlyTurnIncludesAskingFinalAnswerContext(t *tes
 	}
 	if page.Entries[1]["metaKind"] != "awaiting_input" {
 		t.Fatalf("second entry = %#v, want awaiting input card", page.Entries[1])
+	}
+
+	// The asking turn's preamble is page context only on the question turn; it
+	// must NOT become the synthetic question turn's final answer (contract). The
+	// hand-off final-answer promotion is the asking turn's behavior alone.
+	if len(proj.FinalAnswerEntries) != 0 {
+		t.Fatalf("question turn final answer = %#v, want none (preamble stays page context only)", proj.FinalAnswerEntries)
 	}
 }
 

@@ -1086,8 +1086,8 @@ def _tank_caller_session_headers() -> dict[str, str]:
     return headers
 
 
-async def _post_tank_hot_swap_verify(http: ClientSession, service_token: str, payload: dict) -> dict:
-    url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/hot-swap/verify"
+async def _post_tank_governed_merge_verify(http: ClientSession, service_token: str, payload: dict) -> dict:
+    url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/governed-merge/verify"
     async with http.post(
         url,
         headers={"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
@@ -1097,13 +1097,13 @@ async def _post_tank_hot_swap_verify(http: ClientSession, service_token: str, pa
     try:
         body = json.loads(text) if text else {}
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Tank hot-swap verification returned invalid JSON: {text[:500]}") from exc
+        raise RuntimeError(f"Tank governed-merge verification returned invalid JSON: {text[:500]}") from exc
     if resp.status >= 400 and not isinstance(body, dict):
-        raise RuntimeError(f"Tank hot-swap verification failed with HTTP {resp.status}: {text[:500]}")
+        raise RuntimeError(f"Tank governed-merge verification failed with HTTP {resp.status}: {text[:500]}")
     if isinstance(body, dict):
         body.setdefault("http_status", resp.status)
         return body
-    return {"allowed": False, "http_status": resp.status, "reasons": [f"Tank hot-swap verification failed with HTTP {resp.status}"]}
+    return {"allowed": False, "http_status": resp.status, "reasons": [f"Tank governed-merge verification failed with HTTP {resp.status}"]}
 
 
 async def _get_tank_pr_lane_authorization(http: ClientSession, service_token: str, request_event_id: str) -> dict:
@@ -1438,108 +1438,10 @@ async def _ensure_pr_lane_worktree(
         raise RuntimeError(stderr or stdout or f"git empty commit failed with exit code {rc}")
 
 
-def _repo_path_for_hot_swap(arguments: dict) -> Path:
-    repo_path = str(arguments.get("repo_path") or "").strip()
-    repo = str(arguments.get("repo") or "").strip()
-    if repo_path or repo:
-        return _repo_path_from_arguments(arguments)
-    project = str(arguments.get("project") or "").strip()
-    if project:
-        path = (WORKSPACE_ROOT / project).resolve()
-        try:
-            path.relative_to(WORKSPACE_ROOT)
-        except ValueError as exc:
-            raise ValueError(f"project repo path must be under {WORKSPACE_ROOT}") from exc
-        if path.exists() and (path / ".git").exists():
-            return path
-    return _repo_path_from_arguments(arguments)
-
-
 def _rewrite_mcp_tool_arguments(body: bytes, arguments: dict) -> bytes:
     payload = json.loads(body.decode("utf-8"))
     payload["params"]["arguments"] = arguments
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
-
-
-async def _verify_github_hot_swap_head(
-    http: ClientSession,
-    github_token: str,
-    owner: str,
-    repo: str,
-    branch: str,
-    sha: str,
-) -> dict:
-    reasons: list[str] = []
-    branch_status, branch_body = await _github_api_json(
-        http,
-        github_token,
-        "GET",
-        f"/repos/{owner}/{repo}/branches/{quote(branch, safe='')}",
-    )
-    branch_sha = ""
-    if branch_status < 400 and isinstance(branch_body, dict):
-        commit = branch_body.get("commit")
-        if isinstance(commit, dict):
-            branch_sha = str(commit.get("sha") or "")
-    if branch_sha != sha:
-        reasons.append(f"remote branch {branch} is at {branch_sha[:12] or 'unknown'}, not local HEAD {sha[:12]}")
-
-    pr_number: int | None = None
-    pr_url = ""
-    head = quote(f"{owner}:{branch}", safe="")
-    pr_status, pr_body = await _github_api_json(
-        http,
-        github_token,
-        "GET",
-        f"/repos/{owner}/{repo}/pulls?head={head}&state=open",
-    )
-    if pr_status >= 400 or not isinstance(pr_body, list) or not pr_body:
-        reasons.append(f"no open PR exists for {owner}:{branch}")
-    else:
-        pr = pr_body[0] if isinstance(pr_body[0], dict) else {}
-        pr_number = int(pr.get("number") or 0) or None
-        pr_url = str(pr.get("html_url") or "")
-        pr_head = pr.get("head")
-        pr_head_sha = str(pr_head.get("sha") or "") if isinstance(pr_head, dict) else ""
-        if pr_head_sha and pr_head_sha != sha:
-            reasons.append(f"open PR head is {pr_head_sha[:12]}, not local HEAD {sha[:12]}")
-        if pr_number is None:
-            reasons.append("open PR response did not include a PR number")
-        else:
-            detail_status, detail_body = await _github_api_json(
-                http,
-                github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/pulls/{pr_number}",
-            )
-            if detail_status >= 400 or not isinstance(detail_body, dict):
-                reasons.append(f"could not read PR #{pr_number} mergeability")
-            else:
-                mergeable = detail_body.get("mergeable")
-                mergeable_state = str(detail_body.get("mergeable_state") or "")
-                if mergeable is not True or mergeable_state in {"dirty", "behind"}:
-                    reasons.append(f"PR #{pr_number} is not confirmed mergeable/current: {mergeable_state or mergeable}")
-
-    ci_status, ci_error, ci_payload = await _resolve_ci_state(
-        http,
-        github_token,
-        owner,
-        repo,
-        sha,
-        pr_number=pr_number,
-        branch=branch,
-    )
-    if ci_status != "succeeded":
-        reasons.append(f"CI for {sha[:12]} is not green: {ci_error}")
-    return {
-        "allowed": not reasons,
-        "reasons": reasons,
-        "branch_sha": branch_sha,
-        "pr_number": pr_number,
-        "pr_url": pr_url,
-        "ci_status": ci_status,
-        "ci": ci_payload,
-    }
 
 
 def _tank_ui_host() -> str:
@@ -1994,7 +1896,7 @@ def _latest_check_runs(check_runs: list) -> list:
     GitHub retains every run for a commit, including stale runs from an earlier
     attempt. Branch protection evaluates the latest run per name; Tank must too,
     or a check re-run from failure -> success still reads as failed and blocks
-    the governed merge/hot-swap gate forever.
+    the governed-merge gate forever.
     """
     latest: dict[str, dict] = {}
     for run in check_runs:
@@ -2782,7 +2684,7 @@ async def _handle_tank_merge_tool(
         # App's pull-request write permission, but only after the lane checks
         # below have proven this is the session-owned branch and exact PR head.
         github_token = await _mint_github_installation_token(http, service_token, repo_slug, full=True)
-        tank_verify = await _post_tank_hot_swap_verify(
+        tank_verify = await _post_tank_governed_merge_verify(
             http,
             service_token,
             {

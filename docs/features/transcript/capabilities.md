@@ -121,7 +121,10 @@ Contract impact:
   compact mode, keeping the final answer and server-owned wake/context rows
   visible. Failed, interrupted, and no-final completed turns do not expose a
   compacted final-answer projection because there is no durable assistant result
-  to show.
+  to show — the lone exception is an AskUserQuestion / ExitPlanMode hand-off
+  turn, whose final answer is its hand-off (the agent's preamble plus the
+  question card with the shortcut to the question turn) rather than a
+  `turn.completed.final_answer` (see "AskUserQuestion Question Page").
 - The settled main-transcript answer remains canonical for message links,
   unread counts, latest-message state, and fork-from-message actions.
 
@@ -757,6 +760,18 @@ Contract impact:
   derived from the same durable `turn.awaiting_input` event. It is an audit
   marker for the invocation, not the answer surface and not a dependency on
   provider-specific raw tool rows.
+- The asking turn never reaches `turn.completed` — its answer rotates execution
+  onto a separate continuation turn — so its Turns-detail
+  `/turns/{id}/activity` `final_answer.entries` is projected from the hand-off
+  instead of a `turn.completed.final_answer` marker: the agent's preamble (the
+  `asking_turn_final_answer` prose the runner snapshotted) followed by the
+  AskUserQuestion card, whose `awaitingInput` keeps the shortcut to the question
+  turn. This promotes the asking turn from "No turn activity" to a turn
+  collapsible to its preamble + question card. It reuses the same
+  `asking_turn_final_answer` snapshot the question page shows as page context,
+  but only the asking turn turns it into a final answer — the synthetic question
+  turn's copy stays a page-context copy and never becomes that turn's final
+  answer.
 - Turn activity pagination is semantic as well as size-bounded: each
   `turn.awaiting_input` event starts one `question_set` page per question while
   preserving one durable answer set. The pages expose shared set identity and
@@ -791,7 +806,12 @@ Evidence:
 - Backend: `backend-go/cmd/tank-operator/turn_pages_test.go` proves
   `turn.awaiting_input` creates the compact invocation marker page, starts a
   `question_set` page for each question, keeps a shared durable answer set, and
-  seals an answered set before resumed activity.
+  seals an answered set before resumed activity. The
+  `TestProjectTurnPagesAskingTurnHandoffFinalAnswer*` cases prove the asking
+  turn's `final_answer.entries` is the preamble plus the question card (carrying
+  the question-turn shortcut), that the turn becomes collapsible
+  (`reason=final_answer`), and that page bodies / event counts stay unchanged —
+  including the no-preamble (card-only) and ExitPlanMode plan-card variants.
   `TestProjectTurnPagesQuestionOnlyTurnStopFoldsIntoSingleQuestionPage` proves a
   Stopped question turn (`turn.interrupt_requested` → `turn.interrupted`) folds
   onto a single question page with no spurious trailing activity page, so the
@@ -802,8 +822,10 @@ Evidence:
   uses the assistant question message affordance while `RunAwaitingInputCard`
   is owned by Turns, and pins the question heading as a `data-variant="system"`
   `RunQuestionHeadingMessage` frame while retiring the orphaned
-  `run-turn-question-page-head` banner. `frontend/src/composerCss.test.ts`
-  keeps the retired pinned-head CSS rule from reappearing.
+  `run-turn-question-page-head` banner, and pins that `renderFinalAnswerEntry`
+  forwards `onOpenTurn` so the hand-off question card's shortcut renders in the
+  final-answer slot. `frontend/src/composerCss.test.ts` keeps the retired
+  pinned-head CSS rule from reappearing.
 - Frontend visual: `frontend/src/styleguide/question-heading.tsx`
   (`/_styleguide/question-heading`) renders the system-user question heading
   next to the assistant question message and the answer card for review.

@@ -226,7 +226,7 @@ class _GitHubAPIFake:
         return _FakeRawResponse(404, b"{}")
 
 
-class _HotSwapHTTP:
+class _GovernedMergeHTTP:
     def __init__(self, sha: str) -> None:
         self.sha = sha
         self.posts: list[dict] = []
@@ -628,7 +628,7 @@ def test_tank_merge_tool_merges_verified_session_branch(monkeypatch, tmp_path) -
     monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
 
-    http = _HotSwapHTTP(sha)
+    http = _GovernedMergeHTTP(sha)
     response = asyncio.run(
         _handle_tank_merge_tool(
             http,
@@ -649,6 +649,15 @@ def test_tank_merge_tool_merges_verified_session_branch(monkeypatch, tmp_path) -
         "write": True,
         "full": True,
     }
+    # The governed-merge gate is the single readiness authority for the merge
+    # tool: it must be hit at the renamed route, scoped to the session, with the
+    # exact branch/HEAD the merge will land. (Route rename regression guard.)
+    verify_posts = [call for call in http.posts if call["url"].endswith("/governed-merge/verify")]
+    assert len(verify_posts) == 1
+    assert verify_posts[0]["url"].endswith("/api/internal/sessions/95/governed-merge/verify")
+    assert verify_posts[0]["json"]["repo"] == "romaine-life/tank-operator"
+    assert verify_posts[0]["json"]["branch"] == "tank/session/95/tank-operator"
+    assert verify_posts[0]["json"]["sha"] == sha
     merge_requests = [call for call in http.requests if call["method"] == "PUT" and "/pulls/1113/merge" in call["url"]]
     assert merge_requests[0]["kwargs"]["json"] == {"sha": sha, "merge_method": "squash"}
     actions = [call["json"]["action"] for call in http.posts if "control-actions" in call["url"]]
@@ -671,7 +680,7 @@ def test_tank_rename_pr_tool_renames_verified_session_pr(monkeypatch, tmp_path) 
     monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
 
-    http = _HotSwapHTTP(sha)
+    http = _GovernedMergeHTTP(sha)
     response = asyncio.run(
         _handle_tank_rename_pr_tool(
             http,
@@ -712,7 +721,7 @@ def test_tank_update_pr_body_tool_updates_verified_session_pr(monkeypatch, tmp_p
         "- [x] Session Lifecycle\n- [ ] Observability\n\n"
         "Evidence:\n- New control-action ledger entry github.pull_request.update_body.\n"
     )
-    http = _HotSwapHTTP("unused")
+    http = _GovernedMergeHTTP("unused")
     response = asyncio.run(
         _handle_tank_update_pr_body_tool(
             http,
@@ -756,7 +765,7 @@ def test_tank_update_pr_body_tool_flags_incomplete_feature_contracts(monkeypatch
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
 
     # A body the agent might write that does NOT satisfy check-pr-body.
-    http = _HotSwapHTTP("unused")
+    http = _GovernedMergeHTTP("unused")
     response = asyncio.run(
         _handle_tank_update_pr_body_tool(
             http,
@@ -778,7 +787,7 @@ def test_tank_update_pr_body_tool_flags_incomplete_feature_contracts(monkeypatch
 
 def test_tank_update_pr_body_tool_requires_body(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    http = _HotSwapHTTP("unused")
+    http = _GovernedMergeHTTP("unused")
     response = asyncio.run(
         _handle_tank_update_pr_body_tool(
             http,
@@ -840,7 +849,7 @@ def test_tank_merge_tool_rejects_non_session_branch(monkeypatch, tmp_path) -> No
     monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
 
-    http = _HotSwapHTTP("unused")
+    http = _GovernedMergeHTTP("unused")
     response = asyncio.run(
         _handle_tank_merge_tool(
             http,
@@ -1950,7 +1959,7 @@ def test_watch_published_commit_records_clean_mergeability_via_single_pr(monkeyp
     # (/pulls/{n}, which the mock reports clean) so it records a *succeeded*
     # mergeability observation instead of looping on "unknown" forever.
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    http = _HotSwapHTTP("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+    http = _GovernedMergeHTTP("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
     asyncio.run(
         asyncio.wait_for(
             _watch_published_commit(
