@@ -16,6 +16,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { ChatComposer } from "../ChatComposer";
+import { RunMessages, type TranscriptEntry } from "../App";
 import { McpIcon } from "../McpIcon";
 import { WorkspaceShell } from "../WorkspaceShell";
 import {
@@ -504,6 +505,99 @@ function TranscriptSpecimen({
   );
 }
 
+const avatarContinuationEntries: TranscriptEntry[] = [
+  {
+    id: "avatar-continuation-before",
+    kind: "message",
+    role: "assistant",
+    text: "The regression test now checks both sides of the issue: blank text stays out, and real streamed output still lands.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:00:00.000Z",
+    orderKey: "000001",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-tool-1",
+    kind: "tool",
+    toolName: "file_change",
+    toolStatus: "completed",
+    toolInput: "frontend/src/App.tsx",
+    toolOutput: "Updated avatar grouping helper.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:00:12.000Z",
+    orderKey: "000002",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-tool-2",
+    kind: "tool",
+    toolName: "npm test",
+    toolStatus: "completed",
+    toolInput: "npm test --prefix frontend",
+    toolOutput: "77 files passed.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:00:40.000Z",
+    orderKey: "000003",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-after-tools",
+    kind: "message",
+    role: "assistant",
+    text: "The focused suite passes with the new guard. I am checking the final diff/status now.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:01:00.000Z",
+    orderKey: "000004",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-boundary",
+    kind: "meta",
+    meta: {
+      title: "Turn failed",
+      detail: "A meta boundary still starts the next avatar run.",
+      severity: "error",
+    },
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:01:08.000Z",
+    orderKey: "000005",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-after-meta",
+    kind: "message",
+    role: "assistant",
+    text: "This follow-up keeps its avatar because the preceding meta row is a boundary.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:01:20.000Z",
+    orderKey: "000006",
+  } as TranscriptEntry,
+];
+
+function ActualAvatarContinuationSpecimen() {
+  const avatar = getSessionAvatarByID("jp1-malcolm");
+  return (
+    <div
+      style={{
+        height: 360,
+        border: "1px solid var(--border-soft)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--bg-base)",
+        overflow: "hidden",
+      }}
+    >
+      <RunMessages
+        entries={avatarContinuationEntries}
+        avatar={avatar}
+        sessionId="styleguide-avatar-continuation"
+        sessionMode="styleguide"
+        telemetrySurface="styleguide"
+        showThinking={false}
+        autoExpandTools={false}
+        showTimestamps
+        showDuration={false}
+        userKey="styleguide"
+        scrollParent={null}
+      />
+    </div>
+  );
+}
+
 function ComposerToolButtons() {
   return (
     <>
@@ -717,6 +811,13 @@ export function StyleguidePortfolioTranscript() {
               />
             </div>
           </div>
+        </section>
+
+        <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
+          <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "var(--text-lg)" }}>
+            actual renderer avatar continuation
+          </h2>
+          <ActualAvatarContinuationSpecimen />
         </section>
 
         <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
