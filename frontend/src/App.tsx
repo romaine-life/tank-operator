@@ -300,6 +300,7 @@ import {
   type SessionInteraction,
   type SessionMode,
 } from "./sessionModes";
+import { startTestWorkflow } from "./testWorkflow";
 import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
@@ -21642,6 +21643,52 @@ function ChatPane({
     submitSkillInvocation(skillName, composed.prompt);
   }
 
+  // startInteractiveTestWorkflow is the deterministic, zero-LLM replacement for
+  // the retired `/test` skill send. It POSTs to the gated backend endpoint,
+  // which validates the session's governed-PR readiness and provisions a
+  // Glimmung test slot server-side only on a green/mergeable verdict. The 202
+  // accept is immediate (validation can take minutes); the outcome surfaces
+  // afterward through the existing test-state pill (provisioned → active + URL,
+  // via the session-row SSE) or a `ci_status.updated` record in the turns view
+  // (refused → the reason). We deliberately do NOT optimistically mark the test
+  // pill active here: a refused workflow must not leave a phantom-active pill.
+  function startInteractiveTestWorkflow() {
+    if (session.status !== "Active") return;
+    setEntries((prev) =>
+      appendMeta(
+        prev,
+        nextEntryId("test-workflow-start"),
+        "Test workflow started",
+        "Validating PR readiness; the test environment will appear here when ready, or a reason if it can't be provisioned.",
+      ),
+    );
+    void startTestWorkflow(session.id, authedFetch)
+      .then((result) => {
+        if (!result.ok) {
+          setEntries((prev) =>
+            appendMeta(
+              prev,
+              nextEntryId("test-workflow-error"),
+              "Test workflow could not start",
+              result.detail,
+              "error",
+            ),
+          );
+        }
+      })
+      .catch((e) => {
+        setEntries((prev) =>
+          appendMeta(
+            prev,
+            nextEntryId("test-workflow-error"),
+            "Test workflow could not start",
+            String(e),
+            "error",
+          ),
+        );
+      });
+  }
+
   function startGuiRollout() {
     if (session.status !== "Active") return;
     void markRolloutState({ active: true }).catch((e) => {
@@ -24990,7 +25037,7 @@ function ChatPane({
                     if (testState)
                       void markTestState({ ...testState, active: true });
                   },
-                  onCreateHold: () => startTestSkill("test"),
+                  onCreateHold: () => startInteractiveTestWorkflow(),
                   onCreateAndDrive: () => startTestSkill("test-drive"),
                   disabled: !ready,
                   title: testState?.active

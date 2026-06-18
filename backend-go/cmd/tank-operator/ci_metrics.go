@@ -45,6 +45,18 @@ var (
 		Name: "tank_test_slot_provision_total",
 		Help: "Deterministic test-slot provisioning attempts after a ready verdict, by bounded outcome.",
 	}, []string{"outcome"})
+
+	// Interactive (UI-button-triggered) deterministic test-workflow gate
+	// (handlers_test_workflow.go). One increment per completed background run,
+	// labeled by the terminal outcome: "provisioned" on a ready verdict that
+	// deployed, "error" when no verdict could be reached, else the bounded
+	// refusal verdict (failed/conflict/merged/watching_timeout/head_moved). The
+	// underlying validate/provision steps still bump the shared gate counters
+	// above; this one isolates the interactive trigger's end-to-end outcome.
+	testSlotInteractiveTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_test_slot_interactive_total",
+		Help: "Interactive test-workflow trigger outcomes, by bounded terminal outcome.",
+	}, []string{"outcome"})
 )
 
 func recordTestSlotValidate(outcome string) {
@@ -59,6 +71,13 @@ func recordTestSlotProvision(outcome string) {
 		outcome = "error"
 	}
 	testSlotProvisionTotal.WithLabelValues(outcome).Inc()
+}
+
+func recordTestSlotInteractive(outcome string) {
+	if outcome == "" {
+		outcome = "error"
+	}
+	testSlotInteractiveTotal.WithLabelValues(outcome).Inc()
 }
 
 func recordCIWebhook(event, result string) {

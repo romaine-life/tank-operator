@@ -67,8 +67,8 @@ and [../README.md](../README.md) for how capability ledgers are used.
 
 ## gated-test-slot-provisioning
 
-- **Status:** shipped (shared server-side gate + orchestration-review path); interactive
-  endpoint and agent-tool retirement land in later slices.
+- **Status:** shipped (shared server-side gate + orchestration-review path + interactive
+  endpoint); agent-tool retirement lands in a later slice.
 - **Intent:** Provisioning a Tank test slot is deterministic and gated with **zero LLM
   involvement**. The shared `appServer.provisionTestSlotForSession` helper validates a
   session's PR-readiness through a **one-shot live read** (no durable `session_ci_watches`
@@ -87,6 +87,34 @@ and [../README.md](../README.md) for how capability ledgers are used.
   `pgstore.CIWatch` fed to the reducer against live `mcpgithub.PullRequestState`. Outcomes
   are observable via `tank_test_slot_validate_total{outcome}` and
   `tank_test_slot_provision_total{outcome}`.
+
+## interactive-test-workflow
+
+- **Status:** shipped (deterministic UI trigger)
+- **Intent:** The interactive "test" button is a deterministic, **zero-LLM** server-side
+  trigger, not an agent skill send. The UI POSTs
+  `POST /api/sessions/{id}/test-workflow/start` (owner-scoped); the backend
+  (`handleStartTestWorkflow`) resolves the session's governed-PR coordinates from durable
+  state — owner email, repo from `sessions.repos` (single-repo direct; multi-repo
+  disambiguated by an explicit `repo` body field or the repo carrying the open
+  `session_ci_watches` record, else refused as ambiguous), the governed session branch
+  `tank/session/<id>/<repo>`, and the glimmung project mapping — then runs the shared
+  `provisionTestSlotForSession` gate **by branch (current head, no PR-number or SHA pin)**
+  in a background goroutine with a fresh `provisionBackgroundTimeout()` context, mirroring
+  `provisionOrchestrationReviewSlot`. The handler returns **202 Accepted** immediately
+  because validate+wait can take minutes. On a `ready` verdict the gate's `SetTestState`
+  marks the slot active + URL (the pill lights via the session-row SSE); on **any refusal**
+  glimmung and test-state are left untouched and the reason is surfaced as a display-only
+  `ci_status.updated` record in the turns view (not only logged). The retired `/test` skill
+  and its `checkout_test_slot` / `deploy_image_to_test_slot` / `set_test_environment` tools
+  are intentionally left in place for a later slice; this slice only stops the UI button
+  from invoking the agent path.
+- **Durable source:** no new durable row — reuses the gate's transient in-memory
+  `pgstore.CIWatch` validation and surfaces the outcome as a `ci_status.updated`
+  session-event record. Repo disambiguation reads the durable `session_ci_watches` row.
+  Outcomes are observable via `tank_test_slot_interactive_total{outcome}` (terminal
+  outcome of the interactive trigger) plus the shared
+  `tank_test_slot_validate_total` / `tank_test_slot_provision_total` gate counters.
 
 ## ci-status-record
 

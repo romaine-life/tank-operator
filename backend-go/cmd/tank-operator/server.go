@@ -157,6 +157,14 @@ type appServer struct {
 	provisionNow            func() time.Time
 	provisionSleepFunc      func(ctx context.Context, d time.Duration) error
 
+	// interactiveTestWorkflowLaunch starts the deterministic interactive
+	// test-workflow gate (handlers_test_workflow.go). Production wiring spawns
+	// runInteractiveTestWorkflow on a fresh budgeted background goroutine so the
+	// HTTP handler returns 202 immediately; tests inject a synchronous capture to
+	// assert the resolved coordinates deterministically. nil -> the goroutine
+	// launcher.
+	interactiveTestWorkflowLaunch func(provisionTestSlotRequest)
+
 	// orchestrations is the deterministic multi-phase advance engine
 	// (docs/event-driven-rollout.md sibling): the merged-PR webhook calls
 	// advanceOnMerge to walk the DAG and dispatch the next ready phase's spoke,
@@ -487,6 +495,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/sessions/{session_id}/run-config", s.handleSetSessionRunConfig)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-state", s.handleSetTestState)
+	mux.HandleFunc("POST /api/sessions/{session_id}/test-workflow/start", s.handleStartTestWorkflow)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/return", s.handleReturnTestSlot)
 	mux.HandleFunc("POST /api/sessions/{session_id}/rollout-state", s.handleSetRolloutState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/merge-pr", s.handleMergeSessionPR)
