@@ -315,6 +315,186 @@ func TestRunInteractiveTestWorkflow_RefusalSurfacesReason(t *testing.T) {
 	}
 }
 
+// driveWakeCapture records one backend-owned wake submission so a test can
+// assert whether (and with what URL) the drive variant woke the agent, without
+// standing up the full sessionBus/pod machinery enqueueSDKTurn requires.
+type driveWakeCapture struct {
+	req provisionTestSlotRequest
+	url string
+}
+
+// installDriveWakeCapture replaces the real wake submission with a capture and
+// returns a pointer to the accumulating slice.
+func installDriveWakeCapture(app *appServer) *[]driveWakeCapture {
+	captured := &[]driveWakeCapture{}
+	app.testDriveWakeSubmit = func(_ context.Context, req provisionTestSlotRequest, url string) (map[string]any, int, string) {
+		*captured = append(*captured, driveWakeCapture{req: req, url: url})
+		return map[string]any{"status": "accepted", "turn_id": "turn_testdrive_fake"}, 0, ""
+	}
+	return captured
+}
+
+func driveRequest(drive bool) provisionTestSlotRequest {
+	return provisionTestSlotRequest{
+		OwnerEmail: provisionTestOwner,
+		SessionID:  "77",
+		Project:    "tank-operator",
+		Workflow:   interactiveTestWorkflowLabel,
+		RepoOwner:  "romaine-life",
+		RepoName:   "tank-operator",
+		Branch:     "tank/session/77/tank-operator",
+		drive:      drive,
+	}
+}
+
+// TestRunInteractiveTestWorkflow_DriveReadyWakesAgent: the drive variant, on a
+// ready provision, submits exactly one backend-owned wake turn carrying the
+// running slot's URL. This is the only place the agent re-enters; provisioning
+// itself stayed zero-LLM.
+func TestRunInteractiveTestWorkflow_DriveReadyWakesAgent(t *testing.T) {
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
+	glim := &fakeGlimmungClient{}
+	app, _, events, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+	wakes := installDriveWakeCapture(app)
+
+	app.runInteractiveTestWorkflow(driveRequest(true))
+
+	if len(*wakes) != 1 {
+		t.Fatalf("drive+ready should wake the agent exactly once, got %d wakes", len(*wakes))
+	}
+	wake := (*wakes)[0]
+	terminalURL, _ := latestTestProvision(events)["url"].(string)
+	if wake.url == "" || wake.url != terminalURL {
+		t.Fatalf("wake url=%q, want the ready slot URL %q", wake.url, terminalURL)
+	}
+	if wake.req.Branch != "tank/session/77/tank-operator" {
+		t.Fatalf("wake req branch=%q, want the governed branch", wake.req.Branch)
+	}
+	// The visible provision thread is identical to the plain button: ready terminal.
+	if got, _ := latestTestProvision(events)["phase"].(string); got != "ready" {
+		t.Fatalf("terminal phase=%q, want ready", got)
+	}
+}
+
+// TestRunInteractiveTestWorkflow_DriveRefusalDoesNotWake: a refusal (no slot
+// came up) never wakes the agent — only the thread's refusal record, identical
+// to the plain button.
+func TestRunInteractiveTestWorkflow_DriveRefusalDoesNotWake(t *testing.T) {
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{{
+		CheckState:       "failure",
+		AllChecksSettled: true,
+		FailingChecks:    []string{"build"},
+		Mergeable:        provBoolPtr(true),
+		MergeableState:   "blocked",
+		HeadSHA:          "sha-red",
+	}}}
+	glim := &fakeGlimmungClient{}
+	app, _, events, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+	wakes := installDriveWakeCapture(app)
+
+	app.runInteractiveTestWorkflow(driveRequest(true))
+
+	if len(*wakes) != 0 {
+		t.Fatalf("drive+refusal must NOT wake the agent, got %d wakes", len(*wakes))
+	}
+	if got, _ := latestTestProvision(events)["phase"].(string); got != "error" {
+		t.Fatalf("refusal terminal phase=%q, want error", got)
+	}
+}
+
+// TestRunInteractiveTestWorkflow_PlainReadyDoesNotWake: the plain "Create test
+// slot" button (drive=false) provisions but never wakes — Slice 8 behavior is
+// unchanged.
+func TestRunInteractiveTestWorkflow_PlainReadyDoesNotWake(t *testing.T) {
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
+	glim := &fakeGlimmungClient{}
+	app, _, events, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+	wakes := installDriveWakeCapture(app)
+
+	app.runInteractiveTestWorkflow(driveRequest(false))
+
+	if len(*wakes) != 0 {
+		t.Fatalf("plain (drive=false) ready must NOT wake the agent, got %d wakes", len(*wakes))
+	}
+	if got, _ := latestTestProvision(events)["phase"].(string); got != "ready" {
+		t.Fatalf("terminal phase=%q, want ready", got)
+	}
+}
+
+// TestStartTestWorkflow_DriveFlagThreadsToLaunch: the endpoint parses
+// {"drive": true} and threads it onto the launched gate request.
+func TestStartTestWorkflow_DriveFlagThreadsToLaunch(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/77/test-workflow/start",
+		strings.NewReader(`{"drive":true}`))
+	req.SetPathValue("session_id", "77")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, provisionTestOwner, auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 1 {
+		t.Fatalf("expected one launched gate run, got %d", len(*launched))
+	}
+	if !(*launched)[0].drive {
+		t.Fatalf("drive flag should thread onto the launched request")
+	}
+}
+
+// TestStartTestWorkflow_DefaultsDriveFalse: omitting drive (the plain button)
+// leaves the launched request non-driving.
+func TestStartTestWorkflow_DefaultsDriveFalse(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/77/test-workflow/start", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "77")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, provisionTestOwner, auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 1 || (*launched)[0].drive {
+		t.Fatalf("plain request must launch a non-driving gate run")
+	}
+}
+
+func TestTestDriveWakeHelpers(t *testing.T) {
+	if got := sdkTurnSource("test-slot-drive"); got != "test-slot-drive" {
+		t.Fatalf("sdkTurnSource(test-slot-drive) = %q, want test-slot-drive", got)
+	}
+	// Deterministic + turn-id-shaped so a re-fire collapses under command dedupe.
+	seed := "77:tank/session/77/tank-operator:https://slot-1.example"
+	n1 := testDriveWakeTurnNonce(seed)
+	n2 := testDriveWakeTurnNonce(seed)
+	if n1 != n2 {
+		t.Fatalf("nonce not deterministic: %q vs %q", n1, n2)
+	}
+	if !turnIDPattern.MatchString(n1) {
+		t.Fatalf("nonce %q does not match turn id pattern", n1)
+	}
+	// The prompt assumes the slot exists and tells the agent NOT to reserve one.
+	prompt := testDriveWakePrompt(driveRequest(true), "https://slot-1.example")
+	for _, want := range []string{"https://slot-1.example", "already live", "do NOT reserve", "/test-drive"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("drive prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if got := testDriveWakeDisplayText("https://slot-1.example"); !strings.Contains(got, "https://slot-1.example") {
+		t.Fatalf("display text should mention the slot URL, got %q", got)
+	}
+}
+
 func TestSessionGlimmungProjectMapping(t *testing.T) {
 	if got := sessionGlimmungProject("romaine-life", "glimmung"); got != "glimmung" {
 		t.Fatalf("romaine-life repo project=%q, want glimmung", got)
