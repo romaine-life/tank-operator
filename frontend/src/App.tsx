@@ -323,6 +323,7 @@ import {
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
   shouldRingForActivityTransition,
+  type ConversationActivityStatus,
   type SessionActivitySummary,
 } from "./sessionActivity";
 import {
@@ -331,7 +332,11 @@ import {
   type SessionBugLabel,
   type SessionRow,
 } from "./sessionStore";
-import { decideFollowupSubmit } from "./submitLatch";
+import {
+  decideFollowupSubmit,
+  describeRunBlock,
+  type RunBlockDescription,
+} from "./submitLatch";
 import {
   insertThinkingGroupByDurableOrder,
   resolveThinkingInsertIndex,
@@ -5427,6 +5432,7 @@ type RunTab =
   | "background"
   | "files"
   | "session-data"
+  | "queue-status"
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
@@ -17062,6 +17068,162 @@ function RunHelpScreen() {
   );
 }
 
+// QueueBlockScreen is the focused "why is my typed message queued?" page,
+// reached from the small link on the queued-follow-up panel. The queue gate is
+// session-level (the drain effect submits the head the moment `running` goes
+// false), so this page explains the single live reason the run is still
+// considered active. It is purely diagnostic — it never changes when a message
+// queues. All signal values are passed in from the ChatPane, which owns the
+// client-only run latch the server cannot see.
+function QueueBlockScreen({
+  block,
+  durableActivityStatus,
+  runStatus,
+  running,
+  hasLocalRun,
+  localRunHasTerminal,
+  activeTurnId,
+  queuedMessages,
+  onOpenTranscript,
+}: {
+  block: RunBlockDescription | null;
+  durableActivityStatus: ConversationActivityStatus | null;
+  runStatus: LocalRunStatus;
+  running: boolean;
+  hasLocalRun: boolean;
+  localRunHasTerminal: boolean;
+  activeTurnId: string | null;
+  queuedMessages: QueuedMessage[];
+  onOpenTranscript: () => void;
+}) {
+  const signals: { label: string; value: string; detail: string }[] = [
+    {
+      label: "Run active",
+      value: running ? "Yes" : "No",
+      detail:
+        "While this is Yes, a message you type is queued instead of sent. It drains the moment this turns No.",
+    },
+    {
+      label: "Agent status (durable)",
+      value: durableActivityStatus ?? "—",
+      detail:
+        "The server-side turn state from the activity ledger (streaming, needs_input, stopping, scheduled, …).",
+    },
+    {
+      label: "Local run status",
+      value: runStatus,
+      detail: "The browser's local view of the current run.",
+    },
+    {
+      label: "Local run latch",
+      value: hasLocalRun ? "In flight" : "Clear",
+      detail:
+        "An optimistic run the browser tracks until its durable terminal lands. It holds the run 'active' even after the server goes idle.",
+    },
+    {
+      label: "Latch reconciled",
+      value: hasLocalRun ? (localRunHasTerminal ? "Terminal landed" : "Waiting") : "—",
+      detail:
+        "Whether the latch has seen its durable terminal. 'Terminal landed' while still queued is the 'looks done but won't send' case — a reload clears it.",
+    },
+    {
+      label: "Active turn",
+      value: activeTurnId ?? "—",
+      detail: "The turn id the server currently reports as in flight, if any.",
+    },
+    {
+      label: "Queued messages",
+      value: String(queuedMessages.length),
+      detail: "Messages waiting to auto-send, in order, once the run goes idle.",
+    },
+  ];
+  return (
+    <div className="run-queue-status-screen">
+      <div className="run-queue-status-topbar">
+        <h2 className="run-queue-status-title">Queue status</h2>
+        <button
+          type="button"
+          className="run-queue-status-back"
+          onClick={onOpenTranscript}
+        >
+          Back to transcript
+        </button>
+      </div>
+      <section
+        className="run-queue-status-headline"
+        aria-live="polite"
+        aria-label="Current queue reason"
+      >
+        {block ? (
+          <>
+            <span
+              className={`status-dot status-${block.dotStatus}`}
+              aria-hidden="true"
+            />
+            <div className="run-queue-status-headline-copy">
+              <span className="run-queue-status-headline-label">
+                {block.label}
+              </span>
+              <span className="run-queue-status-headline-detail">
+                {block.detail}
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <span
+              className="status-dot status-agent-waiting"
+              aria-hidden="true"
+            />
+            <div className="run-queue-status-headline-copy">
+              <span className="run-queue-status-headline-label">
+                Nothing is blocking
+              </span>
+              <span className="run-queue-status-headline-detail">
+                The run is idle — a message you send now goes through
+                immediately.
+              </span>
+            </div>
+          </>
+        )}
+      </section>
+      <section className="run-queue-status-section">
+        <h3 className="run-queue-status-section-title">Live signals</h3>
+        <div className="run-queue-status-signals">
+          {signals.map((row) => (
+            <div className="run-queue-status-signal" key={row.label}>
+              <span className="run-queue-status-signal-label">{row.label}</span>
+              <span className="run-queue-status-signal-value">{row.value}</span>
+              <span className="run-queue-status-signal-detail">
+                {row.detail}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+      {queuedMessages.length > 0 && (
+        <section className="run-queue-status-section">
+          <h3 className="run-queue-status-section-title">
+            Queued, in send order
+          </h3>
+          <ol className="run-queue-status-queued">
+            {queuedMessages.map((message) => (
+              <li className="run-queue-status-queued-row" key={message.id}>
+                <span className="run-queue-status-queued-text">
+                  {message.displayText ?? message.text}
+                </span>
+                <span className="run-queue-status-queued-origin">
+                  {message.submitSurface === "turns" ? "Turns" : "Chat"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+    </div>
+  );
+}
+
 // The visible pane reports its current in-session location up to the App so the
 // App-level title chrome can render the breadcrumb trail. Mirrors the
 // onConnectionLabelChange bubble-up; null when the pane isn't the visible one.
@@ -18224,6 +18386,14 @@ function ChatPane({
   } | null>(null);
   const terminalCorrelationReportedRef = useRef<Set<string>>(new Set());
   const queuedFollowupBlockedReportedRef = useRef<string | null>(null);
+  // Last durable activity status seen from applySdkActivitySummaryToUi.
+  // needs_input/streaming/submitted/claimed/scheduled all collapse into
+  // runStatus "running", so this ref is the only surviving distinction the
+  // "why is my message queued?" diagnostic can read. Read-only signal — it
+  // never feeds the queue gate, only the explanation surface.
+  const latestDurableActivityStatusRef = useRef<ConversationActivityStatus | null>(
+    null,
+  );
   const [activityLoadingSessionSwitchTelemetry, setActivityLoadingSessionSwitchTelemetry] =
     useState<{ previousSessionId: string; changedAt: number } | null>(null);
   // Mirror of the durable activity summary's active turn. The main transcript
@@ -18307,6 +18477,10 @@ function ChatPane({
       session_id: session.id,
     });
     if (!activity) return;
+    // Capture the raw durable status before the sdkActive collapse and the
+    // `if (currentRunRef.current) return;` early-out below, so the queued-input
+    // diagnostic can recover needs_input/scheduled/etc. and the latch-lag tail.
+    latestDurableActivityStatusRef.current = activity.status;
     const sdkActive =
       activity.status === "submitted" ||
       activity.status === "claimed" ||
@@ -19235,6 +19409,13 @@ function ChatPane({
     }
     if (route.tab === "session-data") {
       setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "queue-status") {
+      setActiveTab("queue-status");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -20312,6 +20493,7 @@ function ChatPane({
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
+    latestDurableActivityStatusRef.current = null;
     setQueuedMessages([]);
     setRunStatus("idle");
     setRunning(false);
@@ -21640,6 +21822,27 @@ function ChatPane({
         ? "error"
         : undefined;
 
+  // The single, session-level "why is typed input queued?" explanation. The
+  // queue gate is exactly `running`, so when the run is active this is the live
+  // reason the queue won't drain; null when idle (input sends immediately).
+  // These are the same latch inputs handleSubmit feeds decideFollowupSubmit, so
+  // the diagnostic and the gate agree by construction.
+  const queueBlockHasLocalRun = currentRunRef.current !== null;
+  const queueBlockLocalRunHasTerminal =
+    currentRunRef.current !== null &&
+    terminalResultForTurn(
+      sdkServerProjectedEntriesRef.current,
+      currentRunRef.current.turnId,
+    ) !== null;
+  const queueBlock: RunBlockDescription | null = running
+    ? describeRunBlock({
+        durableActivityStatus: latestDurableActivityStatusRef.current,
+        runStatus,
+        hasLocalRun: queueBlockHasLocalRun,
+        localRunHasTerminal: queueBlockLocalRunHasTerminal,
+      })
+    : null;
+
   const sessionAvatar = useMemo(
     () => getSessionAvatarByID(session.agent_avatar_id),
     [avatarCatalogVersion, session.agent_avatar_id],
@@ -22174,6 +22377,8 @@ function ChatPane({
       replaceAppRoute("cluster");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "queue-status") {
+      replaceSessionRoute(session.id, "queue-status");
     } else if (activeTab === "pull-requests") {
       replaceSessionRoute(session.id, "pull-requests");
     } else if (activeTab === "break-glass") {
@@ -23785,6 +23990,24 @@ function ChatPane({
                 }
                 readOnly={readOnly}
               />
+            ) : activeTab === "queue-status" ? (
+              <QueueBlockScreen
+                block={queueBlock}
+                durableActivityStatus={latestDurableActivityStatusRef.current}
+                runStatus={runStatus}
+                running={running}
+                hasLocalRun={queueBlockHasLocalRun}
+                localRunHasTerminal={queueBlockLocalRunHasTerminal}
+                activeTurnId={renderedActiveTurnId}
+                queuedMessages={queuedMessages}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
+              />
             ) : activeTab === "pull-requests" ? (
               <AgentGitActivityScreen
                 pullRequests={agentGitActivity.pullRequests}
@@ -24244,6 +24467,36 @@ function ChatPane({
                 <div className="run-queued-followups-head">
                   <span>Queued follow-up inputs</span>
                   <span>{queuedMessages.length}</span>
+                </div>
+                <div className="run-queued-followups-reason">
+                  <span
+                    className={`status-dot status-${queueBlock?.dotStatus ?? "agent-working"}`}
+                    aria-hidden="true"
+                  />
+                  <span className="run-queued-followups-reason-label">
+                    {queueBlock?.label ?? "Finishing up"}
+                  </span>
+                  <a
+                    className="run-queued-followups-reason-link"
+                    href={sessionRouteUrl(session.id, "queue-status")}
+                    title="See why this is queued"
+                    onClick={(e) => {
+                      if (
+                        e.button !== 0 ||
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey
+                      )
+                        return;
+                      e.preventDefault();
+                      navigateToSessionRoute(
+                        sessionRouteUrl(session.id, "queue-status"),
+                      );
+                    }}
+                  >
+                    Why queued?
+                  </a>
                 </div>
                 <div className="run-queued-followups-list">
                   {queuedMessages.map((message, index) => (

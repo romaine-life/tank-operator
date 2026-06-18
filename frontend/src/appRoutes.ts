@@ -12,6 +12,7 @@ export type SessionRouteTab =
   | "chat"
   | "static"
   | "session-data"
+  | "queue-status"
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
@@ -249,6 +250,22 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       ...defaultSettingsRoute,
     };
   }
+  if (parts[2] === "queue-status" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "queue-status",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
   // The file-browser pane is routed at the surface level, and may include a
   // workspace-relative file path so transcript file links can open the same
   // preview in a new tab.
@@ -391,6 +408,8 @@ export function buildSessionRouteUrl(
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {
     suffix = "/session-data";
+  } else if (tab === "queue-status") {
+    suffix = "/queue-status";
   } else if (tab === "pull-requests") {
     suffix = "/pull-requests";
   } else if (tab === "break-glass" && breakGlassRequestId) {

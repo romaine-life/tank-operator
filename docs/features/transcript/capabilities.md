@@ -942,3 +942,50 @@ stages (#1051 B2-B5) change its cost profile, never its ownership.
   incremental flow) deliberately do not bump: their row sets are stable
   within a projection version, and bumping would resnapshot every viewer on
   every batch.
+
+## Queued follow-up block reason (why is my message queued?)
+
+Status: active
+
+Intent:
+While a turn is active, a message the user types is queued instead of sent and
+auto-sends when the run goes idle. Previously the queued panel showed only the
+message text, so a user who typed while the agent "looked done" had no way to
+tell *why* their message was held. This surfaces the single, live reason —
+distinguishing the agent actively working from other holds (a stop in progress,
+the agent waiting on a question, the agent self-parked on a timer, and the
+client-only latch-lag "looks done but won't send" case where the durable ledger
+is idle but the browser's optimistic run latch has not reconciled its terminal).
+
+Affected contracts:
+- Transcript
+
+Contract impact:
+- The queue gate is unchanged and stays session-level: the drain effect submits
+  the queue head precisely when `!running`. This is a read-only diagnostic; it
+  does NOT change *when* a message queues. `decideFollowupSubmit` remains the
+  sole gate and both queue entry points (`handleSubmit`, `submitSkillInvocation`)
+  are untouched.
+- The reason taxonomy is owned by the pure `describeRunBlock` helper in
+  `frontend/src/submitLatch.ts`, which maps the live latch signals to
+  `{ kind, dotStatus, label, detail }`. Dot/label vocabulary is reused from
+  `frontend/src/sessionActivity.ts` (no bespoke status colors); the only signal
+  that survives the `runStatus === "running"` collapse is the retained
+  `latestDurableActivityStatusRef` (set at the top of
+  `applySdkActivitySummaryToUi` before any branch).
+- The queued-follow-up panel gains a compact dot + label + a "Why queued?" link
+  to a focused `queue-status` session route (`/sessions/{id}/queue-status`),
+  rendered by `QueueBlockScreen` as a `RunTab` inside `ChatPane` so it can read
+  the client-only run latch the server cannot see. The page and the gate share
+  the same latch inputs, so they agree by construction.
+
+Evidence:
+- Frontend unit: `frontend/src/submitLatch.test.ts` covers every `RunBlockKind`
+  (stopping wins; needs_input vs working; scheduled; submitted/claimed/streaming
+  → working; idle+latch+no-terminal → settling; idle+terminal → reconciling;
+  null → settling) and guards that every emitted `dotStatus` stays within the
+  reused `sessionActivity` dot vocabulary (so the indicator can never render
+  colorless).
+- Frontend route: `frontend/src/appRoutes.test.ts` proves the
+  `/sessions/{id}/queue-status` parse + build round-trip and rejects a trailing
+  subsegment, matching the `session-data` tab contract.
