@@ -14452,6 +14452,7 @@ function RunTurnActivityScreen({
       showAssistantAvatar
       transcriptHref={transcriptHrefForEntry?.(entry)}
       onOpenTranscriptMessage={onOpenTranscriptMessage}
+      onOpenTurn={onOpenTurn}
     />
   );
 

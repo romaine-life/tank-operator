@@ -446,6 +446,12 @@ test("Turns collapse uses server-projected final answers instead of page-local a
   expect(appSource.includes("finalAnswerEntries: loaded.finalAnswerEntries")).toBe(true);
   expect(appSource.includes("collapse: loaded.collapse")).toBe(true);
   expect(appSource.includes('entry.turnDetailRole !== "final_answer"')).toBe(true);
+  // An asking turn's hand-off final answer can be an AskUserQuestion card whose
+  // "View questions"/"Answer in Turns" shortcut needs onOpenTurn; without it the
+  // shortcut silently disappears when the card renders in the final-answer slot.
+  expect(appSource).toMatch(
+    /const renderFinalAnswerEntry = \(entry: TranscriptEntry\) => \([\s\S]{0,700}onOpenTurn=\{onOpenTurn\}/,
+  );
   expect(appSource.includes("selected?.shell?.activityIds ??")).toBe(false);
   expect(appSource.includes("selected?.shell?.activity?.compactedEntryIds ??")).toBe(false);
   expect(appSource.includes("turn_activity_collapse_applied")).toBe(true);
