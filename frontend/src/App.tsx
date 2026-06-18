@@ -19185,8 +19185,20 @@ function ChatPane({
     setEntries([]);
     setTokensUsed(0);
     clearActivityLiveRefreshState();
-    turnActivityLoadsByTurnRef.current = {};
-    setTurnActivityLoadsByTurn({});
+    // Do NOT wipe the per-turn activity load-state here. It is keyed by durable
+    // turn_id and stays valid across a timeline-window reset — including the
+    // becoming-visible ("visible-reactivation") reset fired on every session-tab
+    // switch. Wiping it was the "dead refresh" bug (issue #1313): a tab switch
+    // threw away the already-loaded activity for the displayed turn, then the
+    // reload raced the directory load + SSE bootstrap while the URL still pointed
+    // at the previous session, and lost ~90% of the time — leaving the Turns body
+    // stranded on "Loading activity…" forever. The owner's R-key / menu-round-trip
+    // workarounds only re-drove that load. Preserving this map means a tab switch
+    // re-shows the displayed turn's activity instantly, and the level-triggered
+    // reconciler (evaluateTurnActivityReconcile) still loads anything genuinely
+    // absent. activityEntriesByTurnRef (the chat-timeline inline-activity surface)
+    // and the timeline window below are still reset; they are window state, not
+    // durable per-turn content.
     activityEntriesByTurnRef.current = {};
     selectedTurnPageRef.current = {};
     setSdkConnectionState("idle");
