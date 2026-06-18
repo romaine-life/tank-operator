@@ -301,6 +301,14 @@ answer; it must not visibly move a rendered row from one surface to the other.
   turn's final-answer candidate above the answer card when the awaiting-input
   payload names one, keeps the page kind as `question`, and invalidates the
   cached page when the asking turn's durable high-water mark changes.
+- A stopped or dismissed synthetic AskUserQuestion / ExitPlanMode turn keeps
+  exactly one `question` page per question: the Stop sequence
+  (`turn.interrupt_requested` followed by the dismissing `turn.interrupted`) and
+  any other non-answer terminal fold onto the question page, never a spurious
+  trailing `activity` page. Because a non-`needs_input` turn opens on its last
+  page, that extra page would land the Turns view on a contextless activity page
+  and strand the prompt slot on "Prompt context unavailable"; instead the turn
+  opens on its question page and the slot shows the "Question N of M" heading.
 - Collapsing agent activity in the Turns view keeps the server-projected final
   answer visible, hides ordinary tool/reasoning/progress rows, keeps
   server-owned always-visible context such as background-wake prompts visible,

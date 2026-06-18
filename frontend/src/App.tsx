@@ -8905,20 +8905,21 @@ function RunMetaBlock({
 }
 
 // RunQuestionHeadingMessage renders the Turns-view question page's
-// "Question N of M" heading as a normal agent-authored message rather than an
-// orphaned banner pinned above the column. AskUserQuestion / ExitPlanMode are
-// agent-invoked tools, so the question is the agent speaking to the user — it
-// is attributed to the session (agent) avatar as its source, the same avatar
-// that fronts the agent's other messages (including the question in the asking
-// turn). As the question turn's turn-starter it occupies the prompt slot a user
-// message normally would. See docs/features/transcript/contract.md.
+// "Question N of M" heading as a system-narrated message rather than an
+// orphaned banner pinned above the column. The heading is Tank's framing around
+// the agent's question — the question TEXT is the agent, but the "Question N of M"
+// frame is system narration — so, like session.status banners, RunMetaBlock
+// status lines, and the background-wake prompt, it speaks through the shared
+// system identity (system avatar, data-variant="system"). As the question turn's
+// turn-starter it occupies the prompt slot a user message normally would. See
+// docs/features/transcript/contract.md.
 function RunQuestionHeadingMessage({
-  avatar,
+  systemAvatar,
   answered,
   questionIndex,
   questionCount,
 }: {
-  avatar: AgentAvatar | null;
+  systemAvatar: AgentAvatar | null;
   answered: boolean;
   questionIndex?: number;
   questionCount?: number;
@@ -8932,13 +8933,20 @@ function RunQuestionHeadingMessage({
     <div
       className="run-transcript-message"
       data-slot="message"
-      data-variant="assistant"
-      data-role="assistant"
+      data-variant="system"
+      data-role="system"
       data-kind="question-heading"
       data-answered={answered ? "true" : "false"}
     >
-      <span className="run-msg-ai-avatar" aria-hidden="true">
-        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      <span
+        className="run-msg-system-avatar"
+        aria-hidden={systemAvatar ? undefined : "true"}
+      >
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+        ) : (
+          <BotIcon size={16} strokeWidth={2.1} />
+        )}
       </span>
       <div
         className="run-transcript-message-content"
@@ -14537,11 +14545,11 @@ function RunTurnActivityScreen({
                   />
                 ) : selectedPageInfo?.kind === "question" ? (
                   // No user message started this turn — the agent did, by
-                  // invoking AskUserQuestion / ExitPlanMode. The question is the
-                  // agent speaking, so the turn-starter is attributed to the
-                  // session (agent) avatar, matching the asking turn.
+                  // invoking AskUserQuestion / ExitPlanMode. The "Question N of M"
+                  // heading is Tank's system-narrated framing around that
+                  // question, so the turn-starter speaks through the system avatar.
                   <RunQuestionHeadingMessage
-                    avatar={avatar}
+                    systemAvatar={systemAvatar}
                     answered={selectedPageInfo.answered ?? false}
                     questionIndex={selectedPageInfo.questionIndex}
                     questionCount={selectedPageInfo.questionCount}

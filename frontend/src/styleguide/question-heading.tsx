@@ -2,8 +2,9 @@
 // N of M" indicator used to render as a full-width orphaned banner pinned above
 // the question column (.run-turn-question-page-head). It now renders as a
 // system-user message: system avatar in the gutter, label + position counter in
-// the message column, scrolling in-flow with the rest of the question body. This
-// mirrors how session.status banners, RunMetaBlock status lines, and the
+// the message column, occupying the Turns prompt slot as the question turn's
+// turn-starter. This mirrors how session.status banners, RunMetaBlock status
+// lines, and the
 // background-wake prompt ("when the timer goes off") speak through the shared
 // system-avatar message frame instead of floating with no author.
 //

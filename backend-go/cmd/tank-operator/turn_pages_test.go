@@ -833,6 +833,64 @@ func TestProjectTurnPagesQuestionOnlyTurnSealsAfterDurableAnswer(t *testing.T) {
 	}
 }
 
+// TestProjectTurnPagesQuestionOnlyTurnStopFoldsIntoSingleQuestionPage pins #1312:
+// Stop drives a question turn to its dismissing turn.interrupted via a preceding
+// turn.interrupt_requested on the SAME turn. That pre-terminal marker is not a
+// dismissal terminal, so before the fix it broke the pending-question fold and
+// spilled the Stop sequence into a spurious trailing "activity" page. A dismissed
+// turn defaults to its LAST page, so that extra page opened the Turns view on a
+// contextless activity page and stranded the prompt slot on "Prompt context
+// unavailable". The Stop sequence must fold onto the one question page.
+func TestProjectTurnPagesQuestionOnlyTurnStopFoldsIntoSingleQuestionPage(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("submitted", "00000001", "turn.submitted", "runner", "tank", "turn-2", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("await", "00000002", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{
+			"asking_turn_id":   "turn-1",
+			"question_turn_id": "turn-2",
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-2:item:ask",
+			"questions": []any{
+				map[string]any{"question": "Pick one", "options": []any{map[string]any{"label": "A"}}},
+			},
+		}),
+		// Stop: interrupt_requested precedes the dismissing interrupted, both on
+		// the question turn — the exact sequence the live ledger showed (#1312).
+		projectionTestEvent("interrupt-req", "00000003", "turn.interrupt_requested", "runner", "tank", "turn-2", "", map[string]any{"client_nonce": "stop-1"}),
+		projectionTestEvent("interrupted", "00000004", "turn.interrupted", "runner", "claude", "turn-2", "", map[string]any{"reason": "question_dismissed_by_stop"}),
+	}
+
+	proj := projectTurnPages("turn-2", events)
+	if len(proj.Pages) != 1 {
+		t.Fatalf("page count = %d, want a single question page; the Stop sequence must not spill a trailing activity page: %#v", len(proj.Pages), proj.Pages)
+	}
+	page := proj.Pages[0]
+	if page.Kind != "question" {
+		t.Fatalf("page kind = %q, want question", page.Kind)
+	}
+	if page.QuestionIndex != 1 || page.QuestionCount != 1 {
+		t.Fatalf("page index/count = %d/%d, want 1/1", page.QuestionIndex, page.QuestionCount)
+	}
+	if page.Answered {
+		t.Fatalf("dismissed question must not report answered")
+	}
+	if got := defaultTurnActivityPageNumber(proj); got != page.Number {
+		t.Fatalf("default page = %d, want the question page %d; a trailing activity page would open the Turns view contextless and strand the prompt slot on %q", got, page.Number, "Prompt context unavailable")
+	}
+	var card map[string]any
+	for _, entry := range page.Entries {
+		if entry["metaKind"] == "awaiting_input" {
+			card = entry
+		}
+	}
+	if card == nil {
+		t.Fatalf("no awaiting card on the question page: %#v", page.Entries)
+	}
+	awaiting := card["awaitingInput"].(map[string]any)
+	if dismissed, _ := awaiting["dismissed"].(bool); !dismissed {
+		t.Fatalf("awaiting card not dismissed after Stop: %#v", awaiting)
+	}
+}
+
 func TestProjectTurnPagesLegacySameTurnAwaitingInputStillShowsInvocationMarkerPage(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("await", "00000001", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
