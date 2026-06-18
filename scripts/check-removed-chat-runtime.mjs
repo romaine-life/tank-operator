@@ -8,6 +8,10 @@ import {
   collectTestSlotProvisioningFailures,
   TEST_SLOT_PROVISIONING_FAILURE_HINT,
 } from "./check-removed-test-slot-agent-provisioning.mjs";
+import {
+  collectHotSwapGateFailures,
+  HOT_SWAP_GATE_FAILURE_HINT,
+} from "./check-removed-hot-swap-verify-gate.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -918,6 +922,14 @@ for await (const filePath of walk(repoRoot)) {
 // workflow step.
 for (const failure of await collectTestSlotProvisioningFailures()) {
   failures.push(`${failure} — ${TEST_SLOT_PROVISIONING_FAILURE_HINT}`);
+}
+
+// Retired governed-merge gate names (the renamed hot-swap verify endpoint and
+// its handler/types/funcs/proxy caller). Scoped scan lives in its own module;
+// merged here so it rides this guard's CI wiring (backend-go/**,
+// claude-container/**, docs/**, scripts/**) without a separate workflow step.
+for (const failure of await collectHotSwapGateFailures()) {
+  failures.push(`${failure} — ${HOT_SWAP_GATE_FAILURE_HINT}`);
 }
 
 if (failures.length > 0) {

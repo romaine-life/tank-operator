@@ -43,7 +43,7 @@ type controlActionEventJSON struct {
 	Payload       json.RawMessage `json:"payload,omitempty"`
 }
 
-type hotSwapVerificationRequest struct {
+type governedMergeVerificationRequest struct {
 	Repo             string `json:"repo"`
 	Branch           string `json:"branch"`
 	SHA              string `json:"sha"`
@@ -51,7 +51,7 @@ type hotSwapVerificationRequest struct {
 	SourceTool       string `json:"source_tool,omitempty"`
 }
 
-type hotSwapVerificationResponse struct {
+type governedMergeVerificationResponse struct {
 	Allowed          bool     `json:"allowed"`
 	Reasons          []string `json:"reasons,omitempty"`
 	Repo             string   `json:"repo"`
@@ -1880,8 +1880,8 @@ func (s *appServer) handleInternalGetPRLaneAuthorization(w http.ResponseWriter, 
 	writeJSON(w, status, resp)
 }
 
-func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.Request) {
-	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/hot-swap/verify")
+func (s *appServer) handleInternalVerifyGovernedMerge(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/governed-merge/verify")
 	if user == nil {
 		return
 	}
@@ -1894,7 +1894,7 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
-	var body hotSwapVerificationRequest
+	var body governedMergeVerificationRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
@@ -1920,9 +1920,9 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	resp := evaluateHotSwapVerification(rows, owner, name, branch, sha)
+	resp := evaluateGovernedMergeVerification(rows, owner, name, branch, sha)
 	if s.mcpGitHub != nil && s.ciWatches != nil {
-		resp = evaluateHotSwapPublishVerification(rows, owner, name, branch, sha)
+		resp = evaluateGovernedMergePublishVerification(rows, owner, name, branch, sha)
 		registered, err := s.registerAndReconcilePRReadiness(r.Context(), prReadinessRegistration{
 			SessionID:       sessionID,
 			OwnerEmail:      user.ActorEmail,
@@ -1931,7 +1931,7 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 			Branch:          branch,
 			ExpectedHeadSHA: sha,
 			CheckState:      "pending",
-			Detail:          "PR readiness registered for hot-swap/test-slot gate.",
+			Detail:          "PR readiness registered for governed-merge gate.",
 		}, ciWatchReconcileHandoff)
 		if err != nil {
 			resp.Reasons = append(resp.Reasons, "live PR readiness unavailable: "+err.Error())
@@ -1940,7 +1940,7 @@ func (s *appServer) handleInternalVerifyHotSwap(w http.ResponseWriter, r *http.R
 				prNumber := registered.Watch.PRNumber
 				resp.PRNumber = &prNumber
 			}
-			applyHotSwapReadinessResult(&resp, registered.Result, sha)
+			applyGovernedMergeReadinessResult(&resp, registered.Result, sha)
 		}
 		resp.Allowed = resp.PublishVerified && resp.CIVerified && resp.MergeVerified && len(resp.Reasons) == 0
 	}
@@ -2281,8 +2281,8 @@ func isFullGitSHA(value string) bool {
 	return true
 }
 
-func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) hotSwapVerificationResponse {
-	resp := hotSwapVerificationResponse{}
+func evaluateGovernedMergeVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) governedMergeVerificationResponse {
+	resp := governedMergeVerificationResponse{}
 	var sawPublish, sawCI, sawMerge bool
 	for _, row := range rows {
 		if row.RepoOwner != owner || row.RepoName != repo || !strings.EqualFold(row.ResultSHA, sha) {
@@ -2360,8 +2360,8 @@ func evaluateHotSwapVerification(rows []pgstore.ControlActionEvent, owner, repo,
 	return resp
 }
 
-func evaluateHotSwapPublishVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) hotSwapVerificationResponse {
-	resp := hotSwapVerificationResponse{}
+func evaluateGovernedMergePublishVerification(rows []pgstore.ControlActionEvent, owner, repo, branch, sha string) governedMergeVerificationResponse {
+	resp := governedMergeVerificationResponse{}
 	sawPublish := false
 	for _, row := range rows {
 		if row.RepoOwner != owner || row.RepoName != repo || !strings.EqualFold(row.ResultSHA, sha) {
@@ -2389,7 +2389,7 @@ func evaluateHotSwapPublishVerification(rows []pgstore.ControlActionEvent, owner
 	return resp
 }
 
-func applyHotSwapReadinessResult(resp *hotSwapVerificationResponse, result ciWatchReconcileResult, sha string) {
+func applyGovernedMergeReadinessResult(resp *governedMergeVerificationResponse, result ciWatchReconcileResult, sha string) {
 	resp.ReadinessState = ciWatchToolState(result.Status)
 	resp.CheckState = result.CheckState
 	resp.MergeableState = result.MergeableState

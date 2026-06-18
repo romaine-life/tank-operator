@@ -91,6 +91,29 @@ All metric names are prefixed `tank_`. The full namespace:
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.
+- `tank_test_slot_pending_provision_oldest_age_seconds` /
+  `tank_test_slot_provision_redrive_total{kind}` /
+  `tank_test_slot_provision_guard_total{result}` — the durable
+  pending-provision backstop for deterministic test-slot provisioning
+  (`pending_test_provisions` + `pending_provision_reconcile_loop.go`). The two
+  background entry points (`provisionOrchestrationReviewSlot`,
+  `runInteractiveTestWorkflow`) run a validate→settle-wait→provision gate in a
+  fire-and-forget goroutine that can wait ~23m for CI; an orchestrator restart
+  mid-wait used to drop the provision with no retry. A durable record is written
+  'pending' at kickoff and terminalized at finish, and a reconcile loop re-drives
+  any record stranded in 'pending' past the settle cap + grace (~25m),
+  idempotently (claim + already-provisioned short-circuit). The **gauge** is the
+  age of the oldest still-'pending' record (0 when none) — the stuck-provision
+  signal `TankTestSlotProvisionStuck` fires on, mirroring `TankCIWatchStalled`.
+  The **redrive counter** (`kind` = `interactive` | `orchestration-review`)
+  increments once per stranded record the backstop actually re-drives — a flat
+  series while the gauge climbs means the loop is not running or every re-drive
+  fails to reach a verdict. The **guard counter** is the interactive endpoint's
+  double-trigger outcomes: `launched` (first trigger admitted), `in_flight` (a
+  second trigger refused 409 because a provision for the target is already
+  pending), `test_state_active` (refused 409 because a test environment is
+  already up for the session). All three label sets are bounded, and `scope` is
+  not a label, so test-slot proliferation does not bloat cardinality.
 - `tank_session_bus_persister_restart_total` +
   `tank_session_bus_stream_{messages,bytes,max_messages,max_bytes,consumers}`
   — supervised persister restarts (a restart is the supervision working;
@@ -1111,6 +1134,14 @@ declares one rule group per subsystem:
   hole). `TankSessionEventStreamTruncated` pages when retention
   discarded events the persister never stored — permanent, unrepairable
   loss that only follows a long-unaddressed backlog.
+- **CI-watch / test-slot backstops**: `TankCIWatchStalled` (a governed-PR
+  CI watch stuck 'watching' with no event for over an hour — the dropped-webhook
+  stall class) and `TankTestSlotProvisionStuck` (a deterministic test-slot
+  provision stuck 'pending' for over an hour — a fire-and-forget gate goroutine
+  lost to an orchestrator restart mid-settle-wait that the reconcile backstop
+  did not recover). Both are durable restart-recovery backstops, not CI polls;
+  the test-slot alert's runbook starts from `pending_test_provisions` and the
+  `tank_test_slot_provision_redrive_total{kind}` counter.
 - **Transcript navigation**: `TankChatScrollUserAtBottomLatched` fires
   when BOTH the browser-side NavigationMode state machine reports
   rising "entered historical-anchor" transitions AND the

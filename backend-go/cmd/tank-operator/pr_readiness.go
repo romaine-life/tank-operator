@@ -47,8 +47,11 @@ type prReadinessRequestBody struct {
 }
 
 // handleInternalRegisterPRReadiness is Tank's neutral PR/head readiness entry
-// point. Older routes such as /ci-watches and /hot-swap/verify are compatibility
-// facades over the same registration + reconcile process.
+// point: it registers a PR/head readiness request and reconciles it against
+// live GitHub CI + mergeability. The governed-merge gate
+// (/governed-merge/verify) and the legacy /ci-watches registration both drive
+// this same registration + reconcile process; the governed-merge gate layers
+// governed-publish-proof and an allow/deny decision on top of it.
 func (s *appServer) handleInternalRegisterPRReadiness(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/pr-readiness")
 	if user == nil {
