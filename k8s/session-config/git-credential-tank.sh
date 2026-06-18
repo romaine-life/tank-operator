@@ -65,6 +65,25 @@ case "$(printf '%s' "${TANK_RESTRICTED_GIT:-false}" | tr '[:upper:]' '[:lower:]'
   1|true|yes|on) restricted=true ;;
 esac
 if [ "$restricted" = "true" ]; then
+  # Break-glass elevation. Before falling back to the read-only mint, ask the
+  # in-pod break-glass server (:9999) — the single source of truth for grants —
+  # whether an active, repo-covering, UNLIMITED-branch grant exists. If so it
+  # mints the App's FULL permission set (full=true) and audits the use, so
+  # `git push`/PR writes work automatically while the grant is live. No
+  # qualifying grant -> {"active":false} and we keep the read-only default.
+  bg_url="${TANK_BREAK_GLASS_MINT_URL:-http://127.0.0.1:9999/mint-git-token}"
+  bg_token="$(curl -sS -m 25 \
+    -H "Authorization: Bearer ${auth_tok}" \
+    -H "Content-Type: application/json" \
+    -X POST "$bg_url" \
+    -d "$(printf '{"repos":["%s"]}' "$repo")" 2>/dev/null \
+    | jq -r 'select(.active==true) | .token // empty' 2>/dev/null \
+    | head -n1 || true)"
+  if [ -n "$bg_token" ]; then
+    printf 'username=x-access-token\n'
+    printf 'password=%s\n' "$bg_token"
+    exit 0
+  fi
   args="$(printf '{"repos":["%s"],"write":false,"workflows":false,"full":false}' "$repo")"
 else
   args="$(printf '{"repos":["%s"],"full":true,"write":true,"workflows":true}' "$repo")"

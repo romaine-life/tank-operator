@@ -515,6 +515,185 @@ func TestGhTankWrapperMintsModeAwareToken(t *testing.T) {
 	}
 }
 
+// In restricted mode, the git credential helper first consults the in-pod
+// break-glass server (the grant source of truth). An active unlimited grant
+// yields a FULL token automatically (no read-only fallback); no grant falls
+// back to the read-only mint exactly as before.
+func TestGitCredentialTankHelperBreakGlassElevation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("credential helper script test runs on POSIX only")
+	}
+	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve credential helper path: %v", err)
+	}
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	run := func(breakGlassURL, readOnlyURL string) string {
+		cmd := exec.Command("sh", helperSrc, "get")
+		cmd.Env = []string{
+			"TANK_RESTRICTED_GIT=true",
+			"TANK_BREAK_GLASS_MINT_URL=" + breakGlassURL,
+			"TANK_GIT_CRED_MCP_URL=" + readOnlyURL,
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"PATH=" + os.Getenv("PATH"),
+		}
+		cmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\npath=romaine-life/tank-operator.git\n\n")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("helper failed: %v\noutput:\n%s", err, string(out))
+		}
+		return string(out)
+	}
+
+	t.Run("active grant mints full token without read-only fallback", func(t *testing.T) {
+		var bgBody string
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			bgBody = string(body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":true,"token":"ghs_fulltoken","full_github_api":true}`))
+		}))
+		defer bg.Close()
+		readOnlyHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			readOnlyHit = true
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_fulltoken") {
+			t.Fatalf("expected full break-glass token, got:\n%s", out)
+		}
+		if readOnlyHit {
+			t.Fatalf("read-only mint must not be hit when a grant is active")
+		}
+		if !strings.Contains(bgBody, "romaine-life/tank-operator") {
+			t.Fatalf("break-glass request missing repo: %s", bgBody)
+		}
+	})
+
+	t.Run("no grant falls back to read-only mint", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":false}`))
+		}))
+		defer bg.Close()
+		var roBody string
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			roBody = string(body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "password=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token, got:\n%s", out)
+		}
+		if !strings.Contains(roBody, "\"write\":false") || strings.Contains(roBody, "\"full\":true") {
+			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
+		}
+	})
+}
+
+// The gh wrapper mirrors the credential helper: an active unlimited grant makes
+// the in-pod break-glass server hand `gh` a FULL token; no grant falls back to
+// the read-only mint.
+func TestGhTankWrapperBreakGlassElevation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("gh wrapper script test runs on POSIX only")
+	}
+	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
+	if err != nil {
+		t.Fatalf("resolve gh wrapper path: %v", err)
+	}
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	fakeGh := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'GH_TOKEN=%s\\n' \"$GH_TOKEN\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	emptyWorkspace := t.TempDir()
+
+	run := func(breakGlassURL, readOnlyURL string) string {
+		cmd := exec.Command("sh", wrapperSrc, "pr", "view", "--repo", "romaine-life/tank-operator")
+		cmd.Env = []string{
+			"TANK_RESTRICTED_GIT=true",
+			"TANK_REAL_GH=" + fakeGh,
+			"TANK_BREAK_GLASS_MINT_URL=" + breakGlassURL,
+			"TANK_GIT_CRED_MCP_URL=" + readOnlyURL,
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"TANK_WORKSPACE_DIR=" + emptyWorkspace,
+			"PATH=" + os.Getenv("PATH"),
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("wrapper failed: %v\noutput:\n%s", err, string(out))
+		}
+		return string(out)
+	}
+
+	t.Run("active grant exports full token without read-only fallback", func(t *testing.T) {
+		var bgBody string
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			bgBody = string(body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":true,"token":"ghs_fulltoken"}`))
+		}))
+		defer bg.Close()
+		readOnlyHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			readOnlyHit = true
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "GH_TOKEN=ghs_fulltoken") {
+			t.Fatalf("expected gh to receive full break-glass token, got:\n%s", out)
+		}
+		if readOnlyHit {
+			t.Fatalf("read-only mint must not be hit when a grant is active")
+		}
+		if !strings.Contains(bgBody, "romaine-life/tank-operator") {
+			t.Fatalf("break-glass request missing repo: %s", bgBody)
+		}
+	})
+
+	t.Run("no grant falls back to read-only mint", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":false}`))
+		}))
+		defer bg.Close()
+		var roBody string
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			roBody = string(body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "GH_TOKEN=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token, got:\n%s", out)
+		}
+		if !strings.Contains(roBody, "\"write\":false") || strings.Contains(roBody, "\"full\":true") {
+			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
+		}
+	})
+}
+
 // TestSessionPodBootstrapScript_PerMode executes the in-pod bootstrap script
 // against each wizard mode in a temp HOME and asserts the right config files
 // land on disk. This is the regression guard the deletion in 650c282 (which

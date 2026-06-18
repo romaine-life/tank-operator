@@ -52,7 +52,25 @@ done
 [ -n "$repos" ] || exec "$REAL_GH" "$@"
 repos="[${repos%,}]"
 
+# Break-glass elevation (restricted only): before the read-only mint, ask the
+# in-pod break-glass server (:9999, the grant source of truth) whether an
+# active, repo-covering, UNLIMITED-branch grant exists. If so it mints the App's
+# FULL permission set and audits the use, so `gh pr edit`/`ready`/merge, issues,
+# etc. work automatically while the grant is live. No qualifying grant ->
+# {"active":false} and we keep the read-only default.
 if [ "$restricted" = "true" ]; then
+  bg_url="${TANK_BREAK_GLASS_MINT_URL:-http://127.0.0.1:9999/mint-git-token}"
+  bg_token="$(curl -sS -m 25 \
+    -H "Authorization: Bearer ${auth_tok}" \
+    -H "Content-Type: application/json" \
+    -X POST "$bg_url" \
+    -d "$(printf '{"repos":%s}' "$repos")" 2>/dev/null \
+    | jq -r 'select(.active==true) | .token // empty' 2>/dev/null \
+    | head -n1 || true)"
+  if [ -n "$bg_token" ]; then
+    export GH_TOKEN="$bg_token"
+    exec "$REAL_GH" "$@"
+  fi
   mint_args="$(printf '{"repos":%s,"write":false,"workflows":false,"full":false}' "$repos")"
 else
   mint_args="$(printf '{"repos":%s,"full":true,"write":true,"workflows":true}' "$repos")"
