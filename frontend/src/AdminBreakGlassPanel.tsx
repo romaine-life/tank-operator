@@ -100,7 +100,7 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
     ];
     if (includeGitHub) {
       lines.push(
-        "GitHub: call request_git_break_glass again to activate tank-git-break-glass, then use mint_full_git_token or push_current_head for the approved work.",
+        "GitHub: your gh/git are now elevated to full GitHub API write (gh pr edit/ready/merge, issues, …) automatically for the approved repo scope. Optionally call request_git_break_glass again to also activate tank-git-break-glass (mint_full_git_token / push_current_head), then continue the approved work.",
       );
     }
     if (includeAzure) {
@@ -172,7 +172,10 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
               ? { kind: "all_repos" }
               : { kind: "current_repo", repo: repo.trim() },
           branch_scope: { kind: "unlimited" },
-          operations: ["mint_full_git_token", "push_current_head"],
+          // Unlimited-branch grants carry the App's full GitHub API write; Tank
+          // canonicalizes this on the server, but send it explicitly so the
+          // approval intent is unambiguous.
+          operations: ["mint_full_git_token", "push_current_head", "full_github_api"],
         },
       );
     }
@@ -303,6 +306,15 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
               </label>
             )}
           </div>
+          <p className="break-glass-warning" role="note">
+            ⚠️ This grant is unlimited-branch, so it carries <strong>full GitHub
+            API write</strong> (pull requests, issues, merges — the App's entire
+            permission set) for {repoScope === "all_repos" ? "every repo the installation can reach" : "the selected repo"} until it expires.
+            The session's <code>gh</code>/<code>git</code> use it automatically
+            and it <strong>bypasses the governed PR ledger</strong>
+            (rename/update-body/merge). Approve only if you accept that blast
+            radius.
+          </p>
         </div>
       )}
       {includeModel && (

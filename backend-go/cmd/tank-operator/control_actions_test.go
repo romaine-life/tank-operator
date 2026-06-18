@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1105,7 +1106,9 @@ func TestHandleApproveBreakGlassRequestPersistsGitGrantForRequestOwner(t *testin
 		t.Fatalf("approved_by = %v", payload["approved_by"])
 	}
 	ops, _ := payload["operations"].([]any)
-	if len(ops) != 1 || ops[0] != "mint_full_git_token" {
+	// Unlimited-branch grants now carry full GitHub API write (full_github_api)
+	// so the session's gh/git get the App's entire permission set automatically.
+	if len(ops) != 2 || ops[0] != "mint_full_git_token" || ops[1] != "full_github_api" {
 		t.Fatalf("operations = %v", payload["operations"])
 	}
 	if _, ok := payload["repo_scope"].(map[string]any); !ok {
@@ -1159,7 +1162,7 @@ func TestHandleApproveBreakGlassRequestPersistsWorkflowGrantOperation(t *testing
 		t.Fatal(err)
 	}
 	ops, _ := payload["operations"].([]any)
-	if len(ops) != 3 || ops[0] != "mint_full_git_token" || ops[1] != "push_current_head" || ops[2] != "workflows" {
+	if len(ops) != 4 || ops[0] != "mint_full_git_token" || ops[1] != "push_current_head" || ops[2] != "workflows" || ops[3] != "full_github_api" {
 		t.Fatalf("operations = %v", payload["operations"])
 	}
 }
@@ -1490,7 +1493,8 @@ func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
 		t.Fatalf("body = %#v", body)
 	}
 	ops, _ := body["operations"].([]any)
-	if len(ops) != 2 || ops[0] != "mint_full_git_token" || ops[1] != "workflows" {
+	// Unlimited-branch grant -> full_github_api is appended by the canonicalizer.
+	if len(ops) != 3 || ops[0] != "mint_full_git_token" || ops[1] != "workflows" || ops[2] != "full_github_api" {
 		t.Fatalf("operations = %v", body["operations"])
 	}
 	if store.listOwner != "owner@example.test" || store.listSession != "47" {
@@ -2248,6 +2252,59 @@ func TestHandleInternalGetGitBreakGlassGrantMatchesExplicitRepoListAndBranchLimi
 	}
 	if body["active"] != true || body["remaining_branches"] != float64(1) {
 		t.Fatalf("body = %#v", body)
+	}
+	// Least-privilege: a branch/count-scoped grant must NOT carry full_github_api
+	// — it stays on the governed push path and never elevates the wrappers.
+	ops, _ := body["operations"].([]any)
+	for _, op := range ops {
+		if op == "full_github_api" {
+			t.Fatalf("count-scoped grant must not carry full_github_api: %v", body["operations"])
+		}
+	}
+}
+
+func TestNormalizeBreakGlassOperationsBindsFullAPIToUnlimitedBranch(t *testing.T) {
+	// Unlimited-branch grant: full_github_api is force-added even if the request
+	// did not ask for it.
+	unlimited := normalizeBreakGlassOperations([]string{"mint_full_git_token", "push_current_head"}, true)
+	if !slices.Contains(unlimited, gitBreakGlassOpFullAPI) {
+		t.Fatalf("unlimited grant must carry full_github_api: %v", unlimited)
+	}
+	// Branch/count-scoped grant: full_github_api is stripped even if requested,
+	// so a request cannot smuggle full-API write into a least-privilege grant.
+	restricted := normalizeBreakGlassOperations([]string{"mint_full_git_token", "push_current_head", "full_github_api"}, false)
+	if slices.Contains(restricted, gitBreakGlassOpFullAPI) {
+		t.Fatalf("branch-restricted grant must not carry full_github_api: %v", restricted)
+	}
+}
+
+func TestGitBreakGlassApprovalTextReflectsFullAPIForUnlimited(t *testing.T) {
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	unlimitedPayload, _ := json.Marshal(map[string]any{
+		"operations":   normalizeBreakGlassOperations([]string{"mint_full_git_token", "push_current_head"}, true),
+		"branch_scope": map[string]any{"kind": "unlimited"},
+	})
+	unlimited := pgstore.ControlActionEvent{RepoOwner: "romaine-life", RepoName: "tank-operator", Payload: unlimitedPayload}
+	if !grantGrantsFullGitHubAPI(unlimited) {
+		t.Fatalf("expected unlimited grant to report full GitHub API write")
+	}
+	if !strings.Contains(gitBreakGlassApprovalDisplayText(unlimited, expiresAt), "full GitHub API write") {
+		t.Fatalf("display text missing full GitHub API write: %q", gitBreakGlassApprovalDisplayText(unlimited, expiresAt))
+	}
+	if !strings.Contains(gitBreakGlassApprovalPrompt(unlimited, expiresAt), "full GitHub API write") {
+		t.Fatalf("approval prompt missing full GitHub API write: %q", gitBreakGlassApprovalPrompt(unlimited, expiresAt))
+	}
+
+	restrictedPayload, _ := json.Marshal(map[string]any{
+		"operations":   normalizeBreakGlassOperations([]string{"push_current_head"}, false),
+		"branch_scope": map[string]any{"kind": "count", "count": 2},
+	})
+	restricted := pgstore.ControlActionEvent{RepoOwner: "romaine-life", RepoName: "tank-operator", Payload: restrictedPayload}
+	if grantGrantsFullGitHubAPI(restricted) {
+		t.Fatalf("count-scoped grant must not report full GitHub API write")
+	}
+	if strings.Contains(gitBreakGlassApprovalDisplayText(restricted, expiresAt), "full GitHub API write") {
+		t.Fatalf("count-scoped display text must not claim full GitHub API write")
 	}
 }
 

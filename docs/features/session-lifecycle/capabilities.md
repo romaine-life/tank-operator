@@ -407,8 +407,13 @@ Open hardening:
   Workflow-file pushes are an explicit GitHub break-glass flavor:
   `request_git_break_glass(workflows=true)` records the extra `workflows`
   operation, and `mint_full_git_token(workflows=true)` is refused unless the
-  active grant includes it. Ordinary break-glass git tokens are contents-write
-  only, not full App-scope tokens.
+  active grant includes it. Branch/count-scoped break-glass git tokens are
+  contents(+workflows)-write only, not full App-scope tokens, and stay on the
+  governed push path. An **unlimited-branch** grant is different: it carries the
+  `full_github_api` operation and mints the App's FULL permission set (pull
+  requests, issues, merges) so the agent's `gh`/`git` get full raw GitHub API
+  write automatically — see "Break-glass full GitHub API elevation (unlimited
+  grants)" below.
   Once an active grant exists, calling
   `request_git_break_glass` again activates a separate `tank-git-break-glass`
   MCP server for the session/repo and writes runtime MCP config for Codex and
@@ -594,6 +599,16 @@ Contract impact:
   mode they request `mint_clone_token` with no `write`/`workflows`/`full`, so
   mcp-github mints a `{contents: read, metadata: read}` token. Non-restricted
   mode is unchanged (full read/write).
+- **Break-glass elevation (restricted mode).** Before the read-only mint, both
+  wrappers first POST to the in-pod break-glass server's `POST /mint-git-token`
+  endpoint (`:9999`, the grant source of truth). If an active, repo-covering,
+  **unlimited-branch** break-glass grant exists, that endpoint mints the App's
+  FULL permission set (`full=true`) and audits the use, so the wrappers hand the
+  shell a full token and `gh pr edit`/`ready`/merge, issues, and `git push`
+  "just work" automatically while the grant is live. With no qualifying grant
+  the endpoint returns `{"active": false}` and the wrappers keep the read-only
+  default unchanged. See "Break-glass full GitHub API elevation (unlimited
+  grants)" below.
 - `install-agent-git-template.sh` installs the credential helper in **both**
   modes; the elevated cluster kubeconfig stays non-restricted-only.
 - `repo-cloner.sh` no longer writes an empty local `credential.helper` in
@@ -619,6 +634,113 @@ Evidence:
   assert the read-only request shape in restricted mode;
   `TestInstallAgentGitTemplateScriptRunsUnderSh` asserts the helper installs in
   restricted mode).
+
+## Break-glass full GitHub API elevation (unlimited grants)
+
+Status: complete
+
+Intent:
+"Unlimited break-glass should give EVERY GitHub permission." An UNLIMITED
+break-glass grant (`repo_scope: all_repos`, `branch_scope: unlimited`,
+admin-approved + TTL-bounded) is the explicit "this session needs to operate as
+a full maintainer" escape hatch. Before this capability it only widened the
+repo/branch reach of `git push`; the permission ceiling stayed hardcoded to
+`contents`, so the agent still could not do `gh pr edit`/`ready`/merge, issue,
+or other GitHub API writes, and `gh`/`git` never consulted the grant at all.
+This capability closes that gap: while an unlimited grant is active, the
+session's `gh` and `git` operate with the GitHub App's FULL permission set
+automatically, with no manual `GH_TOKEN` juggling. Branch/count-scoped grants
+are unchanged — they stay least-privilege on the governed push path.
+
+This is a deliberate, admin-consented blast-radius widening: a full raw GitHub
+App token bypasses the governed PR ledger (the `rename_current_session_pr` /
+`update_current_session_pr_body` / `merge_current_session_pr` Tank tools and
+their `github.pull_request.*` control-action records). It is therefore gated on
+an explicit, audited, TTL-bounded grant and surfaced in the approval prompt,
+the admin panel, and the audit ledger so the approving human accepts it
+knowingly.
+
+Affected contracts:
+- Session Lifecycle
+- Observability
+
+Enforcement / source of truth:
+- The grant's `full_github_api` operation is the authorization signal. It is
+  **bound to the branch scope, not the request**: the orchestrator's
+  `normalizeBreakGlassOperations` force-ADDs it for unlimited-branch grants and
+  force-STRIPs it for branch/count-scoped grants, so a request cannot smuggle
+  full-API write into a least-privilege grant and an unlimited grant always
+  advertises it (`backend-go/cmd/tank-operator/control_actions.go`).
+- The break-glass MCP server (`mcp-auth-proxy` sidecar, `:9999`) is the single
+  source of truth the wrappers consult. It already performs the durable Tank
+  grant lookup (`GET /api/internal/sessions/{id}/git-break-glass/grant`) for
+  `mint_full_git_token` / `push_current_head`; the wrappers reach it at the
+  dedicated `POST /mint-git-token` route. That route deliberately does NOT
+  require the agent-facing MCP activation marker — the durable, admin-approved,
+  TTL-bounded grant is the authorization; the marker only governs whether the
+  agent-facing privileged MCP tools are surfaced. Expiry re-locks automatically
+  because the grant is re-looked-up on every mint.
+- **Hot-path cost/scale.** The wrapper mint runs on every restricted git/`gh`
+  op (overwhelmingly the no-grant case), so the `:9999` server caches the grant
+  lookup RESULT (not a token) with a ~10s TTL, keyed by repo. A burst of ops in
+  a no-grant session makes ONE Tank call, not N (negative results are cached);
+  the durable grant stays the authz. A cached POSITIVE is never served past the
+  grant's own `expires_at`, so expiry re-locks within ~TTL. The wrapper scripts
+  also use a short (`-m 3`) timeout on the optional `:9999` pre-check so a slow
+  or unreachable Tank falls back to the read-only mint fast instead of stalling
+  git; the read-only `mint_clone_token` call keeps its normal timeout.
+
+Contract impact:
+- **Clamp 1 — `mint_full_git_token`.** The break-glass MCP mint
+  (`_handle_break_glass_mint_token`) now mints with `full=true` for the only
+  case it can reach: an unlimited-branch grant (the branch-restricted refusal
+  fires first). The raw break-glass git token therefore carries the App's full
+  permission set, not just contents(+workflows).
+- **Clamps 2 & 3 — the wrappers.** `gh-tank-wrapper.sh` and
+  `git-credential-tank.sh` are break-glass-aware in restricted mode: they
+  consult `:9999` first and use a full token when an active unlimited grant
+  covers the repo(s); otherwise they keep the read-only `mint_clone_token`
+  default. No active grant → restricted sessions stay READ-ONLY exactly as
+  before.
+- **Governance + audit.** The grant operations carry `full_github_api`; the
+  agent approval turn (`gitBreakGlassApprovalPrompt`/`DisplayText`) and the
+  admin grant panel (`frontend/src/AdminBreakGlassPanel.tsx`) both state "full
+  GitHub API write … bypasses the governed PR ledger"; every full-API mint
+  (raw MCP path and wrapper path) is recorded as a `github.break_glass.token`
+  control-action use via `_record_break_glass_use` (the wrapper path tags
+  `channel: wrapper`, `full_github_api: true`), counted by
+  `tank_control_action_events_total`.
+- **Least privilege preserved.** Branch/count-scoped grants never get
+  `full_github_api`, never mint a raw full token, and stay on the governed
+  `publish_current_head` / `push_current_head` path.
+
+Deploy caveat:
+- This changes the session image (wrappers), the `mcp-auth-proxy` sidecar, and
+  the orchestrator, so it only takes effect for NEW sessions after the images
+  rebuild + deploy. It does NOT retroactively elevate an already-running
+  session.
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_break_glass_mint_token_unlimited_mints_full_github_api_scope`,
+  `test_break_glass_mint_token_refuses_branch_restricted_grant`,
+  `test_break_glass_operations_appends_full_api_only_when_unlimited`,
+  `test_break_glass_wrapper_mint_full_token_for_active_unlimited_grant`,
+  `test_break_glass_wrapper_mint_inactive_without_grant`,
+  `test_break_glass_wrapper_mint_inactive_for_branch_restricted_grant`,
+  `test_break_glass_wrapper_mint_inactive_when_repo_outside_grant_scope`,
+  `test_break_glass_wrapper_mint_negative_result_is_cached`,
+  `test_active_break_glass_grant_cached_serves_positive_within_ttl`,
+  `test_active_break_glass_grant_cached_does_not_serve_positive_past_expiry`).
+- `backend-go/cmd/tank-operator/control_actions_test.go`
+  (`TestNormalizeBreakGlassOperationsBindsFullAPIToUnlimitedBranch`,
+  `TestGitBreakGlassApprovalTextReflectsFullAPIForUnlimited`, and the updated
+  grant/approve tests asserting `full_github_api` for unlimited and its absence
+  for count-scoped grants).
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperBreakGlassElevation`,
+  `TestGhTankWrapperBreakGlassElevation`): the wrappers mint full under an
+  active grant and fall back to read-only without one.
 
 ## Non-Restricted Session Read-Only DB Access
 

@@ -112,6 +112,15 @@ const (
 	gitBreakGlassOpMintToken = "mint_full_git_token"
 	gitBreakGlassOpPushHead  = "push_current_head"
 	gitBreakGlassOpWorkflows = "workflows"
+	// gitBreakGlassOpFullAPI marks a grant that carries the GitHub App's FULL
+	// permission set (pull_requests, issues, merges — the whole API), not just
+	// contents. It is granted ONLY for unlimited-branch grants: those let the
+	// session's gh/git operate with full raw GitHub API write, which bypasses the
+	// governed PR ledger (rename/update_body/merge Tank tools). Branch/count-scoped
+	// grants stay least-privilege on the governed push path and never carry it.
+	// Keeping it an explicit operation makes the widened blast radius visible in
+	// the grant event, the approval prompt/display text, and the audit ledger.
+	gitBreakGlassOpFullAPI = "full_github_api"
 )
 
 func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *http.Request) {
@@ -866,7 +875,6 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 	if ttl > 24*3600 {
 		ttl = 24 * 3600
 	}
-	operations := normalizeBreakGlassOperations(in.Operations)
 	now := time.Now().UTC()
 	expiresAt := now.Add(time.Duration(ttl) * time.Second)
 	repo := in.RepoOwner + "/" + in.RepoName
@@ -878,6 +886,9 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 	if strings.TrimSpace(resolvedBranchScope.Kind) == "" {
 		resolvedBranchScope = branchScope{Kind: "unlimited"}
 	}
+	// full_github_api is bound to the (resolved) branch scope: only an
+	// unlimited-branch grant carries the App's full GitHub API write.
+	operations := normalizeBreakGlassOperations(in.Operations, strings.TrimSpace(resolvedBranchScope.Kind) == "unlimited")
 	payload, _ := json.Marshal(map[string]any{
 		"approved_by":      strings.TrimSpace(in.ApprovedBy),
 		"expires_at":       expiresAt.Format(time.RFC3339),
@@ -976,18 +987,26 @@ func gitBreakGlassApprovalDisplayText(grant pgstore.ControlActionEvent, expiresA
 	if repo == "" {
 		repo = "the approved repo scope"
 	}
+	scope := ""
+	if grantGrantsFullGitHubAPI(grant) {
+		scope = " This grant carries full GitHub API write (pull requests, issues, merges — the App's entire permission set), which bypasses the governed PR ledger; the session's gh/git use it automatically while the grant is live."
+	}
 	expiry := ""
 	if !expiresAt.IsZero() {
 		expiry = " The grant expires at " + expiresAt.UTC().Format(time.RFC3339) + "."
 	}
-	return "Break-glass approval granted for " + repo + "." + expiry
+	return "Break-glass approval granted for " + repo + "." + scope + expiry
 }
 
 func gitBreakGlassApprovalPrompt(grant pgstore.ControlActionEvent, expiresAt time.Time) string {
+	activation := "Call request_git_break_glass again to activate the tank-git-break-glass MCP server for this session, then continue with the approved work."
+	if grantGrantsFullGitHubAPI(grant) {
+		activation = "Your gh/git are now elevated to full GitHub API write automatically for the approved repo scope (gh pr edit/ready/merge, issues, …). Call request_git_break_glass again to also activate the tank-git-break-glass MCP server (mint_full_git_token / push_current_head) if you need it, then continue with the approved work."
+	}
 	lines := []string{
 		"System message: Your GitHub break-glass request was approved by the user.",
 		gitBreakGlassApprovalDisplayText(grant, expiresAt),
-		"Call request_git_break_glass again to activate the tank-git-break-glass MCP server for this session, then continue with the approved work.",
+		activation,
 	}
 	if reason := controlActionPayloadString(grant.Payload, "reason"); reason != "" {
 		lines = append(lines, "Approval reason: "+reason)
@@ -1329,7 +1348,7 @@ func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r
 			"repo_scope":         repoScope,
 			"branch_scope":       branchScope,
 			"expires_at":         expiresAt.UTC().Format(time.RFC3339),
-			"operations":         normalizeBreakGlassOperations(payload.Operations),
+			"operations":         normalizeBreakGlassOperations(payload.Operations, branchScope.Kind == "unlimited"),
 			"reason":             payload.Reason,
 			"remaining_branches": remainingBranches,
 			"session_id":         sessionID,
@@ -1435,7 +1454,7 @@ func (s *appServer) handleAdminGrantGitBreakGlass(w http.ResponseWriter, r *http
 		"repo_scope":         repoScope,
 		"branch_scope":       branchScope,
 		"expires_at":         expiresAt.Format(time.RFC3339),
-		"operations":         normalizeBreakGlassOperations(body.Operations),
+		"operations":         normalizeBreakGlassOperations(body.Operations, branchScope.Kind == "unlimited"),
 		"session_id":         sessionID,
 		"session_scope":      sessionScope,
 		"owner_email":        info.Owner,
@@ -2461,8 +2480,14 @@ func asString(value any) string {
 	}
 }
 
-func normalizeBreakGlassOperations(in []string) []string {
-	canonical := []string{gitBreakGlassOpMintToken, gitBreakGlassOpPushHead, gitBreakGlassOpWorkflows}
+// normalizeBreakGlassOperations canonicalizes the grant's operation set.
+// unlimitedBranch is the authoritative input for whether the grant carries the
+// App's full GitHub API write: full_github_api is force-ON for unlimited-branch
+// grants and force-OFF for branch/count-scoped grants regardless of the
+// requested operations, so a request cannot smuggle full-API write into a
+// branch-restricted grant and an unlimited grant always advertises it.
+func normalizeBreakGlassOperations(in []string, unlimitedBranch bool) []string {
+	canonical := []string{gitBreakGlassOpMintToken, gitBreakGlassOpPushHead, gitBreakGlassOpWorkflows, gitBreakGlassOpFullAPI}
 	allowed := map[string]bool{}
 	seen := map[string]bool{}
 	for _, op := range canonical {
@@ -2477,6 +2502,8 @@ func normalizeBreakGlassOperations(in []string) []string {
 	if seen[gitBreakGlassOpWorkflows] {
 		seen[gitBreakGlassOpMintToken] = true
 	}
+	// full_github_api is bound to the branch scope, not the request.
+	seen[gitBreakGlassOpFullAPI] = unlimitedBranch
 	out := []string{}
 	for _, op := range canonical {
 		if seen[op] {
@@ -2487,6 +2514,23 @@ func normalizeBreakGlassOperations(in []string) []string {
 		out = []string{gitBreakGlassOpMintToken, gitBreakGlassOpPushHead}
 	}
 	return out
+}
+
+// grantGrantsFullGitHubAPI reports whether a persisted github.break_glass.grant
+// row carries full GitHub API write (the unlimited-branch elevation). Read from
+// the canonicalized operations so it agrees with what the agent-side grant
+// lookup returns.
+func grantGrantsFullGitHubAPI(grant pgstore.ControlActionEvent) bool {
+	var payload struct {
+		Operations []string `json:"operations"`
+	}
+	_ = json.Unmarshal(grant.Payload, &payload)
+	for _, op := range payload.Operations {
+		if strings.TrimSpace(op) == gitBreakGlassOpFullAPI {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeAzureBreakGlassOperations bounds the azure grant operation set.

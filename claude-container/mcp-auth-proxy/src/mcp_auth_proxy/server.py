@@ -115,6 +115,14 @@ _BREAK_GLASS_MCP_PORT = 9999
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
 _BREAK_GLASS_WORKFLOWS_OPERATION = "workflows"
+# An UNLIMITED-branch break-glass grant carries the GitHub App's full permission
+# set (pull_requests, issues, merges — the whole API), not just contents. This
+# is what lets the session's `gh`/`git` perform PR/issue writes automatically
+# while a grant is active. It is granted ONLY for unlimited-branch grants;
+# branch/count-scoped grants stay least-privilege on the governed push path and
+# never carry it. Surfacing it as an explicit operation keeps the widened blast
+# radius visible in the grant event, the approval prompt, and the audit ledger.
+_BREAK_GLASS_FULL_API_OPERATION = "full_github_api"
 _GITHUB_WRITE_TOOL_DENYLIST = {
     "mint_clone_token",
     "create_pull_request",
@@ -1493,6 +1501,67 @@ async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_
     return None
 
 
+# Short-TTL cache for the break-glass grant lookup, used on the git/`gh` hot path
+# (the wrapper mint endpoint). The :9999 server is long-lived and the wrapper
+# scripts are stateless, so the cache belongs here, not in the scripts. Without
+# it every restricted git/`gh` op — overwhelmingly the NO-grant case — pays a
+# sidecar→Tank round-trip; a burst of ops in a no-grant session would fan out N
+# Tank calls and a slow Tank would stall git. Caching keeps the DURABLE grant as
+# the authz (we cache the lookup RESULT, not a token) and bounds the cost: one
+# Tank call per (repo, ~TTL window). Negative results are cached too. A positive
+# result is never served past the grant's own expires_at, so expiry re-locks
+# within ~TTL rather than later.
+_BREAK_GLASS_GRANT_CACHE_TTL_SECONDS = 10.0
+# key (repo_slug) -> (monotonic_cached_at, grant_or_None)
+_BREAK_GLASS_GRANT_CACHE: dict[str, tuple[float, dict | None]] = {}
+
+
+def _grant_expires_after(grant: dict, now: datetime) -> bool:
+    """True if the grant's own expires_at is still in the future."""
+    raw = str(grant.get("expires_at") or "").strip()
+    if not raw:
+        # No expiry field -> cannot prove it is still valid; do not serve stale.
+        return False
+    try:
+        expires_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at > now
+
+
+def _cached_grant_servable(grant: dict | None, now: datetime) -> bool:
+    """Whether a cached lookup result may still be served without re-fetching.
+
+    A negative result (no grant) is always servable within the TTL. A positive
+    result is servable only while it is still before its own expires_at, so a
+    cached grant can never outlive the real grant.
+    """
+    if grant is None:
+        return True
+    return _grant_expires_after(grant, now)
+
+
+async def _active_break_glass_grant_cached(
+    http: ClientSession, service_jwt: str, repo_slug: str = ""
+) -> dict | None:
+    """TTL-cached wrapper around _active_break_glass_grant for the hot path."""
+    key = repo_slug
+    monotonic_now = time.monotonic()
+    entry = _BREAK_GLASS_GRANT_CACHE.get(key)
+    if entry is not None:
+        cached_at, grant = entry
+        if (
+            monotonic_now - cached_at < _BREAK_GLASS_GRANT_CACHE_TTL_SECONDS
+            and _cached_grant_servable(grant, datetime.now(timezone.utc))
+        ):
+            return grant
+    grant = await _active_break_glass_grant(http, service_jwt, repo_slug)
+    _BREAK_GLASS_GRANT_CACHE[key] = (monotonic_now, grant)
+    return grant
+
+
 async def _active_azure_break_glass_grant(http: ClientSession, service_jwt: str) -> dict | None:
     # Mirrors _active_break_glass_grant; azure grants are session-scoped, not
     # repo-scoped, so there is no repo query parameter. Used only to surface
@@ -1573,11 +1642,18 @@ def _grant_allows_workflows(grant: dict | None) -> bool:
     return _grant_allows(grant, _BREAK_GLASS_WORKFLOWS_OPERATION)
 
 
-def _break_glass_operations(*, workflows: bool) -> list[str]:
+def _break_glass_operations(*, workflows: bool, unlimited: bool = False) -> list[str]:
     operations = [_BREAK_GLASS_MINT_TOKEN_TOOL, _BREAK_GLASS_PUSH_HEAD_TOOL]
     if workflows:
         operations.append(_BREAK_GLASS_WORKFLOWS_OPERATION)
+    if unlimited:
+        # Unlimited-branch grants elevate to the App's full GitHub API write.
+        operations.append(_BREAK_GLASS_FULL_API_OPERATION)
     return operations
+
+
+def _grant_allows_full_github_api(grant: dict | None) -> bool:
+    return _grant_allows(grant, _BREAK_GLASS_FULL_API_OPERATION)
 
 
 def _grant_branch_allows(grant: dict | None, branch: str) -> bool:
@@ -1749,7 +1825,11 @@ def _activate_break_glass_mcp_config(repo_slug: str, grant: dict) -> dict:
 
 
 async def _mint_github_installation_token(http: ClientSession, service_token: str, repo_slug: str, *, workflows: bool = False, full: bool = False) -> str:
-    arguments: dict[str, object] = {"repos": [repo_slug], "write": True}
+    return await _mint_github_installation_token_for_repos(http, service_token, [repo_slug], workflows=workflows, full=full)
+
+
+async def _mint_github_installation_token_for_repos(http: ClientSession, service_token: str, repos: list[str], *, workflows: bool = False, full: bool = False) -> str:
+    arguments: dict[str, object] = {"repos": list(repos), "write": True}
     if workflows:
         arguments["workflows"] = True
     if full:
@@ -3259,6 +3339,7 @@ async def _handle_tank_break_glass_tool(
             raise ValueError("SESSION_ID is required for Tank break-glass requests")
         repo_scope, repo_slug, requested_repos, repo_path = await _repo_scope_from_arguments(arguments)
         branch_scope = _branch_scope_from_arguments(arguments)
+        unlimited_branch = str(branch_scope.get("kind") or "").strip() == "unlimited"
         reason = str(arguments.get("reason") or "").strip()
         if not reason:
             raise ValueError("reason is required")
@@ -3302,7 +3383,7 @@ async def _handle_tank_break_glass_tool(
                     "source": source,
                     "repo_scope": repo_scope,
                     "branch_scope": branch_scope,
-                    "operations": _break_glass_operations(workflows=workflows),
+                    "operations": _break_glass_operations(workflows=workflows, unlimited=unlimited_branch),
                     "workflows": workflows,
                     "repo_path": str(repo_path) if repo_path is not None else "",
                 },
@@ -3318,7 +3399,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
-                "operations": _break_glass_operations(workflows=workflows),
+                "operations": _break_glass_operations(workflows=workflows, unlimited=unlimited_branch),
                 "workflows": workflows,
                 "request_event_id": event_id,
                 "status": "approved",
@@ -3337,7 +3418,7 @@ async def _handle_tank_break_glass_tool(
             structured = {
                 "repo_scope": repo_scope,
                 "branch_scope": branch_scope,
-                "operations": _break_glass_operations(workflows=workflows),
+                "operations": _break_glass_operations(workflows=workflows, unlimited=unlimited_branch),
                 "workflows": workflows,
                 "request_event_id": event_id,
                 "approval_url": approval_url,
@@ -4029,7 +4110,13 @@ async def _handle_break_glass_mint_token(http: ClientSession, auth_romaine_provi
             {"repo": repo_slug, "grant_event_id": grant.get("event_id")},
         )
     try:
-        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows)
+        # The branch-restricted refusal above means this path is reached ONLY for
+        # unlimited-branch grants, which carry the App's FULL permission set
+        # (pull_requests, issues, merges, …). Mint full=True so the raw
+        # break-glass git token also unlocks GitHub PR/issue/merge API writes, not
+        # just contents. This is the conscious, approved blast-radius widening
+        # surfaced in the grant operations (full_github_api) and audited below.
+        token = await _mint_github_installation_token(http, service_token, repo_slug, workflows=workflows, full=True)
         await _record_break_glass_use(
             http,
             service_token,
@@ -4041,6 +4128,7 @@ async def _handle_break_glass_mint_token(http: ClientSession, auth_romaine_provi
                 "grant_event_id": grant.get("event_id"),
                 "grant_expires_at": grant.get("expires_at"),
                 "workflows": workflows,
+                "full_github_api": True,
                 "reason": str(arguments.get("reason") or ""),
             },
         )
@@ -4175,6 +4263,121 @@ async def _handle_break_glass_push_head(http: ClientSession, auth_romaine_provid
             payload={"grant_event_id": grant.get("event_id"), "branch": branch, "repo_path": str(repo_path)},
         )
         raise
+
+
+async def _handle_break_glass_wrapper_mint(
+    http: ClientSession,
+    auth_romaine_provider,
+    request: web.Request,
+) -> web.Response:
+    """Grant-aware git token mint for the in-pod `gh`/`git` wrappers.
+
+    `gh-tank-wrapper.sh` and `git-credential-tank.sh` call this endpoint in
+    restricted mode BEFORE their read-only `mint_clone_token` path. If an active,
+    repo-covering, UNLIMITED-branch break-glass grant exists, this mints the
+    App's FULL permission set (`full=True`) so the session's `gh`/`git` writes
+    (`gh pr edit`/`ready`/merge, issues, …) "just work" — and records the use in
+    the control-action audit ledger. With no qualifying grant it returns
+    `{"active": false}` and the wrapper falls back to the read-only mint.
+
+    The break-glass server (this :9999 listener) is the single source of truth
+    for grants — it already performs the Tank grant lookup for
+    `mint_full_git_token` / `push_current_head` — so the wrappers consult it here
+    rather than polling Tank's internal API directly or trusting a local marker.
+    This route deliberately does NOT require the agent-facing activation marker:
+    the durable, admin-approved, TTL-bounded grant is the authorization, and the
+    marker only governs whether the agent-facing MCP tool is surfaced.
+    """
+    try:
+        raw_body = await request.read()
+        try:
+            payload = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        repos: list[str] = []
+        raw_repos = payload.get("repos")
+        if isinstance(raw_repos, list):
+            for item in raw_repos:
+                slug = str(item).strip()
+                if slug and slug not in repos:
+                    repos.append(slug)
+        single = str(payload.get("repo") or "").strip()
+        if single and single not in repos:
+            repos.append(single)
+        repos = [r for r in repos if "/" in r]
+        if not repos:
+            return web.json_response({"active": False, "reason": "no repo"})
+        workflows = bool(payload.get("workflows"))
+        service_token = await auth_romaine_provider.token()
+        # Hot path: TTL-cached lookup so a burst of git/`gh` ops (especially the
+        # common no-grant case) does not fan out one Tank round-trip each.
+        grant = await _active_break_glass_grant_cached(http, service_token, repos[0])
+        # Only an active, unlimited-branch grant that authorizes full GitHub API
+        # write elevates the wrappers. Branch/count-scoped grants stay on the
+        # governed push path (publish_current_head / push_current_head) and never
+        # hand the shell a raw full token.
+        if not _grant_allows_full_github_api(grant) or _grant_is_branch_restricted(grant):
+            return web.json_response({"active": False})
+        # Every requested repo must fall inside the grant's repo scope.
+        if not all(_activation_scope_allows_repo(grant, r) for r in repos):
+            return web.json_response({"active": False, "reason": "repo outside grant scope"})
+        if workflows and not _grant_allows_workflows(grant):
+            workflows = False
+        try:
+            token = await _mint_github_installation_token_for_repos(
+                http, service_token, repos, workflows=workflows, full=True
+            )
+        except Exception as exc:
+            await _record_break_glass_use(
+                http,
+                service_token,
+                action="github.break_glass.token",
+                status="failed",
+                tool=_BREAK_GLASS_MINT_TOKEN_TOOL,
+                repo_slug=repos[0],
+                error=str(exc),
+                payload={
+                    "grant_event_id": grant.get("event_id"),
+                    "channel": "wrapper",
+                    "full_github_api": True,
+                    "repos": repos,
+                },
+            )
+            raise
+        await _record_break_glass_use(
+            http,
+            service_token,
+            action="github.break_glass.token",
+            status="succeeded",
+            tool=_BREAK_GLASS_MINT_TOKEN_TOOL,
+            repo_slug=repos[0],
+            payload={
+                "grant_event_id": grant.get("event_id"),
+                "grant_expires_at": grant.get("expires_at"),
+                "workflows": workflows,
+                "full_github_api": True,
+                "channel": "wrapper",
+                "repos": repos,
+            },
+        )
+        return web.json_response(
+            {
+                "active": True,
+                "token": token,
+                "grant_event_id": grant.get("event_id"),
+                "grant_expires_at": grant.get("expires_at"),
+                "full_github_api": True,
+                "workflows": workflows,
+                "repos": repos,
+            }
+        )
+    except Exception as exc:
+        # Degrade to the read-only fallback rather than break the wrapper: a
+        # transient mint/lookup failure should not strip an agent's reads.
+        log.warning("break-glass wrapper mint failed", exc_info=True)
+        return web.json_response({"active": False, "error": str(exc)})
 
 
 async def _handle_break_glass_mcp(
@@ -4995,6 +5198,14 @@ async def run() -> None:
         for discovery_path in _OAUTH_DISCOVERY_PATHS:
             break_glass_app.router.add_route("GET", discovery_path, _oauth_discovery_not_configured)
         break_glass_app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
+        # Grant-aware mint endpoint for the in-pod gh/git wrappers (registered
+        # before the MCP catch-all so it is not swallowed by it). See
+        # _handle_break_glass_wrapper_mint.
+        break_glass_app.router.add_route(
+            "POST",
+            "/mint-git-token",
+            lambda request: _handle_break_glass_wrapper_mint(http, auth_romaine_provider, request),
+        )
         break_glass_app.router.add_route(
             "*",
             "/{tail:.*}",
