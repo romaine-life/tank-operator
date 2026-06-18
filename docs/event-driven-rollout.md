@@ -270,7 +270,7 @@ and then emits a display-only completion record.
 invoked by the agent. The auto-merge needs a **server-side (Go) equivalent in the
 orchestrator** that reuses the existing governance gates:
 
-- verify against the durable ledger via the internal `/api/internal/sessions/{id}/hot-swap/verify`
+- verify against the durable ledger via the internal `/api/internal/sessions/{id}/governed-merge/verify`
   endpoint (already server-side); this still proves the exact commit was
   governed/pushed, while CI + mergeability are registered through the same Tank
   PR-readiness process used by `watch_current_session_pr`,
@@ -366,9 +366,9 @@ Two layers, both off data we already hold:
 | `ci_watches` table + 3 indexes | `internal/pgstore/migrations.go` | additive migration |
 | `ci_status.updated` event type | `conversation/types.go`, `builders.go` | additive event (display-only) |
 | `source=ci-failure` / `ci-conflict` | `enqueueSDKTurn` callers | additive turn source |
-| server-side governed merge | orchestrator (Go) reusing hot-swap/verify + mcp-github token | new internal path |
+| server-side governed merge | orchestrator (Go) reusing governed-merge/verify + mcp-github token | new internal path |
 | Tank PR-readiness endpoint | `/api/internal/sessions/{id}/pr-readiness` backed by `session_ci_watches` | shared enforcement path |
-| test-slot deployment gate | `/api/internal/sessions/{id}/hot-swap/verify` as compatibility facade over PR readiness + publish proof | shared enforcement path |
+| governed-merge gate | `/api/internal/sessions/{id}/governed-merge/verify` composing PR readiness + governed-publish-proof into an allow/deny decision | shared enforcement path |
 | `watch_current_session_pr` tool | `mcp-auth-proxy/.../server.py` | new governed tool |
 | ring on `ci_status.updated` | `frontend/src/sessionActivity.ts`, `conversationReducer.ts`, `App.tsx` | additive UI |
 | reaper excludes active watch | `sessionregistry.ClaimIdleForReap` | predicate change |
@@ -444,16 +444,16 @@ named behavior "event-driven rollout watch."
 Each stage is independently shippable and coherent.
 
 1. **Shipped:** Tank owns `POST /api/internal/sessions/{id}/pr-readiness`; both
-   `watch_current_session_pr` and hot-swap/test-slot verification register the same
+   `watch_current_session_pr` and the governed-merge gate register the same
    readiness process and receive `conflict|failed|ready|watching`.
 2. **Shipped:** `POST /webhooks/github` + HMAC, reverse lookup, stale check-SHA guard,
    and aggregate recomputation.
 3. **Shipped:** red/conflict reducer output calls `enqueueSDKTurn`.
 4. **Shipped:** green reducer output marks the watch ready, or auto-merges an
    orchestration phase; merged PR webhooks emit `ci_status.updated`.
-5. **Shipped:** the Glimmung test-slot/hot-swap gate keeps publish proof in the
+5. **Shipped:** the governed-merge gate keeps governed-publish-proof in the
    governed ledger but uses the same Tank PR-readiness process for CI and
-   mergeability.
+   mergeability before returning its allow/deny decision.
 6. **Remaining hardening:** broader observability/alerts and a durable stuck-watch
    backstop.
 

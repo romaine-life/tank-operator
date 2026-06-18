@@ -627,7 +627,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/background-tasks/unresolved", s.handleInternalUnresolvedBackgroundTasks)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
-	mux.HandleFunc("POST /api/internal/sessions/{session_id}/hot-swap/verify", s.handleInternalVerifyHotSwap)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/governed-merge/verify", s.handleInternalVerifyGovernedMerge)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-auto-approval", s.handleInternalGetPRLaneAutoApproval)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
