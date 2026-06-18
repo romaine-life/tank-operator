@@ -162,12 +162,37 @@ func (s *appServer) emitOrchestrationReviewReadyRecord(ctx context.Context, orch
 func (s *appServer) provisionOrchestrationReviewSlot(orch pgstore.Orchestration, target pgstore.OrchestrationPhase) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.provisionBackgroundTimeout())
 	defer cancel()
+	// Register the durable pending record at kickoff so an orchestrator restart
+	// mid-settle-wait leaves a 'pending' row the reconcile backstop re-drives.
+	// A re-drive re-enters here on an already-'pending' (claimed) row; Register's
+	// conditional ON CONFLICT leaves it untouched, so this is a safe no-op then.
+	if s.pendingTestProvisions != nil {
+		if _, _, err := s.pendingTestProvisions.Register(ctx, pgstore.RegisterPendingTestProvisionRequest{
+			SessionScope:    s.sessionScope,
+			SessionID:       target.SpokeSessionID,
+			OwnerEmail:      orch.OwnerEmail,
+			RepoOwner:       orch.RepoOwner,
+			RepoName:        orch.RepoName,
+			Branch:          orch.IntegrationBranch,
+			Project:         orchestrationGlimmungProject(orch),
+			Workflow:        "orchestration-review",
+			Kind:            pgstore.PendingTestProvisionOrchestrationReview,
+			OrchestrationID: orch.OrchestrationID,
+		}); err != nil {
+			slog.Warn("orchestration review pending provision register failed",
+				"orchestration_id", orch.OrchestrationID, "error", err)
+		}
+	}
 	detail := "Test environment for orchestration " + orch.OrchestrationID + ": "
 	checkout, deploy, err := s.checkoutAndDeployOrchestrationReview(ctx, orch, target.SpokeSessionID)
 	if err != nil {
 		detail += "setup failed: " + err.Error()
 		slog.Warn("orchestration review gate setup failed", "orchestration_id", orch.OrchestrationID, "error", err)
 		s.emitOrchestrationPhaseStatusRecord(ctx, orch, target, orch.OwnerEmail, "ready", detail)
+		// checkoutAndDeployOrchestrationReview collapses gate refusals and infra
+		// errors into one error; either way a verdict was reached and the record
+		// is terminal (the backstop recovers only restart-stranded 'pending').
+		s.markOrchestrationProvisionTerminal(ctx, orch, target, pgstore.PendingTestProvisionFailed, detail)
 		return
 	}
 	if checkout.URL != nil && strings.TrimSpace(*checkout.URL) != "" {
@@ -180,6 +205,15 @@ func (s *appServer) provisionOrchestrationReviewSlot(orch pgstore.Orchestration,
 	}
 	detail += "."
 	s.emitOrchestrationPhaseStatusRecord(ctx, orch, target, orch.OwnerEmail, "ready", detail)
+	s.markOrchestrationProvisionTerminal(ctx, orch, target, pgstore.PendingTestProvisionDone, detail)
+}
+
+// markOrchestrationProvisionTerminal closes the durable pending record for an
+// orchestration-review provision at the end of its run, by its target
+// coordinates (the spoke session + integration branch).
+func (s *appServer) markOrchestrationProvisionTerminal(ctx context.Context, orch pgstore.Orchestration, target pgstore.OrchestrationPhase, status pgstore.PendingTestProvisionStatus, detail string) {
+	s.markPendingTestProvisionTerminal(ctx, target.SpokeSessionID, orch.RepoOwner, orch.RepoName, orch.IntegrationBranch,
+		pgstore.PendingTestProvisionOrchestrationReview, status, detail, "")
 }
 
 func latestPhaseWithSpoke(phases []pgstore.OrchestrationPhase) (pgstore.OrchestrationPhase, bool) {

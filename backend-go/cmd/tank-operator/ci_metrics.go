@@ -57,7 +57,51 @@ var (
 		Name: "tank_test_slot_interactive_total",
 		Help: "Interactive test-workflow trigger outcomes, by bounded terminal outcome.",
 	}, []string{"outcome"})
+
+	// Durable pending-provision reconcile backstop (pending_test_provisions +
+	// pending_provision_reconcile_loop.go). The two background provisioning entry
+	// points can wait ~23 min for CI to settle; an orchestrator restart mid-wait
+	// strands the provision in a 'pending' record the loop re-drives idempotently.
+	testSlotPendingProvisionOldestAge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_test_slot_pending_provision_oldest_age_seconds",
+		Help: "Age of the oldest still-'pending' test-slot provision record; the durable backstop's stuck-provision signal (0 when none).",
+	})
+
+	testSlotProvisionRedriveTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_test_slot_provision_redrive_total",
+		Help: "Stranded pending test-slot provisions re-driven by the reconcile backstop, by kind.",
+	}, []string{"kind"})
+
+	// Interactive-endpoint double-trigger guard outcomes. "launched" is the
+	// normal first trigger; "in_flight" is a refused second trigger while a
+	// provision is already running; "test_state_active" is a refused trigger
+	// while a test environment is already up for the session.
+	testSlotProvisionGuardTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_test_slot_provision_guard_total",
+		Help: "Interactive test-workflow double-trigger guard outcomes, by bounded result.",
+	}, []string{"result"})
 )
+
+func setTestSlotPendingProvisionOldestAge(seconds float64) {
+	if seconds < 0 {
+		seconds = 0
+	}
+	testSlotPendingProvisionOldestAge.Set(seconds)
+}
+
+func recordTestSlotProvisionRedrive(kind string) {
+	if kind == "" {
+		kind = "unknown"
+	}
+	testSlotProvisionRedriveTotal.WithLabelValues(kind).Inc()
+}
+
+func recordTestSlotProvisionGuard(result string) {
+	if result == "" {
+		result = "unknown"
+	}
+	testSlotProvisionGuardTotal.WithLabelValues(result).Inc()
+}
 
 func recordTestSlotValidate(outcome string) {
 	if outcome == "" {

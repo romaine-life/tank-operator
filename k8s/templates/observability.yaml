@@ -171,6 +171,14 @@ spec:
           annotations:
             summary: "a governed-PR CI watch has been 'watching' with no event for over an hour"
             runbook: "A CI watch is stuck: the deciding webhook was likely dropped and the durable backstop's live re-drive did not resolve it (CI genuinely hung, or mergeability never resolved). The owning session stays reaper-protected and asleep by design. Check the PR's real check/mergeable state on GitHub and the tank_ci_webhooks_total{result} breakdown, then resolve or close the PR. The agent is intentionally NOT woken for this infra non-event."
+        - alert: TankTestSlotProvisionStuck
+          expr: tank_test_slot_pending_provision_oldest_age_seconds > 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a deterministic test-slot provision has been pending for over an hour"
+            runbook: "A test-slot provision (interactive or orchestration-review) has sat in 'pending' for over an hour — far past the settle cap + deploy grace (~23m). The fire-and-forget gate goroutine was likely lost to an orchestrator restart mid-settle-wait, and the durable reconcile backstop's re-drive has not terminalized it. The backstop re-drives stale records every 5m and increments tank_test_slot_provision_redrive_total{kind} when it does; if that counter is flat while this gauge climbs, the reconcile loop is not running (check the orchestrator started runPendingTestProvisionReconcileLoop) or every re-drive is failing to reach a verdict. Inspect pending_test_provisions for the stuck row's session/repo/branch and the PR's real CI state; the owning session is not blocked by this (the slot just never came up)."
     - name: tank-operator.http
       rules:
         - alert: TankOperatorHTTP5xxRate

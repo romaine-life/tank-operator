@@ -198,6 +198,15 @@ type appServer struct {
 	// after create. nil in stub mode / when pgPool is unset.
 	pendingLaunch pendingLaunchStore
 
+	// pendingTestProvisions is the durable backstop store for in-flight
+	// deterministic test-slot provisions (provision_test_slot.go's two
+	// background entry points). A row is written 'pending' at kickoff and
+	// terminalized at finish; the reconcile loop re-drives any record stranded
+	// in 'pending' by an orchestrator restart mid-settle-wait, and the
+	// interactive endpoint's double-trigger guard rides Register's atomic
+	// conflict. nil in stub mode / when pgPool is unset.
+	pendingTestProvisions pendingTestProvisionStore
+
 	// imageOverrides backs the test-slot session-image repoint flow
 	// (docs/testing.md): the internal /session-scopes/{scope}/image-override
 	// endpoints read/write it, and the Manager resolves it at session-create.
@@ -300,6 +309,22 @@ type pendingLaunchStore interface {
 	MarkDispatched(context.Context, string, string, string) error
 	MarkFailed(context.Context, string, string, string) error
 	Get(context.Context, string, string) (pgstore.PendingLaunchTurn, error)
+}
+
+// pendingTestProvisionStore is the durable in-flight test-slot provision
+// backstop (pending_test_provisions). Register is the atomic double-trigger
+// guard (created=false means a provision is already in flight for the target);
+// MarkTerminal closes a record at finish; ListStale + ClaimForRedrive drive the
+// idempotent restart-recovery reconcile; OldestPendingAgeSeconds backs the
+// stuck-provision alert gauge. Satisfied by *pgstore.PendingTestProvisionStore;
+// an interface so handler/loop tests can fake it without Postgres.
+type pendingTestProvisionStore interface {
+	Register(context.Context, pgstore.RegisterPendingTestProvisionRequest) (pgstore.PendingTestProvision, bool, error)
+	MarkTerminal(context.Context, string, pgstore.PendingTestProvisionStatus, string, string) (pgstore.PendingTestProvision, error)
+	ClaimForRedrive(context.Context, string, int) (pgstore.PendingTestProvision, error)
+	ListStale(context.Context, time.Duration, int) ([]pgstore.PendingTestProvision, error)
+	OldestPendingAgeSeconds(context.Context) (float64, error)
+	Get(context.Context, string) (pgstore.PendingTestProvision, error)
 }
 
 type backgroundTaskWakeStore interface {
