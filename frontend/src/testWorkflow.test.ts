@@ -28,6 +28,25 @@ test("startTestWorkflow POSTs the gated endpoint and resolves ok on 202", async 
   expect(result.status).toBe(202);
 });
 
+test("startTestWorkflow posts drive=true for the drive variant", async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(202, { status: "started" }));
+
+  await startTestWorkflow("77", fetchMock, { drive: true });
+
+  const [url, init] = fetchMock.mock.calls[0];
+  expect(url).toBe("/api/sessions/77/test-workflow/start");
+  expect(JSON.parse(String(init?.body))).toEqual({ drive: true });
+});
+
+test("startTestWorkflow omits drive when false (plain button unchanged)", async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(202, { status: "started" }));
+
+  await startTestWorkflow("77", fetchMock, { drive: false });
+
+  const [, init] = fetchMock.mock.calls[0];
+  expect(JSON.parse(String(init?.body))).toEqual({});
+});
+
 test("startTestWorkflow forwards an explicit repo override", async () => {
   const fetchMock = vi.fn(async () => jsonResponse(202, { status: "started" }));
 

@@ -2534,6 +2534,7 @@ interface ComposerToolButtonsProps {
     readyUrl?: string;
     title: string;
     onCreateHold?: () => void;
+    onCreateDrive?: () => void;
     onOpenReady?: () => void;
   };
   glimmungRuns: {
@@ -3323,6 +3324,15 @@ function ComposerToolButtons({
             <FlaskConicalIcon aria-hidden="true" />
             <span>Create test slot</span>
           </DropdownMenuItem>
+          {test.onCreateDrive && (
+            <DropdownMenuItem
+              className="run-test-action-menu-item"
+              onSelect={test.onCreateDrive}
+            >
+              <FlaskConicalIcon aria-hidden="true" />
+              <span>Create test slot and test</span>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator className="run-test-action-menu-separator" />
           {testReadyURL ? (
             <DropdownMenuItem className="run-test-action-menu-item" asChild>
@@ -21659,9 +21669,9 @@ function ChatPane({
   // phantom-active pill. The only client-side surface is the immediate
   // pre-gate refusal (e.g. 409 already-active, ambiguous repo), which the
   // backend rejects synchronously and therefore emits no thread for.
-  function startInteractiveTestWorkflow() {
+  function startInteractiveTestWorkflow(drive = false) {
     if (session.status !== "Active") return;
-    void startTestWorkflow(session.id, authedFetch)
+    void startTestWorkflow(session.id, authedFetch, { drive })
       .then((result) => {
         if (!result.ok) {
           setEntries((prev) =>
@@ -25095,7 +25105,8 @@ function ChatPane({
                     if (testState)
                       void markTestState({ ...testState, active: true });
                   },
-                  onCreateHold: () => startInteractiveTestWorkflow(),
+                  onCreateHold: () => startInteractiveTestWorkflow(false),
+                  onCreateDrive: () => startInteractiveTestWorkflow(true),
                   disabled: !ready,
                   title: testState?.active
                     ? "Choose a test action"
