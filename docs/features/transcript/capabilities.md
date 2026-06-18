@@ -763,10 +763,12 @@ Contract impact:
   per-question position so the page selector and question card can show
   "question 1 of N" and move to the adjacent question page. Answered/history
   state remains visible when revisiting any question page.
-- The question page heading ("Question N of M") renders as a system-user
+- The question page heading ("Question N of M") renders as a system-narrated
   message — the session's system identity in the avatar gutter, label + position
-  counter in the message column — inside the scrolling question body, not a
-  full-width banner pinned above the column with no author. It shares the
+  counter in the message column — occupying the Turns prompt slot as the question
+  turn's turn-starter, not a full-width banner pinned above the column with no
+  author. The question TEXT is the agent; the "Question N of M" frame is system
+  narration. It shares the
   `data-variant="system"` message frame (`RunQuestionHeadingMessage`) used by
   session.status banners, RunMetaBlock status lines, and the background-wake
   prompt, satisfying the transcript contract's rule that headless status lines
