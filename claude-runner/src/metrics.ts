@@ -68,6 +68,13 @@ export const inputReplyAnswerShapeTotal = new Counter({
   registers: [registry],
 });
 
+export const inputReplyAttachmentTotal = new Counter({
+  name: "tank_runner_input_reply_attachment_total",
+  help: "Files attached to an AskUserQuestion answer, by kind (image|file) and how the runner delivered them into the resolved tool result: delivered (inline image block or path line), read_failed (image present but unreadable/too large), or missing (path could not be located under /workspace). A missing/read_failed image is a silent-screenshot-loss regression signature.",
+  labelNames: ["kind", "result"],
+  registers: [registry],
+});
+
 export const terminalPublishDeferredTotal = new Counter({
   name: "tank_runner_terminal_publish_deferred_total",
   help: "Turn terminals that exhausted publish retries and were parked for JetStream redelivery instead of wedging the data plane (issue #1078 item 1).",

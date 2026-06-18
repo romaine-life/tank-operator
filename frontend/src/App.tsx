@@ -8315,6 +8315,10 @@ interface AnswerPayload {
   timelineId: string;
   answers: Record<string, string[]>;
   annotations?: Record<string, { preview?: string; notes?: string }>;
+  // displayAttachments carries files the user attached to the answer (the
+  // screenshot-in-answer path). Posted as display_attachments on /answer, the
+  // same shape and upload plumbing the normal turn path uses.
+  displayAttachments?: MessageAttachmentDisplay[];
 }
 
 interface AskUserQuestionSubmittedSnapshot {
@@ -23480,6 +23484,11 @@ function ChatPane({
     if (payload.annotations && Object.keys(payload.annotations).length > 0) {
       body.annotations = payload.annotations;
     }
+    if (payload.displayAttachments && payload.displayAttachments.length > 0) {
+      body.display_attachments = attachmentPayloadsForApi(
+        payload.displayAttachments,
+      );
+    }
     const res = await authedFetch(
       `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/answer`,
       {
@@ -23689,14 +23698,32 @@ function ChatPane({
       if (ann.preview || ann.notes) annotations[q.question] = ann;
     }
     if (Object.keys(answers).length === 0) return;
+    // Carry any attached files the same way the normal turn path does: they're
+    // already uploaded to /workspace via uploadAttachment; forward the ready
+    // ones as display_attachments. Block while an upload is still in flight so
+    // the screenshot isn't dropped from the answer (mirrors composePrompt).
+    if (attachments.some((a) => a.status === "uploading")) return;
+    const readyAttachments = attachments.filter((a) => a.status === "ready");
+    const displayAttachments = messageAttachmentDisplays(readyAttachments);
     try {
       const { answerTurnId } = await submitAnswer(ctx.questionTurnId, {
         providerItemId: ctx.providerItemId,
         timelineId: ctx.timelineId,
         answers,
         annotations,
+        ...(displayAttachments.length > 0 ? { displayAttachments } : {}),
       });
       setComposerValue("");
+      // Attachments have been baked into the answer turn — clear the tray and
+      // release any object URLs, same cleanup as the normal submit path.
+      if (readyAttachments.length > 0) {
+        setAttachments((prev) => {
+          for (const a of prev) {
+            if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+          }
+          return [];
+        });
+      }
       // Advance the Turns view to the new answer turn so the user lands where
       // the conversation continues, not stranded on the answered question. The
       // turn isn't loaded yet, so hold it; the effect above navigates once it

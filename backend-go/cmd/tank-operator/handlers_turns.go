@@ -387,6 +387,12 @@ type answerRequest struct {
 	TimelineID     string                      `json:"timeline_id"`
 	Answers        map[string][]string         `json:"answers"`
 	Annotations    map[string]answerAnnotation `json:"annotations,omitempty"`
+	// DisplayAttachments carries files the user attached to the answer (the
+	// screenshot-in-answer path). Same shape and upload plumbing as the normal
+	// turn path's display_attachments; normalized by normalizeDisplayAttachments
+	// and threaded into the transcript chip, the durable turn.input_answered
+	// record, and the input_reply command. Empty for text-only answers.
+	DisplayAttachments []conversation.UserMessageAttachment `json:"display_attachments,omitempty"`
 }
 
 // answerAnnotation carries optional preview/notes the user attached to a
@@ -524,6 +530,11 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "answer too large")
 		return
 	}
+	displayAttachments, status, detail := normalizeDisplayAttachments(body.DisplayAttachments)
+	if detail != "" {
+		writeError(w, status, detail)
+		return
+	}
 
 	owner := user.OwnerEmail()
 	info, err := s.mgr.GetByOwner(r.Context(), owner, sessionID)
@@ -580,6 +591,7 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		QuestionTimelineID: timelineID,
 		Answers:            answers,
 		Annotations:        annotationsToDisplayMap(annotations),
+		Attachments:        displayAttachments,
 		Now:                time.Now().UTC(),
 	})
 	if err := s.persistBackendEvent(r.Context(), storageKey, answerEvent); err != nil {
@@ -602,7 +614,8 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		Display: map[string]any{
 			"kind": "plain",
 		},
-		Now: time.Now().UTC(),
+		Attachments: displayAttachments,
+		Now:         time.Now().UTC(),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "build answer turn: "+err.Error())
@@ -630,6 +643,7 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		TargetProviderItemID: providerItemID,
 		Answers:              answers,
 		Annotations:          commandAnswerAnnotations(annotations),
+		Attachments:          commandAttachments(displayAttachments),
 		CreatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
 		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
@@ -758,6 +772,27 @@ func commandAnswerAnnotations(in map[string]answerAnnotation) map[string]session
 			Preview: ann.Preview,
 			Notes:   ann.Notes,
 		}
+	}
+	return out
+}
+
+// commandAttachments converts already-normalized answer attachments into the
+// input_reply command shape the runner consumes. Path metadata only — the bytes
+// stay pod-local in /workspace and the runner reads them at delivery time.
+func commandAttachments(in []conversation.UserMessageAttachment) []sessionbus.CommandAttachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]sessionbus.CommandAttachment, 0, len(in))
+	for _, attachment := range in {
+		out = append(out, sessionbus.CommandAttachment{
+			Label:   attachment.Label,
+			Name:    attachment.Name,
+			Kind:    attachment.Kind,
+			Path:    attachment.Path,
+			AbsPath: attachment.AbsPath,
+			Size:    attachment.Size,
+		})
 	}
 	return out
 }

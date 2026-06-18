@@ -42,6 +42,20 @@ export interface InputReplyAnnotation {
   notes?: string;
 }
 
+// CommandAttachment carries one file a user attached to an AskUserQuestion
+// answer (the screenshot-in-answer path). Mirrors backend-go's
+// sessionbus.CommandAttachment — snake_case `abs_path` matches the Go json tag.
+// Only path metadata rides the bus; the bytes stay pod-local in the shared
+// /workspace, and the runner reads them when resolving the tool result.
+export interface CommandAttachment {
+  label?: string;
+  name?: string;
+  kind?: "image" | "file" | string;
+  path?: string;
+  abs_path?: string;
+  size?: number;
+}
+
 export interface SessionCommand {
   id: string;
   command_id: string;
@@ -63,6 +77,9 @@ export interface SessionCommand {
   // SDK boundary.
   answers?: Record<string, string[]>;
   annotations?: Record<string, InputReplyAnnotation>;
+  // attachments carries files the user attached to an AskUserQuestion answer.
+  // Present only on input_reply commands that carried an attachment.
+  attachments?: CommandAttachment[];
   prompt?: string;
   model?: string;
   provider_session_id?: string;
@@ -108,6 +125,7 @@ export class SessionCommandRecord implements SessionCommand {
   target_provider_item_id?: string;
   answers?: Record<string, string[]>;
   annotations?: Record<string, InputReplyAnnotation>;
+  attachments?: CommandAttachment[];
   prompt?: string;
   model?: string;
   provider_session_id?: string;

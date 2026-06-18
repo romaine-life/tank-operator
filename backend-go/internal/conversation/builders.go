@@ -479,7 +479,12 @@ type TurnInputAnsweredArgs struct {
 	QuestionTimelineID string
 	Answers            map[string][]string
 	Annotations        map[string]any
-	Now                time.Time
+	// Attachments carries files the user attached to the answer (the
+	// screenshot-in-answer path). Stamped onto the durable turn.input_answered
+	// payload as `attachments` using the same shape as user_message.created, so
+	// the question-set state record carries the answer's attachment metadata.
+	Attachments []UserMessageAttachment
+	Now         time.Time
 }
 
 func TurnInputAnsweredEventMap(args TurnInputAnsweredArgs) map[string]any {
@@ -494,6 +499,9 @@ func TurnInputAnsweredEventMap(args TurnInputAnsweredArgs) map[string]any {
 	}
 	if len(args.Annotations) > 0 {
 		payload["annotations"] = args.Annotations
+	}
+	if attachments := userMessageAttachments(args.Attachments); len(attachments) > 0 {
+		payload["attachments"] = attachments
 	}
 	event := StampEventMap(map[string]any{
 		"event_id":         args.TurnID + ":turn.input_answered:" + args.ClientNonce,
