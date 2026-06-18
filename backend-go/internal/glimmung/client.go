@@ -61,6 +61,16 @@ type ReturnTestSlotRequest struct {
 	Reason          string  `json:"reason,omitempty"`
 }
 
+type ExtendTestSlotRequest struct {
+	Project       string  `json:"project"`
+	SlotIndex     *int    `json:"slot_index,omitempty"`
+	SlotName      *string `json:"slot_name,omitempty"`
+	TankSessionID *string `json:"tank_session_id,omitempty"`
+	ExtendSeconds *int    `json:"extend_seconds,omitempty"`
+	Source        string  `json:"source,omitempty"`
+	Reason        string  `json:"reason,omitempty"`
+}
+
 type CheckoutTestSlotRequest struct {
 	Project       string  `json:"project"`
 	Workflow      *string `json:"workflow,omitempty"`
@@ -93,6 +103,19 @@ type ReturnTestSlotResult struct {
 	Usable         bool    `json:"usable"`
 	StatusURL      *string `json:"status_url,omitempty"`
 	Detail         *string `json:"detail,omitempty"`
+}
+
+type ExtendTestSlotResult struct {
+	State      string  `json:"state"`
+	Project    string  `json:"project"`
+	Lease      string  `json:"lease"`
+	SlotIndex  *int    `json:"slot_index,omitempty"`
+	SlotName   *string `json:"slot_name,omitempty"`
+	TTLSeconds int     `json:"ttl_seconds"`
+	ExtendedBy int     `json:"extended_by_seconds"`
+	Usable     bool    `json:"usable"`
+	StatusURL  *string `json:"status_url,omitempty"`
+	Detail     *string `json:"detail,omitempty"`
 }
 
 type DeployImageToTestSlotRequest struct {
@@ -227,6 +250,36 @@ func (c *Client) DeployImageToTestSlot(ctx context.Context, actorEmail string, b
 	result.GitRef, _ = rawResult["git_ref"].(string)
 	result.SHA, _ = rawResult["sha"].(string)
 	result.Image, _ = rawResult["image"].(string)
+	return result, nil
+}
+
+func (c *Client) ExtendTestSlotLease(ctx context.Context, actorEmail string, body ExtendTestSlotRequest) (ExtendTestSlotResult, error) {
+	token, err := c.mintToken(ctx, actorEmail)
+	if err != nil {
+		return ExtendTestSlotResult{}, err
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return ExtendTestSlotResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/test-slots/extend", bytes.NewReader(raw))
+	if err != nil {
+		return ExtendTestSlotResult{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return ExtendTestSlotResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ExtendTestSlotResult{}, fmt.Errorf("glimmung extend returned %d: %s", resp.StatusCode, responseDetail(resp))
+	}
+	var result ExtendTestSlotResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ExtendTestSlotResult{}, fmt.Errorf("decode glimmung extend: %w", err)
+	}
 	return result, nil
 }
 

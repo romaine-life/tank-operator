@@ -67,6 +67,39 @@ func serviceToken(t *testing.T) string {
 
 func TestSetSessionImageOverride_HappyPath(t *testing.T) {
 	app, store := imageOverrideTestServer(t, true)
+	req, rec := putOverrideReq(t, "sandbox-scope", serviceToken(t), map[string]string{
+		"codex_image": branchCodexImg,
+		"git_ref":     "feat/x",
+	})
+	app.handleInternalSetSessionImageOverride(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := store.rows["sandbox-scope"]
+	if got.CodexImage != branchCodexImg || got.GitRef != "feat/x" {
+		t.Fatalf("stored override = %+v", got)
+	}
+}
+
+func TestSetSessionImageOverrideRequiresGlimmungForSlotScope(t *testing.T) {
+	app, store := imageOverrideTestServer(t, true)
+	req, rec := putOverrideReq(t, "tank-operator-slot-1", serviceToken(t), map[string]string{
+		"codex_image": branchCodexImg,
+		"git_ref":     "feat/x",
+	})
+	app.handleInternalSetSessionImageOverride(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.rows) != 0 {
+		t.Fatalf("override should not be stored without glimmung: %+v", store.rows)
+	}
+}
+
+func TestSetSessionImageOverrideExtendsMatchingGlimmungLease(t *testing.T) {
+	app, store := imageOverrideTestServer(t, true)
+	glim := &fakeGlimmungClient{}
+	app.glimmung = glim
 	req, rec := putOverrideReq(t, "tank-operator-slot-1", serviceToken(t), map[string]string{
 		"codex_image": branchCodexImg,
 		"git_ref":     "feat/x",
@@ -75,9 +108,23 @@ func TestSetSessionImageOverride_HappyPath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	got := store.rows["tank-operator-slot-1"]
-	if got.CodexImage != branchCodexImg || got.GitRef != "feat/x" {
-		t.Fatalf("stored override = %+v", got)
+	if _, ok := store.rows["tank-operator-slot-1"]; !ok {
+		t.Fatalf("override was not stored")
+	}
+	if glim.extendCalls != 1 {
+		t.Fatalf("extendCalls=%d, want 1", glim.extendCalls)
+	}
+	if glim.extendReq.Project != "tank-operator" || glim.extendReq.SlotName == nil || *glim.extendReq.SlotName != "tank-operator-slot-1" {
+		t.Fatalf("extend request=%+v", glim.extendReq)
+	}
+	if glim.extendReq.ExtendSeconds == nil || *glim.extendReq.ExtendSeconds != sessionImageOverrideLeaseExtendSeconds {
+		t.Fatalf("extend seconds=%v, want %d", glim.extendReq.ExtendSeconds, sessionImageOverrideLeaseExtendSeconds)
+	}
+	if glim.extendReq.Source != "tank-operator.session-image-override" || glim.extendReq.Reason == "" {
+		t.Fatalf("extend source/reason=%q/%q", glim.extendReq.Source, glim.extendReq.Reason)
+	}
+	if glim.extendReqEmail != otherUser {
+		t.Fatalf("extend actor=%q, want %q", glim.extendReqEmail, otherUser)
 	}
 }
 

@@ -23,6 +23,7 @@ type AppServerGlimmung interface {
 	State(ctx context.Context, actorEmail string) (glimmung.StateSnapshot, error)
 	CheckoutTestSlot(ctx context.Context, actorEmail string, body glimmung.CheckoutTestSlotRequest) (glimmung.CheckoutTestSlotResult, error)
 	DeployImageToTestSlot(ctx context.Context, actorEmail string, body glimmung.DeployImageToTestSlotRequest) (glimmung.DeployImageToTestSlotResult, error)
+	ExtendTestSlotLease(ctx context.Context, actorEmail string, body glimmung.ExtendTestSlotRequest) (glimmung.ExtendTestSlotResult, error)
 	ReturnTestSlot(ctx context.Context, actorEmail string, body glimmung.ReturnTestSlotRequest) (glimmung.ReturnTestSlotResult, error)
 }
 
