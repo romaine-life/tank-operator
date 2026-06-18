@@ -2792,22 +2792,19 @@ async def _handle_tank_merge_tool(
                 "source_tool": _TANK_MERGE_TOOL,
             },
         )
-        live_verify = await _verify_github_hot_swap_head(http, github_token, owner, repo, branch, sha)
+        # The backend PR-readiness reducer (tank_verify) is the single authority
+        # for governed publish + green CI + clean mergeability. The proxy no
+        # longer runs a second, divergent CI/mergeability reducer here; the exact
+        # head/draft re-check below remains as the only local safety gate.
         reasons: list[str] = []
         if tank_verify.get("allowed") is not True:
             tank_reasons = tank_verify.get("reasons")
             if isinstance(tank_reasons, list):
-                reasons.extend(f"Tank ledger: {reason}" for reason in tank_reasons)
+                reasons.extend(f"Tank readiness: {reason}" for reason in tank_reasons)
             else:
-                reasons.append("Tank ledger did not confirm governed publish, green CI, and clean mergeability")
-        if live_verify.get("allowed") is not True:
-            live_reasons = live_verify.get("reasons")
-            if isinstance(live_reasons, list):
-                reasons.extend(f"GitHub live state: {reason}" for reason in live_reasons)
-            else:
-                reasons.append("GitHub live state did not confirm latest branch head, open PR, green CI, and clean mergeability")
-        pr_number = int(live_verify.get("pr_number") or tank_verify.get("pr_number") or 0) or None
-        pr_url = str(live_verify.get("pr_url") or "")
+                reasons.append("Tank did not confirm governed publish, green CI, and clean mergeability")
+        pr_number = int(tank_verify.get("pr_number") or 0) or None
+        pr_url = str(tank_verify.get("pr_url") or "")
         if requested_pr_number is not None and pr_number != requested_pr_number:
             reasons.append(f"requested PR #{requested_pr_number} does not match governed branch PR #{pr_number or 'unknown'}")
         if pr_number is None:
