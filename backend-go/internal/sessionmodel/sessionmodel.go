@@ -1221,7 +1221,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"timeoutSeconds":      5,
 				"failureThreshold":    4,
 			},
-			"resources": codexRunnerResources(),
+			"resources": agentRunnerResources(),
 		}
 		containers = append(containers, codexRunnerContainer)
 	}
@@ -1410,8 +1410,20 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 // Memory budgets are calibrated against observed steady-state usage
 // from the 7-day sample around the eviction (claude-runner at ~150-300
 // MiB steady, ~795 MiB at the failure point; claude/sandbox-agent at
-// ~14 MiB; mcp-auth-proxy at ~27 MiB). Limits leave 4-5x headroom on
-// every container so normal-but-bursty sessions don't OOMKill.
+// ~14 MiB; mcp-auth-proxy at ~27 MiB).
+//
+// That sample predated Opus-4.8/max-effort sessions with a 1M-token
+// context window and multi-repo workspaces: their in-process SDK state
+// plus compaction spikes blow past the original 1536Mi runner cap and
+// get OOMKilled (exit 137), which kills the pod mid-turn and fails any
+// owed background-task wake. Session #146 first hit this on the Codex
+// runner during compaction (bumped to 3072Mi in isolation); the
+// 2026-06-18 Claude-fleet OOMs (sessions 1090 and 1101 killed mid-turn,
+// 1091 left wedged after its restart) were the same cap. So the
+// agent-runner limit is now 3072Mi, shared by the Claude and Codex
+// runners. Node memory was never the constraint (nodes ~55-75% at the
+// time); the scheduling request stays 512Mi, so only burst headroom
+// changed.
 //
 // CPU intentionally has requests but no limits: limits cause CFS
 // throttling that creates the appearance of latency bugs in agent
@@ -1438,20 +1450,12 @@ func agentRunnerResources() map[string]any {
 			"memory": "512Mi",
 		},
 		"limits": map[string]any{
-			"memory": "1536Mi",
+			// 3072Mi, not 1536Mi — see the calibration note above.
+			// Shared by the Claude and Codex runners: both OOMKill at
+			// 1536Mi under Opus-4.8/max 1M-context work and compaction.
+			"memory": "3072Mi",
 		},
 	}
-}
-
-func codexRunnerResources() map[string]any {
-	resources := agentRunnerResources()
-	limits := resources["limits"].(map[string]any)
-	// Codex app-server compaction runs in the runner container. Session
-	// 146 showed that the shared 1536Mi Claude-runner cap can OOMKill a
-	// live Codex thread during compaction, so Codex gets more burst
-	// headroom while keeping the same scheduling request.
-	limits["memory"] = "3072Mi"
-	return resources
 }
 
 func sandboxAgentResources() map[string]any {

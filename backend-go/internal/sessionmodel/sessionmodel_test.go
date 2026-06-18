@@ -546,6 +546,14 @@ func TestPodManifestClaudeSecondaryUsesSecondaryAPIProxy(t *testing.T) {
 	if got, want := runnerEnv["NODE_EXTRA_CA_CERTS"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
 		t.Fatalf("runner NODE_EXTRA_CA_CERTS = %v, want %q", got, want)
 	}
+	// Regression guard for the 2026-06-18 Claude-fleet OOMs: the runner
+	// burst cap must stay at 3072Mi. At the old 1536Mi, Opus-4.8/max
+	// 1M-context sessions OOMKilled mid-turn (exit 137) and the pod died.
+	claudeRunner := findContainer(t, containers, "claude-runner")
+	runnerLimits := claudeRunner["resources"].(map[string]any)["limits"].(map[string]any)
+	if got, want := runnerLimits["memory"], "3072Mi"; got != want {
+		t.Fatalf("claude-runner memory limit = %v, want %q", got, want)
+	}
 }
 
 func TestPodManifestCodexRunnerAlwaysUsesAppServerTransport(t *testing.T) {
