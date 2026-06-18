@@ -195,3 +195,47 @@ Evidence:
   `Sheet` variant ("sheet primitive supports a bottom-anchored variant"), and the
   disabled empty state ("compact pager stays present with no turns instead of
   vanishing").
+
+## Strand-proof selected-turn activity load
+
+Status: active
+
+Intent:
+The Turns view's per-turn activity body ("Loading activity…") always resolves —
+it can never strand on a permanent spinner with no load in flight (the
+long-standing "dead refresh"). The body and the loader resolve the displayed
+turn through one shared function, and a level-triggered reconcile keeps a load
+running for whatever turn is on screen.
+
+Affected contracts:
+- Transcript Navigation (primary)
+- Observability (the stranded-vs-slow distinction and visible-pane gating)
+
+Contract impact:
+- The activity body renders the displayed turn — the routed/selected turn, or
+  the latest turn when the selected id is not in the loaded (windowed) directory.
+  The selected id legitimately diverges from the directory during deep-link /
+  refresh / route-number resolution, when `effectiveSelectedTurnId` holds the
+  unresolved id to keep the URL stable. Keying the load off that id (as the prior
+  fixes did) loaded an off-screen turn while the body showed the latest turn, so
+  the shown turn never loaded — the strand. The load now reconciles the displayed
+  turn, so it cannot diverge from what the body shows.
+- The reconcile is level-triggered: a Turns pane with a displayed, non-terminal,
+  not-loading turn always has a load running, closing the strand for every
+  selection path (gestures, live-run follow, deep-link match, route resolver,
+  default-latest) rather than wiring a load into each path. Terminal states
+  (loaded / error) stay terminal — no auto-retry hot loop.
+- The stranded / route-session-mismatch client telemetry is gated to the visible
+  routed pane, so hidden tabs-view panes stop inflating the alerts with
+  mismatches no user saw.
+
+Evidence:
+- `frontend/src/turnActivityLoadReconcile.ts` — the pure, truth-table-tested
+  `resolveDisplayedActivityTurn` (single source of truth for the displayed turn)
+  and `evaluateTurnActivityReconcile` (the level-triggered load/idle gate);
+  `turnActivityLoadReconcile.test.ts` pins the divergence case (an off-directory
+  selected id → the displayed latest turn is what reconciles a load) and the
+  strand-without-recovery regression guard.
+- `App.tsx` — `RunTurnActivityScreen` renders `resolveDisplayedActivityTurn`;
+  `ChatPane` reconciles the displayed turn's load, aligns the stuck watchdog and
+  keyboard refresh to it, and gates the stranded/mismatch telemetry on `visible`.

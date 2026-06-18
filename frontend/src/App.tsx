@@ -389,6 +389,10 @@ import {
   type TurnActivityLoadSnapshot as TurnActivityLoadSnapshotModel,
   type TurnActivityLoadState as TurnActivityLoadStateModel,
 } from "./turnActivityState";
+import {
+  evaluateTurnActivityReconcile,
+  resolveDisplayedActivityTurn,
+} from "./turnActivityLoadReconcile";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import {
   AgentAvatarIcon,
@@ -12552,10 +12556,9 @@ export function RunTurnViewControls({
   onStatsExpandedChange: (expanded: boolean) => void;
   onNavigate: (turnId: string, page: number) => void;
 }) {
-  const selected =
-    turns.find((turn) => turn.turnId === selectedTurnId) ??
-    turns[turns.length - 1] ??
-    null;
+  // Displayed turn — same resolution as the activity body (resolveDisplayedActivityTurn)
+  // so the controls and the body agree on which turn is shown.
+  const selected = resolveDisplayedActivityTurn(turns, selectedTurnId);
   const selectedLoadState = selected
     ? turnActivityLoadsByTurn[selected.turnId]
     : undefined;
@@ -13881,6 +13884,7 @@ function RunTurnActivityGroup({
 function RunTurnActivityScreen({
   turns,
   truncated,
+  visible,
   selectedTurnId,
   avatar,
   systemAvatar,
@@ -13910,6 +13914,13 @@ function RunTurnActivityScreen({
   // elided — a >5000-turn session. Surfaced so the list never silently claims
   // to be complete when it isn't.
   truncated?: boolean;
+  // Whether this pane is the on-screen, routed pane. The tabs view keeps
+  // non-routed session panes mounted, so a hidden pane still renders this
+  // screen and runs its effects. The stranded / route-session-mismatch
+  // telemetry below is gated on this: a hidden pane reading the live URL is not
+  // a user-visible strand, and emitting from it inflated the alert with one
+  // long-lived background pane's mismatches against every URL the user visited.
+  visible: boolean;
   selectedTurnId: string | null;
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
@@ -13936,10 +13947,13 @@ function RunTurnActivityScreen({
   statsExpanded: boolean;
   onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
-  const selected =
-    turns.find((turn) => turn.turnId === selectedTurnId) ??
-    turns[turns.length - 1] ??
-    null;
+  // The displayed turn — the routed/selected turn, or the latest turn when the
+  // selected id is not in the (windowed) directory. MUST match what the load
+  // reconciler keys off (resolveDisplayedActivityTurn in ChatPane) so the turn
+  // shown here is always the turn being loaded; otherwise the body strands on
+  // "Loading activity…" (the dead-refresh bug). Single source of truth lives in
+  // turnActivityLoadReconcile.ts.
+  const selected = resolveDisplayedActivityTurn(turns, selectedTurnId);
   const selectedLoadState = selected
     ? turnActivityLoadsByTurn[selected.turnId]
     : undefined;
@@ -14056,7 +14070,13 @@ function RunTurnActivityScreen({
     );
   const selectedActivityLoadingTelemetryKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!showActivityLoading || !selectedTurnIdForTelemetry) {
+    if (!visible || !showActivityLoading || !selectedTurnIdForTelemetry) {
+      // A hidden pane (tabs view) still renders this screen, but a spinner on
+      // an off-screen pane is not a user-visible strand and a hidden pane never
+      // matches the live route — so neither the stranded nor the route-mismatch
+      // signal is meaningful here. The displayed-turn load reconciler keeps the
+      // visible pane from stranding, so an emit that survives this gate is a
+      // real, on-screen stuck spinner worth alerting on.
       selectedActivityLoadingTelemetryKeyRef.current = null;
       return;
     }
@@ -14141,6 +14161,7 @@ function RunTurnActivityScreen({
     sessionId,
     sessionMode,
     showActivityLoading,
+    visible,
   ]);
   const selectedThinkingStatus =
     selected?.shell?.activity?.status === "needs_input"
@@ -22594,11 +22615,44 @@ function ChatPane({
     settingsTab,
     visible,
   ]);
+  // The turn the activity body actually renders. resolveDisplayedActivityTurn
+  // is the SAME resolver the body uses, so the loader and the body never
+  // disagree about which turn is on screen. It falls back to the latest turn
+  // when the selected id is not in the (windowed) directory — which is exactly
+  // what happens on a deep-link or refresh of /sessions/{id}/turns/{n} while
+  // that turn is still resolving (effectiveSelectedTurnId holds the unresolved
+  // id to keep the URL stable). Keying the load off effectiveSelectedTurnId
+  // (every prior fix did) loaded the off-screen id while the body showed the
+  // latest turn → the shown turn never loaded → "Loading activity…" forever.
+  const displayedActivityTurnId =
+    resolveDisplayedActivityTurn(turnViewItems, effectiveSelectedTurnId)
+      ?.turnId ?? null;
+  // Level-triggered activity-load reconciler. A Turns pane with a displayed,
+  // non-terminal, not-loading turn ALWAYS has a load running — closing the
+  // strand for every selection path (gestures, live-run follow, deep-link
+  // match, route-number resolver, default-latest), present and future, instead
+  // of wiring a load into each path. turnActivityShouldStartLoad dedups
+  // concurrent loads, so re-running on every relevant render is safe
+  // (loading/loaded/error all resolve to idle). Mirrors the directory-load
+  // reconcile design; pure gate + resolver are truth-table tested in
+  // turnActivityLoadReconcile.ts.
   useEffect(() => {
-    if (activeTab !== "turns") return;
-    if (!effectiveSelectedTurnId) return;
-    ensureTurnActivityLoaded(effectiveSelectedTurnId);
-  }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+    const decision = evaluateTurnActivityReconcile({
+      active: activeTab === "turns",
+      hasDisplayedTurn: displayedActivityTurnId != null,
+      status: displayedActivityTurnId
+        ? turnActivityLoadsByTurn[displayedActivityTurnId]?.status
+        : undefined,
+    });
+    if (decision.action === "load" && displayedActivityTurnId) {
+      ensureTurnActivityLoaded(displayedActivityTurnId);
+    }
+  }, [
+    activeTab,
+    displayedActivityTurnId,
+    ensureTurnActivityLoaded,
+    turnActivityLoadsByTurn,
+  ]);
   // Behavior-free watchdog (telemetry only): report when the selected turn's
   // activity body stays on "Loading activity..." past the threshold. It emits a
   // bounded session-event-stream metric and does NOT start a load, touch the
@@ -22607,16 +22661,18 @@ function ChatPane({
   // that never started (the selected turn left `unloaded` with nothing
   // re-triggering it) is invisible today; this fills that gap so the strand is
   // measurable in prod data before any fix. See turnActivityState.ts.
-  const selectedActivityStatus = effectiveSelectedTurnId
-    ? turnActivityLoadsByTurn[effectiveSelectedTurnId]?.status
+  const displayedActivityStatus = displayedActivityTurnId
+    ? turnActivityLoadsByTurn[displayedActivityTurnId]?.status
     : undefined;
   useEffect(() => {
     if (!visible) return;
     if (activeTab !== "turns") return;
-    if (!effectiveSelectedTurnId) return;
-    // Arm only while the body shows the spinner (a non-terminal status).
-    if (turnActivityStuckEvent(selectedActivityStatus) === null) return;
-    const turnId = effectiveSelectedTurnId;
+    if (!displayedActivityTurnId) return;
+    // Arm only while the body shows the spinner (a non-terminal status). Keyed
+    // on the DISPLAYED turn — the turn the spinner is actually for — so the
+    // watchdog can't fire on an off-screen id whose body already cleared.
+    if (turnActivityStuckEvent(displayedActivityStatus) === null) return;
+    const turnId = displayedActivityTurnId;
     const timer = window.setTimeout(() => {
       // Recompute from the ref at fire time so a load that resolved within the
       // threshold does not produce a false positive.
@@ -22630,8 +22686,8 @@ function ChatPane({
   }, [
     visible,
     activeTab,
-    effectiveSelectedTurnId,
-    selectedActivityStatus,
+    displayedActivityTurnId,
+    displayedActivityStatus,
     session.mode,
   ]);
   useEffect(() => {
@@ -22856,8 +22912,8 @@ function ChatPane({
       // clearRealtime=false keeps any in-flight optimistic local echo; the
       // refreshed server rows are deduped against it by syncSdkRenderedEntries.
       const pull = refreshSdkRunHistoryResult(false, "keyboard-refresh");
-      if (activeTab === "turns" && effectiveSelectedTurnId) {
-        ensureTurnActivityLoaded(effectiveSelectedTurnId, { force: true });
+      if (activeTab === "turns" && displayedActivityTurnId) {
+        ensureTurnActivityLoaded(displayedActivityTurnId, { force: true });
       }
       void pull.finally(() => {
         keyboardRefreshInFlightRef.current = false;
@@ -22867,7 +22923,7 @@ function ChatPane({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [
     activeTab,
-    effectiveSelectedTurnId,
+    displayedActivityTurnId,
     ensureTurnActivityLoaded,
     mcpOpen,
     mentionOpen,
@@ -24266,6 +24322,7 @@ function ChatPane({
                 <RunTurnActivityScreen
                   turns={turnViewItems}
                   truncated={turnDirectoryTruncated}
+                  visible={visible}
                   selectedTurnId={effectiveSelectedTurnId}
                   avatar={sessionAvatar}
                   systemAvatar={systemAvatar}

@@ -166,6 +166,16 @@ yanking the viewport away from a user reading history.
   above the activity page body when that turn has a human `user_message.created`
   event. It must not rediscover that message from the loaded transcript window
   or treat it as a paged activity entry.
+- The selected turn's activity body always loads, regardless of how the turn
+  became selected (explicit gesture, live-run follow, deep-link route match,
+  route-number resolver, or the default-to-latest fallback). The load is
+  reconciled level-triggered against the turn the body actually displays — the
+  routed/selected turn, or the latest turn when the selected id is not in the
+  loaded (windowed) directory — so a deep-link to or refresh of
+  `/sessions/{id}/turns/{n}` while that turn is still resolving can never leave
+  the displayed turn on a spinner with no load in flight. One shared resolver
+  (`resolveDisplayedActivityTurn`) feeds both the render and the loader, so they
+  cannot disagree about which turn is on screen.
 
 ## Failure And Recovery
 
@@ -180,6 +190,13 @@ yanking the viewport away from a user reading history.
 - If a target message is absent from the durable transcript projection or is
   outside the durability boundary, the UI should show a clear
   unavailable-target state. Sidebar deletion by itself is not such a boundary.
+- The "Loading activity…" body is a transient state with a guaranteed exit. A
+  Turns pane with a displayed, non-terminal, not-loading turn always has a load
+  running (level-triggered reconcile), so the activity body resolves to loaded, a
+  retryable error, or a genuinely in-flight load — never a permanent spinner with
+  nothing in flight (the "dead refresh" strand). Terminal states stay terminal:
+  the reconciler never auto-retries a failed load into a hot loop; Retry or
+  re-selecting the turn re-drives it.
 
 ## Observability
 
@@ -228,6 +245,16 @@ yanking the viewport away from a user reading history.
   SPA emits bounded `turn-directory-request` / `turn-directory-loaded` /
   `turn-directory-error` client events so a directory load that fails (leaving
   the retryable Turns error state) is diagnosable without browser devtools.
+- The selected-turn activity strand is observable and scoped to the visible
+  routed pane. `turn-activity-selected-loading-stranded` (a displayed turn whose
+  load never started) is distinct from `turn-activity-selected-loading-slow` (a
+  genuinely in-flight load past the threshold), so a healthy state drives the
+  stranded rate to ~0 without suppressing real slow-load signal. These client
+  events and `turn-activity-selected-route-session-mismatch` are emitted only
+  from the on-screen routed pane: the tabs view keeps non-routed session panes
+  mounted, and a hidden pane reading the live URL is not a user-visible strand,
+  so emitting from it inflated the alerts with one long-lived background pane's
+  mismatches against every URL the user visited.
 
 - Normal session open lands at the live tail.
 - A copied message link resolves through a durable cursor and lands on the
