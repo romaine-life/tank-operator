@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  collectTestSlotProvisioningFailures,
+  TEST_SLOT_PROVISIONING_FAILURE_HINT,
+} from "./check-removed-test-slot-agent-provisioning.mjs";
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const ignoredDirs = new Set([
@@ -905,6 +910,14 @@ for await (const filePath of walk(repoRoot)) {
     const { line, column } = lineAndColumn(text, match.index);
     failures.push(`${relativePath}:${line}:${column} ${rule.name}: ${JSON.stringify(match[0])}`);
   }
+}
+
+// Retired agent-facing test-slot *provisioning* steps (the rewritten /test
+// skill + testing docs). Scoped scan lives in its own module; merged here so it
+// rides this guard's CI wiring (k8s/**, docs/**, scripts/**) without a separate
+// workflow step.
+for (const failure of await collectTestSlotProvisioningFailures()) {
+  failures.push(`${failure} — ${TEST_SLOT_PROVISIONING_FAILURE_HINT}`);
 }
 
 if (failures.length > 0) {

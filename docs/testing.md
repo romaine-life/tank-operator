@@ -124,9 +124,13 @@ so this whole layer runs in CI with no extra workflow wiring.
 
 ## Glimmung Test Slots
 
-Tank-operator test slots are provisioned by Glimmung. Before relying on
-hardcoded slot paths or pod names, check the current slot lease and deploy the
-CI-built image for pushed refs with Glimmung `deploy_image_to_test_slot`.
+Tank-operator test slots are provisioned by Glimmung. Provisioning is
+deterministic and server-side: Tank's Test button /
+`POST /api/sessions/{id}/test-workflow/start` endpoint validates readiness
+(published + CI-green + mergeable + current-with-main) and then checks out a
+slot and deploys the branch's CI-built image for pushed refs. Agents do not
+check out or deploy slots by hand; before relying on hardcoded slot paths or pod
+names, check the current slot lease.
 
 For `/test-drive`, user-visible Tank UI behavior must be proven in a real
 session created inside the checked-out test slot. Use `spawn_test_slot_session`
@@ -234,8 +238,9 @@ ACR may still use GHA cache because it is their only cache backend.
 
 That proof-image path is the input for slot deploys:
 
-- Use Glimmung `deploy_image_to_test_slot` to deploy the CI-built image for a
-  pushed ref into a checked-out slot. Glimmung resolves the ref to the
+- The deterministic Test workflow deploys the CI-built image for a pushed ref
+  into the provisioned slot server-side (Tank's backend drives Glimmung's
+  `/v1/test-slots/deploy-image` HTTP API). Glimmung resolves the ref to the
   app image's CI-run lookup tag, which points at the fingerprint tag CI
   produced; the registry contract is not a raw commit-SHA image alias.
 - Use PR CI proof images to prove buildability and prime ACR for slot
@@ -294,6 +299,6 @@ Two steps:
    production scope, and is honored only by test-env orchestrators — production
    sessions are never repointed.
 
-For app-level validation, prefer Glimmung `deploy_image_to_test_slot`. For
-session-image validation, build the session image and repoint the slot so newly
-created sessions boot the branch image.
+For app-level validation, let the deterministic Test workflow deploy the
+CI-built image to the slot. For session-image validation, build the session
+image and repoint the slot so newly created sessions boot the branch image.
