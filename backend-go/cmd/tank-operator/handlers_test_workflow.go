@@ -1,0 +1,299 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
+)
+
+// interactiveTestWorkflowLabel labels the glimmung checkout lease for the
+// interactive (UI-button-triggered) test workflow so it is distinguishable from
+// the "orchestration-review" lease the autonomous path leases.
+const interactiveTestWorkflowLabel = "interactive-test"
+
+// testWorkflowResolveError carries an HTTP status + message out of the
+// coordinate-resolution helper without writing the response itself.
+type testWorkflowResolveError struct {
+	status int
+	msg    string
+}
+
+// handleStartTestWorkflow is the deterministic, zero-LLM replacement for the
+// retired interactive "/test" skill. The UI "test" button POSTs here instead of
+// sending the skill prompt to the agent. The backend resolves the session's
+// governed-PR coordinates from durable state (owner, repo, the governed session
+// branch tank/session/<id>/<repo>, glimmung project) and runs the shared
+// validate→wait→provision gate (provisionTestSlotForSession) in a background
+// goroutine with a fresh budgeted context, mirroring
+// provisionOrchestrationReviewSlot. It returns 202 immediately because the
+// gate's settle-wait can take minutes. The branch's current head is validated
+// ("latest pushed" semantics): no PR number pin, no ExpectedSHA pin.
+//
+// Owner-scoped like the other human-facing /api/sessions/{id}/... routes: the
+// caller can only trigger their own session's test workflow.
+func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if s.glimmung == nil || s.mcpGitHub == nil {
+		writeError(w, http.StatusServiceUnavailable, "test workflow is unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetRegisteredByOwner(r.Context(), owner, sessionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+			writeError(w, http.StatusNotFound, "session not found")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	// Optional `repo` override disambiguates a multi-repo session. The body is
+	// optional: a single-repo session needs none.
+	var body struct {
+		Repo string `json:"repo"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+
+	req, herr := s.resolveTestWorkflowTarget(r.Context(), owner, sessionID, info, strings.TrimSpace(body.Repo))
+	if herr != nil {
+		writeError(w, herr.status, herr.msg)
+		return
+	}
+
+	s.launchInteractiveTestWorkflow(req)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "started",
+		"repo":   req.RepoOwner + "/" + req.RepoName,
+		"branch": req.Branch,
+	})
+}
+
+// launchInteractiveTestWorkflow starts the background gate run. Production wiring
+// is a fresh budgeted goroutine; tests inject a synchronous capture via
+// interactiveTestWorkflowLaunch.
+func (s *appServer) launchInteractiveTestWorkflow(req provisionTestSlotRequest) {
+	if s.interactiveTestWorkflowLaunch != nil {
+		s.interactiveTestWorkflowLaunch(req)
+		return
+	}
+	go s.runInteractiveTestWorkflow(req)
+}
+
+// resolveTestWorkflowTarget derives the gate request from durable session state.
+// Repo comes from sessions.repos (the create-time owner/name selection); the
+// branch is the governed session branch the publish flow pushes to; the project
+// is the glimmung project mapping for the repo. PRNumber/ExpectedSHA are left
+// zero so the gate validates the branch's current head.
+func (s *appServer) resolveTestWorkflowTarget(ctx context.Context, owner, sessionID string, info sessions.Info, repoOverride string) (provisionTestSlotRequest, *testWorkflowResolveError) {
+	repos := make([]string, 0, len(info.Repos))
+	for _, repo := range info.Repos {
+		if trimmed := strings.TrimSpace(repo); trimmed != "" {
+			repos = append(repos, trimmed)
+		}
+	}
+	if len(repos) == 0 {
+		return provisionTestSlotRequest{}, &testWorkflowResolveError{
+			status: http.StatusBadRequest,
+			msg:    "session has no repository; nothing to provision a test environment for",
+		}
+	}
+
+	slug, herr := s.pickTestWorkflowRepo(ctx, sessionID, repos, repoOverride)
+	if herr != nil {
+		return provisionTestSlotRequest{}, herr
+	}
+	repoOwner, repoName, ok := splitRepoSlug(slug)
+	if !ok {
+		return provisionTestSlotRequest{}, &testWorkflowResolveError{
+			status: http.StatusBadRequest,
+			msg:    "session repository is not a valid owner/name slug: " + slug,
+		}
+	}
+
+	return provisionTestSlotRequest{
+		OwnerEmail: owner,
+		SessionID:  sessionID,
+		Project:    sessionGlimmungProject(repoOwner, repoName),
+		Workflow:   interactiveTestWorkflowLabel,
+		RepoOwner:  repoOwner,
+		RepoName:   repoName,
+		Branch:     sessionGovernedBranch(sessionID, repoName),
+		// PRNumber=0, ExpectedSHA="": validate the branch's current head
+		// ("latest pushed"), not a pinned PR number or commit.
+	}, nil
+}
+
+// pickTestWorkflowRepo selects the repo to test. An explicit override wins (and
+// must be one of the session's repos). A single-repo session is unambiguous.
+// For a multi-repo session with no override, the repo carrying the open governed
+// PR — the durable CI-watch record the publish flow registers — disambiguates;
+// otherwise the request is refused as ambiguous.
+func (s *appServer) pickTestWorkflowRepo(ctx context.Context, sessionID string, repos []string, override string) (string, *testWorkflowResolveError) {
+	if override != "" {
+		for _, repo := range repos {
+			if strings.EqualFold(repo, override) || strings.EqualFold(repoNameOnly(repo), override) {
+				return repo, nil
+			}
+		}
+		return "", &testWorkflowResolveError{
+			status: http.StatusBadRequest,
+			msg:    "repo " + override + " is not one of this session's repositories",
+		}
+	}
+	if len(repos) == 1 {
+		return repos[0], nil
+	}
+	if s.ciWatches != nil {
+		if watch, err := s.ciWatches.GetLatestForSession(ctx, s.sessionScope, sessionID); err == nil &&
+			strings.TrimSpace(watch.PROwner) != "" && strings.TrimSpace(watch.PRName) != "" {
+			watched := watch.PROwner + "/" + watch.PRName
+			for _, repo := range repos {
+				if strings.EqualFold(repo, watched) {
+					return repo, nil
+				}
+			}
+		}
+	}
+	return "", &testWorkflowResolveError{
+		status: http.StatusConflict,
+		msg:    "session has multiple repositories; specify which to test (repo=owner/name)",
+	}
+}
+
+// runInteractiveTestWorkflow runs the gated validate→wait→provision sequence for
+// the interactive trigger off the request path (it can wait minutes for CI to
+// settle) and surfaces the outcome durably. On a ready verdict the gate's
+// SetTestState already marked the slot active + URL; on any refusal the gate
+// left glimmung and test-state untouched, so the refusal reason is surfaced as a
+// display-only ci_status.updated record the turns view renders. It uses a fresh
+// background context budgeted for the settle cap plus deploy grace, not a
+// possibly-canceled request ctx.
+func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.provisionBackgroundTimeout())
+	defer cancel()
+
+	outcome, err := s.provisionTestSlotForSession(ctx, req)
+	repo := req.RepoOwner + "/" + req.RepoName
+	if err != nil {
+		recordTestSlotInteractive("error")
+		slog.Warn("interactive test workflow gate failed",
+			"session_id", req.SessionID, "repo", repo, "branch", req.Branch, "error", err)
+		s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, "failed",
+			"Could not start the test workflow for "+req.Branch+": "+err.Error())
+		return
+	}
+	if outcome.Provisioned {
+		recordTestSlotInteractive(provisionStepProvisioned)
+		detail := strings.TrimSpace(outcome.Detail)
+		if detail == "" {
+			detail = "Test environment provisioned for " + req.Branch + "."
+		}
+		s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, "ready", detail)
+		return
+	}
+
+	// Refusal: surface the reason so the user sees why no environment came up.
+	recordTestSlotInteractive(string(outcome.Verdict))
+	detail := strings.TrimSpace(outcome.Detail)
+	if detail == "" {
+		detail = "Test environment not provisioned for " + req.Branch + " (" + string(outcome.Verdict) + ")."
+	}
+	s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, testWorkflowStatusState(outcome.Verdict), detail)
+}
+
+// emitTestWorkflowStatusRecord writes a display-only ci_status.updated event to
+// the session ledger so the interactive test-workflow outcome (and especially a
+// refusal reason) is visible in the turns view — not only in logs. Mirrors
+// emitCIStatusRecord / emitOrchestrationPhaseStatusRecord. PR number/URL are
+// best-effort from the session's CI-watch record; absent one, the branch tree
+// URL is used.
+func (s *appServer) emitTestWorkflowStatusRecord(ctx context.Context, req provisionTestSlotRequest, headSHA, state, detail string) {
+	if s.sessionEvents == nil {
+		return
+	}
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, req.SessionID)
+	repo := req.RepoOwner + "/" + req.RepoName
+	prNumber := 0
+	prURL := "https://github.com/" + repo + "/tree/" + req.Branch
+	if s.ciWatches != nil {
+		if watch, err := s.ciWatches.GetLatestForSession(ctx, s.sessionScope, req.SessionID); err == nil &&
+			strings.EqualFold(strings.TrimSpace(watch.PROwner), req.RepoOwner) &&
+			strings.EqualFold(strings.TrimSpace(watch.PRName), req.RepoName) {
+			if watch.PRNumber > 0 {
+				prNumber = watch.PRNumber
+			}
+			if strings.TrimSpace(watch.PRURL) != "" {
+				prURL = strings.TrimSpace(watch.PRURL)
+			}
+		}
+	}
+	event := conversation.CIStatusUpdatedEventMap(conversation.CIStatusUpdatedArgs{
+		SessionID:         req.SessionID,
+		SessionStorageKey: storageKey,
+		Email:             req.OwnerEmail,
+		Repo:              repo,
+		PRNumber:          prNumber,
+		PRURL:             prURL,
+		HeadSHA:           strings.TrimSpace(headSHA),
+		State:             state,
+		Detail:            detail,
+	})
+	if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
+		slog.Warn("interactive test workflow status record persist failed",
+			"session", req.SessionID, "error", err)
+	}
+}
+
+// testWorkflowStatusState maps a refusal verdict to the ci_status.updated `state`
+// the turns view renders. Conflict and merged keep their own states; every other
+// refusal (failed checks, settle timeout, head moved, infra error) surfaces as
+// "failed" so the UI reflects that no environment came up.
+func testWorkflowStatusState(v provisionVerdict) string {
+	switch v {
+	case provisionVerdictConflict:
+		return "conflict"
+	case provisionVerdictMerged:
+		return "merged"
+	default:
+		return "failed"
+	}
+}
+
+// sessionGovernedBranch is the Tank-owned session branch the governed Git flow
+// publishes to: tank/session/<session_id>/<repoName>.
+func sessionGovernedBranch(sessionID, repoName string) string {
+	return "tank/session/" + strings.TrimSpace(sessionID) + "/" + strings.TrimSpace(repoName)
+}
+
+// sessionGlimmungProject maps a repo to its glimmung project, mirroring
+// orchestrationGlimmungProject: romaine-life repos map to a project named after
+// the repo; everything else falls back to the default project.
+func sessionGlimmungProject(repoOwner, repoName string) string {
+	if strings.EqualFold(strings.TrimSpace(repoOwner), "romaine-life") && strings.TrimSpace(repoName) != "" {
+		return strings.TrimSpace(repoName)
+	}
+	return defaultGlimmungProject
+}
+
+func repoNameOnly(slug string) string {
+	_, name, ok := splitRepoSlug(slug)
+	if !ok {
+		return ""
+	}
+	return name
+}
