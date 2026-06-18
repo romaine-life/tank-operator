@@ -727,3 +727,71 @@ Evidence:
   Terminal` (k8s_watch_test.go); the `provider_fatal → status Failed +
   terminating_at (sticky)` and guarded recovery rows in
   `TestDeriveRowColumnChangesPerEventType` (writer_test.go).
+
+
+## AskUserQuestion answer attachments (screenshot-in-answer)
+
+Status: shipped
+
+Intent:
+A file the user attaches while answering an AskUserQuestion must reach the
+model — not be silently discarded. Originating report: a user answered a
+question with both typed text and a pasted screenshot; the text arrived as the
+answer's free-form note, the screenshot was dropped. Root cause: the answer
+path (`POST /…/answer` → `input_reply`) was built text-only across all four
+layers it crosses (frontend composer, backend `handlers_turns.go`, sessionbus
+`Command`, runner) and had no attachment field anywhere. The normal turn path
+already solved the same problem (upload to `/workspace`, carry
+`display_attachments`), so the fix reuses that plumbing rather than inventing a
+new one.
+
+Affected contracts:
+- Agent Runners
+- Transcript
+- Artifacts And Files
+
+Contract impact:
+- Satisfies the new Agent Runners invariant "a file attached to an
+  AskUserQuestion answer must reach the model, not be silently dropped." The
+  attachment is carried end to end as path metadata only: the bytes stay
+  pod-local in the shared `/workspace`, ride nothing on the durable ledger
+  except `path`/`abs_path`, and the Claude runner reads them at delivery and
+  returns an image as an inline image content block in the resolved
+  AskUserQuestion tool result (non-image → path line; missing/oversize/
+  unreadable → visible note; never a silent drop).
+- The answer's attachment is also stamped on the durable `turn.input_answered`
+  record and on the Tank-visible `user_message.created` continuation turn, so
+  the transcript renders the attachment chip on the answer bubble (Transcript /
+  Artifacts-And-Files contracts).
+- Additive across the wire: `Command.attachments` /
+  `turn.input_answered.payload.attachments` are absent on text-only answers, so
+  pre-deploy session pods keep delivering text answers unchanged (no consumer
+  migration required).
+
+Non-goal / named gap:
+- Codex GUI model-side delivery. The Codex app-server answer is a structured
+  per-question response with no inline-image or free-text channel, so
+  codex-runner does not yet put the attachment in front of the Codex model — it
+  records the attachment on the transcript turn (backend-stamped, provider-
+  agnostic) but the image is not delivered to the agent. A future agent wiring
+  Codex answer attachments should append the workspace path to the Codex answer
+  (mirroring how Codex consumes normal-turn attachment paths) or use whatever
+  image channel the app-server gains.
+
+Observability:
+- Runner `tank_runner_input_reply_attachment_total{kind,result}`
+  (`kind` = `image|file`, `result` = `delivered|read_failed|missing`). A
+  `missing`/`read_failed` image with a populated
+  `turn.input_answered.attachments` is the silent-screenshot-loss signature.
+
+Evidence:
+- Backend (cmd/tank-operator/handlers_turns_test.go):
+  `TestAnswerSessionTurnCarriesDisplayAttachments` proves the attachment
+  reaches all three sinks (input_reply command, `turn.input_answered`,
+  `user_message.created`).
+- Sessionbus (internal/sessionbus/commands_test.go):
+  `TestNormalizeCommandAttachments`,
+  `TestNormalizeCommandAttachmentsEmptyStaysNil`.
+- Runner (claude-runner/src/runner.answer-attachments.test.ts): inline image
+  block, non-image path line, missing/oversize/escaping-path visible note,
+  text-only no-op.

@@ -1114,9 +1114,11 @@ do not sit open forever in the first place.
   runner normalizes both forms into the durable Tank conversation protocol's
   `questions[]` payload. The MCP handler publishes `turn.awaiting_input` and
   keeps that tool call pending. When `input_reply` arrives, the runner resolves
-  the MCP call with the user's answers so the provider turn continues. Claude
-  SDK permissions run in bypass mode; AskUserQuestion is not implemented
-  through permission interception.
+  the MCP call with the user's answers so the provider turn continues; any image
+  the user attached to the answer is read from `/workspace` and returned as an
+  inline image content block on that tool result (see `display_attachments`
+  below). Claude SDK permissions run in bypass mode; AskUserQuestion is not
+  implemented through permission interception.
 - **Codex** (`codex_gui`): on the App Server's `item/tool/requestUserInput`,
   the runner publishes `turn.awaiting_input`, keeps the JSON-RPC request
   pending, then responds with the submitted answers when `input_reply` arrives.
@@ -1139,7 +1141,11 @@ Body:
   "provider_item_id": "toolu_...",
   "timeline_id": "item_...",
   "answers": { "Which auth method should we use?": ["OAuth"] },
-  "annotations": { "Which auth method should we use?": { "notes": "matches the existing IdP" } }
+  "annotations": { "Which auth method should we use?": { "notes": "matches the existing IdP" } },
+  "display_attachments": [
+    { "label": "Screenshot 1", "name": "screenshot.png", "kind": "image",
+      "path": "screenshots/3.png", "abs_path": "/workspace/screenshots/3.png", "size": 40213 }
+  ]
 }
 ```
 
@@ -1163,6 +1169,22 @@ page's answered state is derived durably — the projection
 marks it answered by finding a later `turn.input_answered` event whose
 `payload.question_timeline_id` matches the question — never from browser-local
 optimism.
+
+`display_attachments` is optional and carries any files the user attached to
+the answer (a pasted screenshot is the main case), the same shape and upload
+plumbing as a normal turn's `display_attachments` — the SPA uploads bytes to
+`/files/upload` (landing at `/workspace/screenshots/…`) and posts only the
+attachment metadata here. The handler normalizes it and threads it into all
+three answer sinks: the durable `turn.input_answered` payload (`attachments`),
+the Tank-visible `user_message.created` continuation turn (so the transcript
+renders the attachment chip on the answer bubble), and the `input_reply`
+command's `attachments`. The bytes never travel the bus — only path metadata
+does, and the runner reads the file from the shared `/workspace` at delivery.
+The Claude runner returns an image as an inline image content block in the
+resolved AskUserQuestion tool result (a non-image as a path line, a
+missing/oversize/unreadable image as a visible note) so the screenshot is in
+the model's context, not silently dropped. `tank_runner_input_reply_attachment_total{kind,result}`
+counts the outcome.
 
 Tank-canonical AskUserQuestion question shape:
 

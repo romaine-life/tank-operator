@@ -68,6 +68,19 @@ the rest of the product reconstruct what happened.
   `questions` is a non-empty array, including the one-question case.
   It must not depend on Claude's permission callback path; permission mode and
   human-question handoff are separate runner concerns.
+- A file the user attaches to an AskUserQuestion answer must reach the model,
+  not be silently dropped. The attachment rides the same upload +
+  `display_attachments` plumbing as a normal turn: the bytes stay pod-local in
+  the shared `/workspace`, and only path metadata travels the `input_reply`
+  command (`attachments`) and the durable `turn.input_answered` record. At
+  delivery the Claude runner reads the bytes from `/workspace` and returns an
+  image as an inline image content block in the resolved AskUserQuestion tool
+  result (the pixels in context — on an answer the screenshot is often the
+  answer), a non-image as a path line, and a missing/oversize/unreadable image
+  as a visible note. Never a silent drop. (Codex GUI records the attachment on
+  the transcript turn but does not yet inline it to the model — a named gap in
+  the capability ledger, since the Codex app-server answer is a structured
+  response with no inline-image channel.)
 - Runner events must wake transcript and session-list followers after
   persistence.
 - A runner must not require an open browser to continue work.
@@ -173,6 +186,13 @@ the rest of the product reconstruct what happened.
   labels, free-form-only notes, and selected-labels-plus-notes so a durable
   `turn.input_answered` row with annotations can be compared against what the
   runner actually normalized for provider delivery.
+- Files attached to an AskUserQuestion answer are counted at the same boundary:
+  `tank_runner_input_reply_attachment_total{kind,result}` records each
+  attachment by `kind` (`image` | `file`) and `result`
+  (`delivered` | `read_failed` | `missing`). A `missing` or `read_failed` image
+  is the silent-screenshot-loss regression signature — the durable
+  `turn.input_answered.attachments` shows the user attached a screenshot while
+  the runner failed to put it in front of the model.
 - Claude tool permission denials are counted at the runner/provider boundary:
   `tank_runner_tool_permission_denied_total{agent_kind,tool_family,server,decision}`
   distinguishes parent versus subagent origin, MCP versus local tools, the MCP
@@ -206,3 +226,6 @@ the rest of the product reconstruct what happened.
   depends on it.
 - Runner work continues across browser disconnect and remains reconstructable
   from durable events.
+- A screenshot attached to an AskUserQuestion answer reaches the model: on
+  Claude, the agent's continuation describes the image's content, proving the
+  inline image block was delivered — not just that the attachment was recorded.

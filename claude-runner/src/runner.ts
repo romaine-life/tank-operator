@@ -16,6 +16,8 @@
 // runner; persistent failures will surface via session-bus publish errors.
 
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { resolve as resolvePath, sep as pathSep } from "node:path";
 import {
   createSdkMcpServer,
   query,
@@ -71,6 +73,7 @@ import {
   commandsConsumedTotal,
   eventTruncatedTotal,
   inputReplyAnswerShapeTotal,
+  inputReplyAttachmentTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   optionsPinnedTotal,
@@ -510,6 +513,7 @@ function answersForClaudeInput(
 
 function askUserQuestionToolResult(
   answers: Record<string, string>,
+  attachmentBlocks: CallToolResult["content"] = [],
 ): CallToolResult {
   const lines = Object.entries(answers).map(
     ([question, answer]) => `${question}\n${answer}`,
@@ -523,10 +527,137 @@ function askUserQuestionToolResult(
             ? `User answered:\n\n${lines.join("\n\n")}`
             : "User answered with no selected options or notes.",
       },
+      // Files the user attached to the answer follow the text. An image is an
+      // inline image content block (pixels in context by construction — on an
+      // answer the screenshot often IS the answer); a non-image or unreadable
+      // file is a text line carrying its workspace path so the agent can Read
+      // it. Built by buildAnswerAttachmentBlocks from the input_reply command's
+      // attachments; empty for a text-only answer.
+      ...attachmentBlocks,
     ],
     structuredContent: { answers },
     _meta: { tankAskUserQuestion: true },
   };
+}
+
+// WORKSPACE_ROOT is the shared emptyDir the runner and the user's uploads both
+// see inside the `sandbox` container. Answer attachments land here (pasted
+// screenshots at /workspace/screenshots/<n>.<ext>) and the runner reads the
+// bytes at delivery time — they never travel the durable ledger.
+const WORKSPACE_ROOT = "/workspace";
+// Anthropic rejects base64 images past ~5 MiB; over that we emit a path line
+// instead of inlining so the agent can Read the file rather than the turn
+// failing on an oversized tool result. Uploads already cap at 8 MiB backend-side.
+const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+};
+
+function attachmentExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0 || dot === name.length - 1) return "";
+  return name.slice(dot + 1).toLowerCase();
+}
+
+function isImageAttachment(kind: string, name: string): boolean {
+  if (kind === "image") return true;
+  if (kind === "file") return false;
+  return attachmentExtension(name) in IMAGE_MIME_BY_EXT;
+}
+
+function imageMimeForName(name: string): string {
+  return IMAGE_MIME_BY_EXT[attachmentExtension(name)] ?? "image/png";
+}
+
+// resolveWorkspaceAttachmentPath maps a command attachment to an absolute path
+// inside /workspace, rejecting anything that escapes the workspace root (a
+// path-traversal guard: the command is user-influenced). Prefers abs_path,
+// falls back to the workspace-relative path. Returns null when neither is
+// present or the resolved path is outside /workspace.
+function resolveWorkspaceAttachmentPath(
+  absPath: string,
+  relPath: string,
+  rootDir: string = WORKSPACE_ROOT,
+): string | null {
+  const root = resolvePath(rootDir);
+  let candidate = "";
+  if (absPath) candidate = resolvePath(absPath);
+  else if (relPath) candidate = resolvePath(root, relPath);
+  else return null;
+  if (candidate !== root && !candidate.startsWith(root + pathSep)) {
+    return null;
+  }
+  return candidate;
+}
+
+// buildAnswerAttachmentBlocks turns the input_reply command's attachments into
+// tool-result content blocks. Images are read from /workspace and inlined as
+// base64 image blocks; non-images become a path line; a missing or unreadable
+// image becomes a visible note (never a silent drop). Every outcome is counted
+// on inputReplyAttachmentTotal so screenshot loss is observable.
+export async function buildAnswerAttachmentBlocks(
+  attachments: SessionCommandRecord["attachments"],
+  rootDir: string = WORKSPACE_ROOT,
+): Promise<CallToolResult["content"]> {
+  if (!attachments || attachments.length === 0) return [];
+  const blocks: CallToolResult["content"] = [];
+  for (const attachment of attachments) {
+    const name = String(attachment.name ?? attachment.label ?? "").trim();
+    const label =
+      String(attachment.label ?? attachment.name ?? "").trim() || "attachment";
+    const kind = String(attachment.kind ?? "").trim();
+    const relPath = String(attachment.path ?? "").trim();
+    const absPath = String(attachment.abs_path ?? "").trim();
+    const display = relPath || absPath || label;
+    if (!isImageAttachment(kind, name || display)) {
+      inputReplyAttachmentTotal.labels("file", "delivered").inc();
+      blocks.push({
+        type: "text",
+        text: `Attached file "${label}" is at ${display} in the workspace; read it if you need its contents.`,
+      });
+      continue;
+    }
+    const resolved = resolveWorkspaceAttachmentPath(absPath, relPath, rootDir);
+    if (!resolved) {
+      inputReplyAttachmentTotal.labels("image", "missing").inc();
+      blocks.push({
+        type: "text",
+        text: `Attached image "${label}" could not be located in the workspace (${display}).`,
+      });
+      continue;
+    }
+    try {
+      const bytes = await readFile(resolved);
+      if (bytes.byteLength > MAX_INLINE_IMAGE_BYTES) {
+        inputReplyAttachmentTotal.labels("image", "read_failed").inc();
+        blocks.push({
+          type: "text",
+          text: `Attached image "${label}" is too large to inline (${bytes.byteLength} bytes); read it at ${display}.`,
+        });
+        continue;
+      }
+      inputReplyAttachmentTotal.labels("image", "delivered").inc();
+      blocks.push({
+        type: "image",
+        data: bytes.toString("base64"),
+        mimeType: imageMimeForName(name || display),
+      });
+    } catch (err) {
+      inputReplyAttachmentTotal.labels("image", "read_failed").inc();
+      blocks.push({
+        type: "text",
+        text: `Attached image "${label}" could not be read (${display}): ${String(
+          (err as Error)?.message ?? err,
+        )}.`,
+      });
+    }
+  }
+  return blocks;
 }
 
 // exitPlanModePlanText extracts the plan markdown from an ExitPlanMode tool
@@ -2863,9 +2994,16 @@ export class Runner {
     }
     this.pendingInputReplies.delete(pendingKey);
     await this.rotateTurnForInputReply(pending.turn, record);
+    // Read any attached files from /workspace and turn them into tool-result
+    // content blocks (inline image, or a path line) BEFORE resolving, so the
+    // screenshot rides the same resolved AskUserQuestion result as the text.
+    const attachmentBlocks = await buildAnswerAttachmentBlocks(
+      record.attachments,
+    );
     pending.resolve(
       askUserQuestionToolResult(
         answersForClaudeInput(record.answers, record.annotations),
+        attachmentBlocks,
       ),
     );
     await this.commandBus.markCompleted(record);

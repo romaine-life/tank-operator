@@ -1155,6 +1155,77 @@ func TestAnswerSessionTurnPublishesInputReply(t *testing.T) {
 	}
 }
 
+// TestAnswerSessionTurnCarriesDisplayAttachments proves a screenshot attached
+// to the answer is threaded into all three sinks — the input_reply command (so
+// the runner can read it), the durable turn.input_answered marker, and the
+// Tank-visible user_message.created turn (so the transcript renders the chip) —
+// rather than being silently dropped (the reported bug).
+func TestAnswerSessionTurnCarriesDisplayAttachments(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
+	app.sessionEvents = &recordingSessionEventStore{
+		turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "What does the screen show?")},
+	}
+	body := `{
+		"provider_item_id": "toolu_123",
+		"timeline_id": "turn-question_123:item:toolu_123",
+		"answers": {"What does the screen show?": ["Other"]},
+		"annotations": {"What does the screen show?": {"notes": "see attached"}},
+		"display_attachments": [
+			{"label": "Screenshot 1", "name": "screenshot.png", "kind": "image", "path": "screenshots/3.png", "abs_path": "/workspace/screenshots/3.png", "size": 4096}
+		]
+	}`
+	req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
+	resp := httptest.NewRecorder()
+
+	app.handleAnswerSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+
+	// Sink 1: the input_reply command carries the attachment metadata.
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	cmdAttachments := bus.commands[0].Attachments
+	if len(cmdAttachments) != 1 {
+		t.Fatalf("command attachments = %#v, want 1", cmdAttachments)
+	}
+	if cmdAttachments[0].Kind != "image" || cmdAttachments[0].AbsPath != "/workspace/screenshots/3.png" {
+		t.Fatalf("command attachment = %#v, want image at /workspace/screenshots/3.png", cmdAttachments[0])
+	}
+
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 3 {
+		t.Fatalf("session-event upserts = %d, want 3", len(es.upserts))
+	}
+	// Sink 2: the durable turn.input_answered marker carries attachments.
+	answeredPayload, _ := es.upserts[0]["payload"].(map[string]any)
+	if attachmentLen(answeredPayload["attachments"]) != 1 {
+		t.Fatalf("turn.input_answered attachments = %#v, want 1", answeredPayload["attachments"])
+	}
+	// Sink 3: the Tank-visible user_message.created turn carries attachments so
+	// the transcript renders the screenshot chip on the answer bubble.
+	userPayload, _ := es.upserts[1]["payload"].(map[string]any)
+	if attachmentLen(userPayload["attachments"]) != 1 {
+		t.Fatalf("user_message.created attachments = %#v, want 1", userPayload["attachments"])
+	}
+}
+
+// attachmentLen counts a stamped payload `attachments` field regardless of
+// whether it is []map[string]any (builder output) or []any (round-tripped).
+func attachmentLen(raw any) int {
+	switch v := raw.(type) {
+	case []map[string]any:
+		return len(v)
+	case []any:
+		return len(v)
+	default:
+		return 0
+	}
+}
+
 func TestAnswerSessionTurnPublishesCodexCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
