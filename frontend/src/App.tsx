@@ -1765,6 +1765,7 @@ interface AdminBreakGlassListBody {
 }
 
 type BreakGlassApprovalMenuKind = "github" | "azure" | "model" | "pr-lane";
+const BREAK_GLASS_BATCH_BUSY_ID = "__break_glass_batch__";
 
 interface BreakGlassApprovalMenuItem {
   id: string;
@@ -2536,6 +2537,7 @@ interface ComposerToolButtonsProps {
     items: BreakGlassApprovalMenuItem[];
     approvingId?: string | null;
     onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
+    onQuickApproveMany?: (items: BreakGlassApprovalMenuItem[]) => void;
     onApprovePRLane?: (
       request: PRLaneRequest,
       override?: "listed" | "count" | "unlimited",
@@ -2778,14 +2780,20 @@ function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
   return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
 }
 
+function isBatchableBreakGlassMenuItem(item: BreakGlassApprovalMenuItem): boolean {
+  return item.kind === "github" || item.kind === "azure";
+}
+
 function BreakGlassApprovalMenuButton({
   items,
   approvingId,
   onQuickApprove,
+  onQuickApproveMany,
   onApprovePRLane,
   onDenyPRLane,
 }: ComposerToolButtonsProps["breakGlass"]) {
   const [open, setOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const ref = useRef<HTMLSpanElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
@@ -2798,6 +2806,26 @@ function BreakGlassApprovalMenuButton({
       ? `Break-glass approvals awaiting review (${pendingCount})`
       : "No break-glass approvals pending";
   const settingsHref = appRouteUrl("settings", "admin", "break-glass");
+  const batchableItems = useMemo(
+    () => items.filter(isBatchableBreakGlassMenuItem),
+    [items],
+  );
+  const batchSelectionVisible = batchableItems.length > 1;
+  const selectedBatchItems = useMemo(
+    () => batchableItems.filter((item) => selectedIds.has(item.id)),
+    [batchableItems, selectedIds],
+  );
+  const allBatchSelected =
+    batchableItems.length > 0 && selectedBatchItems.length === batchableItems.length;
+  const batchBusy = approvingId === BREAK_GLASS_BATCH_BUSY_ID;
+
+  useEffect(() => {
+    const validIds = new Set(batchableItems.map((item) => item.id));
+    setSelectedIds((prev) => {
+      const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [batchableItems]);
 
   const computeAnchor = useCallback(() => {
     const r = triggerRef.current?.getBoundingClientRect();
@@ -2842,6 +2870,22 @@ function BreakGlassApprovalMenuButton({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
+
+  const toggleBatchItem = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAllBatchItems = useCallback(
+    (checked: boolean) => {
+      setSelectedIds(checked ? new Set(batchableItems.map((item) => item.id)) : new Set());
+    },
+    [batchableItems],
+  );
 
   return (
     <span ref={ref} className="run-pr-menu">
@@ -2893,9 +2937,41 @@ function BreakGlassApprovalMenuButton({
                 Settings
               </a>
             </div>
+            {batchSelectionVisible && (
+              <div className="run-pr-menu-batch">
+                <label className="run-pr-menu-select-all">
+                  <input
+                    type="checkbox"
+                    checked={allBatchSelected}
+                    disabled={batchBusy}
+                    onChange={(event) => toggleAllBatchItems(event.target.checked)}
+                  />
+                  <span>{selectedBatchItems.length} selected</span>
+                </label>
+                <button
+                  type="button"
+                  className="run-pr-menu-action-btn"
+                  disabled={
+                    !onQuickApproveMany ||
+                    selectedBatchItems.length === 0 ||
+                    batchBusy
+                  }
+                  onClick={() => {
+                    onQuickApproveMany?.(selectedBatchItems);
+                    setSelectedIds(new Set());
+                    setOpen(false);
+                  }}
+                >
+                  <CheckIcon aria-hidden="true" />
+                  <span>{batchBusy ? "Approving" : "Approve selected"}</span>
+                </button>
+              </div>
+            )}
             {items.map((item) => {
               const prLane = item.prLaneRequest;
-              const busy = approvingId === item.id;
+              const isBatchable = isBatchableBreakGlassMenuItem(item);
+              const busy = approvingId === item.id || batchBusy;
+              const selected = selectedIds.has(item.id);
               return (
                 <div
                   key={item.id}
@@ -2907,14 +2983,29 @@ function BreakGlassApprovalMenuButton({
                       : item.target
                   }
                 >
-                  <span className="run-pr-menu-main">
-                    <span className="run-pr-menu-name">
-                      <BreakGlassMenuIcon kind={item.kind} />
-                      {item.label}
-                    </span>
-                    <span className="run-slash-desc">
-                      {item.target}
-                      {item.reason ? ` — ${item.reason}` : ""}
+                  <span className="run-pr-menu-main-row">
+                    {batchSelectionVisible && isBatchable && (
+                      <label className="run-pr-menu-select">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={busy}
+                          aria-label={`Select ${item.label}`}
+                          onChange={(event) =>
+                            toggleBatchItem(item.id, event.target.checked)
+                          }
+                        />
+                      </label>
+                    )}
+                    <span className="run-pr-menu-main">
+                      <span className="run-pr-menu-name">
+                        <BreakGlassMenuIcon kind={item.kind} />
+                        {item.label}
+                      </span>
+                      <span className="run-slash-desc">
+                        {item.target}
+                        {item.reason ? ` — ${item.reason}` : ""}
+                      </span>
                     </span>
                   </span>
                   {item.kind === "pr-lane" && prLane ? (
@@ -17768,6 +17859,43 @@ function ChatPane({
       session.id,
     ],
   );
+  const postBreakGlassBatchApproval = useCallback(
+    async (items: BreakGlassApprovalMenuItem[]) => {
+      if (publicView || readOnly) return;
+      const requests = items
+        .filter(isBatchableBreakGlassMenuItem)
+        .map((item) => ({ event_id: item.id, note: "" }));
+      if (requests.length === 0) return;
+      setBreakGlassApprovalBusyId(BREAK_GLASS_BATCH_BUSY_ID);
+      try {
+        const res = await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/batch/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ requests }),
+          },
+        );
+        const responseBody = await res.json().catch(() => null);
+        const turnId = approvalNotificationTurnId(responseBody);
+        if (turnId) setPendingApprovalTurnOpenId(turnId);
+        await fetchControlActionEntries();
+        await fetchFocusedBreakGlassRequest();
+      } finally {
+        setBreakGlassApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      fetchFocusedBreakGlassRequest,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
   const postTestSlotModelApproval = useCallback(
     async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
       if (publicView || readOnly) return;
@@ -17816,6 +17944,12 @@ function ChatPane({
       void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
     },
     [postBreakGlassDecision, postPRLaneDecision, postTestSlotModelApproval],
+  );
+  const quickApproveBreakGlassMenuItems = useCallback(
+    (items: BreakGlassApprovalMenuItem[]) => {
+      void postBreakGlassBatchApproval(items);
+    },
+    [postBreakGlassBatchApproval],
   );
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
@@ -24861,6 +24995,8 @@ function ChatPane({
                     prLaneApprovalBusyId,
                   onQuickApprove:
                     publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
+                  onQuickApproveMany:
+                    publicView || readOnly ? undefined : quickApproveBreakGlassMenuItems,
                   onApprovePRLane:
                     publicView || readOnly
                       ? undefined

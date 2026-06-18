@@ -9623,6 +9623,31 @@ button:disabled {
   padding-right: 0.25rem;
 }
 
+.run-pr-menu-batch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.25rem 0.45rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.run-pr-menu-select-all,
+.run-pr-menu-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.run-pr-menu-select-all input,
+.run-pr-menu-select input {
+  width: 0.9rem;
+  height: 0.9rem;
+  accent-color: #f0b429;
+}
+
 .run-pr-menu-settings,
 .run-pr-menu-action-link,
 .run-pr-menu-action-btn {
@@ -9711,6 +9736,14 @@ button:disabled {
 
 .run-pr-menu-breakglass {
   flex-direction: column;
+}
+
+.run-pr-menu-main-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
 }
 
 .run-pr-menu-actions {
