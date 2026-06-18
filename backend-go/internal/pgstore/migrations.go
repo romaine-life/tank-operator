@@ -2133,6 +2133,56 @@ var schemaMigrations = []migration{
 	{ID: "0174", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_spoke
 		ON orchestration_phases (spoke_session_id)
 		WHERE spoke_session_id <> ''`},
+
+	// pending_test_provisions — durable backstop record for an in-flight
+	// deterministic test-slot provision. The two background entry points
+	// (provisionOrchestrationReviewSlot, runInteractiveTestWorkflow) run the
+	// validate→settle-wait→provision gate in a fire-and-forget goroutine that can
+	// wait ~23 min for CI to settle; an orchestrator restart mid-wait used to
+	// drop that provision with no retry. A row is written 'pending' at kickoff and
+	// terminalized ('done'/'failed') when the run reaches a verdict or infra
+	// error. A record stranded in 'pending' past the settle cap + grace is the
+	// signature of a restart, and the reconcile loop re-drives it idempotently —
+	// the same durable-backstop shape as session_ci_watches' stale re-drive.
+	// One row per (session, repo, branch, kind): the deterministic provision_id
+	// makes a re-kickoff of the same target the same row, so the interactive
+	// endpoint's double-trigger guard and the backstop's re-drive both address
+	// the in-flight record instead of duplicating it.
+	{ID: "0175", SQL: `CREATE TABLE IF NOT EXISTS pending_test_provisions (
+		provision_id     text PRIMARY KEY,
+		session_scope    text NOT NULL,
+		session_id       text NOT NULL,
+		tank_session_id  text NOT NULL,
+		owner_email      text NOT NULL DEFAULT '',
+		repo_owner       text NOT NULL,
+		repo_name        text NOT NULL,
+		branch           text NOT NULL DEFAULT '',
+		project          text NOT NULL DEFAULT '',
+		workflow         text NOT NULL DEFAULT '',
+		kind             text NOT NULL,
+		pr_number        integer NOT NULL DEFAULT 0,
+		expected_sha     text NOT NULL DEFAULT '',
+		head_sha         text NOT NULL DEFAULT '',
+		orchestration_id text NOT NULL DEFAULT '',
+		status           text NOT NULL,
+		detail           text NOT NULL DEFAULT '',
+		attempt_count    integer NOT NULL DEFAULT 0,
+		started_at       timestamptz NOT NULL,
+		last_event_at    timestamptz,
+		created_at       timestamptz NOT NULL DEFAULT now(),
+		updated_at       timestamptz NOT NULL DEFAULT now(),
+		CHECK (kind IN ('interactive', 'orchestration-review')),
+		CHECK (status IN ('pending', 'done', 'failed'))
+	)`},
+	// Stale-pending scan predicate for the reconcile backstop: only 'pending'
+	// rows, ordered by last activity. Partial so the index stays tiny (terminal
+	// rows fall out of it).
+	{ID: "0176", SQL: `CREATE INDEX IF NOT EXISTS pending_test_provisions_pending
+		ON pending_test_provisions (COALESCE(last_event_at, started_at))
+		WHERE status = 'pending'`},
+	// Session reverse lookup (debug/audit + any future per-session guard query).
+	{ID: "0177", SQL: `CREATE INDEX IF NOT EXISTS pending_test_provisions_session
+		ON pending_test_provisions (session_scope, session_id, status)`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

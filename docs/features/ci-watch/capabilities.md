@@ -119,6 +119,38 @@ and [../README.md](../README.md) for how capability ledgers are used.
   outcome of the interactive trigger) plus the shared
   `tank_test_slot_validate_total` / `tank_test_slot_provision_total` gate counters.
 
+## pending-provision-backstop
+
+- **Status:** shipped (durable reconcile backstop + double-trigger guard)
+- **Intent:** The two background provisioning entry points
+  (`provisionOrchestrationReviewSlot`, `runInteractiveTestWorkflow`) run the
+  validate→settle-wait→provision gate in a fire-and-forget goroutine that can
+  wait ~23m for CI to settle. An orchestrator restart mid-wait previously dropped
+  that provision with **no retry**. This capability closes that gap, mirroring
+  the #1295 CI-watch reconcile backstop: a durable `pending_test_provisions` row
+  is written `'pending'` at kickoff (deterministic `provision_id` per
+  session/repo/branch/kind) and terminalized (`'done'` on any reached verdict
+  including a gate refusal, `'failed'` on an infra error) at finish. A reconcile
+  loop (`runPendingTestProvisionReconcileLoop`, 5m ticker, wired in `main.go`)
+  re-drives any record stranded in `'pending'` past the settle cap + grace
+  (~25m) **idempotently**: it takes a conditional `ClaimForRedrive` (attempt-gated
+  so two replicas / a double pass cannot both fire the gate — the
+  `ErrPendingTestProvisionStale` lost-race pattern), short-circuits to `'done'`
+  when a test environment is already active for the session (never
+  double-provisions), then re-invokes the same entry point. The **double-trigger
+  guard** on the interactive endpoint rides the same row: `Register`'s atomic
+  conditional `ON CONFLICT ... WHERE status <> 'pending'` admits one winner, so a
+  rapid double-click (or an already-active test environment) is refused **409**
+  instead of launching a second gate run / second glimmung checkout.
+- **Durable source:** new `pending_test_provisions` table (migrations
+  0175–0177; bounded `kind`/`status` CHECK constraints, partial index on the
+  stale-pending scan). Observable via
+  `tank_test_slot_pending_provision_oldest_age_seconds` (gauge),
+  `tank_test_slot_provision_redrive_total{kind}` (backstop re-drives), and
+  `tank_test_slot_provision_guard_total{result}` (double-trigger outcomes). The
+  `TankTestSlotProvisionStuck` alert fires on the gauge, mirroring
+  `TankCIWatchStalled`.
+
 ## ci-status-record
 
 - **Status:** shipped (event + webhook merge path); in-Tank merge surface in progress

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
@@ -73,6 +74,41 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
+	}
+
+	// Double-trigger guard (Slice-5). A rapid double-click must not start two
+	// gate runs / two glimmung checkouts. Refuse when a test environment is
+	// already active for this session, and -- atomically -- when a provision for
+	// this exact target is already in flight (a non-terminal pending record).
+	if active, _ := info.TestState["active"].(bool); active {
+		recordTestSlotProvisionGuard("test_state_active")
+		writeError(w, http.StatusConflict, "a test environment is already active for this session")
+		return
+	}
+	if s.pendingTestProvisions != nil {
+		_, created, err := s.pendingTestProvisions.Register(r.Context(), pgstore.RegisterPendingTestProvisionRequest{
+			SessionScope: s.sessionScope,
+			SessionID:    req.SessionID,
+			OwnerEmail:   req.OwnerEmail,
+			RepoOwner:    req.RepoOwner,
+			RepoName:     req.RepoName,
+			Branch:       req.Branch,
+			Project:      req.Project,
+			Workflow:     req.Workflow,
+			Kind:         pgstore.PendingTestProvisionInteractive,
+			PRNumber:     req.PRNumber,
+			ExpectedSHA:  req.ExpectedSHA,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not record pending test provision: "+err.Error())
+			return
+		}
+		if !created {
+			recordTestSlotProvisionGuard("in_flight")
+			writeError(w, http.StatusConflict, "a test workflow is already in progress for "+req.Branch)
+			return
+		}
+		recordTestSlotProvisionGuard("launched")
 	}
 
 	s.launchInteractiveTestWorkflow(req)
@@ -195,6 +231,9 @@ func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
 			"session_id", req.SessionID, "repo", repo, "branch", req.Branch, "error", err)
 		s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, "failed",
 			"Could not start the test workflow for "+req.Branch+": "+err.Error())
+		// Infra error: terminalize 'failed' so the backstop only recovers a
+		// restart-stranded record, not a deterministic infra failure loop.
+		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionFailed, "gate error: "+err.Error())
 		return
 	}
 	if outcome.Provisioned {
@@ -204,6 +243,7 @@ func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
 			detail = "Test environment provisioned for " + req.Branch + "."
 		}
 		s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, "ready", detail)
+		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, detail)
 		return
 	}
 
@@ -214,6 +254,16 @@ func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
 		detail = "Test environment not provisioned for " + req.Branch + " (" + string(outcome.Verdict) + ")."
 	}
 	s.emitTestWorkflowStatusRecord(ctx, req, outcome.HeadSHA, testWorkflowStatusState(outcome.Verdict), detail)
+	// A gate refusal is a reached verdict, not a strand: terminalize 'done' so
+	// the backstop does not re-drive a legitimately-refused provision.
+	s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, detail)
+}
+
+// markInteractiveProvisionTerminal closes the durable pending record for an
+// interactive provision at the end of its run, by its target coordinates.
+func (s *appServer) markInteractiveProvisionTerminal(ctx context.Context, req provisionTestSlotRequest, headSHA string, status pgstore.PendingTestProvisionStatus, detail string) {
+	s.markPendingTestProvisionTerminal(ctx, req.SessionID, req.RepoOwner, req.RepoName, req.Branch,
+		pgstore.PendingTestProvisionInteractive, status, detail, headSHA)
 }
 
 // emitTestWorkflowStatusRecord writes a display-only ci_status.updated event to

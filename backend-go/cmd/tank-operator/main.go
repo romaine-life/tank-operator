@@ -273,6 +273,7 @@ func main() {
 	var controlActionStore *pgstore.ControlActionStore
 	var pendingLaunchStore *pgstore.PendingLaunchStore
 	var ciWatchStore *pgstore.CIWatchStore
+	var pendingTestProvisionStore *pgstore.PendingTestProvisionStore
 	var orchestrationStore *pgstore.OrchestrationStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
@@ -280,6 +281,7 @@ func main() {
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
 		ciWatchStore = pgstore.NewCIWatchStore(pgPool, sessionScope)
+		pendingTestProvisionStore = pgstore.NewPendingTestProvisionStore(pgPool, sessionScope)
 		// The orchestration store carries no session scope — a run is owned by an
 		// email and targets a repo, not bound to a session_scope.
 		orchestrationStore = pgstore.NewOrchestrationStore(pgPool)
@@ -669,6 +671,10 @@ func main() {
 	if pendingLaunchStore != nil {
 		srv.pendingLaunch = pendingLaunchStore
 	}
+	// Same typed-nil-interface guard for the durable pending-provision backstop.
+	if pendingTestProvisionStore != nil {
+		srv.pendingTestProvisions = pendingTestProvisionStore
+	}
 	// The deterministic orchestration advance engine: bound to the durable
 	// store and the real spoke spawner (mgr.Create + enqueueSDKTurn). The
 	// webhook + CI-watch register handlers call it on the hot path; the
@@ -763,6 +769,18 @@ func main() {
 		go func() {
 			if err := runCIWatchReconcileLoop(workerCtx, srv, ciWatchReconcileInterval, ciWatchStaleAfter); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("ci watch reconcile loop stopped", "error", err)
+			}
+		}()
+	}
+	// Durable pending-provision backstop: re-drive test-slot provisions stranded
+	// in 'pending' by an orchestrator restart mid-settle-wait, so a fire-and-forget
+	// provision goroutine that died with its pod degrades to a delay, not a lost
+	// provision with no retry. Idempotent (claim + already-provisioned short
+	// circuit + guarded writes). Postgres-only — the store is nil in stub mode.
+	if srv.pendingTestProvisions != nil {
+		go func() {
+			if err := runPendingTestProvisionReconcileLoop(workerCtx, srv, pendingProvisionReconcileInterval, pendingProvisionStaleAfter); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("pending test provision reconcile loop stopped", "error", err)
 			}
 		}()
 	}
