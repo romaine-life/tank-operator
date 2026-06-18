@@ -841,6 +841,39 @@
           "detail": "All required checks passed."
         }
       }
+    },
+    {
+      "name": "test provision updated",
+      "event": {
+        "event_id": "test-provision:run-1:ready:1768179860000000000",
+        "uuid": "test-provision:run-1:ready:1768179860000000000",
+        "order_key": "1768179860000-00000016-test-provision:run-1:ready",
+        "sequence": 16,
+        "conversation_id": "63",
+        "session_id": "63",
+        "timeline_id": "test-provision:run-1:ready",
+        "client_nonce": "test-provision-run-1",
+        "actor": "system",
+        "source": "tank",
+        "type": "test_provision.updated",
+        "created_at": "2026-05-12T00:00:20.000Z",
+        "written_at": "2026-05-12T00:00:20.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "claude"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "test_provision",
+          "run_id": "run-1",
+          "phase": "ready",
+          "text": "Test environment ready at https://tank-operator-slot-1.tank.dev.romaine.life/",
+          "severity": "info",
+          "repo": "romaine-life/tank-operator",
+          "branch": "tank/session/63/tank-operator",
+          "url": "https://tank-operator-slot-1.tank.dev.romaine.life/"
+        }
+      }
     }
   ]
 }
