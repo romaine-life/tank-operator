@@ -8,7 +8,7 @@
 // already-running session pod's sidecar predated that header, so every governed-git
 // control-action (publish / CI / mergeability / break-glass) 403'd and was silently
 // swallowed by the sidecar — the control_action_events ledger froze system-wide for
-// ~2.5h on 2026-06-16, stalling the hot-swap verify gate, break-glass, and ci-wait.
+// ~2.5h on 2026-06-16, stalling the governed-merge verify gate, break-glass, and ci-wait.
 // The fix authorizes solely off the unforgeable subject (svc:tank:<id> /
 // svc:tank:slot-<n>-session-<id>) that auth.romaine.life mints from the pod's
 // tank-operator/session-id annotation. This guard keeps the caller-asserted-header

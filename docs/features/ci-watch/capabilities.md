@@ -8,9 +8,9 @@ and [../README.md](../README.md) for how capability ledgers are used.
 
 - **Status:** shipped
 - **Intent:** Tank owns a neutral PR/head readiness process. `watch_current_session_pr`
-  and the hot-swap/test-slot gate both register the same readiness request via
-  `POST /api/internal/sessions/{id}/pr-readiness`; older `/ci-watches` callers are
-  compatibility facades. The backend reducer reads GitHub's live
+  and the governed-merge gate both register the same readiness request via
+  `POST /api/internal/sessions/{id}/pr-readiness`; the legacy `/ci-watches`
+  registration drives the same process. The backend reducer reads GitHub's live
   `mergeable_state` plus auditable CI evidence and returns
   `conflict | failed | ready | watching`. When GitHub reports
   `mergeable=null` / `unknown`, the backend schedules a narrow deduped retry for
@@ -52,15 +52,19 @@ and [../README.md](../README.md) for how capability ledgers are used.
   session may reap, and the human merges independently.
 - **Durable source:** `ClaimIdleForReap` `NOT EXISTS (session_ci_watches ... status='watching')`.
 
-## test-slot-ci-gate
+## governed-merge-gate
 
 - **Status:** shipped
-- **Intent:** Glimmung test-slot deployment still requires a governed publish record for
-  the exact branch/commit, but it no longer owns a separate CI/mergeability gate.
-  `/api/internal/sessions/{id}/hot-swap/verify` is now a compatibility facade over
-  the same Tank PR-readiness registration/reconcile process used by
-  `watch_current_session_pr`.
-- **Durable source:** publish proof remains the control-action ledger
+- **Intent:** `POST /api/internal/sessions/{id}/governed-merge/verify` is the
+  server-side governed-merge gate. It composes the shared Tank PR-readiness
+  registration/reconcile process (same one `watch_current_session_pr` drives)
+  with governed-publish-proof for the exact branch/commit, and returns an
+  `allowed` / `reasons` decision. It is **not** a compatibility facade and is
+  not a test-slot deploy path — the test-slot deploy is provisioned server-side
+  by the deterministic gate. Its sole caller is the governed `merge` MCP tool in
+  the mcp-auth-proxy sidecar, which refuses to merge unless the gate returns
+  `allowed=true`.
+- **Durable source:** governed-publish-proof remains the control-action ledger
   (`github.commit.push` / `github.break_glass.push`); CI and mergeability are the
   durable `session_ci_watches` readiness row plus live reducer output from GitHub PR
   state.
