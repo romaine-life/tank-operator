@@ -59,8 +59,10 @@ repos="[${repos%,}]"
 # etc. work automatically while the grant is live. No qualifying grant ->
 # {"active":false} and we keep the read-only default.
 if [ "$restricted" = "true" ]; then
+  # Short timeout: elevation is optional, so a slow lookup falls back to the
+  # read-only mint fast rather than stalling gh.
   bg_url="${TANK_BREAK_GLASS_MINT_URL:-http://127.0.0.1:9999/mint-git-token}"
-  bg_token="$(curl -sS -m 25 \
+  bg_token="$(curl -sS -m 3 \
     -H "Authorization: Bearer ${auth_tok}" \
     -H "Content-Type: application/json" \
     -X POST "$bg_url" \

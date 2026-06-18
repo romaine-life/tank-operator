@@ -680,6 +680,15 @@ Enforcement / source of truth:
   TTL-bounded grant is the authorization; the marker only governs whether the
   agent-facing privileged MCP tools are surfaced. Expiry re-locks automatically
   because the grant is re-looked-up on every mint.
+- **Hot-path cost/scale.** The wrapper mint runs on every restricted git/`gh`
+  op (overwhelmingly the no-grant case), so the `:9999` server caches the grant
+  lookup RESULT (not a token) with a ~10s TTL, keyed by repo. A burst of ops in
+  a no-grant session makes ONE Tank call, not N (negative results are cached);
+  the durable grant stays the authz. A cached POSITIVE is never served past the
+  grant's own `expires_at`, so expiry re-locks within ~TTL. The wrapper scripts
+  also use a short (`-m 3`) timeout on the optional `:9999` pre-check so a slow
+  or unreachable Tank falls back to the read-only mint fast instead of stalling
+  git; the read-only `mint_clone_token` call keeps its normal timeout.
 
 Contract impact:
 - **Clamp 1 — `mint_full_git_token`.** The break-glass MCP mint
@@ -719,7 +728,10 @@ Evidence:
   `test_break_glass_wrapper_mint_full_token_for_active_unlimited_grant`,
   `test_break_glass_wrapper_mint_inactive_without_grant`,
   `test_break_glass_wrapper_mint_inactive_for_branch_restricted_grant`,
-  `test_break_glass_wrapper_mint_inactive_when_repo_outside_grant_scope`).
+  `test_break_glass_wrapper_mint_inactive_when_repo_outside_grant_scope`,
+  `test_break_glass_wrapper_mint_negative_result_is_cached`,
+  `test_active_break_glass_grant_cached_serves_positive_within_ttl`,
+  `test_active_break_glass_grant_cached_does_not_serve_positive_past_expiry`).
 - `backend-go/cmd/tank-operator/control_actions_test.go`
   (`TestNormalizeBreakGlassOperationsBindsFullAPIToUnlimitedBranch`,
   `TestGitBreakGlassApprovalTextReflectsFullAPIForUnlimited`, and the updated

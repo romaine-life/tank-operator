@@ -43,6 +43,7 @@ from mcp_auth_proxy.server import (
     _handle_tank_rename_pr_tool,
     _handle_tank_update_pr_body_tool,
     _handle_tank_pr_lane_tool,
+    _active_break_glass_grant_cached,
     _handle_break_glass_mcp,
     _handle_break_glass_mint_token,
     _handle_break_glass_wrapper_mint,
@@ -59,6 +60,17 @@ from mcp_auth_proxy.server import (
     _resolve_ci_state,
     _watch_published_commit,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_break_glass_grant_cache():
+    # The grant-lookup cache is a module-level dict; clear it around every test so
+    # a cached result from one test cannot leak into the next.
+    import mcp_auth_proxy.server as _server
+
+    _server._BREAK_GLASS_GRANT_CACHE.clear()
+    yield
+    _server._BREAK_GLASS_GRANT_CACHE.clear()
 
 
 def test_tank_operator_uses_jwt_bearer_not_sa_token() -> None:
@@ -774,6 +786,86 @@ def test_break_glass_wrapper_mint_inactive_when_repo_outside_grant_scope(monkeyp
 
     payload = json.loads(response.text)
     assert payload["active"] is False
+
+
+def test_break_glass_wrapper_mint_negative_result_is_cached(monkeypatch) -> None:
+    # The no-grant hot path must hit Tank once per TTL window, not once per
+    # git/`gh` op. Two wrapper-mint calls -> one underlying grant lookup.
+    monkeypatch.setattr("mcp_auth_proxy.server._BREAK_GLASS_GRANT_CACHE", {})
+    calls = {"n": 0}
+
+    async def fake_active(_http, _service_token, _repo_slug):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+
+    async def run_once():
+        return await _handle_break_glass_wrapper_mint(
+            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
+            _StaticTokenProvider("service-token"),
+            _wrapper_mint_request({"repos": ["romaine-life/tank-operator"]}),
+        )
+
+    first = json.loads(asyncio.run(run_once()).text)
+    second = json.loads(asyncio.run(run_once()).text)
+    assert first["active"] is False and second["active"] is False
+    assert calls["n"] == 1  # second served from the negative cache
+
+
+def test_active_break_glass_grant_cached_serves_positive_within_ttl(monkeypatch) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server._BREAK_GLASS_GRANT_CACHE", {})
+    calls = {"n": 0}
+
+    async def fake_active(_http, _service_token, _repo_slug):
+        calls["n"] += 1
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token", "full_github_api"],
+            "branch_scope": {"kind": "unlimited"},
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+
+    http = _FakeRawHTTP(_FakeRawResponse(200, b"{}"))
+
+    async def run():
+        a = await _active_break_glass_grant_cached(http, "svc", "romaine-life/tank-operator")
+        b = await _active_break_glass_grant_cached(http, "svc", "romaine-life/tank-operator")
+        return a, b
+
+    a, b = asyncio.run(run())
+    assert a is not None and b is not None
+    assert calls["n"] == 1  # second served from cache (grant not yet expired)
+
+
+def test_active_break_glass_grant_cached_does_not_serve_positive_past_expiry(monkeypatch) -> None:
+    # A cached positive must never outlive the grant's own expires_at: an expired
+    # entry forces a re-fetch (which in production re-locks, since real Tank
+    # filters expiry).
+    monkeypatch.setattr("mcp_auth_proxy.server._BREAK_GLASS_GRANT_CACHE", {})
+    calls = {"n": 0}
+
+    async def fake_active(_http, _service_token, _repo_slug):
+        calls["n"] += 1
+        return {
+            "event_id": "grant-1",
+            "operations": ["mint_full_git_token", "full_github_api"],
+            "branch_scope": {"kind": "unlimited"},
+            "expires_at": "2000-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
+
+    http = _FakeRawHTTP(_FakeRawResponse(200, b"{}"))
+
+    async def run():
+        await _active_break_glass_grant_cached(http, "svc", "romaine-life/tank-operator")
+        await _active_break_glass_grant_cached(http, "svc", "romaine-life/tank-operator")
+
+    asyncio.run(run())
+    assert calls["n"] == 2  # expired positive is not served stale from cache
 
 
 def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path) -> None:

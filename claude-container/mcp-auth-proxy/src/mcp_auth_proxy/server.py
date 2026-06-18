@@ -1501,6 +1501,67 @@ async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_
     return None
 
 
+# Short-TTL cache for the break-glass grant lookup, used on the git/`gh` hot path
+# (the wrapper mint endpoint). The :9999 server is long-lived and the wrapper
+# scripts are stateless, so the cache belongs here, not in the scripts. Without
+# it every restricted git/`gh` op — overwhelmingly the NO-grant case — pays a
+# sidecar→Tank round-trip; a burst of ops in a no-grant session would fan out N
+# Tank calls and a slow Tank would stall git. Caching keeps the DURABLE grant as
+# the authz (we cache the lookup RESULT, not a token) and bounds the cost: one
+# Tank call per (repo, ~TTL window). Negative results are cached too. A positive
+# result is never served past the grant's own expires_at, so expiry re-locks
+# within ~TTL rather than later.
+_BREAK_GLASS_GRANT_CACHE_TTL_SECONDS = 10.0
+# key (repo_slug) -> (monotonic_cached_at, grant_or_None)
+_BREAK_GLASS_GRANT_CACHE: dict[str, tuple[float, dict | None]] = {}
+
+
+def _grant_expires_after(grant: dict, now: datetime) -> bool:
+    """True if the grant's own expires_at is still in the future."""
+    raw = str(grant.get("expires_at") or "").strip()
+    if not raw:
+        # No expiry field -> cannot prove it is still valid; do not serve stale.
+        return False
+    try:
+        expires_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at > now
+
+
+def _cached_grant_servable(grant: dict | None, now: datetime) -> bool:
+    """Whether a cached lookup result may still be served without re-fetching.
+
+    A negative result (no grant) is always servable within the TTL. A positive
+    result is servable only while it is still before its own expires_at, so a
+    cached grant can never outlive the real grant.
+    """
+    if grant is None:
+        return True
+    return _grant_expires_after(grant, now)
+
+
+async def _active_break_glass_grant_cached(
+    http: ClientSession, service_jwt: str, repo_slug: str = ""
+) -> dict | None:
+    """TTL-cached wrapper around _active_break_glass_grant for the hot path."""
+    key = repo_slug
+    monotonic_now = time.monotonic()
+    entry = _BREAK_GLASS_GRANT_CACHE.get(key)
+    if entry is not None:
+        cached_at, grant = entry
+        if (
+            monotonic_now - cached_at < _BREAK_GLASS_GRANT_CACHE_TTL_SECONDS
+            and _cached_grant_servable(grant, datetime.now(timezone.utc))
+        ):
+            return grant
+    grant = await _active_break_glass_grant(http, service_jwt, repo_slug)
+    _BREAK_GLASS_GRANT_CACHE[key] = (monotonic_now, grant)
+    return grant
+
+
 async def _active_azure_break_glass_grant(http: ClientSession, service_jwt: str) -> dict | None:
     # Mirrors _active_break_glass_grant; azure grants are session-scoped, not
     # repo-scoped, so there is no repo query parameter. Used only to surface
@@ -4250,7 +4311,9 @@ async def _handle_break_glass_wrapper_mint(
             return web.json_response({"active": False, "reason": "no repo"})
         workflows = bool(payload.get("workflows"))
         service_token = await auth_romaine_provider.token()
-        grant = await _active_break_glass_grant(http, service_token, repos[0])
+        # Hot path: TTL-cached lookup so a burst of git/`gh` ops (especially the
+        # common no-grant case) does not fan out one Tank round-trip each.
+        grant = await _active_break_glass_grant_cached(http, service_token, repos[0])
         # Only an active, unlimited-branch grant that authorizes full GitHub API
         # write elevates the wrappers. Branch/count-scoped grants stay on the
         # governed push path (publish_current_head / push_current_head) and never

@@ -71,8 +71,10 @@ if [ "$restricted" = "true" ]; then
   # mints the App's FULL permission set (full=true) and audits the use, so
   # `git push`/PR writes work automatically while the grant is live. No
   # qualifying grant -> {"active":false} and we keep the read-only default.
+  # Short timeout: break-glass elevation is optional, so if the lookup is slow
+  # we fall back to the read-only mint fast rather than stall git.
   bg_url="${TANK_BREAK_GLASS_MINT_URL:-http://127.0.0.1:9999/mint-git-token}"
-  bg_token="$(curl -sS -m 25 \
+  bg_token="$(curl -sS -m 3 \
     -H "Authorization: Bearer ${auth_tok}" \
     -H "Content-Type: application/json" \
     -X POST "$bg_url" \
