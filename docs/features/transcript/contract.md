@@ -200,7 +200,21 @@ answer; it must not visibly move a rendered row from one surface to the other.
   final-answer event belongs to a different activity page. Expanding the turn
   reveals the execution trace for that turn. Failed, interrupted, and no-final
   completed turns do not expose a compacted final-answer projection because
-  there is no durable assistant result to show.
+  there is no durable assistant result to show, except the AskUserQuestion /
+  ExitPlanMode hand-off turn described next.
+- An asking turn that paused on AskUserQuestion / ExitPlanMode never carries a
+  durable `turn.completed.final_answer`: the answer rotates execution onto a
+  separate continuation turn. The hand-off itself plays the final-answer role, so
+  `/turns/{id}/activity` `final_answer.entries` for that turn is the agent's
+  preamble (the `asking_turn_final_answer` assistant prose the runner
+  snapshotted, named with the same `final_answer.timeline_ids` shape) followed by
+  the AskUserQuestion card, whose `awaitingInput` carries the shortcut to the
+  question turn. This makes the asking turn collapsible to that bundle instead of
+  rendering "No turn activity", and is the same snapshot the question page copies
+  as page context — but only the asking turn promotes it to a final answer; the
+  synthetic question turn's copy stays a page-context copy (above) and never
+  becomes that turn's final answer. The promotion projects existing durable rows;
+  it must not add an activity page or change either turn's event counts.
 - The authenticated Turns view is a chat-capable continuation surface. Its
   composer uses the same `POST /api/sessions/{session_id}/turns` durable
   boundary as the main transcript composer; it does not create a second submit
