@@ -195,3 +195,58 @@ Evidence:
   `Sheet` variant ("sheet primitive supports a bottom-anchored variant"), and the
   disabled empty state ("compact pager stays present with no turns instead of
   vanishing").
+
+## Strand-proof selected-turn activity load
+
+Status: shipped
+
+Intent:
+Selecting a turn in the Turns view always loads its activity body. Before this,
+the "Loading activity…" spinner could stay up forever: the selected turn id was
+set from several paths (explicit gestures, the live-run follow, the deep-link
+route match, the route-number resolver, and the default-to-latest fallback) but
+only some of them also *started* a load. Landing on a turn via a deep link, via
+the route resolver, or via the default-latest selection set the selection and
+left the per-turn activity load `unloaded`/absent with nothing in flight — a
+visible spinner with no in-flight request and no edge left to re-fire. Only a
+remount or an explicit click recovered it. This was the user-reported "dead
+refresh."
+
+Affected contracts:
+- Transcript Navigation (primary — a selected turn's body always loads)
+- Observability (the stuck-spinner / route-session-mismatch client telemetry)
+
+Contract impact:
+- Whether a load runs for the selected turn is decided by a single, pure,
+  level-triggered gate (`frontend/src/turnActivityLoadReconcile.ts`,
+  `evaluateTurnActivityReconcile`): a visible Turns pane with a selected,
+  non-terminal, not-loading turn ALWAYS resolves to "load". No selection path —
+  present or future — can leave the body stranded, because the reconcile keys on
+  the selection + its load state, not on how the selection happened. This mirrors
+  the directory-load reconcile design and is the same shape as the pure
+  `turnActivityPager` / `turnActivityState` gates: the truth-table test is the
+  regression guard.
+- Terminal states stay terminal: `loaded` is the desired state and `error` is
+  left for Retry / re-selection to re-drive — the gate never auto-retries a
+  failing endpoint in a hot loop. A genuinely hung load self-heals to `error`
+  via the existing per-load `AbortController` timeout, then Retry.
+- Hidden panes do not eagerly load (the tabs view keeps non-routed session panes
+  mounted); they reconcile when they next become the visible Turns surface. The
+  stranded / route-session-mismatch client telemetry is gated on the same
+  visibility, so a hidden background pane reading the live URL no longer reports
+  a strand or a route mismatch that no user can see.
+
+Evidence:
+- `frontend/src/turnActivityLoadReconcile.ts` (pure gate) +
+  `turnActivityLoadReconcile.test.ts` (truth table, including the
+  strand-without-recovery regression guard); `App.tsx` ChatPane reconcile effect
+  keyed on `(visible, activeTab, effectiveSelectedTurnId, selected load status)`
+  and `visible`-gated `RunTurnActivityScreen` stuck/mismatch telemetry.
+- Diagnosis: production `tank_session_event_client_events_total`
+  (`turn_activity_load_started`≈`_succeeded`, no failed/timed-out tail;
+  `turn_activity_stuck_loading`=0) and `tank_chat_scroll_client_events_total`
+  (`turn-activity-selected-loading-stranded` present, reason=absent;
+  `turn-activity-selected-loading-slow`=0), plus the firing
+  `TankTurnActivitySelectedLoadingStranded` /
+  `TankTurnActivitySelectedRouteSessionMismatch` alerts — all of which name a
+  load that never started, never a slow load.
