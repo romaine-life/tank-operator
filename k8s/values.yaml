@@ -3,18 +3,18 @@ image:
   # Fingerprint-pinned. The build workflow rewrites this line on every push
   # to main via a `[skip ci]` follow-up commit, so the cluster reconciles to
   # the exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-dfcd9d81230ff104b7f5bd6ef59794759a69b768cf0362a6b3843c0a9e33e90b"
+  tag: "app-8d96ee3ffd64540eef25107dbf1770193c398f4ad50cc7121e35c7cdc9675822"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-17T05:53:29Z"
-    git_sha: "fad8c5690c01851debe0c100a2fbae6f6de586c0"
+    built_at: "2026-06-18T01:34:54Z"
+    git_sha: "dcb2444c9499a21f8ceac0dd96951ce37e45d7c6"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/fad8c5690c01851debe0c100a2fbae6f6de586c0"
-    pr_number: "1284"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1284"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27668809189"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/dcb2444c9499a21f8ceac0dd96951ce37e45d7c6"
+    pr_number: "1296"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1296"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27730923836"
     repository: "romaine-life/tank-operator"
-    actor: "tank-operator-host[bot]"
+    actor: "nelsong6"
 
 # normal: regular chart render
 # warm: per-slot baseline resources, no long-running app/proxy pods
@@ -72,29 +72,29 @@ orchestrator:
 session:
   # Fingerprint-pinned. claude-container-build.yml rewrites these tag
   # suffixes on every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-0267fdbc10ae8f37ace335c401a094c3c122b1111cb0d9afadcee0d8b2c74720"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-b9de89609f9f64bba1202d4248483bafd3a0d51da57492f7c048f52215035d31"
+  image: "romainecr.azurecr.io/claude-container:claude-8c4ad8c6a50aa22875f0ee32539caf0d8ec847bd30576ce07669473eea7902fb"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-b4c4b42ef2cd9a4c60431301cd39fdf33cb1c7c20af22272fbc8e15aa49d3686"
   imageMetadata:
     claude:
-      built_at: "2026-06-17T05:03:18Z"
-      git_sha: "9e83592ed41cf12ade793a044fa7069b157d3262"
+      built_at: "2026-06-18T00:40:00Z"
+      git_sha: "face26e71b202c84beae513b1444efa7a47d59ab"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/9e83592ed41cf12ade793a044fa7069b157d3262"
-      pr_number: "1287"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1287"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27666963016"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/face26e71b202c84beae513b1444efa7a47d59ab"
+      pr_number: "1295"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1295"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27728992563"
       repository: "romaine-life/tank-operator"
-      actor: "nelsong6"
+      actor: "tank-operator-host[bot]"
     codex:
-      built_at: "2026-06-17T05:03:18Z"
-      git_sha: "9e83592ed41cf12ade793a044fa7069b157d3262"
+      built_at: "2026-06-18T00:40:00Z"
+      git_sha: "face26e71b202c84beae513b1444efa7a47d59ab"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/9e83592ed41cf12ade793a044fa7069b157d3262"
-      pr_number: "1287"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1287"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27666963016"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/face26e71b202c84beae513b1444efa7a47d59ab"
+      pr_number: "1295"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1295"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27728992563"
       repository: "romaine-life/tank-operator"
-      actor: "nelsong6"
+      actor: "tank-operator-host[bot]"
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -378,6 +378,16 @@ externalSecret:
     # Key inside the K8s Secret. The proxy mounts this as
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
+  # HMAC secret for the inbound GitHub CI-watch webhook (POST /webhooks/github).
+  # The orchestrator reads it as GITHUB_WEBHOOK_SECRET and rejects every delivery
+  # when empty (fail-closed), so a watched PR's CI never wakes its session until
+  # this is set. Seeded out-of-band: the SAME value must be configured as the
+  # webhook secret on the tank-operator-host GitHub App. Production only — test
+  # slots receive no deliveries, so the deployment env reference is optional.
+  githubWebhook:
+    secretName: github-webhook-secret
+    secretKey: secret
+    kvKey: tank-operator-github-webhook-secret
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

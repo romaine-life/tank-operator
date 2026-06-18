@@ -226,6 +226,17 @@ spec:
             # the redirect to complete.
             - name: GITHUB_APP_SLUG
               value: {{ .Values.github.appSlug | quote }}
+            # HMAC secret for the inbound GitHub CI-watch webhook
+            # (POST /webhooks/github). Mirrored from KV into a Secret by
+            # externalsecret-github-webhook.yaml (production only). Marked
+            # optional so test-slot pods, which receive no GitHub deliveries
+            # and have no such Secret, start cleanly with the receiver disabled.
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalSecret.githubWebhook.secretName | quote }}
+                  key: {{ .Values.externalSecret.githubWebhook.secretKey | quote }}
+                  optional: true
             # Cluster operator email used when Tank mints GitHub MCP
             # attestations for the host's sessions.
             - name: HOST_EMAIL

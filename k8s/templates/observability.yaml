@@ -161,6 +161,16 @@ metadata:
     app.kubernetes.io/name: tank-operator
 spec:
   groups:
+    - name: tank-operator.ci-watch
+      rules:
+        - alert: TankCIWatchStalled
+          expr: tank_ci_watch_oldest_stale_age_seconds > 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a governed-PR CI watch has been 'watching' with no event for over an hour"
+            runbook: "A CI watch is stuck: the deciding webhook was likely dropped and the durable backstop's live re-drive did not resolve it (CI genuinely hung, or mergeability never resolved). The owning session stays reaper-protected and asleep by design. Check the PR's real check/mergeable state on GitHub and the tank_ci_webhooks_total{result} breakdown, then resolve or close the PR. The agent is intentionally NOT woken for this infra non-event."
     - name: tank-operator.http
       rules:
         - alert: TankOperatorHTTP5xxRate
@@ -474,6 +484,94 @@ spec:
               activity_summary rows and terminal correlation telemetry
               to decide whether the cause was a stale server activity
               projection or a missed local-run finalization.
+
+        - alert: TankTurnDirectoryNewTurnLoop
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-directory-new-turn-loop",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Turns directory new-turn refresh loop on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser repeatedly reloaded /turns/directory with
+              source=new-turn because the live transcript window contained
+              at least one turn_activity shell whose turn_id was still
+              absent from the durable directory after repeated reads.
+              This is the upstream spinner/bootstrap class: the Turns
+              surface is trying to make the selector complete before the
+              selected activity body can load.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-directory-new-turn-loop"
+
+              The log carries session_id, page_path, source, key (the
+              first missing turn_id), event_count (number of missing live
+              shells), canonical_event_count (known directory turn count),
+              entries, and turn_activity_shells.
+
+        - alert: TankTurnDirectoryRouteSessionMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-directory-route-session-mismatch",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Turns directory loaded from a pane whose session does not match the URL on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser was about to load /turns/directory for one
+              mounted Run pane while window.location pointed at a different
+              /sessions/{id} route. That is the route/session desync seen
+              when switching sessions leaves an old pane doing work under
+              the new URL.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-directory-route-session-mismatch"
+
+              The log carries session_id (the pane), key (the route
+              session id), page_path, source, and event_count (directory
+              turn count known before the request).
+
+        - alert: TankTurnActivitySelectedRouteSessionMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-route-session-mismatch",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "selected activity pane belongs to a different session than the route on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              A selected Turns activity body reached the stuck loading
+              watchdog while the mounted pane session id disagreed with
+              the current /sessions/{id} route. This is the explicit
+              selected-activity form of the stale-pane/session ownership
+              bug: an old session component is still participating under
+              a new session URL.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-activity-selected-route-session-mismatch"
+
+              The log carries session_id (the mounted pane),
+              route_session_id (the URL session), selected_turn_id,
+              page_path, source, reason, status, entries, groups,
+              turn_activity_shells, durable_active_turn_activity_shells,
+              and activity_entries. Compare it with the adjacent
+              event="turn-activity-selected-loading-stranded" log for the
+              same timestamp to tell whether the wrong pane is also the
+              one rendering the visible spinner or only a hidden stale
+              participant.
 
         - alert: TankTurnActivitySelectedLoadingStranded
           expr: |

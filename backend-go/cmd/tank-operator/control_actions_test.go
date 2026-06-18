@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -2386,6 +2387,135 @@ func TestHandleInternalVerifyHotSwapBlocksWrongBranchPublish(t *testing.T) {
 		t.Fatalf("wrong-branch publish was accepted: %#v", body)
 	}
 	if got := strings.Join(body.Reasons, "\n"); !strings.Contains(got, "no governed publish record") {
+		t.Fatalf("reasons = %q", got)
+	}
+}
+
+func TestHandleInternalVerifyHotSwapUsesBackendReducer(t *testing.T) {
+	prNumber := 1113
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	mergeable := true
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{
+			{
+				Action:    "github.commit.push",
+				Status:    "succeeded",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+			},
+			{
+				Action:    "github.commit.ci",
+				Status:    "failed",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				ResultSHA: sha,
+				Error:     "stale legacy failure",
+				Payload:   []byte(`{"failed":["old"]}`),
+			},
+			{
+				Action:    "github.pull_request.mergeability",
+				Status:    "failed",
+				RepoOwner: "romaine-life",
+				RepoName:  "tank-operator",
+				PRNumber:  &prNumber,
+				ResultSHA: sha,
+				Error:     "stale legacy conflict",
+				Payload:   []byte(`{"branch":"tank/session/47/tank-operator","mergeable":false,"mergeable_state":"dirty"}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	app.ciWatches = &fakeCIWatchStore{}
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		PR:             mcpgithub.PullRequestDetail{Number: prNumber},
+		Mergeable:      &mergeable,
+		MergeableState: "clean",
+		HeadSHA:        sha,
+		CheckState:     "success",
+		CIStatus:       "succeeded",
+		HTMLURL:        "https://github.com/romaine-life/tank-operator/pull/1113",
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`",
+		"source_tool": "deploy_image_to_test_slot"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Allowed || !body.PublishVerified || !body.CIVerified || !body.MergeVerified {
+		t.Fatalf("verification body = %#v", body)
+	}
+	if body.PRNumber == nil || *body.PRNumber != prNumber {
+		t.Fatalf("pr_number = %#v, want %d", body.PRNumber, prNumber)
+	}
+	gh := app.mcpGitHub.(*fakeMCPGitHub)
+	if gh.resolveOpenPRCalls != 1 || gh.resolvePRCalls != 0 {
+		t.Fatalf("resolve calls = open %d by-number %d, want open 1 by-number 0", gh.resolveOpenPRCalls, gh.resolvePRCalls)
+	}
+}
+
+func TestHandleInternalVerifyHotSwapBlocksBackendReducerPendingCI(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	branch := "tank/session/47/tank-operator"
+	mergeable := true
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			Action:    "github.commit.push",
+			Status:    "succeeded",
+			RepoOwner: "romaine-life",
+			RepoName:  "tank-operator",
+			ResultSHA: sha,
+			Payload:   []byte(`{"branch":"tank/session/47/tank-operator"}`),
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	app.ciWatches = &fakeCIWatchStore{}
+	app.mcpGitHub = &fakeMCPGitHub{prState: mcpgithub.PullRequestState{
+		PR:             mcpgithub.PullRequestDetail{Number: 1113},
+		Mergeable:      &mergeable,
+		MergeableState: "clean",
+		HeadSHA:        sha,
+		CheckState:     "pending",
+		CIStatus:       "started",
+		CIError:        "pending checks: test",
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/hot-swap/verify", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"branch": "`+branch+`",
+		"sha": "`+sha+`"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalVerifyHotSwap(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body hotSwapVerificationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Allowed || !body.PublishVerified || body.CIVerified || !body.MergeVerified || body.ReadinessState != "watching" {
+		t.Fatalf("verification body = %#v", body)
+	}
+	if got := strings.Join(body.Reasons, "\n"); !strings.Contains(got, "CI in progress") {
 		t.Fatalf("reasons = %q", got)
 	}
 }

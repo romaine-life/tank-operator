@@ -551,11 +551,11 @@ def _append_tank_publish_tool_to_json(value) -> bool:
             {
                 "name": _TANK_WATCH_PR_TOOL,
                 "description": (
-                    "Hand off CI/mergeability watching for the current session's "
-                    "governed PR to Tank. Performs the authoritative GitHub read "
+                    "Register the current session's governed PR head with Tank's "
+                    "PR-readiness process. Tank performs the authoritative GitHub read "
                     "(resolving GitHub's asynchronous mergeable_state and reading the "
                     "check rollup) so you do not poll check status yourself. Returns "
-                    "'conflict' or 'failed' to fix now, or 'watching'/'ready'."
+                    "'conflict', 'failed', 'watching', or 'ready'."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -2613,109 +2613,50 @@ async def _handle_tank_watch_pr_tool(
         if requested_repo and requested_repo != f"{owner}/{repo}":
             raise ValueError(f"repo argument {requested_repo!r} does not match origin {owner}/{repo}")
 
-        service_token = await auth_romaine_provider.token()
-        github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
-
-        # Resolve the PR number: explicit arg, else the open PR for this branch.
+        # Tank resolves the PR number from branch when the caller does not pass one.
         raw_pr_number = arguments.get("pr_number")
         try:
             pr_number = int(raw_pr_number) if raw_pr_number is not None else 0
         except (TypeError, ValueError):
             raise ValueError("pr_number must be an integer")
-        if pr_number <= 0:
-            list_status, list_body = await _github_api_json(
-                http,
-                github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/pulls?head={owner}:{branch}&state=open",
-            )
-            if list_status >= 400 or not isinstance(list_body, list) or not list_body:
-                raise ValueError(f"no open PR found for {owner}:{branch}; pass pr_number explicitly")
-            first = list_body[0] if isinstance(list_body[0], dict) else {}
-            pr_number = int(first.get("number") or 0)
-            if pr_number <= 0:
-                raise ValueError(f"could not resolve PR number for {owner}:{branch}")
-
-        # Authoritative mergeability read. GitHub computes mergeable_state
-        # asynchronously, so the value is null/'unknown' right after a push; poll
-        # until it resolves. This is the fix for the "reports it's good while the
-        # PR actually has a conflict" failure (docs/event-driven-rollout.md).
-        mergeable = None
-        mergeable_state = ""
-        head_sha = ""
+        service_token = await auth_romaine_provider.token()
+        head_sha = await _git_output(repo_path, "rev-parse", "HEAD")
         pr_url = ""
-        for _attempt in range(6):
-            detail_status, detail_body = await _github_api_json(
-                http,
-                github_token,
-                "GET",
-                f"/repos/{owner}/{repo}/pulls/{pr_number}",
-            )
-            if detail_status >= 400 or not isinstance(detail_body, dict):
-                raise RuntimeError(f"could not read PR #{pr_number}: HTTP {detail_status}")
-            mergeable = detail_body.get("mergeable")
-            mergeable_state = str(detail_body.get("mergeable_state") or "")
-            head = detail_body.get("head")
-            head_sha = str(head.get("sha") or "") if isinstance(head, dict) else ""
-            pr_url = str(detail_body.get("html_url") or "")
-            if mergeable is not None and mergeable_state and mergeable_state != "unknown":
-                break
-            await asyncio.sleep(1.5)
 
-        # Reduce CI evidence for the resolved head SHA to pass/fail/pending.
-        check_state = "pending"
-        failing: list[str] = []
-        ci_payload: dict = {}
-        ci_error = "checks have not appeared yet"
-        if head_sha:
-            ci_status, ci_error, ci_payload = await _resolve_ci_state(
-                http,
-                github_token,
-                owner,
-                repo,
-                head_sha,
-                pr_number=pr_number,
-                branch=branch,
-            )
-            check_state = "success" if ci_status == "succeeded" else "failure" if ci_status == "failed" else "pending"
-            if ci_status == "failed":
-                failing = [str(item).split(":", 1)[0] for item in ci_payload.get("failed", []) if str(item).strip()]
-
-        # Classify into the small, unambiguous set the rollout skill acts on.
-        if mergeable_state in {"dirty", "behind"}:
-            state = "conflict"
-            detail = f"PR #{pr_number} needs a rebase onto its base (mergeable_state={mergeable_state})."
-        elif failing:
-            state = "failed"
-            detail = f"Required checks failed: {', '.join(failing[:8])}."
-        elif mergeable is True and mergeable_state == "clean" and check_state == "success":
-            state = "ready"
-            detail = f"PR #{pr_number} is green and mergeable, awaiting human merge in Tank."
-        else:
-            state = "watching"
-            detail = f"CI in progress (mergeable_state={mergeable_state or 'unknown'}, checks={check_state}: {ci_error})."
-
-        # Register durable backend state for pending and ready PRs. Ready PRs do
-        # not need an agent wait, but the backend still needs the PR link so
-        # orchestration phases can auto-merge and advance.
-        if state in {"watching", "ready"}:
-            headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
-            watch_url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/ci-watches"
-            watch_payload = {
-                "pr_owner": owner,
-                "pr_name": repo,
-                "pr_number": pr_number,
-                "head_sha": head_sha,
-                "mergeable_state": mergeable_state,
-                "check_state": check_state,
-                "detail": detail,
-                "pr_url": pr_url,
-                "status": state,
-            }
-            async with http.post(watch_url, headers=headers, json=watch_payload) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    raise RuntimeError(f"could not register CI watch: HTTP {resp.status}: {body[:300]}")
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        watch_url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pr-readiness"
+        watch_payload = {
+            "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "expected_head_sha": head_sha,
+            "mergeable_state": "",
+            "check_state": "pending",
+            "detail": "PR readiness registered; backend reconcile owns live state.",
+            "pr_url": pr_url,
+            "status": "watching",
+        }
+        if pr_number > 0:
+            watch_payload["pr_number"] = pr_number
+        async with http.post(watch_url, headers=headers, json=watch_payload) as resp:
+            body_text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(f"could not register PR readiness: HTTP {resp.status}: {body_text[:300]}")
+        try:
+            watch_body = json.loads(body_text) if body_text else {}
+        except Exception:
+            watch_body = {}
+        state = str(watch_body.get("state") or watch_body.get("status") or "watching")
+        detail = str(watch_body.get("detail") or "PR readiness registered; backend reconcile is watching.")
+        try:
+            pr_number = int(watch_body.get("pr_number") or pr_number or 0)
+        except (TypeError, ValueError):
+            pr_number = 0
+        head_sha = str(watch_body.get("head_sha") or head_sha)
+        pr_url = str(watch_body.get("pr_url") or pr_url)
+        mergeable_state = str(watch_body.get("mergeable_state") or "")
+        check_state = str(watch_body.get("check_state") or "pending")
+        failing = [str(item) for item in watch_body.get("failing_checks", []) if str(item).strip()] if isinstance(watch_body.get("failing_checks"), list) else []
+        ci_payload = watch_body.get("ci") if isinstance(watch_body.get("ci"), dict) else {}
 
         return _mcp_result_response(
             request_id,
@@ -2851,22 +2792,19 @@ async def _handle_tank_merge_tool(
                 "source_tool": _TANK_MERGE_TOOL,
             },
         )
-        live_verify = await _verify_github_hot_swap_head(http, github_token, owner, repo, branch, sha)
+        # The backend PR-readiness reducer (tank_verify) is the single authority
+        # for governed publish + green CI + clean mergeability. The proxy no
+        # longer runs a second, divergent CI/mergeability reducer here; the exact
+        # head/draft re-check below remains as the only local safety gate.
         reasons: list[str] = []
         if tank_verify.get("allowed") is not True:
             tank_reasons = tank_verify.get("reasons")
             if isinstance(tank_reasons, list):
-                reasons.extend(f"Tank ledger: {reason}" for reason in tank_reasons)
+                reasons.extend(f"Tank readiness: {reason}" for reason in tank_reasons)
             else:
-                reasons.append("Tank ledger did not confirm governed publish, green CI, and clean mergeability")
-        if live_verify.get("allowed") is not True:
-            live_reasons = live_verify.get("reasons")
-            if isinstance(live_reasons, list):
-                reasons.extend(f"GitHub live state: {reason}" for reason in live_reasons)
-            else:
-                reasons.append("GitHub live state did not confirm latest branch head, open PR, green CI, and clean mergeability")
-        pr_number = int(live_verify.get("pr_number") or tank_verify.get("pr_number") or 0) or None
-        pr_url = str(live_verify.get("pr_url") or "")
+                reasons.append("Tank did not confirm governed publish, green CI, and clean mergeability")
+        pr_number = int(tank_verify.get("pr_number") or 0) or None
+        pr_url = str(tank_verify.get("pr_url") or "")
         if requested_pr_number is not None and pr_number != requested_pr_number:
             reasons.append(f"requested PR #{requested_pr_number} does not match governed branch PR #{pr_number or 'unknown'}")
         if pr_number is None:

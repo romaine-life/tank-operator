@@ -1,7 +1,22 @@
 # Event-Driven Rollout: CI Watch, Auto-Merge, and Synthetic Completion Records
 
-Status: **proposed (design)**. No code yet. This doc is the full plan; implementation
-is staged in [Phased delivery](#phased-delivery), each stage coherent on its own.
+Status: **shipped** (phases 1–4; see
+[CI-watch capabilities](features/ci-watch/capabilities.md)). Stage-5 hardening (the
+stall alert / dead-man's timer) remains deferred. This doc is the original design;
+[Phased delivery](#phased-delivery) tracks what landed.
+
+> **Deployment wiring (required — the webhook half is inert without it).** The receiver
+> fails closed when its secret is empty, so production must have BOTH:
+> 1. `GITHUB_WEBHOOK_SECRET` mirrored from KV `tank-operator-github-webhook-secret` via
+>    `k8s/templates/externalsecret-github-webhook.yaml` (the secret value is seeded
+>    out-of-band in KV), and
+> 2. a webhook on the **tank-operator-host** GitHub App →
+>    `https://tank.romaine.life/webhooks/github` (content-type `application/json`, the
+>    same secret, events: `pull_request` / `check_suite` / `check_run` / `workflow_run`).
+>
+> One app-level webhook covers every governed repo (reverse lookup is by
+> `(owner, name, pr)`). Both pieces were missing at first ship (2026-06-17), so every
+> "watching" session slept through its CI — confirmed by an empty `tank_ci_webhooks_total`.
 
 Extends [tank-conversation-protocol.md](tank-conversation-protocol.md),
 [scheduled-turn-continuity.md](scheduled-turn-continuity.md), and the
@@ -62,13 +77,15 @@ This yields four edges. Three are infra-only; one invokes the agent:
 agent: push → publish_current_head → watch_current_session_pr → STOP (turn ends)
                                               │
                                               ▼
-                               authoritative read (fail-fast)
-                          poll mergeable_state until != unknown;
-                          read required-check rollup for head SHA
+                             register PR handoff row
+                                      │
+                                      ▼
+                       backend authoritative reconcile
+                 read PR mergeability + required-check rollup
                                               │
                   ┌───────────────────────────┼───────────────────────────┐
               already bad                  clean+pending                already green
-          return verdict NOW          register ci_watch row,         (rare) → straight
+          return verdict NOW          keep ci_watch watching,        (rare) → straight
           (agent fixes in same        agent ends turn                to merge path
            turn, never disengages)            │
                                               ▼
@@ -77,7 +94,7 @@ agent: push → publish_current_head → watch_current_session_pr → STOP (turn
                                   status / pull_request)
                                               │
                           HMAC verify → lookup ci_watch by (repo, pr) →
-                          ignore stale head SHA → coalesce → compute terminal
+                          ignore stale check SHA → coalesce → reconcile live
                                               │
                  ┌────────────────────────────┼────────────────────────────┐
             green+mergeable                  red                        conflict
@@ -113,7 +130,7 @@ New tool `watch_current_session_pr`, added to the Tank governed-tool surface in
 ```jsonc
 {
   "name": "watch_current_session_pr",
-  "description": "Hand off CI/mergeability watching for the current session's governed PR to Tank. Performs the authoritative read (resolves GitHub's async mergeable_state) and either returns an immediate problem to fix, or registers a watch and returns 'watching' so the agent can end its turn. Tank emits a completion record on green-and-merged, or wakes the session on failure/conflict.",
+  "description": "Register the current session's governed PR head with Tank's PR-readiness process. Tank reads authoritative GitHub CI/mergeability state and returns conflict, failed, watching, or ready.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -125,15 +142,18 @@ New tool `watch_current_session_pr`, added to the Tank governed-tool surface in
 }
 ```
 
-Handler behavior (fail-fast, synchronous — this is the value the agent cannot fumble):
+Handler behavior (handoff is synchronous; live state is backend-owned):
 
-1. Resolve repo + governed PR + current local/remote/PR head SHA (reuse the head
-   reconciliation already in `_verify_github_hot_swap_head`).
-2. **Resolve mergeability authoritatively**: GET the PR, and if `mergeable == null` /
-   `mergeable_state == "unknown"`, re-GET with backoff until GitHub has computed it
-   (bounded, e.g. ≤10s). This is the single fix for the "says it's good over a
-   conflict" class.
-3. Resolve CI evidence for the PR head. A check is satisfied by an exact-head green
+1. Resolve repo + current local head SHA, then call Tank's
+   `POST /api/internal/sessions/{id}/pr-readiness` endpoint. Tank resolves the
+   governed branch PR when the caller did not pass a PR number, then upserts the
+   durable readiness row.
+2. **Reconcile authoritatively in the backend**: GET the PR, read
+   `mergeable` / `mergeable_state`, and resolve CI evidence for the PR head. If
+   GitHub returns `mergeable == null` / `mergeable_state == "unknown"`, keep the
+   watch in `watching` and schedule the narrow mergeability retry for this same
+   PR head (about 2s, 5s, 10s, 20s, 40s, then 60s; deduped per watch/head).
+3. A check is satisfied by an exact-head green
    run, or by a prior green run on the same PR branch when Tank can prove every commit
    since that run skipped the workflow because its `pull_request.paths` inputs were
    unchanged. If the workflow path filter cannot be inspected, exact-head evidence is
@@ -141,20 +161,18 @@ Handler behavior (fail-fast, synchronous — this is the value the agent cannot 
 4. Return one of a small, unambiguous set:
    - `dirty` / `behind` → `{"state":"conflict", "base": "...", "detail": ...}`
    - a required check already failed → `{"state":"failed", "failing": [...], "logs_url": ...}`
-   - `unknown`-but-no-checks-yet **and** checks expected → register a watch, return
+   - `unknown`-but-no-checks-yet **and** checks expected → keep the watch, return
      `{"state":"watching"}` (do **not** treat "no checks reported yet" as green —
      see [the empty-green trap](#the-empty-green-trap)).
-   - `clean` + required checks still pending/missing with changed inputs → register a
+   - `clean` + required checks still pending/missing with changed inputs → keep the
      watch, `{"state":"watching"}`
-   - `clean` + all required CI evidence satisfied → go straight to the merge path,
-     `{"state":"merging"}`.
+   - `clean` + all required CI evidence satisfied → `{"state":"ready"}` and the
+     backend emits the ready record or auto-merges an orchestration phase.
 5. Registering a watch = upsert a `ci_watches` row (below) and record a control-action
    ledger event (`action=watch_current_session_pr`) for audit, consistent with every
    other governed PR mutation.
 
-### B. Webhook ingestion (new — does not exist today)
-
-There is no inbound GitHub webhook path in tank-operator today. Add one.
+### B. Webhook ingestion
 
 - **Route**: `mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)` registered
   in `backend-go/cmd/tank-operator/server.go` `registerRoutes` as a **public**
@@ -162,8 +180,8 @@ There is no inbound GitHub webhook path in tank-operator today. Add one.
 - **Authentication is the signature, not a JWT**: verify `X-Hub-Signature-256`
   (HMAC-SHA256 over the raw body) with `crypto/hmac` + `crypto/sha256` against a
   `GITHUB_WEBHOOK_SECRET` sourced from Key Vault via ESO. Reject mismatches before
-  parsing. This is new middleware/helper; nothing in the repo does HMAC today.
-- **Subscribed events**: `check_suite`, `check_run`, `workflow_run`, `status`,
+  parsing.
+- **Subscribed events**: `check_suite`, `check_run`, `workflow_run`,
   `pull_request` (for `synchronize`/base-move/conflict signals). Configure the
   subscription on the **`tank-operator-host`** GitHub App (the automation app that
   authors session PRs; credentials in KV under `tank-operator-app-*`). For
@@ -206,22 +224,26 @@ CREATE INDEX ci_watches_active  ON ci_watches (status) WHERE status = 'watching'
 ```
 
 The webhook handler looks up by `(repo_owner, repo_name, pr_number)`, then **discards
-the event if `payload head sha != ci_watches.head_sha`** (a new push superseded it; the
-agent's re-publish updates `head_sha` and the old suite is irrelevant). This is the
-stale-SHA guard.
+check/workflow events if `payload head sha != ci_watches.head_sha`** (a new push
+superseded it; the old suite is irrelevant). Pull-request `synchronize` events are
+allowed to move the watched head because they are the notification that the PR head
+changed.
 
 ### D. Terminal-state computation + coalescing
 
-A single PR emits dozens of `check_run`/`check_suite`/`workflow_run`/`status` events.
-The watcher does **not** wake on each. On every (non-stale) event it recomputes the
-CI evidence for the current head SHA — reusing the same resolver as
-`_verify_github_hot_swap_head` (latest-per-name, path-aware prior-green evidence,
-mergeable + `mergeable_state`) — and only acts on a **transition into a terminal
-state**:
+Diagram: [CI Watch Webhook Reconcile Shape](features/ci-watch/ci-watch.html),
+an overview with one page per lane.
+
+A single PR emits dozens of `check_run`/`check_suite`/`workflow_run` events.
+The watcher does **not** wake on each. On every actionable event it recomputes live
+CI evidence for the current PR head SHA (latest-per-name, path-aware prior-green
+evidence, mergeable + `mergeable_state`) and only acts on the aggregate state:
 
 - all required CI evidence satisfied + `mergeable == true` + `mergeable_state == clean` → **green**
 - any required check `conclusion ∈ {failure, cancelled, timed_out}` → **red**
 - `mergeable_state ∈ {dirty, behind}` → **conflict**
+- `mergeable == null` / `mergeable_state == unknown` → keep watching and schedule the
+  narrow mergeability retry for this same PR head
 - otherwise still pending → record `last_event_at`, do nothing
 
 Coalescing falls out of "compute aggregate, act only on transition": three suites
@@ -249,8 +271,10 @@ invoked by the agent. The auto-merge needs a **server-side (Go) equivalent in th
 orchestrator** that reuses the existing governance gates:
 
 - verify against the durable ledger via the internal `/api/internal/sessions/{id}/hot-swap/verify`
-  endpoint (already server-side),
-- re-verify live GitHub head + mergeability + checks,
+  endpoint (already server-side); this still proves the exact commit was
+  governed/pushed, while CI + mergeability are registered through the same Tank
+  PR-readiness process used by `watch_current_session_pr`,
+- re-verify live GitHub head + mergeability + checks through that readiness reducer,
 - mark the draft PR ready (`markPullRequestReadyForReview`) — session PRs start as
   drafts (`repo-cloner`); the agent's `watch_current_session_pr` handoff is the
   readiness signal,
@@ -343,6 +367,8 @@ Two layers, both off data we already hold:
 | `ci_status.updated` event type | `conversation/types.go`, `builders.go` | additive event (display-only) |
 | `source=ci-failure` / `ci-conflict` | `enqueueSDKTurn` callers | additive turn source |
 | server-side governed merge | orchestrator (Go) reusing hot-swap/verify + mcp-github token | new internal path |
+| Tank PR-readiness endpoint | `/api/internal/sessions/{id}/pr-readiness` backed by `session_ci_watches` | shared enforcement path |
+| test-slot deployment gate | `/api/internal/sessions/{id}/hot-swap/verify` as compatibility facade over PR readiness + publish proof | shared enforcement path |
 | `watch_current_session_pr` tool | `mcp-auth-proxy/.../server.py` | new governed tool |
 | ring on `ci_status.updated` | `frontend/src/sessionActivity.ts`, `conversationReducer.ts`, `App.tsx` | additive UI |
 | reaper excludes active watch | `sessionregistry.ClaimIdleForReap` | predicate change |
@@ -417,21 +443,19 @@ named behavior "event-driven rollout watch."
 
 Each stage is independently shippable and coherent.
 
-1. **Authoritative read, no waiting.** Add `watch_current_session_pr` returning
-   `conflict|failed|merging|watching` synchronously (the mergeable_state resolution +
-   required-check read), and the `ci_watches` table. Rewrite `/rollout` to call it and
-   stop. Even with no webhook yet, this alone kills the "says it's good over a conflict"
-   bug — registration just has nothing to fire it yet.
-2. **Webhook → terminal computation.** `POST /webhooks/github` + HMAC, reverse lookup,
-   stale-SHA + coalescing + empty-green guards, transition detection. Log terminal
-   states; do not act yet.
-3. **Red/conflict wake.** Wire terminal red/conflict to `enqueueSDKTurn` with
-   pre-fetched payloads. Agent fix-loop closes.
-4. **Green path.** Server-side governed merge + `ci_status.updated` record +
-   notification + reducer rendering + reaper-exclusion gate. Happy path goes
-   agent-free.
-5. **Hardening.** Full observability/alerts, idempotency, `capabilities.md`, contract
-   evidence.
+1. **Shipped:** Tank owns `POST /api/internal/sessions/{id}/pr-readiness`; both
+   `watch_current_session_pr` and hot-swap/test-slot verification register the same
+   readiness process and receive `conflict|failed|ready|watching`.
+2. **Shipped:** `POST /webhooks/github` + HMAC, reverse lookup, stale check-SHA guard,
+   and aggregate recomputation.
+3. **Shipped:** red/conflict reducer output calls `enqueueSDKTurn`.
+4. **Shipped:** green reducer output marks the watch ready, or auto-merges an
+   orchestration phase; merged PR webhooks emit `ci_status.updated`.
+5. **Shipped:** the Glimmung test-slot/hot-swap gate keeps publish proof in the
+   governed ledger but uses the same Tank PR-readiness process for CI and
+   mergeability.
+6. **Remaining hardening:** broader observability/alerts and a durable stuck-watch
+   backstop.
 
 ## Open questions
 
