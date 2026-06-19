@@ -18,17 +18,21 @@ function decodeHeader(res, name) {
   }
 }
 
-export async function fetchResumeTranscript(cfg) {
+export async function fetchResumeTranscript(cfg, sourceSessionId) {
   const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
   const tokenPath = cfg.operatorTokenPath || "";
-  if (!baseURL || !tokenPath || !cfg.sessionId) {
+  const source = String(sourceSessionId || "").trim();
+  if (!baseURL || !tokenPath || !cfg.sessionId || !source) {
     return null;
   }
   const token = (await readFile(tokenPath, "utf8")).trim();
   const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/resume-transcript`;
   const res = await fetch(url, {
     method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Tank-Resurrect-Source-Session-Id": source,
+    },
   });
   if (res.status === 404) {
     return null;

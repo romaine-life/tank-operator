@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
@@ -71,4 +72,35 @@ func (s *AzureStore) Get(ctx context.Context, key string) (Snapshot, bool, error
 		snap.Metadata = md
 	}
 	return snap, true, nil
+}
+
+func (s *AzureStore) Latest(ctx context.Context, prefix string) (Snapshot, bool, error) {
+	pager := s.client.NewListBlobsFlatPager(s.container, &azblob.ListBlobsFlatOptions{Prefix: &prefix})
+	newestKey := ""
+	var newestTime time.Time
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			if bloberror.HasCode(err, bloberror.ContainerNotFound) {
+				return Snapshot{}, false, nil
+			}
+			return Snapshot{}, false, err
+		}
+		if page.Segment == nil {
+			continue
+		}
+		for _, item := range page.Segment.BlobItems {
+			if item == nil || item.Name == nil || item.Properties == nil || item.Properties.LastModified == nil {
+				continue
+			}
+			if newestKey == "" || item.Properties.LastModified.After(newestTime) {
+				newestKey = *item.Name
+				newestTime = *item.Properties.LastModified
+			}
+		}
+	}
+	if newestKey == "" {
+		return Snapshot{}, false, nil
+	}
+	return s.Get(ctx, newestKey)
 }

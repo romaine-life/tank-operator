@@ -79,7 +79,7 @@ async function main(): Promise<void> {
       const resumeSessionId = await runResumeBootstrap({
         homeDir: home,
         runningSdkVersion: readClaudeSdkVersion(),
-        fetchTranscript: () => fetchResumeTranscript(cfg),
+        fetchTranscript: () => fetchResumeTranscript(cfg, cfg.resurrectSourceSessionId ?? ""),
         onOutcome: (outcome) => transcriptResumeTotal.labels(outcome).inc(),
       });
       if (resumeSessionId) {

@@ -9,4 +9,5 @@ export interface ResumeTranscript {
 
 export function fetchResumeTranscript(
   cfg: SessionBusConfig,
+  sourceSessionId: string,
 ): Promise<ResumeTranscript | null>;

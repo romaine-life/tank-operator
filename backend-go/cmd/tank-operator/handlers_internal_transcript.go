@@ -96,6 +96,75 @@ func (s *appServer) handleInternalSessionTranscriptSnapshot(w http.ResponseWrite
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleInternalSessionResumeTranscript streams a dead session's captured
+// transcript back to its resurrected pod's runner. The runner (a freshly
+// created, authenticated session pod) sends the dead source session id in a
+// header; the orchestrator re-verifies the source is owned by the same caller
+// before returning anything. Restore metadata (sdk session id, rel-path,
+// version) rides as headers so the runner materializes the file at the exact
+// SDK-expected path and gates resume on version.
+func (s *appServer) handleInternalSessionResumeTranscript(w http.ResponseWriter, r *http.Request) {
+	caller, ok := s.requireInternalSessionPodCaller(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID != caller.SessionID {
+		writeError(w, http.StatusForbidden, "session target does not match caller pod")
+		return
+	}
+	if s.transcripts == nil {
+		writeError(w, http.StatusServiceUnavailable, "transcript storage not configured")
+		return
+	}
+	if s.mgr == nil {
+		writeError(w, http.StatusServiceUnavailable, "session manager unavailable")
+		return
+	}
+	sourceID := strings.TrimSpace(r.Header.Get("X-Tank-Resurrect-Source-Session-Id"))
+	if sourceID == "" {
+		writeError(w, http.StatusBadRequest, "missing resurrect source session id")
+		return
+	}
+	// Ownership is authoritative here: the pod supplied the source id from its
+	// env, but the orchestrator confirms the caller owns that source session
+	// (any visibility — a resurrected source is typically soft-deleted/dead).
+	if _, _, err := s.mgr.GetRegisteredByOwnerAnyVisibility(r.Context(), caller.Email, sourceID); err != nil {
+		writeError(w, http.StatusNotFound, "source session not found")
+		return
+	}
+	snap, found, err := s.transcripts.Latest(r.Context(), transcriptBlobPrefix(caller.Email, sourceID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read transcript")
+		return
+	}
+	if !found {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	setMetaHeader := func(header, key string) {
+		if v := snap.Metadata[key]; v != "" {
+			w.Header().Set(header, url.QueryEscape(v))
+		}
+	}
+	setMetaHeader("X-Tank-Transcript-Sdk-Session-Id", "sdk_session_id")
+	setMetaHeader("X-Tank-Transcript-Rel-Path", "rel_path")
+	setMetaHeader("X-Tank-Transcript-Sdk-Version", "sdk_version")
+	contentType := snap.ContentType
+	if contentType == "" {
+		contentType = "application/x-ndjson"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(snap.Bytes)
+}
+
+// transcriptBlobPrefix is the blob key namespace for one session's snapshots:
+// transcriptBlobKey joins prefix + "<sdkSessionId>.jsonl".
+func transcriptBlobPrefix(email, sessionID string) string {
+	return blobSegment(email) + "/" + blobSegment(sessionID) + "/"
+}
+
 func decodeHeader(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

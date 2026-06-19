@@ -47,6 +47,28 @@ func TestMemoryStoreCopiesBytes(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreLatestByPrefix(t *testing.T) {
+	m := NewMemoryStore()
+	ctx := context.Background()
+	_ = m.Put(ctx, "owner/8/aaa.jsonl", Snapshot{Bytes: []byte("a"), Metadata: map[string]string{"sdk_session_id": "aaa"}})
+	_ = m.Put(ctx, "owner/8/bbb.jsonl", Snapshot{Bytes: []byte("b"), Metadata: map[string]string{"sdk_session_id": "bbb"}})
+	_ = m.Put(ctx, "owner/9/ccc.jsonl", Snapshot{Bytes: []byte("c")})
+
+	// Newest under the 8 prefix is bbb (written after aaa).
+	snap, ok, err := m.Latest(ctx, "owner/8/")
+	if err != nil || !ok {
+		t.Fatalf("Latest: ok=%v err=%v", ok, err)
+	}
+	if snap.Metadata["sdk_session_id"] != "bbb" {
+		t.Fatalf("expected newest=bbb, got %v", snap.Metadata)
+	}
+
+	// A prefix with no blobs returns ok=false.
+	if _, ok, _ := m.Latest(ctx, "owner/404/"); ok {
+		t.Fatal("expected no match for empty prefix")
+	}
+}
+
 func TestMemoryStoreLastWriteWins(t *testing.T) {
 	m := NewMemoryStore()
 	_ = m.Put(context.Background(), "k", Snapshot{Bytes: []byte("v1")})

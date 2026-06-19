@@ -11,6 +11,7 @@ package transcriptstore
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 )
 
@@ -29,6 +30,12 @@ type Snapshot struct {
 type Store interface {
 	Put(ctx context.Context, key string, snap Snapshot) error
 	Get(ctx context.Context, key string) (snap Snapshot, ok bool, err error)
+	// Latest returns the most-recently-written snapshot whose key starts with
+	// prefix, or ok=false when none exist. Restore uses it to find a dead
+	// session's transcript without a separate durable pointer: one session
+	// normally has a single transcript blob, and last-write-wins picks the
+	// freshest if there are several.
+	Latest(ctx context.Context, prefix string) (snap Snapshot, ok bool, err error)
 }
 
 // ErrNotFound is returned by stores when a key is absent. Get reports absence
@@ -37,12 +44,14 @@ var ErrNotFound = errors.New("transcriptstore: not found")
 
 // MemoryStore is an in-process stub used in tests and as a non-fatal fallback.
 type MemoryStore struct {
-	mu   sync.Mutex
-	objs map[string]Snapshot
+	mu      sync.Mutex
+	objs    map[string]Snapshot
+	seq     map[string]int64
+	counter int64
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{objs: make(map[string]Snapshot)}
+	return &MemoryStore{objs: make(map[string]Snapshot), seq: make(map[string]int64)}
 }
 
 func (m *MemoryStore) Put(_ context.Context, key string, snap Snapshot) error {
@@ -53,6 +62,8 @@ func (m *MemoryStore) Put(_ context.Context, key string, snap Snapshot) error {
 	stored := snap
 	stored.Bytes = cp
 	m.objs[key] = stored
+	m.counter++
+	m.seq[key] = m.counter
 	return nil
 }
 
@@ -63,9 +74,33 @@ func (m *MemoryStore) Get(_ context.Context, key string) (Snapshot, bool, error)
 	if !ok {
 		return Snapshot{}, false, nil
 	}
+	return copyOf(snap), true, nil
+}
+
+func (m *MemoryStore) Latest(_ context.Context, prefix string) (Snapshot, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bestKey := ""
+	var bestSeq int64
+	for key := range m.objs {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if bestKey == "" || m.seq[key] > bestSeq {
+			bestKey = key
+			bestSeq = m.seq[key]
+		}
+	}
+	if bestKey == "" {
+		return Snapshot{}, false, nil
+	}
+	return copyOf(m.objs[bestKey]), true, nil
+}
+
+func copyOf(snap Snapshot) Snapshot {
 	cp := make([]byte, len(snap.Bytes))
 	copy(cp, snap.Bytes)
 	out := snap
 	out.Bytes = cp
-	return out, true, nil
+	return out
 }
