@@ -212,6 +212,19 @@ and [../README.md](../README.md) for how capability ledgers are used.
   `handlers_test_slot_status_test.go` (auth, owner scope, durable coordinate
   resolution, live ready/`no_pr` preflight, multi-repo soft error), frontend
   `tsc` + `vite build`, and a Glimmung test-slot click-through (pending).
+- **Enrichment (2026-06-19, follow-up):** the page now names and links the
+  entities it talks about: a labeled identity strip (repo ↗ / branch ↗ /
+  **PR #N ↗**), and — when a slot is up — an **active-environment panel** (slot
+  name/index, URL shown + clickable, **deployed branch @ commit** from the
+  provision row, started-at) with a **stale-slot** warning when the deployed SHA
+  no longer matches the branch head. The readiness card humanizes
+  `mergeable_state`, summarizes the check rollup, and lists **failing/pending
+  check names** (from the live preflight's `failing_checks`/`pending_checks`,
+  shown only while they describe the current head). The verdict is sourced from
+  the durable watch (event-driven) and a **12s durable poll** (paused when the
+  tab is hidden) converges the `mergeable → merged` transition without a manual
+  refresh; the live preflight (mount + Refresh) supplies the check names. Backend:
+  `pr_number` + `pending_checks` added to the preflight view.
 
 ## pending-provision-backstop
 

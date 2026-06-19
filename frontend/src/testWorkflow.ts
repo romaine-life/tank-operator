@@ -106,6 +106,8 @@ export interface TestSlotPreflight {
   mergeable_state: string;
   check_state: string;
   failing_checks: string[];
+  pending_checks: string[];
+  pr_number: number;
   pr_url: string;
   head_sha: string;
   detail: string;
