@@ -518,6 +518,42 @@ func (s *Store) AppendSpawnedSession(ctx context.Context, email, parentSessionID
 	return err
 }
 
+// AppendSessionPullRequest upserts one PR ref into the session row's
+// pull_requests jsonb array, deduped by URL: any existing entry for the same PR
+// URL is dropped and the new ref appended, so the latest sighting's state wins
+// (last-arrival-wins — control actions are an append-only ledger and this is a
+// display-only projection, never load-bearing for session correctness). Matches
+// the row on the full (email, session_scope, session_id) primary key like every
+// other row writer. Bumps row_version so the snapshot/SSE catch-up re-reads the
+// row. No-op on empty inputs (a sighting without a PR URL is not retained).
+func (s *Store) AppendSessionPullRequest(ctx context.Context, email, sessionID string, ref sessionmodel.SessionPullRequestRef) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	session := strings.TrimSpace(sessionID)
+	url := strings.TrimSpace(ref.URL)
+	if normalized == "" || session == "" || url == "" {
+		return nil
+	}
+	ref.URL = url
+	raw, err := json.Marshal(ref)
+	if err != nil {
+		return fmt.Errorf("sessionregistry: marshal session pull request: %w", err)
+	}
+	const q = `
+		UPDATE sessions
+		SET pull_requests = COALESCE(
+				(SELECT jsonb_agg(elem)
+				 FROM jsonb_array_elements(COALESCE(pull_requests, '[]'::jsonb)) elem
+				 WHERE elem->>'url' <> $5),
+				'[]'::jsonb
+			) || jsonb_build_array($4::jsonb),
+			updated_at = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err = s.pool.Exec(ctx, q, normalized, s.scope, session, raw, url)
+	return err
+}
+
 func (s *Store) setJSONBColumn(ctx context.Context, column, clearColumn, email, sessionID string, state map[string]any) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
@@ -574,6 +610,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.rollout_state,
 			sessions.spoke_config,
 			sessions.spawned_sessions,
+			sessions.pull_requests,
 			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
@@ -626,27 +663,27 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		WHERE sessions.email = $1 AND sessions.session_scope = $2 AND sessions.session_id = $3
 	`
 	var (
-		mode, podName, sessionImage, requestedAt, createdAt, updatedAt string
-		status, readyAt, terminatingAt                                 string
-		name                                                           string
-		visible                                                        bool
-		sessionImageMetadata                                           []byte
+		mode, podName, sessionImage, requestedAt, createdAt, updatedAt    string
+		status, readyAt, terminatingAt                                    string
+		name                                                              string
+		visible                                                           bool
+		sessionImageMetadata                                              []byte
 		activitySummary, testState, rolloutState, spokeConfig, cloneState []byte
-		spawnedSessions                                                   []byte
+		spawnedSessions, pullRequests                                     []byte
 		parentSessionID                                                   string
 		providerRateLimitInfo                                             []byte
 		repos, capabilities                                               []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt             string
 		runtimeContextWindowSource, runtimeContextWindowAt                string
-		runtimeProviderSessionID, runtimeProviderSessionObservedAt     string
-		providerRateLimitObservedAt                                    string
-		openTarget                                                     string
-		agentAvatarID, systemAvatarID                                  string
-		runtimeContextWindowTokens, compactionCount, userMessageCount  int64
-		sidebarPosition, rowVersion                                    int64
-		bugLabelID                                                     sql.NullInt64
-		bugLabelName, bugLabelSlug                                     sql.NullString
-		bugLabelsRaw                                                   []byte
+		runtimeProviderSessionID, runtimeProviderSessionObservedAt        string
+		providerRateLimitObservedAt                                       string
+		openTarget                                                        string
+		agentAvatarID, systemAvatarID                                     string
+		runtimeContextWindowTokens, compactionCount, userMessageCount     int64
+		sidebarPosition, rowVersion                                       int64
+		bugLabelID                                                        sql.NullInt64
+		bugLabelName, bugLabelSlug                                        sql.NullString
+		bugLabelsRaw                                                      []byte
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible, &sessionImage, &sessionImageMetadata,
@@ -654,6 +691,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState, &spokeConfig,
 		&spawnedSessions,
+		&pullRequests,
 		&parentSessionID,
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
@@ -701,6 +739,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		RolloutState:                     unmarshalJSONB(rolloutState),
 		SpokeConfig:                      unmarshalJSONB(spokeConfig),
 		SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
+		PullRequests:                     sessionmodel.DecodeSessionPullRequests(pullRequests),
 		ParentSessionID:                  parentSessionID,
 		Repos:                            repos,
 		CloneState:                       unmarshalJSONB(cloneState),

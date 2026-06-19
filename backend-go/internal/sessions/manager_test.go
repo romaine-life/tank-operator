@@ -1010,6 +1010,10 @@ func (r *managerTestRegistry) AppendSpawnedSession(context.Context, string, stri
 	return nil
 }
 
+func (r *managerTestRegistry) AppendSessionPullRequest(context.Context, string, string, sessionmodel.SessionPullRequestRef) error {
+	return nil
+}
+
 func (r *managerTestRegistry) SetRuntimeConfig(_ context.Context, email, sessionID, model, effort string) error {
 	for i, record := range r.records {
 		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
@@ -1120,6 +1124,9 @@ func (upsertFailingRegistry) SetCloneState(context.Context, string, string, map[
 	return nil
 }
 func (upsertFailingRegistry) AppendSpawnedSession(context.Context, string, string, sessionmodel.SpawnedSessionRef) error {
+	return nil
+}
+func (upsertFailingRegistry) AppendSessionPullRequest(context.Context, string, string, sessionmodel.SessionPullRequestRef) error {
 	return nil
 }
 func (upsertFailingRegistry) Reorder(context.Context, string, []string) ([]string, error) {

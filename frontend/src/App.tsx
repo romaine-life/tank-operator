@@ -453,6 +453,10 @@ import {
   normalizeSpawnedSessions,
   type SpawnedSessionRef,
 } from "./spawnedSessions";
+import {
+  normalizeSessionPullRequests,
+  type SessionPullRequestRef,
+} from "./pullRequests";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -910,6 +914,11 @@ interface Session {
   // "spawned sessions" chip lists (sessions this one spawned via
   // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
   spawned_sessions?: SpawnedSessionRef[];
+  // pull_requests is the durable list of PRs this session touched, surfaced by
+  // the composer git chip / dedicated /pull-requests page. Absent/empty when
+  // none. Sourced from the durable sessions.pull_requests column, not re-derived
+  // from the capped control-action feed.
+  pull_requests?: SessionPullRequestRef[];
   // parent_session_id is the child→parent (origin) pointer that drives sidebar
   // nesting: the id of the session that spawned this one, stamped on the child
   // row at create. Absent when this session was not spawned. arrangeSessionTree
@@ -2614,6 +2623,10 @@ interface ComposerToolButtonsProps {
     latestUrl?: string;
     linkedUrl?: string;
     sessionId?: string | null;
+    // count + onOpenPage drive the primary "View all N PRs" action that opens
+    // the dedicated /pull-requests page (the complete, durable list).
+    count?: number;
+    onOpenPage?: () => void;
   };
   slash: {
     disabled?: boolean;
@@ -2643,6 +2656,8 @@ function PullRequestMenuButton({
   latestUrl,
   linkedUrl,
   sessionId,
+  count,
+  onOpenPage,
 }: ComposerToolButtonsProps["pullRequest"]) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
@@ -2740,8 +2755,14 @@ function PullRequestMenuButton({
   const latest = latestUrl?.trim() ?? "";
   const linked = linkedUrl?.trim() ?? "";
   const showLinkedDistinct = Boolean(linked) && linked !== latest;
-  const hasLinks = Boolean(latest || linked);
-  const title = hasLinks ? "Pull request" : "No pull request linked yet";
+  const prCount = typeof count === "number" ? count : 0;
+  const hasPage = Boolean(onOpenPage && prCount > 0);
+  const hasLinks = Boolean(latest || linked || hasPage);
+  const title = hasLinks
+    ? prCount > 1
+      ? `${prCount} pull requests`
+      : "Pull request"
+    : "No pull request linked yet";
 
   return (
     <span ref={ref} className="run-pr-menu">
@@ -2772,7 +2793,28 @@ function PullRequestMenuButton({
                 : { visibility: "hidden" }
             }
           >
-            <div className="run-slash-palette-label">Pull request</div>
+            <div className="run-slash-palette-label">
+              {prCount > 1 ? `Pull requests (${prCount})` : "Pull request"}
+            </div>
+            {hasPage ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="run-pr-menu-item"
+                onClick={() => {
+                  setOpen(false);
+                  onOpenPage?.();
+                }}
+              >
+                <span className="run-pr-menu-name">
+                  {prCount > 1 ? `View all ${prCount} PRs` : "View pull request"}
+                </span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </button>
+            ) : null}
             {latest ? (
               <a
                 role="menuitem"
@@ -9207,11 +9249,14 @@ function summarizeGitAction(action: string | undefined): string {
   }
 }
 
+// buildAgentGitActivity derives the COMMIT list for the /pull-requests page from
+// the recent control-action feed. PRs are NOT derived here anymore — they come
+// from the durable sessions.pull_requests projection (see pullRequestsFromDurable)
+// so the complete set survives the feed's newest-N cap. A commit list is
+// inherently recent-activity, so the capped feed remains the right source for it.
 function buildAgentGitActivity(entries: TranscriptEntry[]): {
-  pullRequests: AgentGitActivityItem[];
   commits: AgentGitActivityItem[];
 } {
-  const pullRequestsByKey = new Map<string, AgentGitActivityItem>();
   const commits: AgentGitActivityItem[] = [];
   for (const entry of entries) {
     if (!isControlActionEntry(entry)) continue;
@@ -9220,36 +9265,6 @@ function buildAgentGitActivity(entries: TranscriptEntry[]): {
     const href = entry.controlActionTarget ?? row?.target_ref ?? "";
     const repo = entry.controlActionRepo;
     const createdAt = entry.startedAt ?? entry.time;
-    if (
-      action?.startsWith("github.pull_request.") &&
-      href.includes("github.com/") &&
-      href.includes("/pull/")
-    ) {
-      const number =
-        entry.controlActionPrNumber ??
-        (typeof row?.pr_number === "number" ? row.pr_number : undefined);
-      const key = repo && number ? `${repo}#${number}` : href;
-      const state =
-        typeof row?.status === "string" && row.status !== "succeeded"
-          ? row.status
-          : payloadField(row?.payload, "mergeable_state");
-      const item: AgentGitActivityItem = {
-        id: `pr-${key}`,
-        href,
-        repo,
-        label: number ? `PR #${number}` : "Pull request",
-        detail: [repo, summarizeGitAction(action), state, formatToolFullTime(createdAt)]
-          .filter(Boolean)
-          .join(" / "),
-        action,
-        createdAt,
-      };
-      const existing = pullRequestsByKey.get(key);
-      if (!existing || (createdAt ?? "") > (existing.createdAt ?? "")) {
-        pullRequestsByKey.set(key, item);
-      }
-      continue;
-    }
     if (
       action === "github.commit.push" ||
       action === "github.commit.write" ||
@@ -9280,9 +9295,49 @@ function buildAgentGitActivity(entries: TranscriptEntry[]): {
   const byNewest = (a: AgentGitActivityItem, b: AgentGitActivityItem) =>
     (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
   return {
-    pullRequests: Array.from(pullRequestsByKey.values()).sort(byNewest),
     commits: commits.sort(byNewest),
   };
+}
+
+// pullRequestsFromDurable maps the durable sessions.pull_requests projection
+// into the AgentGitActivityItem shape the composer git chip and the dedicated
+// /pull-requests page render. This is the COMPLETE list — the backend records a
+// ref for every github.pull_request.* sighting onto the session row — replacing
+// the old in-browser re-derivation from the newest-100 control-action feed where
+// the oldest .open rows silently dropped on busy sessions.
+function pullRequestsFromDurable(
+  refs: SessionPullRequestRef[] | undefined,
+): AgentGitActivityItem[] {
+  if (!refs || refs.length === 0) return [];
+  const items = refs.flatMap((pr) => {
+    const url = pr.url?.trim();
+    if (!url) return [];
+    const number = typeof pr.number === "number" ? pr.number : undefined;
+    const key = pr.repo && number ? `${pr.repo}#${number}` : url;
+    const state =
+      pr.state || (pr.status && pr.status !== "succeeded" ? pr.status : "");
+    return [
+      {
+        id: `pr-${key}`,
+        href: url,
+        repo: pr.repo,
+        label: number ? `PR #${number}` : "Pull request",
+        detail: [
+          pr.repo,
+          summarizeGitAction(pr.action),
+          state,
+          formatToolFullTime(pr.updated_at),
+        ]
+          .filter(Boolean)
+          .join(" / "),
+        action: pr.action,
+        createdAt: pr.updated_at,
+      },
+    ];
+  });
+  return items.sort((a, b) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
 }
 
 function isShellToolEntry(entry: TranscriptEntry): boolean {
@@ -23251,8 +23306,13 @@ function ChatPane({
     [backgroundTaskLedgerEntries],
   );
   const agentGitActivity = useMemo(
-    () => buildAgentGitActivity(controlActionEntries),
-    [controlActionEntries],
+    () => ({
+      // PRs come from the durable sessions.pull_requests projection (complete and
+      // cap-proof); commits stay derived from the recent control-action feed.
+      pullRequests: pullRequestsFromDurable(session.pull_requests),
+      commits: buildAgentGitActivity(controlActionEntries).commits,
+    }),
+    [session.pull_requests, controlActionEntries],
   );
   const runningShellInvocationEntries = useMemo(
     () => renderedEntries.filter(isRunningShellInvocationEntry),
@@ -24260,8 +24320,10 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  // The composer pull-request menu surfaces two links separately: the latest PR
-  // the agent opened (derived from control-action git activity) and the PR
+  // The composer pull-request menu surfaces the PRs this session touched: a
+  // primary "View all N PRs" entry opening the /pull-requests page, the latest
+  // PR the agent opened (now from the durable sessions.pull_requests projection,
+  // not a re-derivation of the capped control-action feed), and the PR
   // explicitly linked to the session via set_pull_request_link (test/rollout).
   const latestPullRequestURL = agentGitActivity.pullRequests[0]?.href ?? "";
   const linkedPullRequestURL = testState?.pull_request_url?.trim() ?? "";
@@ -26329,6 +26391,8 @@ function ChatPane({
                   latestUrl: latestPullRequestURL,
                   linkedUrl: linkedPullRequestURL,
                   sessionId: session.id,
+                  count: agentGitActivity.pullRequests.length,
+                  onOpenPage: () => toggleRunTab("pull-requests"),
                 }}
                 slash={{
                   title: "Show slash commands",
@@ -28162,6 +28226,7 @@ function AuthenticatedApp() {
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
       spoke_config: row.spoke_config,
       spawned_sessions: row.spawned_sessions,
+      pull_requests: row.pull_requests,
       parent_session_id: row.parent_session_id,
       sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
@@ -28235,6 +28300,7 @@ function AuthenticatedApp() {
           ? (raw.spoke_config as Record<string, unknown>)
           : undefined,
       spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
+      pull_requests: normalizeSessionPullRequests(raw.pull_requests),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities)

@@ -46,6 +46,10 @@ import {
   normalizeSpawnedSessions,
   type SpawnedSessionRef,
 } from "./spawnedSessions";
+import {
+  normalizeSessionPullRequests,
+  type SessionPullRequestRef,
+} from "./pullRequests";
 
 export interface SessionBugLabel {
   id?: number;
@@ -90,6 +94,11 @@ export interface SessionRow {
   // "spawned sessions" chip lists. Omitted/empty when this session spawned
   // nothing. Normalized to clean refs at the store boundary.
   spawned_sessions?: SpawnedSessionRef[];
+  // pull_requests is the durable list of PRs this session touched, rendered by
+  // the composer git chip / dedicated /pull-requests page. Omitted/empty when
+  // none. Normalized (deduped by url server-side) at the store boundary so the
+  // chip never re-derives PRs from the capped control-action feed.
+  pull_requests?: SessionPullRequestRef[];
   // parent_session_id is the child→parent (origin) pointer that drives sidebar
   // nesting: the id of the session that spawned this one, stamped on the child
   // row at create. Omitted/empty when this session was not spawned. Because it
@@ -558,6 +567,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
         ? (rowRaw.spoke_config as Record<string, unknown>)
         : undefined,
       spawned_sessions: normalizeSpawnedSessions(rowRaw.spawned_sessions),
+      pull_requests: normalizeSessionPullRequests(rowRaw.pull_requests),
       parent_session_id:
         typeof rowRaw.parent_session_id === "string" &&
         rowRaw.parent_session_id !== ""
