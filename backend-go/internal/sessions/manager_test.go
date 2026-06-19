@@ -998,6 +998,10 @@ func (r *managerTestRegistry) SetRolloutState(context.Context, string, string, m
 	return nil
 }
 
+func (r *managerTestRegistry) SetSpokeConfig(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
 func (r *managerTestRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
 	return nil
 }
@@ -1097,6 +1101,9 @@ func (upsertFailingRegistry) SetTestState(context.Context, string, string, map[s
 	return nil
 }
 func (upsertFailingRegistry) SetRolloutState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+func (upsertFailingRegistry) SetSpokeConfig(context.Context, string, string, map[string]any) error {
 	return nil
 }
 func (upsertFailingRegistry) SetCloneState(context.Context, string, string, map[string]any) error {

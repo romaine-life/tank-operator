@@ -570,6 +570,43 @@ var spawnedSessionLinkTotal = promauto.NewCounterVec(
 	[]string{"result"},
 )
 
+// orchestrateLaunchTotal counts attempts to turn a GUI chat session into a
+// spoke-fleet hub via POST /api/sessions/{id}/orchestrate, by bounded result.
+// "ok" is a launched hub; the rejection labels make the human-owner gate,
+// SDK-chat-hub gate, and spoke-config validation contract visible, and
+// "grant_error"/"kickoff_error"/"store_error"/"store_unavailable" surface the
+// partial-failure modes of the persist→self-grant→kickoff sequence.
+var orchestrateLaunchTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_orchestrate_launch_total",
+		Help: "Orchestrate hub launch attempts, labeled by bounded result.",
+	},
+	[]string{"result"},
+)
+
+func recordOrchestrateLaunch(result string) {
+	orchestrateLaunchTotal.WithLabelValues(orchestrateLaunchResultLabel(result)).Inc()
+}
+
+// orchestrateLaunchResultLabel bounds the result label cardinality to the known
+// outcomes so an unexpected string can't explode the time series.
+func orchestrateLaunchResultLabel(result string) string {
+	switch result {
+	case "ok",
+		"service_rejected",
+		"not_owner",
+		"not_hub_mode",
+		"invalid_spoke_config",
+		"store_unavailable",
+		"store_error",
+		"grant_error",
+		"kickoff_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
 // pinnedReposUpdateTotal counts authenticated writes to the durable per-user
 // repo pin list. The bounded result label makes user-trust failures visible:
 // invalid means the SPA/server slug contract drifted, unavailable means a
@@ -2381,7 +2418,7 @@ func recordSessionEventPersistTransientFailure() {
 
 func recordSessionRunConfigRejected(surface, provider, reason string) {
 	switch surface {
-	case "create", "turn", "runtime_config", "run_config_update":
+	case "create", "turn", "runtime_config", "run_config_update", "orchestrate":
 	default:
 		surface = "other"
 	}

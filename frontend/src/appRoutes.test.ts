@@ -336,6 +336,32 @@ test("turn routes carry an optional page ordinal", () => {
   expect(buildSessionRouteUrl(current, "s-1", "turns", null, null, 2)).toBe("https://tank.example.test/sessions/s-1");
 });
 
+test("orchestrate route parses and builds round-trip", () => {
+  // /sessions/{id}/orchestrate is a simple tab-level subroute with no extra id segment.
+  expect(readSessionRouteFromPathname("/sessions/s-1/orchestrate")).toEqual({
+    sessionId: "s-1",
+    tab: "orchestrate",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    filePath: null,
+    fileLine: null,
+    breakGlassRequestId: null,
+    testSlotModelRequestId: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // An extra segment after /orchestrate is not a valid route.
+  expect(readSessionRouteFromPathname("/sessions/s-1/orchestrate/extra")).toBe(null);
+  // URL builder emits the correct path.
+  const current = "https://tank.example.test/sessions/old";
+  expect(buildSessionRouteUrl(current, "s 1", "orchestrate")).toBe(
+    "https://tank.example.test/sessions/s%201/orchestrate",
+  );
+});
+
 test("home splash route parses only the new-session splash", () => {
   expect(readHomeRouteFromPathname("/new")).toEqual({
         tab: "chat",

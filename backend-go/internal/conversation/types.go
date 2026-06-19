@@ -69,6 +69,11 @@ const (
 	// its changes against the now-running test slot. Provisioning itself stays
 	// zero-LLM; this source labels the post-ready hand-back to the agent.
 	TurnSubmittedSourceTestSlotDrive TurnSubmittedSource = "test-slot-drive"
+	// TurnSubmittedSourceOrchestrateLaunch marks the backend-owned kickoff turn
+	// the orchestrate launch endpoint enqueues when a GUI chat session is turned
+	// into a spoke-fleet hub: it carries the spoke config, the hub's own id (for
+	// ping-backs), and the break-glass status into the /orchestrate skill.
+	TurnSubmittedSourceOrchestrateLaunch TurnSubmittedSource = "orchestrate-launch"
 )
 
 type Visibility string
@@ -908,7 +913,8 @@ func validTurnSubmittedSource(source TurnSubmittedSource) bool {
 		TurnSubmittedSourceLaunchDispatch,
 		TurnSubmittedSourceBreakGlassApproval,
 		TurnSubmittedSourceTestSlotModelApproval,
-		TurnSubmittedSourceTestSlotDrive:
+		TurnSubmittedSourceTestSlotDrive,
+		TurnSubmittedSourceOrchestrateLaunch:
 		return true
 	default:
 		return false

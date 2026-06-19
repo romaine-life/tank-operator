@@ -19,7 +19,8 @@ export type SessionRouteTab =
   | "test-slot-model"
   | "test-slot"
   | "files"
-  | "background";
+  | "background"
+  | "orchestrate";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help" | "cluster";
 
@@ -371,6 +372,22 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       ...defaultSettingsRoute,
     };
   }
+  if (parts[2] === "orchestrate" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "orchestrate",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
   return null;
 }
 
@@ -448,6 +465,8 @@ export function buildSessionRouteUrl(
     suffix = "/test-slot";
   } else if (tab === "background") {
     suffix = "/background";
+  } else if (tab === "orchestrate") {
+    suffix = "/orchestrate";
   }
   url.pathname = `/sessions/${encodedId}${suffix}`;
   url.search = "";

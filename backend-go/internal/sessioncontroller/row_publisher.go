@@ -138,6 +138,7 @@ type rowWireShape struct {
 	ActivitySummary map[string]any `json:"activity_summary,omitempty"`
 	TestState       map[string]any `json:"test_state,omitempty"`
 	RolloutState    map[string]any `json:"rollout_state,omitempty"`
+	SpokeConfig     map[string]any `json:"spoke_config,omitempty"`
 	// SpawnedSessions: omit-when-empty parent→child lineage for the
 	// session-bar "spawned sessions" chip. Mirrors the snapshot Info field.
 	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
@@ -215,6 +216,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			ActivitySummary:                  activity,
 			TestState:                        record.TestState,
 			RolloutState:                     record.RolloutState,
+			SpokeConfig:                      record.SpokeConfig,
 			SpawnedSessions:                  record.SpawnedSessions,
 			ParentSessionID:                  record.ParentSessionID,
 			Repos:                            repos,

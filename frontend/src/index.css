@@ -1790,15 +1790,23 @@ button:disabled {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
+  gap: var(--nest-row-gap);
   /* Spawned-sub-session nesting (one indent tier). --nest-indent is the gutter
      the nested tab's left edge steps in by; the connector is painted into it.
-     --nest-line-x is the vertical guide's x inside that gutter; --nest-gap-bridge
-     overshoots the 2px flex gap so the guide reads continuous across rows. */
+     --nest-line-x is the vertical guide's x inside that gutter. The guide is a
+     continuous, opaque spine: each nested row paints its own row height plus the
+     single row gap ABOVE it (--nest-row-gap), so the segments butt-join at each
+     neighbor's bottom edge — continuous down the group, never overshooting onto
+     a card and never double-painting a seam. --nest-row-gap MUST stay equal to
+     the row flex gap above (it IS that gap) for the butt-join to land exactly;
+     binding both to one token is what keeps the two from drifting. The prior
+     --nest-gap-bridge:4px overshot the real 2px gap by 2px, which is exactly
+     what bled the line onto the card above and double-painted (brightened) the
+     seam between two translucent segments. */
   --nest-indent: 22px;
   --nest-line-x: 9px;
-  --nest-line-color: rgba(255, 255, 255, 0.22);
-  --nest-gap-bridge: 4px;
+  --nest-line-color: var(--gray-700);
+  --nest-row-gap: 0.125rem;
 }
 
 /* Chat-row geometry from ChatItem.svelte:448 — px-[11px] py-[6px], rounded-xl.
@@ -1933,9 +1941,12 @@ button:disabled {
    the row card). ::before is the vertical guide; ::after is the horizontal tick
    pointing at the row. The last child (is-nested-last) cuts the vertical at the
    tick so it reads as an elbow (└); earlier children keep a full-height vertical
-   (tee, ├). The vertical overshoots the row box by --nest-gap-bridge top (and,
-   for non-last rows, the box already reaches the next row) so the guide looks
-   continuous down the group. */
+   (tee, ├). Each vertical spans its own row height plus the one row gap ABOVE it
+   (top: -gap; height: 100% + gap), so it reaches up to the previous row's bottom
+   edge and no further. The gutter is empty margin space (no card sits at the
+   nested row's x), and bridging only upward by exactly one gap means each seam
+   is painted once, by the upper segment, and nothing lands on a card. The
+   segments butt-join into one continuous spine. */
 .session-nest-connector {
   position: absolute;
   left: calc(-1 * var(--nest-indent));
@@ -1950,15 +1961,14 @@ button:disabled {
   content: "";
   position: absolute;
   left: var(--nest-line-x);
-  top: calc(-1 * var(--nest-gap-bridge));
-  width: 1.5px;
-  height: calc(100% + var(--nest-gap-bridge));
+  top: calc(-1 * var(--nest-row-gap));
+  width: 1px;
+  height: calc(100% + var(--nest-row-gap));
   background: var(--nest-line-color);
-  border-radius: 1px;
 }
 
 .sessions li.is-nested-last .session-nest-connector::before {
-  height: calc(50% + var(--nest-gap-bridge));
+  height: calc(50% + var(--nest-row-gap));
 }
 
 .session-nest-connector::after {
@@ -1967,9 +1977,8 @@ button:disabled {
   left: var(--nest-line-x);
   top: 50%;
   width: calc(var(--nest-indent) - var(--nest-line-x) - 2px);
-  height: 1.5px;
+  height: 1px;
   background: var(--nest-line-color);
-  border-radius: 1px;
 }
 
 /* Collapsed sidebar is an icon rail — no room for an indent tier or guides.

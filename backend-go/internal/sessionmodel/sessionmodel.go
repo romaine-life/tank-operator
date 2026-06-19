@@ -218,6 +218,9 @@ type SessionRecord struct {
 	ActivitySummary []byte         // JSON-marshaled; nil when no chat activity yet
 	TestState       map[string]any // jsonb column, materialized for the handler layer
 	RolloutState    map[string]any // jsonb column
+	// SpokeConfig is the hub's spoke-fleet launch config, set by the orchestrate
+	// endpoint. NULL/nil until the orchestrate endpoint writes it. jsonb column.
+	SpokeConfig     map[string]any // jsonb column
 
 	// SpawnedSessions is the durable parent→child lineage surfaced by the
 	// session-bar "spawned sessions" chip: one ref per session this
