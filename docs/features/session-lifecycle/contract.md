@@ -7,8 +7,11 @@ terminating sessions, including the session pod boundary.
 
 A Tank session is a user-owned pod-backed workspace with explicit lifecycle
 state. The product should make the lifecycle legible without pretending that a
-dead pod can be resurrected or that a request succeeded before durable state
-confirms it.
+dead pod can be revived in place or that a request succeeded before durable
+state confirms it. Pod death is terminal for the running session; a user may
+nonetheless start a **new** session that resumes a dead session's
+*conversation* from a durably-captured transcript (see "Conversation
+resurrection" below) — that is a new lifecycle, not a revival of the old pod.
 
 ## Sources Of Truth
 
@@ -45,6 +48,14 @@ confirms it.
   inside the durability boundary while the same session pod is alive.
 - Session-pod death is outside the messaging durability boundary. The session
   is terminal because the `emptyDir` workspace is gone.
+- **Conversation resurrection.** The session's *conversation* may be captured
+  durably (the Claude SDK transcript shipped off-pod to object storage) and
+  re-seeded into a NEW session. Resurrection creates a new session row + pod,
+  re-clones the same repos, and the runner `resume`s the captured transcript;
+  it never revives the dead pod and never silently continues across the
+  pod-death boundary. The workspace is still gone — only the conversation is
+  restored. Resurrection failures (no captured transcript, SDK-version gap)
+  start the new session fresh rather than producing a corrupt resume.
 - Failed create, load, stop, and delete operations must leave visible failure
   state and durable or observable evidence.
 - Repeated actions should be idempotent or return the already-terminal durable

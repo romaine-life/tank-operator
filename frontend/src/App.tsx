@@ -8335,6 +8335,7 @@ function SessionTabMenu({
   isClosing,
   readOnly,
   onClose,
+  onResurrect,
   onSaveCredentials,
   saveDisabled,
 }: {
@@ -8342,6 +8343,7 @@ function SessionTabMenu({
   isClosing: boolean;
   readOnly: boolean;
   onClose: () => void;
+  onResurrect?: () => void;
   onSaveCredentials?: () => void;
   saveDisabled?: boolean;
 }) {
@@ -8396,6 +8398,15 @@ function SessionTabMenu({
           >
             <SaveIcon className="run-tab-more-item-icon" />
             <span>Save credentials</span>
+          </DropdownMenuItem>
+        )}
+        {onResurrect && session.status !== "Active" && (
+          <DropdownMenuItem
+            className="run-tab-more-item"
+            onSelect={onResurrect}
+            title="create a new session that resumes this conversation on a fresh pod"
+          >
+            <span>Resurrect session</span>
           </DropdownMenuItem>
         )}
         <DropdownMenuItem
@@ -23936,6 +23947,30 @@ function AuthenticatedApp() {
     }
   }
 
+  async function resurrectSession(id: string) {
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/sessions/${id}/resurrect`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        let detail = `resurrect failed: ${res.status}`;
+        try {
+          const body = (await res.json()) as { detail?: string };
+          if (body?.detail) detail = body.detail;
+        } catch {
+          /* non-JSON error body */
+        }
+        throw new Error(detail);
+      }
+      const data = (await res.json()) as { session_id?: string };
+      await refresh();
+      if (data.session_id) setActive(data.session_id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function saveCredentials(id: string) {
     setBusy(true);
     setError(null);
@@ -24306,6 +24341,7 @@ function AuthenticatedApp() {
                       isClosing={isClosing}
                       readOnly={readOnlySessionView}
                       onClose={() => deleteSession(s.id)}
+                      onResurrect={() => resurrectSession(s.id)}
                       onSaveCredentials={
                         CONFIG_MODES.has(s.mode)
                           ? () => saveCredentials(s.id)

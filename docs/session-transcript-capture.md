@@ -1,6 +1,8 @@
 # Session Transcript Capture & Conversation Resurrection
 
-Status: **Stage 1 (capture) implemented**; Stages 2–4 proposed
+Status: **Stages 1–3 implemented** (capture, resurrection, contract
+amendments); Stage 4 (Codex parity) + durable `resurrected_from` lineage are
+follow-ups
 Owner: TBD
 Affected contracts: [Session Lifecycle](features/session-lifecycle/contract.md),
 [Agent Runners](features/agent-runners/contract.md),

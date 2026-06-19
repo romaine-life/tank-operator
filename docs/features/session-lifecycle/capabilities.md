@@ -313,8 +313,9 @@ evidence bar.
 
 ## Conversation resurrection (transcript capture)
 
-Status: in progress (Stage 1 — capture — implemented; Stage 2 — restore — not
-yet built)
+Status: in progress (Stages 1–3 implemented: capture, resurrection
+endpoints/runner-resume/SPA trigger, and the contract amendments; Codex parity
+and a durable `resurrected_from` lineage column are deliberate follow-ups)
 
 Intent:
 Make a session's *conversation* survivable across pod death. Session pods are
