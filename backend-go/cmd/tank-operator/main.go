@@ -1214,6 +1214,9 @@ func (r *stubSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map
 func (r *stubSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
+func (r *stubSessionRegistry) SetSpokeConfig(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
 func (r *stubSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }

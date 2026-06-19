@@ -102,6 +102,7 @@ func debugRowJSON(record sessionmodel.SessionRecord) map[string]any {
 		"has_clone_state":       record.CloneState != nil,
 		"has_test_state":        record.TestState != nil,
 		"has_rollout":           record.RolloutState != nil,
+		"has_spoke_config":      record.SpokeConfig != nil,
 	}
 }
 

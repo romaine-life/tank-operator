@@ -61,6 +61,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sessions.activity_summary,
 			sessions.test_state,
 			sessions.rollout_state,
+			sessions.spoke_config,
 			sessions.spawned_sessions,
 			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
@@ -128,7 +129,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			name                                                                      string
 			visible                                                                   bool
 			sessionImageMetadata                                                      []byte
-			activitySummary, testState, rolloutState, cloneState                      []byte
+			activitySummary, testState, rolloutState, spokeConfig, cloneState          []byte
 			spawnedSessions                                                           []byte
 			parentSessionID                                                           string
 			providerRateLimitInfo                                                     []byte
@@ -150,7 +151,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&sessionImage, &sessionImageMetadata,
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
-			&activitySummary, &testState, &rolloutState,
+			&activitySummary, &testState, &rolloutState, &spokeConfig,
 			&spawnedSessions,
 			&parentSessionID,
 			&repos, &cloneState, &capabilities, &model, &effort,
@@ -193,6 +194,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			ActivitySummary:                  activitySummary,
 			TestState:                        unmarshalJSONB(testState),
 			RolloutState:                     unmarshalJSONB(rolloutState),
+			SpokeConfig:                      unmarshalJSONB(spokeConfig),
 			SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
 			ParentSessionID:                  parentSessionID,
 			Repos:                            repos,

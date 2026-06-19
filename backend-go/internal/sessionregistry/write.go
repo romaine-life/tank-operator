@@ -436,6 +436,13 @@ func (s *Store) SetRolloutState(ctx context.Context, email, sessionID string, st
 	return s.setJSONBColumn(ctx, "rollout_state", clearColumn, email, sessionID, state)
 }
 
+// SetSpokeConfig replaces the row's spoke_config jsonb — the hub's
+// spoke-fleet launch config persisted by the orchestrate endpoint. nil
+// clears the column. Bumps row_version so the snapshot/SSE re-reads.
+func (s *Store) SetSpokeConfig(ctx context.Context, email, sessionID string, config map[string]any) error {
+	return s.setJSONBColumn(ctx, "spoke_config", "", email, sessionID, config)
+}
+
 func skillStateActive(state map[string]any) bool {
 	active, _ := state["active"].(bool)
 	return active
@@ -543,6 +550,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.activity_summary,
 			sessions.test_state,
 			sessions.rollout_state,
+			sessions.spoke_config,
 			sessions.spawned_sessions,
 			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
@@ -601,13 +609,13 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		name                                                           string
 		visible                                                        bool
 		sessionImageMetadata                                           []byte
-		activitySummary, testState, rolloutState, cloneState           []byte
-		spawnedSessions                                                []byte
-		parentSessionID                                                string
-		providerRateLimitInfo                                          []byte
-		repos, capabilities                                            []string
-		model, effort, runtimeModel, runtimeEffort, runtimeAt          string
-		runtimeContextWindowSource, runtimeContextWindowAt             string
+		activitySummary, testState, rolloutState, spokeConfig, cloneState []byte
+		spawnedSessions                                                   []byte
+		parentSessionID                                                   string
+		providerRateLimitInfo                                             []byte
+		repos, capabilities                                               []string
+		model, effort, runtimeModel, runtimeEffort, runtimeAt             string
+		runtimeContextWindowSource, runtimeContextWindowAt                string
 		runtimeProviderSessionID, runtimeProviderSessionObservedAt     string
 		providerRateLimitObservedAt                                    string
 		openTarget                                                     string
@@ -622,7 +630,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&mode, &podName, &name, &visible, &sessionImage, &sessionImageMetadata,
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
-		&activitySummary, &testState, &rolloutState,
+		&activitySummary, &testState, &rolloutState, &spokeConfig,
 		&spawnedSessions,
 		&parentSessionID,
 		&repos, &cloneState, &capabilities, &model, &effort,
@@ -669,6 +677,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		ActivitySummary:                  activitySummary,
 		TestState:                        unmarshalJSONB(testState),
 		RolloutState:                     unmarshalJSONB(rolloutState),
+		SpokeConfig:                      unmarshalJSONB(spokeConfig),
 		SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
 		ParentSessionID:                  parentSessionID,
 		Repos:                            repos,
