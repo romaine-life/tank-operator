@@ -170,6 +170,14 @@ All metric names are prefixed `tank_`. The full namespace:
   `forbidden`, `store_error`, `not_configured`. `empty` is its own
   label so a wave of misdirected lookups (wrong scope, wrong id) is
   visible without grepping the audit slog line.
+- `tank_admin_data_browser_reads_total{surface,result}` — admin reads of
+  the read-only database browser (`GET /api/admin/data/tables` and
+  `/api/admin/data/tables/{table}/rows` — the in-app, SQL-free counterpart to
+  the service-principal diagnostic SQL path). `surface` is `table_list` |
+  `rows`; bounded `result` labels: `ok`, `empty`, `bad_request`, `forbidden`,
+  `not_found`, `error`, `not_configured`. The browsed table name is kept off
+  the metric label (cardinality) and on the per-call audit slog line so
+  who-read-what stays answerable without bloating series.
 - `tank_admin_debug_conversation_read_state_reads_total{result}` —
   admin reads of `GET /api/debug/conversation-read-state` (the
   per-session, per-owner read-cursor + activity-summary diagnostic

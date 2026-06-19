@@ -50,7 +50,10 @@ type appServer struct {
 	avatarImages        avatarassets.ImageStore
 	avatarUploads       avataruploads.Store
 	pgPool              *pgxpool.Pool
-	sessionBus          sessionCommandBus
+	// dataBrowser backs the admin-only read-only DB browser. nil in stub mode
+	// (no pgPool); handlers return 503 rather than pretend to browse.
+	dataBrowser dataBrowserReader
+	sessionBus  sessionCommandBus
 	// rowWriter is the shared session-row transition writer (same instance
 	// the K8s watch and chat-activity emitter use). The internal
 	// provider-fatal endpoint routes runner-reported agent-process death
@@ -428,6 +431,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
 	mux.HandleFunc("GET /api/admin/break-glass-requests", s.handleAdminBreakGlassRequests)
+	// Admin-only, read-only database browser: a table directory plus keyset
+	// pages of one table's rows. No caller SQL; redaction + bounds live in
+	// internal/pgstore.DataBrowser.
+	mux.HandleFunc("GET /api/admin/data/tables", s.handleAdminDataTables)
+	mux.HandleFunc("GET /api/admin/data/tables/{table}/rows", s.handleAdminDataTableRows)
 	// Admin-only durable support surface for avatar upload failures. The
 	// form error returns attempt_id; this endpoint turns that reference into
 	// a curl-able diagnosis without browser devtools.

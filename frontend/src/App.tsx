@@ -68,6 +68,7 @@ import {
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
 import { OrchestrationsDashboard } from "./OrchestrationsDashboard";
+import { AdminDataBrowser } from "./AdminDataBrowser";
 import { OrchestratePanel } from "./OrchestratePanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
@@ -133,6 +134,7 @@ import {
   Code2Icon,
   CoinsIcon,
   CopyIcon,
+  DatabaseIcon,
   EllipsisVerticalIcon,
   FileDiffIcon,
   FileIcon,
@@ -17495,7 +17497,8 @@ function RunSettingsPanel({
       adminView === "orchestrations" ||
       adminView === "report" ||
       adminView === "hidden-transcripts" ||
-      adminView === "observability")
+      adminView === "observability" ||
+      adminView === "data")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
   const adminObservabilityAttention = observabilityAttentionStatus(
@@ -17684,6 +17687,23 @@ function RunSettingsPanel({
               onRefresh={adminControls.onRefreshVersion}
             />
           </>
+        ) : adminView === "data" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Database</h2>
+              </div>
+            </section>
+            <AdminDataBrowser />
+          </>
         ) : (
           <>
             <section className="run-settings-section">
@@ -17737,6 +17757,20 @@ function RunSettingsPanel({
                   {adminControls.observability.summary?.status ??
                     (adminControls.observability.error ? "error" : "Open")}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "data")}
+              >
+                <span className="run-settings-link-label">
+                  <DatabaseIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Database</span>
+                </span>
+                <span className="run-settings-scope-value">Browse</span>
               </button>
               <button
                 type="button"

@@ -671,6 +671,11 @@ func main() {
 	if pendingLaunchStore != nil {
 		srv.pendingLaunch = pendingLaunchStore
 	}
+	// Admin read-only DB browser. Only wired when a real pool exists; in stub
+	// mode the field stays a true nil interface and the handlers return 503.
+	if pgPool != nil {
+		srv.dataBrowser = pgstore.NewDataBrowser(pgPool)
+	}
 	// Same typed-nil-interface guard for the durable pending-provision backstop.
 	if pendingTestProvisionStore != nil {
 		srv.pendingTestProvisions = pendingTestProvisionStore
