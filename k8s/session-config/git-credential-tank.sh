@@ -71,20 +71,37 @@ if [ "$restricted" = "true" ]; then
   # mints the App's FULL permission set (full=true) and audits the use, so
   # `git push`/PR writes work automatically while the grant is live. No
   # qualifying grant -> {"active":false} and we keep the read-only default.
-  # Short timeout: break-glass elevation is optional, so if the lookup is slow
-  # we fall back to the read-only mint fast rather than stall git.
+  #
+  # FAIL LOUD, never silent: the mint endpoint answers `{"active":true,"token":…}`
+  # (elevate) or `{"active":false}` (genuine no-grant). Anything else — a JSON-RPC
+  # error like `{"error":{"code":-32600,...}}` (the symptom when the mcp-auth-proxy
+  # sidecar predates the /mint-git-token route and the POST falls through to the
+  # MCP catch-all), an HTTP error, a timeout, or any unrecognized shape — is
+  # reported to stderr rather than silently collapsed to read-only. The silent
+  # downgrade is what made the :9999 sidecar-skew regression undiagnosable, so it
+  # is part of the bug, not an acceptable fallback.
   bg_url="${TANK_BREAK_GLASS_MINT_URL:-http://127.0.0.1:9999/mint-git-token}"
-  bg_token="$(curl -sS -m 3 \
+  # Capture body and HTTP status together; the cold full-mint path does a Tank
+  # grant lookup + GitHub App mint, so allow headroom rather than a tight timeout
+  # that would masquerade as "no grant".
+  bg_raw="$(curl -sS -m 8 -w 'HTTPSTATUS:%{http_code}' \
     -H "Authorization: Bearer ${auth_tok}" \
     -H "Content-Type: application/json" \
     -X POST "$bg_url" \
-    -d "$(printf '{"repos":["%s"]}' "$repo")" 2>/dev/null \
-    | jq -r 'select(.active==true) | .token // empty' 2>/dev/null \
-    | head -n1 || true)"
+    -d "$(printf '{"repos":["%s"]}' "$repo")" 2>/dev/null || printf 'HTTPSTATUS:000')"
+  bg_code="${bg_raw##*HTTPSTATUS:}"
+  bg_body="${bg_raw%HTTPSTATUS:*}"
+  bg_token="$(printf '%s' "$bg_body" | jq -r 'select(.active==true) | .token // empty' 2>/dev/null | head -n1 || true)"
   if [ -n "$bg_token" ]; then
     printf 'username=x-access-token\n'
     printf 'password=%s\n' "$bg_token"
     exit 0
+  fi
+  # No elevation token. Only a clean `{"active":false}` over HTTP 200 is the
+  # expected, quiet no-grant case; everything else is surfaced loudly.
+  if [ "$bg_code" != "200" ] || ! printf '%s' "$bg_body" | jq -e '.active == false' >/dev/null 2>&1; then
+    printf 'tank(git-credential): break-glass elevation FAILED — POST %s returned an unexpected response (HTTP %s); falling back to a READ-ONLY token. If an active break-glass grant exists, git pushes/PR writes WILL fail. Most likely the in-pod mcp-auth-proxy sidecar predates the /mint-git-token route (image/version skew) or the break-glass server errored. Response: %.300s\n' \
+      "$bg_url" "$bg_code" "$bg_body" >&2
   fi
   args="$(printf '{"repos":["%s"],"write":false,"workflows":false,"full":false}' "$repo")"
 else

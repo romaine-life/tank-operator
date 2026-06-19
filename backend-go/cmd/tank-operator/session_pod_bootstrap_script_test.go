@@ -600,6 +600,39 @@ func TestGitCredentialTankHelperBreakGlassElevation(t *testing.T) {
 			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
 		}
 	})
+
+	// FAIL LOUD, never silent. When the break-glass mint returns an
+	// unrecognized/error shape — e.g. the JSON-RPC `invalid MCP request` (HTTP
+	// 200) the :9999 MCP catch-all emits when the mcp-auth-proxy sidecar predates
+	// the /mint-git-token route (image/version skew) — the helper must NOT
+	// silently collapse to read-only. It surfaces a diagnostic to stderr AND
+	// still mints the read-only token so reads keep working. The silent collapse
+	// is the bug that made the live regression undiagnosable.
+	t.Run("error mint response fails loud and falls back to read-only", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid MCP request"}}`))
+		}))
+		defer bg.Close()
+		roHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			roHit = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !roHit {
+			t.Fatalf("read-only mint must be hit as fallback when the break-glass mint errors")
+		}
+		if !strings.Contains(out, "password=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token after error mint response, got:\n%s", out)
+		}
+		if !strings.Contains(out, "break-glass elevation FAILED") {
+			t.Fatalf("expected a loud diagnostic on an error mint response, got:\n%s", out)
+		}
+	})
 }
 
 // The gh wrapper mirrors the credential helper: an active unlimited grant makes
@@ -690,6 +723,36 @@ func TestGhTankWrapperBreakGlassElevation(t *testing.T) {
 		}
 		if !strings.Contains(roBody, "\"write\":false") || strings.Contains(roBody, "\"full\":true") {
 			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
+		}
+	})
+
+	// FAIL LOUD, never silent — mirror of the credential-helper guard. A
+	// JSON-RPC error (HTTP 200) from the :9999 MCP catch-all (sidecar predating
+	// the /mint-git-token route) must produce a stderr diagnostic, not a silent
+	// downgrade, while gh still gets a read-only token for reads.
+	t.Run("error mint response fails loud and falls back to read-only", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid MCP request"}}`))
+		}))
+		defer bg.Close()
+		roHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			roHit = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !roHit {
+			t.Fatalf("read-only mint must be hit as fallback when the break-glass mint errors")
+		}
+		if !strings.Contains(out, "GH_TOKEN=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token after error mint response, got:\n%s", out)
+		}
+		if !strings.Contains(out, "break-glass elevation FAILED") {
+			t.Fatalf("expected a loud diagnostic on an error mint response, got:\n%s", out)
 		}
 	})
 }
