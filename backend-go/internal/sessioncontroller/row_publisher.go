@@ -141,6 +141,11 @@ type rowWireShape struct {
 	// SpawnedSessions: omit-when-empty parent→child lineage for the
 	// session-bar "spawned sessions" chip. Mirrors the snapshot Info field.
 	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
+	// ParentSessionID: omit-when-empty child→parent (origin) pointer that drives
+	// sidebar nesting. On the create row-update this lands with the child, so
+	// the SPA nests it on arrival without waiting for the parent's
+	// spawned_sessions append. Mirrors the snapshot Info field.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 	// Repos and CloneState: always-emit / omit-when-nil to mirror
 	// the snapshot Info struct field-for-field (see
 	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
@@ -211,6 +216,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			TestState:                        record.TestState,
 			RolloutState:                     record.RolloutState,
 			SpawnedSessions:                  record.SpawnedSessions,
+			ParentSessionID:                  record.ParentSessionID,
 			Repos:                            repos,
 			CloneState:                       record.CloneState,
 			Capabilities:                     capabilities,

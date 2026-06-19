@@ -2200,6 +2200,21 @@ var schemaMigrations = []migration{
 	// follow-up (needs the origin scope plumbed from the proxy).
 	{ID: "0178", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS spawned_sessions jsonb`},
+
+	// Child→parent (origin) pointer for sidebar nesting. The spawned_sessions
+	// column above lives on the PARENT and is written by a SEPARATE, later
+	// UPDATE than the child row's INSERT, so a freshly spawned child first
+	// paints as a top-level row and only re-nests once the parent's append
+	// propagates — a visible reflow. parent_session_id lives on the CHILD and is
+	// stamped in the SAME INSERT that creates the child (from the
+	// X-Tank-Origin-Session-Id header), so the child is "born nested": the first
+	// snapshot/row-update that carries the child already carries its parent.
+	// NULL means "not spawned" (human/splash create) or a pre-column session.
+	// Scalar text, same per-scope id space as session_id; the SPA only nests
+	// when the referenced parent is present in the same (email, scope) list, so
+	// a cross-scope test-slot origin stored here never produces a phantom nest.
+	{ID: "0179", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS parent_session_id text`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

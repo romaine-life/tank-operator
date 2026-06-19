@@ -694,6 +694,44 @@ func TestHandleInternalCreateSessionRecordsSpawnedSessionOnOrigin(t *testing.T) 
 	}
 }
 
+// The CHILD row is stamped with parent_session_id = the origin in the same
+// create write, so the sidebar nests it under its origin from the first
+// snapshot/row-update with no reflow. This is the child-side nesting edge,
+// distinct from the parent-side spawned_sessions chip lineage above.
+func TestHandleInternalCreateSessionStampsParentSessionIDOnChild(t *testing.T) {
+	server, registry, tok := newSpawnTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"Child Work",
+			"initial_turn":{"client_nonce":"turn-parent-ptr","prompt":"go do the thing"}
+		}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "parent-42")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.ParentSessionID != "parent-42" {
+		t.Fatalf("info.parent_session_id = %q, want origin %q", info.ParentSessionID, "parent-42")
+	}
+	record, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("get child record: ok=%v err=%v", ok, err)
+	}
+	if record.ParentSessionID != "parent-42" {
+		t.Fatalf("child row parent_session_id = %q, want %q (born nested)", record.ParentSessionID, "parent-42")
+	}
+}
+
 // A spawn WITHOUT an origin header (a human/splash-page create) records no
 // edge — the chip is for agent-spawned lineage only.
 func TestHandleInternalCreateSessionWithoutOriginRecordsNoSpawnedSession(t *testing.T) {
@@ -715,6 +753,21 @@ func TestHandleInternalCreateSessionWithoutOriginRecordsNoSpawnedSession(t *test
 	}
 	if len(registry.spawnedAppends) != 0 {
 		t.Fatalf("spawned appends = %d, want 0 (no origin header)", len(registry.spawnedAppends))
+	}
+	// No origin → no parent pointer either: the child is a root, not nested.
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.ParentSessionID != "" {
+		t.Fatalf("info.parent_session_id = %q, want empty (no origin)", info.ParentSessionID)
+	}
+	record, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("get child record: ok=%v err=%v", ok, err)
+	}
+	if record.ParentSessionID != "" {
+		t.Fatalf("child row parent_session_id = %q, want empty (no origin)", record.ParentSessionID)
 	}
 }
 

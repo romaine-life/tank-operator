@@ -329,29 +329,39 @@ Named behaviors in the session-bar surface. See
   its origin**, with a ├─/└─ tree connector, so the parent→child relationship
   is visible at a glance and a working sub-session stays attached to the work
   that started it.
-- **Durable source:** the same `sessions.spawned_sessions jsonb` lineage the
-  spawned-sessions chip reads (migration `0178`). This is pure presentation
-  over that durable row — it adds **no** new durable state, expand/collapse
-  state, or ordering column. The child→parent edge is derived from the parent
-  row's refs at render time, so it converges over the session-list SSE exactly
-  like the chip: a freshly created child renders as a root until the parent
-  row's `spawned_sessions` includes it, then regroups under the parent without
-  a refresh.
+- **Durable source:** the child's own `sessions.parent_session_id` column
+  (migration `0179`) — the id of the origin that spawned it, stamped in the
+  **same INSERT that creates the child** (from the `X-Tank-Origin-Session-Id`
+  header). This is deliberately the *child→parent* edge, not the parent's
+  `spawned_sessions` array (which stays the chip's *parent→children* source).
+  Reading the child's own pointer is what makes a child **born nested**: the
+  pointer lands with the child row, so the first snapshot/row-update that
+  carries the child already nests it — no appear-at-top-then-snap reflow.
+  Inferring nesting from the parent's separate, later `spawned_sessions` append
+  was the original implementation and *did* reflow; that inference has been
+  removed (no dual path). `parent_session_id` is write-once: set on create,
+  absent from the registry `Upsert` `ON CONFLICT` update set, so lifecycle
+  re-upserts preserve it. Still pure presentation — no expand/collapse or
+  ordering state.
 - **Arrangement:** `frontend/src/sessionTree.ts` → `arrangeSessionTree()`
-  re-orders the already-`sidebar_position`-sorted list so each child follows its
-  origin, annotating `{depth (0|1), parentId, isLastChild}`. Root order and
-  within-group order are preserved from the durable sort (it layers nesting on
-  top of the drag order without owning it). Every input session is emitted
-  exactly once, including under malformed self-referential or cyclic lineage
-  (a safety pass emits any cycle-trapped row as a root).
+  builds the child→parent map from each row's `parent_session_id` (only when the
+  origin is present in the same scoped list) and re-orders the
+  already-`sidebar_position`-sorted list so each child follows its origin,
+  annotating `{depth (0|1), parentId, isLastChild}`. Root order and within-group
+  order are preserved from the durable sort (it layers nesting on top of the
+  drag order without owning it). Every input session is emitted exactly once,
+  including under malformed self-referential or cyclic lineage (a safety pass
+  emits any cycle-trapped row as a root).
 - **One tier only:** depth is clamped to 1 by design. If a sub-session itself
   spawns sessions, those grandchildren are grouped under the same top-level
   ancestor at the same single indented tier — the sidebar never indents twice.
   `parentId` still records the *direct* spawner for diagnostics.
 - **Cross-scope exclusion:** test-slot children live in a different
-  `session_scope` and never appear in this `(email, scope)`-scoped list, so they
-  are never present to nest. Spawning a test slot from prod does not nest, which
-  matches the lineage write path (only same-scope spawns record an edge today).
+  `session_scope` and never appear in this `(email, scope)`-scoped list. Even
+  though such a child may carry a cross-scope `parent_session_id` (the prod
+  origin id), `arrangeSessionTree` only nests when the referenced origin is
+  present in the same list, so a test slot spawned from prod never nests — no
+  phantom row, no need to gate the write on scope.
 - **Rendering:** the nested `<li>` carries `is-nested` (+ `is-nested-last` for
   the elbow) and a `.session-nest-connector` gutter element
   (`frontend/src/App.tsx`, styled in `index.css`). The tab keeps its right edge
@@ -362,10 +372,13 @@ Named behaviors in the session-bar surface. See
   (`sessionListDebugRow`/`SessionListDebugRow`) carries `parent_session_id` and
   `nest_depth` so a "my sub-session didn't nest" report is diagnosable from the
   capture without re-deriving lineage; each rendered row also exposes
-  `data-depth`. No new metric — the durable edge write is already counted by
+  `data-depth`. No new metric: `parent_session_id` is written inside the child's
+  create `Upsert`, so a failed write fails the create itself (surfaced like any
+  create error) rather than silently dropping a best-effort edge — unlike the
+  parent-side chip append, which stays best-effort and counted by
   `tank_session_spawn_link_total{result}`.
 - **Non-goal:** no second indent level, no subtree collapse/expand (it would
-  hide the very sub-sessions this surfaces), no parent backlink on the child
-  beyond the visual grouping, and no new durable ordering/state. Cross-scope
-  test-slot lineage nesting is out of scope until the origin scope is plumbed
-  through the spawn write path (the tracked spawned-sessions follow-up).
+  hide the very sub-sessions this surfaces), no parent backlink rendered on the
+  child beyond the visual grouping, and no new durable ordering/state. Nesting a
+  cross-scope test-slot child under a prod origin remains out of scope (they are
+  different scopes and never share a list).

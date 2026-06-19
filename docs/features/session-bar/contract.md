@@ -81,12 +81,15 @@ work completion, deletion, unread counts, or running state.
   `sessions.spawned_sessions` row without a manual refresh, and is absent for
   sessions that spawned nothing or were created without an origin.
 - A same-scope spawned child renders as a single indented tier directly under
-  its origin in the session list, regrouped from the durable
-  `sessions.spawned_sessions` lineage and converging over the live path without
-  a manual refresh. Nesting never exceeds one tier (deeper lineage is clamped
-  to the same tier under the top-level ancestor), and a cross-scope test-slot
-  child — which is not in the `(email, session_scope)`-scoped list — does not
-  nest. The regrouping must not drop, duplicate, or reorder a root relative to
-  the durable `sidebar_position` order.
+  its origin in the session list, grouped from the child's durable
+  `sessions.parent_session_id` (stamped in the same write that creates the
+  child). Because the pointer arrives with the child row, the child appears
+  already nested on its first snapshot/row-update — it must not first render as
+  a top-level row and then reflow into place. Nesting never exceeds one tier
+  (deeper lineage is clamped to the same tier under the top-level ancestor), and
+  a cross-scope test-slot child — whose origin is not in the
+  `(email, session_scope)`-scoped list — does not nest. The grouping must not
+  drop, duplicate, or reorder a root relative to the durable `sidebar_position`
+  order.
 - Tests cover a projection lag or missed wake scenario and prove the sidebar
   catches up from durable state.

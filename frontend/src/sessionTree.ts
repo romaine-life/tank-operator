@@ -1,42 +1,48 @@
 // Sidebar session nesting (single tier).
 //
-// When an agent spawns a session (spawn_run_session), the backend records the
-// parent→child link on the *origin* session's durable `sessions.spawned_sessions`
-// row (see docs/features/session-bar/capabilities.md → "spawned-sessions-chip").
-// This module turns that durable lineage into a sidebar render order: each
-// spawned child is grouped directly under its origin and marked as one indented
-// tier so a running sub-session is impossible to lose track of.
+// When an agent spawns a session (spawn_run_session), the backend stamps the
+// origin's id on the CHILD row's durable `parent_session_id` column in the same
+// write that creates the child (see docs/features/session-bar/capabilities.md →
+// "nested-spawned-sessions"). This module turns that child→parent pointer into a
+// sidebar render order: each spawned child is grouped directly under its origin
+// and marked as one indented tier so a running sub-session is impossible to lose
+// track of.
+//
+// Reading the child's OWN pointer — not the parent's `spawned_sessions` list —
+// is what makes a child "born nested". The pointer lands with the child row, so
+// the first snapshot/row-update that carries the child already knows its parent
+// and renders it directly in the nested slot. Inferring from the parent's
+// separate, later `spawned_sessions` append (the chip's source) is what caused
+// the child to flash at the top of the list and then snap into place; this side
+// of the edge has no such lag.
 //
 // Design decision — exactly ONE indent level. A session is either a root
 // (depth 0) or a nested child (depth 1). If a sub-session itself spawns
 // sessions ("grandchildren"), they are clamped to the same single tier and
 // grouped under their top-level ancestor; the sidebar never indents twice.
 //
-// This is pure presentation over data that already ships. It introduces no new
-// durable state and reads only the parent row's `spawned_sessions`, so it
-// converges over the session-list SSE exactly like the spawned-sessions chip:
-// a freshly created child renders as a root until the parent row's
-// `spawned_sessions` includes it, then snaps under the parent. Cross-scope
-// test-slot children are excluded for free — they live in a different
-// `session_scope`, never appear in this (email, scope)-scoped list, and so are
-// never present to nest.
-
-import type { SpawnedSessionRef } from "./spawnedSessions";
+// This is pure presentation over durable state. Cross-scope test-slot children
+// are excluded for free — they live in a different `session_scope`, never appear
+// in this (email, scope)-scoped list, so even though the child carries a
+// cross-scope `parent_session_id`, that origin is never present to nest under.
 
 // The minimal shape this module needs from a session row. Kept structural (not
 // the full App `Session`) so lightweight test fixtures satisfy it too.
 export interface SessionTreeInput {
   id: string;
-  spawned_sessions?: SpawnedSessionRef[];
+  // The origin session that spawned this one, stamped at create. Absent/empty
+  // for roots (human/splash creates). Nesting applies only when this id is
+  // present in the same list.
+  parent_session_id?: string | null;
 }
 
 export interface ArrangedSession<T extends SessionTreeInput> {
   session: T;
   // 0 = root / top-level, 1 = nested child. Capped at 1 by design.
   depth: 0 | 1;
-  // The id of the *direct* spawning session when that session is present in
-  // the same list, else null. Diagnostic only — the visual tier is `depth`,
-  // which is clamped to 1 even for deeper lineage. Roots are null.
+  // The id of the direct spawning origin when that session is present in the
+  // same list, else null. Diagnostic only — the visual tier is `depth`, which
+  // is clamped to 1 even for deeper lineage. Roots are null.
   parentId: string | null;
   // True only for the last nested row of a top-level ancestor's group, so the
   // connector renders an elbow (└) and the vertical guide terminates there;
@@ -61,21 +67,16 @@ export function arrangeSessionTree<T extends SessionTreeInput>(
     if (!byId.has(s.id)) byId.set(s.id, s);
   }
 
-  // parentOf[child] = the spawning session's id, but only when that parent is
-  // present in this list. First parent to claim a child wins (a child has one
-  // origin; this is just defensive against duplicate refs). Self-references are
-  // ignored so a row can't be its own parent.
+  // parentOf[child] = the origin id stamped on the child, but only when that
+  // origin is present in this list. Self-references are ignored so a row can't
+  // be its own parent. A cross-scope origin id simply isn't in `byId`, so the
+  // child falls through to a root.
   const parentOf = new Map<string, string>();
-  for (const parent of sessions) {
-    const refs = parent.spawned_sessions;
-    if (!refs || refs.length === 0) continue;
-    for (const ref of refs) {
-      const childId = ref?.id;
-      if (!childId || childId === parent.id) continue;
-      if (!byId.has(childId)) continue; // cross-scope / not in this list
-      if (parentOf.has(childId)) continue; // already claimed
-      parentOf.set(childId, parent.id);
-    }
+  for (const s of sessions) {
+    const parentId = s.parent_session_id;
+    if (!parentId || parentId === s.id) continue;
+    if (!byId.has(parentId)) continue; // origin not in this scoped list
+    parentOf.set(s.id, parentId);
   }
 
   // childrenOf[parent] = direct children in input order.

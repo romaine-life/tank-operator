@@ -54,6 +54,11 @@ type Info struct {
 	// the wire when empty (the every-session-today shape). Same source of
 	// truth as the RowPublisher field so snapshot and SSE agree.
 	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
+	// ParentSessionID is the child→parent (origin) pointer that drives sidebar
+	// nesting — the id of the session that spawned this one, stamped at create.
+	// Omitted when empty (human/splash creates, pre-column sessions). Same
+	// source of truth as the RowPublisher field so snapshot and SSE agree.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 	// Repos is the "owner/name" slug list the user picked at
 	// session creation; always present on the wire (empty array
 	// when none were selected). Driven by the durable
@@ -295,6 +300,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		TestState:                        record.TestState,
 		RolloutState:                     record.RolloutState,
 		SpawnedSessions:                  record.SpawnedSessions,
+		ParentSessionID:                  record.ParentSessionID,
 		Repos:                            repos,
 		CloneState:                       record.CloneState,
 		Capabilities:                     capabilities,
