@@ -103,6 +103,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			sessions.activity_summary,
 			sessions.test_state,
 			sessions.rollout_state,
+			sessions.spoke_config,
 			sessions.spawned_sessions,
 			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
@@ -166,8 +167,8 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			status, readyAt, terminatingAt                              string
 			name                                                        string
 			visible                                                     bool
-			activitySummary, testState, rolloutState, cloneState        []byte
-			spawnedSessions                                             []byte
+			activitySummary, testState, rolloutState, spokeConfig, cloneState []byte
+			spawnedSessions                                                   []byte
 			parentSessionID                                             string
 			providerRateLimitInfo                                       []byte
 			repos, capabilities                                         []string
@@ -187,7 +188,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			&sessionID, &mode, &podName, &name, &visible,
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
-			&activitySummary, &testState, &rolloutState,
+			&activitySummary, &testState, &rolloutState, &spokeConfig,
 			&spawnedSessions,
 			&parentSessionID,
 			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID,
@@ -224,6 +225,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			ActivitySummary:                  activitySummary,
 			TestState:                        unmarshalJSONBField(testState),
 			RolloutState:                     unmarshalJSONBField(rolloutState),
+			SpokeConfig:                      unmarshalJSONBField(spokeConfig),
 			SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
 			ParentSessionID:                  parentSessionID,
 			Repos:                            repos,

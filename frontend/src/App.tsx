@@ -68,6 +68,7 @@ import {
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
 import { OrchestrationsDashboard } from "./OrchestrationsDashboard";
+import { OrchestratePanel } from "./OrchestratePanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -165,6 +166,7 @@ import {
   TerminalIcon,
   TextQuoteIcon,
   TimerIcon,
+  Wand2Icon,
   WrenchIcon,
   XIcon,
   SaveIcon,
@@ -892,6 +894,9 @@ interface Session {
   name: string;
   test_state?: TestState | null;
   rollout_state?: RolloutState | null;
+  // spoke_config is present when this session acts as an orchestration hub.
+  // Carries the provider/surface/model/effort used to launch the spoke.
+  spoke_config?: Record<string, unknown>;
   // spawned_sessions is the durable parent→child lineage the session-bar
   // "spawned sessions" chip lists (sessions this one spawned via
   // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
@@ -1492,6 +1497,12 @@ function normalizeSession(session: Session): Session {
   next.spawned_sessions = Array.isArray(session.spawned_sessions)
     ? session.spawned_sessions
     : undefined;
+  next.spoke_config =
+    session.spoke_config != null &&
+    typeof session.spoke_config === "object" &&
+    !Array.isArray(session.spoke_config)
+      ? (session.spoke_config as Record<string, unknown>)
+      : undefined;
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter(
         (entry): entry is string => typeof entry === "string",
@@ -2567,6 +2578,13 @@ interface ComposerToolButtonsProps {
     title: string;
     onClick?: () => void;
   };
+  orchestrate?: {
+    visible?: boolean;
+    active?: boolean;
+    disabled?: boolean;
+    title: string;
+    onClick?: () => void;
+  };
   test: {
     active?: boolean;
     disabled?: boolean;
@@ -3433,6 +3451,7 @@ function ComposerToolButtons({
   attach,
   cost,
   rollout,
+  orchestrate,
   test,
   glimmungRuns,
   spawnedSessions,
@@ -3468,6 +3487,18 @@ function ComposerToolButtons({
           title={rollout.title}
         >
           <WheelsIcon className="run-composer-icon" />
+        </button>
+      )}
+      {orchestrate?.visible && (
+        <button
+          type="button"
+          className={`run-composer-icon-btn run-composer-action-btn run-orchestrate-action-btn${orchestrate.active ? " is-active" : ""}`}
+          onClick={orchestrate.onClick}
+          disabled={orchestrate.disabled}
+          aria-label="Orchestrate"
+          title={orchestrate.title}
+        >
+          <Wand2Icon className="run-composer-icon" aria-hidden="true" />
         </button>
       )}
       <DropdownMenu>
@@ -5207,6 +5238,11 @@ function DemoLanding() {
                         disabled: true,
                         title: "Sign in to use /rollout",
                       }}
+                      orchestrate={{
+                        visible: GUI_ROLLOUT_MODES.has(selectedMode),
+                        disabled: true,
+                        title: "Sign in to orchestrate",
+                      }}
                       test={{
                         disabled: true,
                         title: "Sign in to start a session",
@@ -5757,6 +5793,7 @@ type RunTab =
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
+  | "orchestrate"
   | "settings"
   | "help"
   | "cluster"
@@ -8692,7 +8729,9 @@ function RunMessageBubble({
       ? FlaskConicalIcon
       : skillName === "rollout"
         ? TankIcon
-        : ListChecksIcon;
+        : skillName === "orchestrate"
+          ? Wand2Icon
+          : ListChecksIcon;
   const SkillActionIcon = skillActionIcon;
   const explicitAttachments = entry.attachments ?? [];
   const legacyAttachmentParts =
@@ -19972,6 +20011,13 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (route.tab === "orchestrate") {
+      setActiveTab("orchestrate");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     setActiveTab("turns");
     setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor("bottom");
@@ -22937,6 +22983,8 @@ function ChatPane({
       );
     } else if (activeTab === "background") {
       replaceSessionRoute(session.id, "background");
+    } else if (activeTab === "orchestrate") {
+      replaceSessionRoute(session.id, "orchestrate");
     } else if (activeTab === "chat") {
       replaceSessionTranscriptRoute(session.id);
     } else {
@@ -24822,6 +24870,13 @@ function ChatPane({
                   void postTestSlotModelApproval(request, note);
                 }}
               />
+            ) : activeTab === "orchestrate" ? (
+              <OrchestratePanel
+                sessionId={session.id}
+                spokeConfig={session.spoke_config}
+                spawnedSessions={session.spawned_sessions ?? []}
+                ready={ready}
+              />
             ) : activeTab === "settings" ? (
               <RunSettingsPanel
                 session={session}
@@ -25408,6 +25463,16 @@ function ChatPane({
                   title: isClaude
                     ? "Use /rollout in this run"
                     : "Use $rollout in this run",
+                }}
+                orchestrate={{
+                  visible: GUI_ROLLOUT_MODES.has(session.mode),
+                  active: Boolean(
+                    session.spoke_config &&
+                      Object.keys(session.spoke_config).length > 0,
+                  ),
+                  disabled: !ready,
+                  title: "Orchestrate a spoke session",
+                  onClick: () => setActiveTab("orchestrate"),
                 }}
                 test={{
                   active: testActionActive,
@@ -27251,6 +27316,7 @@ function AuthenticatedApp() {
       name: row.name,
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
+      spoke_config: row.spoke_config,
       spawned_sessions: row.spawned_sessions,
       parent_session_id: row.parent_session_id,
       sidebar_position: row.sidebar_position,
@@ -27318,6 +27384,12 @@ function AuthenticatedApp() {
       activity_summary: raw.activity ?? undefined,
       test_state: raw.test_state ?? undefined,
       rollout_state: raw.rollout_state ?? undefined,
+      spoke_config:
+        raw.spoke_config != null &&
+        typeof raw.spoke_config === "object" &&
+        !Array.isArray(raw.spoke_config)
+          ? (raw.spoke_config as Record<string, unknown>)
+          : undefined,
       spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
@@ -30097,6 +30169,11 @@ function AuthenticatedApp() {
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
                       disabled: true,
                       title: "Use /rollout once your session starts",
+                    }}
+                    orchestrate={{
+                      visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
+                      disabled: true,
+                      title: "Orchestrate is available in an active chat session",
                     }}
                     test={{
                       onCreateHold: () => {

@@ -56,6 +56,7 @@ type SessionRegistry interface {
 	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
+	SetSpokeConfig(ctx context.Context, email, sessionID string, config map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
 	AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
@@ -778,6 +779,20 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 			}
 			return m.registry.SetRolloutState(c, owner, sessionID, state)
 		})
+}
+
+// SetSpokeConfig replaces the sessions.spoke_config payload persisted by the
+// orchestrate endpoint and publishes the updated row to the sidebar stream.
+// It does not patch pod annotations: spoke_config is hub-side only, read
+// from the durable row. Returns a refreshed Info the same way SetCloneState does.
+func (m *Manager) SetSpokeConfig(ctx context.Context, owner, sessionID string, config map[string]any) (Info, error) {
+	if m.registry != nil {
+		if err := m.registry.SetSpokeConfig(ctx, owner, sessionID, config); err != nil {
+			return Info{}, err
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetByOwner(ctx, owner, sessionID)
 }
 
 // SetCloneState replaces the sessions.clone_state payload written by
