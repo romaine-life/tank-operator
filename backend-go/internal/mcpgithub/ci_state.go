@@ -13,6 +13,12 @@ import (
 	"strings"
 )
 
+// ErrNoOpenPR is returned (wrapped) when a branch has no open pull request.
+// Callers that want to treat "no PR yet" as a distinct, non-fatal state — the
+// read-only test-slot preflight, for example — match it with errors.Is rather
+// than string-sniffing the message.
+var ErrNoOpenPR = errors.New("no open PR exists")
+
 type PullRequestDetail struct {
 	Number         int    `json:"number"`
 	HTMLURL        string `json:"html_url"`
@@ -231,7 +237,7 @@ func (c *Client) githubOpenPullRequestForBranch(ctx context.Context, token, owne
 		return PullRequestDetail{}, fmt.Errorf("list PRs for %s:%s: GitHub returned %d", headOwner, branch, status)
 	}
 	if len(prs) == 0 {
-		return PullRequestDetail{}, fmt.Errorf("no open PR exists for %s:%s", headOwner, branch)
+		return PullRequestDetail{}, fmt.Errorf("%w for %s:%s", ErrNoOpenPR, headOwner, branch)
 	}
 	if prs[0].Number <= 0 {
 		return PullRequestDetail{}, fmt.Errorf("open PR for %s:%s did not include a PR number", headOwner, branch)
