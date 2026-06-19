@@ -86,7 +86,13 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 	// gate runs / two glimmung checkouts. Refuse when a test environment is
 	// already active for this session, and -- atomically -- when a provision for
 	// this exact target is already in flight (a non-terminal pending record).
-	if active, _ := info.TestState["active"].(bool); active {
+	// A real running environment is active AND has a slot URL. An `active:true`
+	// with no URL is an optimistic/stale flag (e.g. set at "test" session-create
+	// before any slot existed); it must NOT block a genuine provision with a
+	// bogus 409.
+	active, _ := info.TestState["active"].(bool)
+	stateURL, _ := info.TestState["url"].(string)
+	if active && strings.TrimSpace(stateURL) != "" {
 		recordTestSlotProvisionGuard("test_state_active")
 		writeError(w, http.StatusConflict, "a test environment is already active for this session")
 		return

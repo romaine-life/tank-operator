@@ -6002,6 +6002,12 @@ button:disabled {
   background: var(--status-error-bg);
 }
 
+/* Merged PR — GitHub's merged purple, distinct from green/ready. */
+.run-session-data-card.is-merged {
+  border-color: rgba(167, 139, 250, 0.28);
+  background: rgba(167, 139, 250, 0.07);
+}
+
 .run-session-data-card-icon {
   display: inline-flex;
   align-items: center;
@@ -6037,6 +6043,11 @@ button:disabled {
 .run-session-data-card.is-danger .run-session-data-card-icon,
 .run-session-data-card.is-danger .run-session-data-card-status {
   color: var(--status-error-fg);
+}
+
+.run-session-data-card.is-merged .run-session-data-card-icon,
+.run-session-data-card.is-merged .run-session-data-card-status {
+  color: #c4b5fd;
 }
 
 .run-session-data-card-main {
