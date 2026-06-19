@@ -154,6 +154,8 @@ func (s *appServer) testSlotPreflight(ctx context.Context, req provisionTestSlot
 		MergeableState: res.MergeableState,
 		CheckState:     res.CheckState,
 		FailingChecks:  res.FailingChecks,
+		PendingChecks:  state.PendingChecks,
+		PRNumber:       state.PR.Number,
 		PRURL:          res.PRURL,
 		HeadSHA:        res.HeadSHA,
 		HasOpenPR:      true,
@@ -228,6 +230,8 @@ type testSlotPreflightView struct {
 	MergeableState string   `json:"mergeable_state"`
 	CheckState     string   `json:"check_state"`
 	FailingChecks  []string `json:"failing_checks"`
+	PendingChecks  []string `json:"pending_checks"`
+	PRNumber       int      `json:"pr_number"`
 	PRURL          string   `json:"pr_url"`
 	HeadSHA        string   `json:"head_sha"`
 	Detail         string   `json:"detail"`

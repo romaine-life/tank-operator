@@ -342,8 +342,8 @@ answer; it must not visibly move a rendered row from one surface to the other.
   payload names one, keeps the page kind as `question`, and invalidates the
   cached page when the asking turn's durable high-water mark changes.
 - A pending AskUserQuestion renders its question widget inline in the main
-  transcript beneath the agent's preamble (the activity group is emitted inline,
-  not condensed to an "Answer requested" pointer), and is answerable there
+  transcript on the asking turn — the widget renders in place of the derived
+  "summary" question message, beneath the agent's preamble — and is answerable there
   through the composer. There is no assistant-message "Answer in Turns" / tool
   "Open question page" shortcut. For a multi-question set, only Q1 renders inline;
   advancing leaves the inline surface for Q2+'s dedicated pages rather than

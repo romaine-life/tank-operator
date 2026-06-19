@@ -316,16 +316,19 @@ test("AskUserQuestion renders the question widget inline in the main transcript"
   ).toBe(false);
   expect(indexCssSource.includes(".run-needs-input-announcement-copy")).toBe(false);
   expect(indexCssSource.includes(".run-msg-question-action")).toBe(false);
-  // The pending question's activity group is emitted into the main transcript
-  // (not condensed to an "Answer requested" pointer) so RunTurnActivityGroup
-  // renders the inline question widget; advancing past Q1 leaves for Turns.
+  // The pending question renders inline on the ASKING turn, as the widget in
+  // place of the derived "summary" question message — not inside the synthetic
+  // question turn. The card shows only Q1; advancing leaves for Q2+'s pages.
+  expect(appSource.includes("function isPendingInlineQuestionEntry")).toBe(true);
+  expect(appSource.includes("function RunInlineAskUserQuestion")).toBe(true);
   expect(
     appSource.includes(
-      "// Surface the pending question inline in the main transcript",
+      "isPendingInlineQuestionEntry(g.entry)",
     ),
   ).toBe(true);
-  expect(appSource.includes('className="run-turn-activity-question"')).toBe(true);
-  expect(appSource.includes("const inlineQuestionEntry")).toBe(true);
+  expect(appSource.includes("firstQuestionOnly")).toBe(true);
+  // The synthetic needs_input turn is not surfaced as its own block in chat.
+  expect(appSource.includes("groups.push(group)")).toBe(false);
   expect(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}')).toBe(true);
   expect(indexCssSource.includes(".run-turn-view {\n  display: flex;")).toBe(true);
   expect(indexCssSource.includes('.run-turn-view-body[data-page-kind="question"]')).toBe(true);
@@ -700,8 +703,9 @@ test("server-projected active turn activity shells own thinking row active state
   expect(appSource).toMatch(/group\.active &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/);
   expect(appSource.includes('turnThinkingGroup(group.turnId, entry, "needs_input")')).toBe(false);
   expect(appSource.includes("data-status={status}")).toBe(true);
-  // needs_input turns push their activity group inline rather than a thinking row.
-  expect(appSource.includes("groups.push(group);")).toBe(true);
+  // needs_input turns are hidden in chat (no thinking row, no activity block);
+  // the question renders inline on the asking turn instead.
+  expect(appSource.includes("groups.push(group)")).toBe(false);
   expect(appSource.includes(
           "turnActivityShellIsDurablyActive(group.shell.activity)",
         )).toBe(true);
