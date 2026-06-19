@@ -1732,6 +1732,20 @@ var (
 		[]string{"result"},
 	)
 
+	// adminDataBrowserReadsTotal is the volume + outcome signal for the
+	// admin-only read-only database browser (GET /api/admin/data/...).
+	// `surface` is table_list|rows; `result` is a bounded outcome. The
+	// browsed table name is deliberately NOT a label — it already rides the
+	// per-call audit slog line, and keeping it off the metric pins
+	// cardinality at surface×result.
+	adminDataBrowserReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_data_browser_reads_total",
+			Help: "Admin reads of the read-only data browser, labeled by bounded surface and result.",
+		},
+		[]string{"surface", "result"},
+	)
+
 	// conversationReadCursorStagnantTotal is the durable cross-check
 	// for the transcript navigation latch failure mode. Increments
 	// once per sample pass for every (session_mode, scope) tuple where
@@ -1796,6 +1810,31 @@ func recordDebugSessionEventLedgerRead(result string) {
 func debugSessionEventLedgerResultLabel(result string) string {
 	switch result {
 	case "ok", "empty", "bad_request", "forbidden", "store_error", "not_configured":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func recordAdminDataBrowserRead(surface, result string) {
+	adminDataBrowserReadsTotal.WithLabelValues(
+		adminDataBrowserSurfaceLabel(surface),
+		adminDataBrowserResultLabel(result),
+	).Inc()
+}
+
+func adminDataBrowserSurfaceLabel(surface string) string {
+	switch surface {
+	case "table_list", "rows":
+		return surface
+	default:
+		return "other"
+	}
+}
+
+func adminDataBrowserResultLabel(result string) string {
+	switch result {
+	case "ok", "empty", "bad_request", "forbidden", "not_found", "error", "not_configured":
 		return result
 	default:
 		return "other"

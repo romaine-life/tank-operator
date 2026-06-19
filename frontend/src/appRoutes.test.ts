@@ -355,6 +355,11 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
         settingsTab: "admin",
         adminView: "break-glass",
       });
+  expect(readAppRouteFromPathname("/settings/admin/data")).toEqual({
+        tab: "settings",
+        settingsTab: "admin",
+        adminView: "data",
+      });
   expect(readAppRouteFromPathname("/settings/admin/orchestrations")).toEqual({
         tab: "settings",
         settingsTab: "admin",

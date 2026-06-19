@@ -14110,3 +14110,212 @@ textarea.run-files-viewer-editor:focus {
     display: none;
   }
 }
+
+/* Admin read-only database browser (AdminDataBrowser.tsx). */
+.admin-data-browser {
+  display: flex;
+  gap: var(--space-4);
+  align-items: stretch;
+  min-height: 0;
+  height: 70vh;
+}
+.admin-data-tables {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 16rem;
+  flex: 0 0 16rem;
+  min-height: 0;
+}
+.admin-data-tables-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.admin-data-filter {
+  width: 100%;
+}
+.admin-data-table-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.admin-data-table-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1-5) var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-body);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.admin-data-table-item:hover {
+  background: var(--bg-hover);
+}
+.admin-data-table-item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+}
+.admin-data-table-name {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-data-table-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.admin-data-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.admin-data-rows-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.admin-data-rows-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+}
+.admin-data-rows-head .run-settings-scope-value {
+  margin-left: auto;
+}
+.admin-data-table-scroll {
+  overflow: auto;
+  min-height: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+}
+.admin-data-grid {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: var(--text-xs);
+}
+.admin-data-grid th,
+.admin-data-grid td {
+  border-bottom: 1px solid var(--border-subtle);
+  border-inline-end: 1px solid var(--border-subtle);
+  padding: var(--space-1-5) var(--space-2);
+  text-align: left;
+  vertical-align: top;
+}
+.admin-data-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-sidebar-raised);
+  border-bottom: 1px solid var(--border-strong);
+}
+.admin-data-grid tbody tr:hover {
+  background: var(--bg-hover-soft);
+}
+.admin-data-col-name {
+  display: block;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+.admin-data-col-type {
+  display: block;
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.6875rem;
+}
+.admin-data-grid td {
+  font-family: var(--font-mono);
+  color: var(--text-body);
+}
+.admin-data-cell-value {
+  display: inline-block;
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.admin-data-cell-null {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.admin-data-cell-bytes {
+  color: var(--accent-fg);
+}
+.admin-data-cell-redacted {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.admin-data-cell-lock {
+  width: 11px;
+  height: 11px;
+}
+.admin-data-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  color: var(--text-muted);
+  text-align: center;
+}
+.admin-data-placeholder svg {
+  width: 28px;
+  height: 28px;
+  opacity: 0.5;
+}
+.admin-data-placeholder-note {
+  max-width: 28rem;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.admin-data-empty {
+  padding: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.admin-data-rows-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.admin-data-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.admin-data-loading svg {
+  width: 14px;
+  height: 14px;
+  animation: admin-data-spin 1s linear infinite;
+}
+@keyframes admin-data-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

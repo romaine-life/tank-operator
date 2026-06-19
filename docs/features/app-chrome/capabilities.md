@@ -475,3 +475,62 @@ Evidence:
 - Owed before "done": behavioral validation on a per-change environment, and
   component/interaction tests (render + click→nav) once the frontend
   component-test tooling lands (separate testing-strategy effort, session 667).
+
+## Admin Database Browser
+
+Status: active
+
+Intent:
+Give administrators an in-app, read-only window into the orchestrator's own
+Postgres tables from Settings -> Admin -> Database, so an operator can see the
+durable rows that drive the system (sessions, the `session_events` ledger,
+profiles, orchestrations, …) without raw database credentials, a SQL console,
+or browser devtools.
+
+Affected contracts:
+- App Chrome
+- Auth And Streams, because the surface is admin-gated and exposes durable data
+- Observability, because privileged data reads are audited and counted
+
+Contract impact:
+- Admin-only: the browser routes are gated on `/api/auth/me.is_admin` in the UI,
+  and the backend re-checks `hasAdminPower` on every request
+  (`GET /api/admin/data/tables`, `GET /api/admin/data/tables/{table}/rows`).
+- Strictly read-only and SQL-free: the browser never accepts caller SQL. The
+  table name is validated against a strict identifier regex AND resolved against
+  the live catalog, then quoted; every query runs inside a read-only transaction
+  with a statement timeout. The free-form diagnostic SQL path
+  (`/api/internal/.../db-read-query`) stays a separate service-principal surface
+  and is not reachable from the browser (no duplicate write/exec path).
+- Redaction is a settled contract, not best-effort: secret columns (bearer
+  tokens, the GitHub install nonce, stream-ticket and message-link tokens)
+  render as a redacted placeholder and never cross to the browser; bytea columns
+  render as a byte count, never their contents; oversized cells are truncated.
+  The policy is code-owned in `internal/pgstore.DataBrowser` (`isSecretColumn`)
+  so the exposed surface is a deliberate decision, not whatever the schema
+  happens to hold. A table whose primary key is itself a secret column (e.g.
+  `stream_auth_tickets.ticket`) does not paginate, so the redacted value never
+  rides a `next_cursor` either.
+- Bounded cost: row counts are `pg_class.reltuples` estimates, never `count(*)`,
+  and pagination is keyset by primary key (index-ordered), so browsing the
+  billions-row `session_events` ledger stays O(page). A table without a
+  keyset-safe primary key renders a single ordered page rather than paginating.
+- Audited: every call emits a structured slog line (caller_email, table, result)
+  and increments `tank_admin_data_browser_reads_total{surface,result}`; the table
+  name stays out of the metric label to bound cardinality and on the slog line
+  for the who-read-what record.
+
+Evidence:
+- `backend-go/internal/pgstore/data_browser_test.go` covers identifier
+  validation, the redaction policy (explicit secret pairs + name patterns, with
+  non-secret `*_state` columns staying visible), keyset query construction
+  (quoted identifiers, typed cursor casts, bytea-as-size, no-PK degradation),
+  and cursor encode/decode round-trips.
+- `backend-go/cmd/tank-operator/handlers_admin_data_browser_test.go` covers the
+  admin gate (403), table-name validation (400), unknown table (404), invalid
+  cursor (400), the limit clamp, stub-mode 503, and the response envelope.
+- `frontend/src/AdminDataBrowser.test.tsx` proves the table directory renders,
+  selecting a table renders its rows, the secret column shows the masked chip
+  (never the bearer value), and bytea cells render as a size.
+- `frontend/src/appRoutes.test.ts` pins `/settings/admin/data` as a
+  URL-addressable admin surface.
