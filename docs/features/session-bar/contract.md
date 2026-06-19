@@ -93,3 +93,11 @@ work completion, deletion, unread counts, or running state.
   order.
 - Tests cover a projection lag or missed wake scenario and prove the sidebar
   catches up from durable state.
+- Dragging a session row persists its order to durable `sidebar_position`
+  without an error (the `PUT /api/sessions/order` path must not regress to the
+  `42P18` 500), and the order survives reload. Dragging onto a row's middle band
+  nests it under that row (durable `parent_session_id`) and converges in every
+  open list over the row-update stream without a refresh; dragging onto an edge
+  band reorders at that level; the "…"-menu Un-nest (or dragging a child to a
+  root slot) clears nesting. A self/cycle/cross-scope nest is rejected (400) with
+  no durable change, and the durable tree never exceeds one rendered tier.

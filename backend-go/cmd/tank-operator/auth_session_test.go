@@ -537,6 +537,18 @@ func (r *testSessionRegistry) SetProviderRateLimitInfo(_ context.Context, email,
 func (r *testSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
 }
+func (r *testSessionRegistry) SetParentSession(_ context.Context, owner, sessionID, parentID string) error {
+	if r.records == nil || r.records[owner] == nil {
+		return nil
+	}
+	record, ok := r.records[owner][sessionID]
+	if !ok {
+		return nil
+	}
+	record.ParentSessionID = parentID
+	r.records[owner][sessionID] = record
+	return nil
+}
 func (r *testSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
 
 func TestAuthorizeSessionRead_AdminCanReadAnyOwner(t *testing.T) {

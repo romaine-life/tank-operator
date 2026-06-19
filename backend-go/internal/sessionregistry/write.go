@@ -335,6 +335,28 @@ func (s *Store) SetRunConfig(ctx context.Context, email, sessionID, model, effor
 	return err
 }
 
+// SetParentSession sets or clears the durable child→parent nesting edge
+// (sessions.parent_session_id) for one session. Unlike the write-once stamp the
+// create Upsert applies for agent-spawned children, this is the explicit
+// user-driven mutation behind drag-to-nest and the "Un-nest" menu action. An
+// empty parentID writes NULL (un-nest). The row_version bump keeps open tabs
+// converging; ownership/cycle validation lives in Manager.SetParentSession.
+func (s *Store) SetParentSession(ctx context.Context, email, sessionID, parentID string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET parent_session_id = NULLIF($4, ''),
+			updated_at        = now(),
+			row_version       = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, strings.TrimSpace(sessionID), strings.TrimSpace(parentID))
+	return err
+}
+
 // SetBugLabel attaches or clears the user's Tank-native bug label for one
 // session. Missing-session errors are left to Postgres' FK/UPDATE behavior:
 // callers validate ownership through Manager before writing. The sessions
@@ -773,13 +795,19 @@ func (s *Store) Reorder(ctx context.Context, email string, orderedIDs []string) 
 	for i := range cleaned {
 		positions[i] = int64(len(cleaned) - i)
 	}
+	// Bind order is ($1 email, $2 scope, $3 ids, $4 positions): the unnest
+	// placeholders MUST be $3/$4, matching cleaned/positions below. They were
+	// $4/$5 once, which left $3 bound-but-unreferenced (Postgres "could not
+	// determine data type of parameter $3", SQLSTATE 42P18) and referenced a
+	// nonexistent $5 — a 500 on every reorder. The DSN-gated Reorder round-trip
+	// test guards this; the hermetic suite stubs Reorder and cannot.
 	const updateQ = `
 		WITH updated AS (
 			UPDATE sessions
 			SET sidebar_position = v.position,
 				updated_at = now(),
 				row_version = nextval('sessions_row_version_seq')
-			FROM unnest($4::text[], $5::bigint[]) AS v(session_id, position)
+			FROM unnest($3::text[], $4::bigint[]) AS v(session_id, position)
 			WHERE sessions.email = $1
 			  AND sessions.session_scope = $2
 			  AND sessions.visible = true

@@ -557,6 +557,19 @@ All metric names are prefixed `tank_`. The full namespace:
   never fails the spawn, so a rising `error` rate is a quiet user-trust
   regression — parents are silently losing the links to their children — and
   is the signal to alert on rather than the (healthy) `ok` volume.
+- `tank_session_reorder_total{result}` — outcomes of the sidebar drag-to-reorder
+  write (`PUT /api/sessions/order`). `result` is `ok|conflict|error` (bounded, 3
+  series). `conflict` is the benign stale-permutation rejection the SPA
+  reconciles by refresh; a nonzero `error` rate means the durable reorder write
+  is failing — this counter exists because the `Store.Reorder` `42P18` bug shipped
+  a 500 on *every* drag that was invisible except in the generic 5xx log, with no
+  per-feature signal to alert on.
+- `tank_session_nest_update_total{action,result}` — manual drag-to-nest / un-nest
+  writes to `parent_session_id` (`PUT /api/sessions/{id}/parent`). `action` is
+  `nest|unnest`, `result` is `ok|rejected|error` (bounded, 6 series). `rejected`
+  is a guard refusal (self-parent, cycle, or missing/cross-scope target → 400 so
+  the durable tree stays acyclic and one tier); a rising `error` rate is a
+  durable-write/republish failure worth alerting on.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   `PROXY_PROVIDER`.
   `tank_api_proxy_upstream_status_total{provider,status_class}` buckets every

@@ -1067,6 +1067,16 @@ func (r *managerTestRegistry) Reorder(_ context.Context, _ string, orderedIDs []
 	return orderedIDs, nil
 }
 
+func (r *managerTestRegistry) SetParentSession(_ context.Context, _, sessionID, parentID string) error {
+	for i := range r.records {
+		if r.records[i].ID == sessionID {
+			r.records[i].ParentSessionID = parentID
+			return nil
+		}
+	}
+	return nil
+}
+
 func (r *managerTestRegistry) MarkDeleted(context.Context, string, string) error { return nil }
 
 // upsertFailingRegistry satisfies SessionRegistry with a failing Upsert —
@@ -1107,6 +1117,9 @@ func (upsertFailingRegistry) AppendSpawnedSession(context.Context, string, strin
 }
 func (upsertFailingRegistry) Reorder(context.Context, string, []string) ([]string, error) {
 	return nil, nil
+}
+func (upsertFailingRegistry) SetParentSession(context.Context, string, string, string) error {
+	return nil
 }
 func (upsertFailingRegistry) MarkDeleted(context.Context, string, string) error { return nil }
 

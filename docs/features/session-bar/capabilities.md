@@ -377,8 +377,79 @@ Named behaviors in the session-bar surface. See
   create error) rather than silently dropping a best-effort edge — unlike the
   parent-side chip append, which stays best-effort and counted by
   `tank_session_spawn_link_total{result}`.
-- **Non-goal:** no second indent level, no subtree collapse/expand (it would
-  hide the very sub-sessions this surfaces), no parent backlink rendered on the
-  child beyond the visual grouping, and no new durable ordering/state. Nesting a
-  cross-scope test-slot child under a prod origin remains out of scope (they are
-  different scopes and never share a list).
+- **Non-goal (for this spawn-driven capability):** no second indent level, no
+  subtree collapse/expand (it would hide the very sub-sessions this surfaces),
+  no parent backlink rendered on the child beyond the visual grouping. The
+  create-time stamp itself is pure presentation over lineage and writes no
+  ordering. User-initiated nesting and reordering by drag *are* deliberately
+  durable and live in their own capability (see **session-drag-reorder-and-nesting**),
+  which reuses this module's `arrangeSessionTree` renderer. Nesting a cross-scope
+  test-slot child under a prod origin remains out of scope (they are different
+  scopes and never share a list).
+
+## session-drag-reorder-and-nesting
+
+- **Status:** shipped
+- **Intent:** The sidebar session list is both user-orderable and user-nestable
+  by direct drag. One zone-based gesture covers both: dropping a row onto the
+  **top/bottom edge band** of a target reorders it before/after that row at the
+  target's level; dropping onto the **middle band** nests it under the target.
+  This is the manual counterpart to spawn-driven nesting — organization the user
+  controls, not lineage.
+- **Gesture / zones:** `frontend/src/dragNest.ts` is the DOM-free decision layer.
+  `dropIntentForRow(clientY, rowTop, rowHeight)` maps the pointer to
+  `reorder-before | reorder-after | nest` (top/bottom `NEST_EDGE_FRACTION`=0.25
+  reorder, middle nests); `placeSessionRelative` computes the new id order. The
+  decision is recomputed from the drop position (not stale hover state). Rows
+  render the live affordance via `is-drag-nest` (row glows as the new parent) or
+  `is-drag-reorder-before/after` (a top/bottom insertion line) in `index.css`.
+  Desktop-only: rows are `draggable` only when `!isCompact` (no dead touch
+  gesture; guarded by `mobileShell.test.ts`).
+- **Durable model — two single-purpose writes, orchestrated per drop:**
+  - **Reorder** persists the complete visible permutation to
+    `sessions.sidebar_position` via `PUT /api/sessions/order`
+    (`Store.Reorder`). The order endpoint owns ordering only.
+    - *Regression guard:* `Store.Reorder`'s UPDATE binds
+      `unnest($3::text[], $4::bigint[])`; it once read `$4/$5`, leaving `$3`
+      bound-but-unreferenced — Postgres `42P18` "could not determine data type
+      of parameter $3" — a **500 on every drag** that no test caught because the
+      hermetic suites stub `Reorder`. The DSN-gated
+      `TestReorderPersistsSidebarOrder` / `TestReorderRejectsIncompletePermutation`
+      now exercise the real query.
+  - **Nesting** sets/clears the child's `sessions.parent_session_id` via
+    `PUT /api/sessions/{id}/parent` → `Manager.SetParentSession` →
+    `Store.SetParentSession` (`NULLIF($4,'')` clears). Distinct from the
+    write-once create stamp: this is the explicit user mutation. A drop issues a
+    parent write only when the nesting level changed, plus the order write.
+- **Guards (durable tree stays acyclic, one tier):** `Manager.SetParentSession`
+  rejects self-parent, a target whose ancestor chain contains the moved row
+  (cycle), and a missing/cross-scope/owned-by-another target — all
+  `ErrInvalidParent` → HTTP 400; an unknown/own-not-visible child → 404. Depth is
+  **not** clamped on write: the stored edge is the literal direct parent, and
+  `arrangeSessionTree` clamps deeper lineage to a single tier on render, exactly
+  as it does for an agent sub-session that spawns its own children. `publishRow`
+  re-emits the row so every open list converges over the row-update stream
+  without a refresh.
+- **Un-nest:** the row's "…" menu carries an **Un-nest** item (shown when
+  `depth > 0`) that clears the pointer; dragging a child onto a *root* row's edge
+  band also un-nests as a natural consequence of zone reorder (the target's level
+  is the top level → parent becomes null).
+- **`spawned_sessions` untouched:** manual nesting writes only the child's
+  `parent_session_id`; the parent-side `spawned_sessions` chip JSONB keeps its
+  agent-spawn semantics. The two relationships stay independent.
+- **Observability:** `tank_session_reorder_total{result=ok|conflict|error}` and
+  `tank_session_nest_update_total{action=nest|unnest,result=ok|rejected|error}`.
+  `conflict` is the benign stale-permutation rejection the SPA reconciles;
+  `rejected` is a guard refusal; `error` is a durable-write failure — the
+  user-trust signals that the original 500 lacked (it was only visible via the
+  generic 5xx log).
+- **Optimism + recovery:** the SPA applies the new order (`applyLocalOrder`) and
+  parent locally, then persists; on any non-409 failure it surfaces a friendly
+  message and `refresh()`-reconciles from the authoritative snapshot. A 409 stale
+  reorder reconciles silently.
+- **Tests:** `dragNest.test.ts` (zone math + relative placement), DSN-gated
+  `Store.Reorder` / `Store.SetParentSession` round-trips, hermetic
+  `handleSetSessionParent` guard matrix (nest/un-nest/self/cycle/missing/404).
+- **Non-goal:** no second indent tier (durable lineage may go deeper but renders
+  clamped), no fine within-group ordering beyond `sidebar_position`, no
+  cross-scope nesting.

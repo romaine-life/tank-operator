@@ -570,6 +570,55 @@ var spawnedSessionLinkTotal = promauto.NewCounterVec(
 	[]string{"result"},
 )
 
+// sessionReorderTotal counts PUT /api/sessions/order outcomes. result=ok|conflict|error.
+// Bounded (3 series). conflict is the benign stale-tab permutation rejection
+// (the SPA refreshes and retries); a nonzero error rate means the durable
+// reorder write is failing — exactly the class of silent breakage that shipped
+// the 42P18 500 on every drag, invisible until pulled from the generic 5xx log.
+var sessionReorderTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_reorder_total",
+		Help: "Sidebar reorder (PUT /api/sessions/order) outcomes, by bounded result.",
+	},
+	[]string{"result"},
+)
+
+func recordSessionReorder(result string) {
+	switch result {
+	case "ok", "conflict", "error":
+	default:
+		result = "error"
+	}
+	sessionReorderTotal.WithLabelValues(result).Inc()
+}
+
+// sessionNestUpdateTotal counts manual drag-to-nest / un-nest writes to a
+// session's parent_session_id (PUT /api/sessions/{id}/parent). action=nest|unnest,
+// result=ok|rejected|error. Bounded (6 series). rejected is a guard refusal
+// (self-parent, cycle, or missing/cross-scope target — the durable tree stays
+// acyclic and one tier); error means the durable write or row republish failed.
+var sessionNestUpdateTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_nest_update_total",
+		Help: "Manual session nest/un-nest writes to parent_session_id, by action and bounded result.",
+	},
+	[]string{"action", "result"},
+)
+
+func recordSessionNestUpdate(action, result string) {
+	switch action {
+	case "nest", "unnest":
+	default:
+		action = "nest"
+	}
+	switch result {
+	case "ok", "rejected", "error":
+	default:
+		result = "error"
+	}
+	sessionNestUpdateTotal.WithLabelValues(action, result).Inc()
+}
+
 // pinnedReposUpdateTotal counts authenticated writes to the durable per-user
 // repo pin list. The bounded result label makes user-trust failures visible:
 // invalid means the SPA/server slug contract drifted, unavailable means a

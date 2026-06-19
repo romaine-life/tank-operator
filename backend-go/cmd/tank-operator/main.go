@@ -1223,7 +1223,8 @@ func (r *stubSessionRegistry) AppendSpawnedSession(_ context.Context, _, _ strin
 func (r *stubSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
 }
-func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
+func (r *stubSessionRegistry) SetParentSession(_ context.Context, _, _, _ string) error { return nil }
+func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error         { return nil }
 
 func envDefault(name, fallback string) string {
 	v := strings.TrimSpace(os.Getenv(name))
