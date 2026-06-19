@@ -10359,45 +10359,99 @@ function testSlotVerdictLabel(verdict: string): string {
   }
 }
 
-// testSlotReadiness collapses a status snapshot into the single readiness view
-// the page renders. It prefers the authoritative live preflight (present only
-// after a ?refresh=1 read) and otherwise falls back to the durable last-known
-// watch row ("as of" its last event). Null when neither is known yet.
+// testSlotReadiness collapses a status snapshot into the readiness view the page
+// renders. The durable watch row is the PRIMARY source for verdict/mergeable
+// state — it is event-driven (GitHub webhooks), so it converges merged/ready/
+// failed without a manual refresh (the page's background poll picks it up). The
+// live preflight (present only right after a live read) is the fallback when no
+// watch row exists yet; the failing/pending check NAMES it carries are surfaced
+// separately. Null when neither source is known yet.
 function testSlotReadiness(status: TestSlotStatus | null): {
   verdict: string;
   hasOpenPR: boolean;
   detail: string;
   prUrl: string;
+  prNumber: number;
   mergeableState: string;
+  checkState: string;
+  headSha: string;
   asOf: string | null;
   live: boolean;
 } | null {
   if (!status) return null;
-  const p: TestSlotPreflight | null = status.preflight;
-  if (p) {
-    return {
-      verdict: p.verdict,
-      hasOpenPR: p.has_open_pr,
-      detail: p.detail,
-      prUrl: p.pr_url,
-      mergeableState: p.mergeable_state,
-      asOf: null,
-      live: true,
-    };
-  }
   const w: TestSlotWatch | null = status.watch;
-  if (w) {
-    return {
-      verdict: w.status,
-      hasOpenPR: w.has_open_pr,
-      detail: w.detail,
-      prUrl: w.pr_url,
-      mergeableState: w.mergeable_state,
-      asOf: w.last_event_at,
-      live: false,
-    };
+  const p: TestSlotPreflight | null = status.preflight;
+  if (!w && !p) return null;
+  return {
+    verdict: w ? w.status : p!.verdict,
+    hasOpenPR: w ? w.has_open_pr : p!.has_open_pr,
+    detail: w?.detail || p?.detail || "",
+    prUrl: w?.pr_url || p?.pr_url || "",
+    prNumber: w?.pr_number || p?.pr_number || 0,
+    mergeableState: w?.mergeable_state || p?.mergeable_state || "",
+    checkState: w?.check_state || p?.check_state || "",
+    headSha: w?.head_sha || p?.head_sha || "",
+    asOf: w?.last_event_at ?? null,
+    live: !w && !!p,
+  };
+}
+
+// humanizeMergeableState turns GitHub's mergeable_state jargon into plain English
+// for the readiness card.
+function humanizeMergeableState(state: string): string {
+  switch ((state || "").trim().toLowerCase()) {
+    case "clean":
+      return "No conflicts";
+    case "dirty":
+      return "Has conflicts with main";
+    case "behind":
+      return "Behind main";
+    case "blocked":
+      return "Blocked by branch protection";
+    case "unstable":
+      return "Mergeable (checks pending)";
+    case "draft":
+      return "Draft PR";
+    case "has_hooks":
+      return "Mergeable";
+    case "":
+    case "unknown":
+      return "Unknown";
+    default:
+      return state;
   }
-  return null;
+}
+
+function testSlotShortSha(sha: string | null | undefined): string {
+  const s = (sha || "").trim();
+  return s ? s.slice(0, 7) : "";
+}
+
+function githubRepoUrl(slug: string): string {
+  return slug ? `https://github.com/${slug}` : "";
+}
+
+function githubBranchUrl(slug: string, branch: string): string {
+  if (!slug || !branch) return "";
+  const encoded = branch.split("/").map(encodeURIComponent).join("/");
+  return `https://github.com/${slug}/tree/${encoded}`;
+}
+
+// testSlotSlotLabel names the obtained slot: prefer its numeric index, else the
+// slot hostname parsed from the URL (e.g. "tank-operator-slot-1").
+function testSlotSlotLabel(testState: TestState | null): string {
+  if (!testState) return "";
+  const url = testState.url?.trim();
+  if (url) {
+    try {
+      const host = new URL(url).hostname.split(".")[0];
+      if (host) return host;
+    } catch {
+      // fall through to the index
+    }
+  }
+  if (testState.slot_index != null) return `Slot ${testState.slot_index}`;
+  return "";
 }
 
 function formatTestSlotAsOf(iso: string | null): string {
@@ -10436,6 +10490,15 @@ function TestSlotScreen({
   onOpenTranscript: () => void;
 }) {
   const [status, setStatus] = useState<TestSlotStatus | null>(null);
+  // Failing/pending check NAMES from the last LIVE read (mount enrich + manual
+  // Refresh). Kept separate from `status` so a cheap durable poll — which carries
+  // no preflight — does not wipe them; they are shown only while they describe
+  // the current head SHA.
+  const [liveChecks, setLiveChecks] = useState<{
+    failing: string[];
+    pending: string[];
+    headSha: string;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -10446,31 +10509,58 @@ function TestSlotScreen({
   fetchRef.current = authedFetch;
 
   const load = useCallback(
-    async (refresh: boolean) => {
-      if (refresh) setRefreshing(true);
-      else setLoading(true);
-      setError(null);
+    async (refresh: boolean, silent: boolean) => {
+      if (!silent) {
+        if (refresh) setRefreshing(true);
+        else setLoading(true);
+        setError(null);
+      }
       try {
         const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
           refresh,
         });
         setStatus(next);
+        if (refresh && next.preflight) {
+          setLiveChecks({
+            failing: next.preflight.failing_checks ?? [],
+            pending: next.preflight.pending_checks ?? [],
+            headSha: next.preflight.head_sha ?? "",
+          });
+        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (!silent) setError(err instanceof Error ? err.message : String(err));
       } finally {
-        if (refresh) setRefreshing(false);
-        else setLoading(false);
+        if (!silent) {
+          if (refresh) setRefreshing(false);
+          else setLoading(false);
+        }
       }
     },
     [sessionId],
   );
 
-  // Load on mount, and re-pull the durable snapshot whenever the slot pill
-  // (testState, which converges live via the session SSE) flips — so a
-  // provisioning → ready/url transition reflects without a manual refresh.
+  // Mount: instant durable paint, then a silent live read to enrich (authoritative
+  // verdict + failing-check names).
   useEffect(() => {
-    void load(false);
+    void load(false, false);
+    void load(true, true);
+  }, [load]);
+
+  // The slot pill (testState) converges via the session SSE; re-pull durable when
+  // it flips so a provisioning → ready/url transition reflects without a refresh.
+  useEffect(() => {
+    void load(false, true);
   }, [load, testState?.active, testState?.url]);
+
+  // Background convergence: a cheap durable poll (no GitHub call) so a
+  // webhook-driven transition — most importantly mergeable → merged — reflects
+  // without a manual refresh. Paused when the tab is hidden.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load(false, true);
+    }, 12000);
+    return () => window.clearInterval(id);
+  }, [load]);
 
   const readiness = testSlotReadiness(status);
   const active = Boolean(testState?.active);
@@ -10484,6 +10574,40 @@ function TestSlotScreen({
 
   const verdict = readiness?.verdict ?? "";
   const tone = verdict ? testSlotVerdictTone(verdict) : "info";
+
+  const currentSha = readiness?.headSha || "";
+  const deployedSha = status?.provision?.head_sha || "";
+  const stale = Boolean(
+    active && deployedSha && currentSha && deployedSha !== currentSha,
+  );
+
+  // Live check names only apply to the current head; otherwise they describe a
+  // superseded commit and are hidden.
+  const checksCurrent =
+    liveChecks != null &&
+    (!currentSha || !liveChecks.headSha || liveChecks.headSha === currentSha);
+  const failingChecks = checksCurrent ? liveChecks!.failing : [];
+  const pendingChecks = checksCurrent ? liveChecks!.pending : [];
+  const checksSummary = (() => {
+    if (failingChecks.length > 0) return `${failingChecks.length} failing`;
+    if (pendingChecks.length > 0) return `${pendingChecks.length} running`;
+    switch (readiness?.checkState) {
+      case "success":
+        return "Passing";
+      case "failure":
+        return "Failing";
+      case "pending":
+        return "Running";
+      default:
+        return "Unknown";
+    }
+  })();
+
+  const repoUrl = githubRepoUrl(repoSlug);
+  const branchUrl = githubBranchUrl(repoSlug, branch);
+  const prUrl = readiness?.prUrl || "";
+  const prNumber = readiness?.prNumber || 0;
+  const slotLabel = testSlotSlotLabel(testState);
 
   const doReturn = async () => {
     if (!onReturnTestSlot || returning) return;
@@ -10522,7 +10646,7 @@ function TestSlotScreen({
           <button
             type="button"
             className="run-session-data-action"
-            onClick={() => void load(true)}
+            onClick={() => void load(true, false)}
             disabled={refreshing || loading}
             aria-busy={refreshing || undefined}
             title="Re-check PR readiness against GitHub now"
@@ -10542,10 +10666,35 @@ function TestSlotScreen({
           </button>
         </div>
 
-        {repoSlug && (
+        {(repoSlug || (prNumber > 0 && prUrl)) && (
           <p className="run-session-data-summary">
-            {repoSlug}
-            {branch ? ` · ${branch}` : ""}
+            {repoUrl ? (
+              <a href={repoUrl} target="_blank" rel="noreferrer">
+                {repoSlug}
+              </a>
+            ) : (
+              repoSlug
+            )}
+            {branch && (
+              <>
+                {" · "}
+                {branchUrl ? (
+                  <a href={branchUrl} target="_blank" rel="noreferrer">
+                    {branch}
+                  </a>
+                ) : (
+                  branch
+                )}
+              </>
+            )}
+            {prNumber > 0 && prUrl && (
+              <>
+                {" · "}
+                <a href={prUrl} target="_blank" rel="noreferrer">
+                  PR #{prNumber}
+                </a>
+              </>
+            )}
           </p>
         )}
 
@@ -10566,6 +10715,122 @@ function TestSlotScreen({
           </div>
         ) : (
           <div className="run-session-data-page-list" aria-label="Test slot">
+            {/* Active environment — what slot is obtained, its URL, what's on it */}
+            {active && (
+              <div className="run-session-data-card is-good">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <FlaskConicalIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      Test environment — running
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      {slotLabel || "Provisioned for this session"}
+                      {deployedSha
+                        ? ` · ${branch || "branch"} @ ${testSlotShortSha(deployedSha)}`
+                        : ""}
+                    </span>
+                  </span>
+                  {readyUrl && (
+                    <a
+                      className="run-session-data-card-status"
+                      href={readyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={onOpenReady}
+                      title={readyUrl}
+                    >
+                      <span>Open</span>
+                      <ExternalLinkIcon aria-hidden="true" />
+                    </a>
+                  )}
+                </div>
+                <SessionDataFacts
+                  facts={[
+                    ["Slot", slotLabel || "Assigned"],
+                    ["URL", readyUrl || "Unknown"],
+                    [
+                      "Deployed",
+                      deployedSha
+                        ? `${branch || "branch"} @ ${testSlotShortSha(deployedSha)}`
+                        : branch || "Unknown",
+                    ],
+                    ...((status?.provision?.started_at
+                      ? [["Started", formatTestSlotAsOf(status.provision.started_at)]]
+                      : []) as Array<[string, string]>),
+                  ]}
+                />
+                <div className="run-session-data-actions">
+                  {readyUrl && (
+                    <a
+                      className="run-session-data-action"
+                      href={readyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={onOpenReady}
+                      title={readyUrl}
+                    >
+                      <ExternalLinkIcon
+                        className="run-session-data-action-icon"
+                        aria-hidden="true"
+                      />
+                      <span>Open test slot</span>
+                    </a>
+                  )}
+                  {onReturnTestSlot && !readOnly && (
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={returning}
+                      aria-busy={returning || undefined}
+                      onClick={() => void doReturn()}
+                    >
+                      {returning ? (
+                        <Loader2Icon
+                          className="run-session-data-action-icon run-spin"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <RotateCcwIcon
+                          className="run-session-data-action-icon"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span>{returning ? "Returning…" : "Return lease"}</span>
+                    </button>
+                  )}
+                  {readOnly && (
+                    <span className="run-session-data-readonly">
+                      Read-only session
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Stale-slot warning: deployed commit no longer matches branch head */}
+            {stale && (
+              <div className="run-session-data-card is-warning">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <RotateCcwIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      Slot is running an older commit
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      Deployed {testSlotShortSha(deployedSha)}, but the branch is
+                      now at {testSlotShortSha(currentSha)}. Create the test slot
+                      again to test your latest.
+                    </span>
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* PR readiness */}
             <div className={`run-session-data-card is-${tone}`}>
               <div className="run-session-data-card-top">
@@ -10574,7 +10839,9 @@ function TestSlotScreen({
                 </span>
                 <span className="run-session-data-card-main">
                   <span className="run-session-data-card-label">
-                    Pull request readiness
+                    {prNumber > 0
+                      ? `Pull request #${prNumber}`
+                      : "Pull request readiness"}
                   </span>
                   <span className="run-session-data-card-detail">
                     {repoBlocked
@@ -10586,13 +10853,13 @@ function TestSlotScreen({
                         : "No PR readiness recorded yet — Refresh to check live."}
                   </span>
                 </span>
-                {readiness?.prUrl ? (
+                {prUrl ? (
                   <a
                     className="run-session-data-card-status"
-                    href={readiness.prUrl}
+                    href={prUrl}
                     target="_blank"
                     rel="noreferrer"
-                    title={readiness.prUrl}
+                    title={prUrl}
                   >
                     <span>{testSlotVerdictLabel(verdict)}</span>
                     <ExternalLinkIcon aria-hidden="true" />
@@ -10607,9 +10874,19 @@ function TestSlotScreen({
                 facts={[
                   [
                     "Mergeable",
-                    readiness?.mergeableState
-                      ? readiness.mergeableState
+                    readiness
+                      ? humanizeMergeableState(readiness.mergeableState)
                       : "Unknown",
+                  ],
+                  ["Checks", checksSummary],
+                  ...((failingChecks.length > 0
+                    ? [["Failing", failingChecks.slice(0, 6).join(", ")]]
+                    : pendingChecks.length > 0
+                      ? [["Running", pendingChecks.slice(0, 6).join(", ")]]
+                      : []) as Array<[string, string]>),
+                  [
+                    "Commit",
+                    currentSha ? testSlotShortSha(currentSha) : "Unknown",
                   ],
                   [
                     "Source",
@@ -10627,157 +10904,108 @@ function TestSlotScreen({
               />
             </div>
 
-            {/* Controls */}
-            <div className="run-session-data-card is-info">
-              <div className="run-session-data-card-top">
-                <span className="run-session-data-card-icon" aria-hidden="true">
-                  <FlaskConicalIcon />
-                </span>
-                <span className="run-session-data-card-main">
-                  <span className="run-session-data-card-label">
-                    {active ? "Test environment" : "Create a test environment"}
-                  </span>
-                  <span className="run-session-data-card-detail">
-                    {active
-                      ? "A slot is provisioned for this session."
-                      : repoBlocked
-                        ? "Resolve a repository above to enable provisioning."
-                        : hasOpenPR
-                          ? "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict."
-                          : "No open PR for this branch yet — publish a PR to test."}
-                  </span>
-                </span>
-              </div>
-              <div className="run-session-data-actions">
-                {active ? (
-                  <>
-                    {readyUrl && (
-                      <a
-                        className="run-session-data-action"
-                        href={readyUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={onOpenReady}
-                        title={readyUrl}
-                      >
-                        <ExternalLinkIcon
-                          className="run-session-data-action-icon"
-                          aria-hidden="true"
-                        />
-                        <span>Open test slot</span>
-                      </a>
-                    )}
-                    {onReturnTestSlot && !readOnly && (
-                      <button
-                        type="button"
-                        className="run-session-data-action"
-                        disabled={returning}
-                        aria-busy={returning || undefined}
-                        onClick={() => void doReturn()}
-                      >
-                        {returning ? (
-                          <Loader2Icon
-                            className="run-session-data-action-icon run-spin"
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <RotateCcwIcon
-                            className="run-session-data-action-icon"
-                            aria-hidden="true"
-                          />
-                        )}
-                        <span>{returning ? "Returning…" : "Return lease"}</span>
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="run-session-data-action"
-                      disabled={!canCreate}
-                      onClick={onCreateHold}
-                      title={
-                        canCreate
-                          ? "Provision a test slot for this branch"
-                          : repoBlocked
-                            ? "Resolve a repository first"
-                            : hasOpenPR
-                              ? "Unavailable"
-                              : "No open PR to test"
-                      }
-                    >
-                      <FlaskConicalIcon
-                        className="run-session-data-action-icon"
-                        aria-hidden="true"
-                      />
-                      <span>Create test slot</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="run-session-data-action"
-                      disabled={!canCreate}
-                      onClick={onCreateDrive}
-                      title={
-                        canCreate
-                          ? "Provision a slot, then have the agent validate it"
-                          : "Unavailable"
-                      }
-                    >
-                      <FlaskConicalIcon
-                        className="run-session-data-action-icon"
-                        aria-hidden="true"
-                      />
-                      <span>Create test slot and test</span>
-                    </button>
-                  </>
-                )}
-                {readOnly && (
-                  <span className="run-session-data-readonly">
-                    Read-only session
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Last provision outcome (durable) */}
-            {status?.provision && (
-              <div
-                className={`run-session-data-card is-${
-                  status.provision.status === "failed"
-                    ? "danger"
-                    : status.provision.status === "pending"
-                      ? "warning"
-                      : "info"
-                }`}
-              >
+            {/* Create controls (only when no slot is up) */}
+            {!active && (
+              <div className="run-session-data-card is-info">
                 <div className="run-session-data-card-top">
-                  <span
-                    className="run-session-data-card-icon"
-                    aria-hidden="true"
-                  >
-                    {status.provision.status === "pending" ? (
-                      <Loader2Icon className="run-spin" />
-                    ) : status.provision.status === "failed" ? (
-                      <XIcon />
-                    ) : (
-                      <CheckIcon />
-                    )}
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <FlaskConicalIcon />
                   </span>
                   <span className="run-session-data-card-main">
                     <span className="run-session-data-card-label">
-                      {status.provision.status === "pending"
-                        ? "Provisioning…"
-                        : "Last provision"}
+                      Create a test environment
                     </span>
                     <span className="run-session-data-card-detail">
-                      {status.provision.detail ||
-                        `Status: ${status.provision.status}`}
+                      {repoBlocked
+                        ? "Resolve a repository above to enable provisioning."
+                        : hasOpenPR
+                          ? "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict. CI validation can take several minutes."
+                          : "No open PR for this branch yet — publish a PR to test."}
                     </span>
                   </span>
                 </div>
+                <div className="run-session-data-actions">
+                  <button
+                    type="button"
+                    className="run-session-data-action"
+                    disabled={!canCreate}
+                    onClick={onCreateHold}
+                    title={
+                      canCreate
+                        ? "Provision a test slot for this branch"
+                        : repoBlocked
+                          ? "Resolve a repository first"
+                          : hasOpenPR
+                            ? "Unavailable"
+                            : "No open PR to test"
+                    }
+                  >
+                    <FlaskConicalIcon
+                      className="run-session-data-action-icon"
+                      aria-hidden="true"
+                    />
+                    <span>Create test slot</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="run-session-data-action"
+                    disabled={!canCreate}
+                    onClick={onCreateDrive}
+                    title={
+                      canCreate
+                        ? "Provision a slot, then have the agent validate it"
+                        : "Unavailable"
+                    }
+                  >
+                    <FlaskConicalIcon
+                      className="run-session-data-action-icon"
+                      aria-hidden="true"
+                    />
+                    <span>Create test slot and test</span>
+                  </button>
+                  {readOnly && (
+                    <span className="run-session-data-readonly">
+                      Read-only session
+                    </span>
+                  )}
+                </div>
               </div>
             )}
+
+            {/* Provisioning in flight / last failure (a ready slot shows above) */}
+            {status?.provision &&
+              (status.provision.status === "pending" ||
+                status.provision.status === "failed") && (
+                <div
+                  className={`run-session-data-card is-${
+                    status.provision.status === "failed" ? "danger" : "warning"
+                  }`}
+                >
+                  <div className="run-session-data-card-top">
+                    <span
+                      className="run-session-data-card-icon"
+                      aria-hidden="true"
+                    >
+                      {status.provision.status === "pending" ? (
+                        <Loader2Icon className="run-spin" />
+                      ) : (
+                        <XIcon />
+                      )}
+                    </span>
+                    <span className="run-session-data-card-main">
+                      <span className="run-session-data-card-label">
+                        {status.provision.status === "pending"
+                          ? "Provisioning…"
+                          : "Last provision failed"}
+                      </span>
+                      <span className="run-session-data-card-detail">
+                        {status.provision.detail ||
+                          `Status: ${status.provision.status}`}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              )}
           </div>
         )}
       </section>
