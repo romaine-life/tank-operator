@@ -9789,6 +9789,50 @@ button:disabled {
   font-weight: 750;
 }
 
+/* Spawned-sessions ("tank operator") chip. Mirrors the Glimmung chip's
+   count-badge + popover-of-links shape; the emerald tint distinguishes it
+   from the Glimmung cyan and the rollout wheels. */
+.run-spawned-menu {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.run-spawned-action-btn.is-ready {
+  color: #6ee7b7;
+}
+
+.run-spawned-action-btn.is-ready:hover {
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.run-spawned-menu-popover {
+  width: min(28rem, calc(100vw - 2rem));
+}
+
+.run-spawned-menu-item {
+  align-items: flex-start;
+}
+
+.run-spawned-menu-name {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #6ee7b7;
+}
+
+.run-spawned-menu-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+}
+
 .run-pr-action-btn.is-ready {
   color: #93c5fd;
 }

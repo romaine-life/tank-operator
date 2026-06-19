@@ -435,6 +435,10 @@ import {
   collectGlimmungRunsFromEntries,
   type GlimmungRunLink,
 } from "./glimmungRuns";
+import {
+  normalizeSpawnedSessions,
+  type SpawnedSessionRef,
+} from "./spawnedSessions";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -887,6 +891,10 @@ interface Session {
   name: string;
   test_state?: TestState | null;
   rollout_state?: RolloutState | null;
+  // spawned_sessions is the durable parent→child lineage the session-bar
+  // "spawned sessions" chip lists (sessions this one spawned via
+  // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
+  spawned_sessions?: SpawnedSessionRef[];
   // Activity is the chat-derived sidebar indicator block. Backend
   // hydrates this from the latest session.activity_changed lifecycle
   // event in GET /api/sessions; the session-list SSE stream then keeps the
@@ -1475,6 +1483,9 @@ function normalizeSession(session: Session): Session {
   // array so downstream renderers can `.map` without a guard.
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
+  next.spawned_sessions = Array.isArray(session.spawned_sessions)
+    ? session.spawned_sessions
+    : undefined;
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter(
         (entry): entry is string => typeof entry === "string",
@@ -2545,6 +2556,9 @@ interface ComposerToolButtonsProps {
   glimmungRuns: {
     runs: GlimmungRunLink[];
   };
+  spawnedSessions: {
+    items: SpawnedSessionRef[];
+  };
   breakGlass: {
     items: BreakGlassApprovalMenuItem[];
     approvingId?: string | null;
@@ -3258,12 +3272,147 @@ function GlimmungRunMenuButton({
   );
 }
 
+// SpawnedSessionsMenuButton is the session-bar "tank operator" chip: when
+// this session has spawned child sessions (via spawn_run_session /
+// spawn_test_slot_session) it shows the tank glyph with a count badge and a
+// popover of links to each child. Hidden entirely when nothing was spawned.
+// Cloned from GlimmungRunMenuButton (count + portal popover of links); it
+// wears the tank icon vacated by the rollout chip — the tank belongs to
+// "tank operator", and spawning sessions is the core tank-operator action.
+function SpawnedSessionsMenuButton({
+  items,
+}: ComposerToolButtonsProps["spawnedSessions"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  // Hidden until this session has spawned something — the chip is a
+  // presence signal, not a permanently-disabled affordance.
+  if (items.length === 0) return null;
+  const title = `Spawned sessions (${items.length})`;
+
+  return (
+    <span ref={ref} className="run-spawned-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="run-composer-icon-btn run-composer-action-btn run-spawned-action-btn is-ready"
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <TankIcon className="run-composer-icon" />
+        {items.length > 1 && (
+          <span className="run-command-menu-count">{items.length}</span>
+        )}
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover run-spawned-menu-popover"
+            role="menu"
+            aria-label="Spawned sessions"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Spawned sessions</div>
+            {items.map((spawned) => (
+              <a
+                key={spawned.id}
+                role="menuitem"
+                className="run-pr-menu-item run-spawned-menu-item"
+                href={spawned.url}
+                target="_blank"
+                rel="noreferrer"
+                title={spawned.url}
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-glimmung-menu-main">
+                  <span className="run-pr-menu-name run-spawned-menu-name">
+                    <TankIcon className="run-spawned-menu-glyph" />
+                    {spawned.name}
+                  </span>
+                  <span className="run-slash-desc">
+                    {[spawned.mode, spawned.model, spawned.repos?.join(", ")]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 function ComposerToolButtons({
   attach,
   cost,
   rollout,
   test,
   glimmungRuns,
+  spawnedSessions,
   breakGlass,
   pullRequest,
   slash,
@@ -3295,7 +3444,7 @@ function ComposerToolButtons({
           aria-label="Start rollout"
           title={rollout.title}
         >
-          <TankIcon className="run-composer-icon" />
+          <WheelsIcon className="run-composer-icon" />
         </button>
       )}
       <DropdownMenu>
@@ -3363,6 +3512,7 @@ function ComposerToolButtons({
         </DropdownMenuContent>
       </DropdownMenu>
       <GlimmungRunMenuButton {...glimmungRuns} />
+      <SpawnedSessionsMenuButton {...spawnedSessions} />
       <PullRequestMenuButton {...pullRequest} />
       <BreakGlassApprovalMenuButton {...breakGlass} />
       {bugLabelControl}
@@ -4172,6 +4322,48 @@ function TankIcon({
       <circle cx="40" cy="46" r="5" />
       <line x1="48" y1="32" x2="58" y2="32" />
       <rect x="22" y="20" width="14" height="8" rx="1.5" />
+    </svg>
+  );
+}
+
+// WheelsIcon is the rollout chip's glyph: two spoked wheels mid-roll with
+// motion streaks — "rolling out". It took over from TankIcon when the tank
+// glyph moved to the spawned-sessions chip (the tank icon belongs to "tank
+// operator"). Same viewBox/stroke conventions as TankIcon so the two read
+// as a matched pair in the composer toolbar.
+function WheelsIcon({
+  className,
+  size,
+  strokeWidth,
+}: {
+  className?: string;
+  size?: number;
+  strokeWidth?: number;
+}) {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth ?? 2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <circle cx="21" cy="40" r="11" />
+      <circle cx="21" cy="40" r="2.5" />
+      <line x1="21" y1="29" x2="21" y2="51" />
+      <line x1="10" y1="40" x2="32" y2="40" />
+      <circle cx="46" cy="42" r="9" />
+      <circle cx="46" cy="42" r="2" />
+      <line x1="46" y1="33" x2="46" y2="51" />
+      <line x1="37" y1="42" x2="55" y2="42" />
+      <line x1="6" y1="18" x2="22" y2="18" />
+      <line x1="12" y1="24" x2="30" y2="24" />
     </svg>
   );
 }
@@ -4997,6 +5189,7 @@ function DemoLanding() {
                         title: "Sign in to start a session",
                       }}
                       glimmungRuns={{ runs: [] }}
+                      spawnedSessions={{ items: [] }}
                       breakGlass={{ items: [] }}
                       pullRequest={{}}
                       slash={{
@@ -25108,6 +25301,7 @@ function ChatPane({
                 glimmungRuns={{
                   runs: glimmungRunLinks,
                 }}
+                spawnedSessions={{ items: session.spawned_sessions ?? [] }}
                 breakGlass={{
                   items: breakGlassApprovalMenuItems,
                   approvingId:
@@ -26932,6 +27126,7 @@ function AuthenticatedApp() {
       name: row.name,
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
+      spawned_sessions: row.spawned_sessions,
       sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
@@ -26997,6 +27192,7 @@ function AuthenticatedApp() {
       activity_summary: raw.activity ?? undefined,
       test_state: raw.test_state ?? undefined,
       rollout_state: raw.rollout_state ?? undefined,
+      spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities)
@@ -29763,6 +29959,7 @@ function AuthenticatedApp() {
                       title: "Available in an active chat session",
                     }}
                     glimmungRuns={{ runs: [] }}
+                    spawnedSessions={{ items: [] }}
                     breakGlass={{ items: [] }}
                     pullRequest={{}}
                     slash={{

@@ -550,6 +550,13 @@ All metric names are prefixed `tank_`. The full namespace:
   red signal for agents or browser prefs attempting retired Codex modes or
   unavailable model strings; the corresponding HTTP response must be a hard
   400 with an actionable allowed-value list, never a silent default.
+- `tank_session_spawn_link_total{result}` — parent→child edge writes onto the
+  origin session row when an agent spawns a session (`spawn_run_session` /
+  `spawn_test_slot_session`), feeding the session-bar spawned-sessions chip.
+  `result` is `ok|error` (bounded, 2 series). The write is best-effort and
+  never fails the spawn, so a rising `error` rate is a quiet user-trust
+  regression — parents are silently losing the links to their children — and
+  is the signal to alert on rather than the (healthy) `ok` volume.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   `PROXY_PROVIDER`.
   `tank_api_proxy_upstream_status_total{provider,status_class}` buckets every

@@ -555,6 +555,21 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	[]string{"count_bucket"},
 )
 
+// spawnedSessionLinkTotal counts attempts to record a parent→child edge on
+// the origin session's row when an agent spawns a session, so the
+// session-bar "spawned sessions" chip can link to it. result=ok|error.
+// Bounded (2 series). The notice is best-effort and never fails the spawn;
+// a rising error rate means parents are silently losing child links (the
+// append write is failing) — a user-trust regression worth alerting on,
+// per docs/observability.md.
+var spawnedSessionLinkTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_spawn_link_total",
+		Help: "Parent→child spawned-session edge writes onto the origin session row, by result.",
+	},
+	[]string{"result"},
+)
+
 // pinnedReposUpdateTotal counts authenticated writes to the durable per-user
 // repo pin list. The bounded result label makes user-trust failures visible:
 // invalid means the SPA/server slug contract drifted, unavailable means a

@@ -57,6 +57,7 @@ type SessionRegistry interface {
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
+	AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
@@ -782,6 +783,28 @@ func (m *Manager) SetCloneState(ctx context.Context, owner, sessionID string, st
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// AppendSpawnedSession records that parentSessionID (owned by owner)
+// spawned the session described by ref, for the parent's session-bar
+// "spawned sessions" chip. Append-only and id-deduped at the registry so a
+// spawn retry is idempotent. Republishes the parent row so an open sidebar
+// updates live; this is best-effort — the durable column is the source of
+// truth and the SPA's next SSE reconnect catch-up re-reads it. Unlike the
+// Set*State mutators it patches no pod annotation: lineage is a durable UI
+// surface, never runtime input for the parent's container. The registry
+// matches the parent on its full (email, session_scope, session_id) key, so
+// lineage lands for same-scope spawns (spawn_run_session); cross-scope
+// test-slot lineage needs the origin scope plumbed through (a follow-up).
+func (m *Manager) AppendSpawnedSession(ctx context.Context, owner, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error {
+	if m.registry == nil {
+		return nil
+	}
+	if err := m.registry.AppendSpawnedSession(ctx, owner, parentSessionID, ref); err != nil {
+		return err
+	}
+	m.publishRow(ctx, owner, parentSessionID)
+	return nil
 }
 
 type runtimeConfigRegistry interface {
