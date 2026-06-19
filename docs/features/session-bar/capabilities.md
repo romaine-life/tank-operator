@@ -274,3 +274,48 @@ Named behaviors in the session-bar surface. See
 - **Non-goal:** the indicator does not change Git enforcement, gate any
   control, or imply the GUI/CLI surface of the session beyond what the
   capability already encodes. It is a read-only display affordance.
+
+## spawned-sessions-chip
+
+- **Status:** shipped
+- **Intent:** When an agent spawns a session (the `spawn_run_session` /
+  `spawn_test_slot_session` MCP tools), the human needs a durable, clickable
+  handle to the new session — not a one-line "I started session 1132, boss"
+  in the transcript that the agent may describe uselessly or never link. The
+  composer toolbar gets a "tank operator" chip that lists the sessions spawned
+  from the current one, each a working link, so the relationship survives
+  reloads and is reachable without reading the conversation.
+- **Durable source:** `sessions.spawned_sessions jsonb` on the **origin
+  (parent)** row (migration `0178`). Each entry is a self-contained
+  `{id,name,mode,model,repos,url,created_at}` ref. The absolute `url` is
+  stamped server-side by whichever operator handled the spawn, so a
+  cross-scope test-slot child carries its own slot host. The column is the
+  snapshot/SSE-facing source of truth; the SPA never re-derives the
+  parent→child relationship from the event ledger.
+- **Write path:** `handleInternalCreateSession` appends to the origin row when
+  the `X-Tank-Origin-Session-Id` header is present (the proxy stamps it on
+  every MCP call), via `sessionregistry.AppendSpawnedSession`. The append is
+  atomic and id-deduped (a spawn retry is idempotent) and matches the parent
+  on its full `(email, session_scope, session_id)` key — session ids are only
+  unique within a scope, so the scope is load-bearing. Same-scope spawns
+  (`spawn_run_session`) record lineage; a cross-scope test-slot spawn needs
+  the origin scope plumbed through to reach a prod parent, a tracked
+  follow-up (the write never targets the wrong row in the meantime). It is
+  **best-effort**: the child is already durably created, so a failed edge
+  write never fails the spawn. Counter `tank_session_spawn_link_total{result}`.
+- **Runtime behavior:** `SpawnedSessionsMenuButton` (`frontend/src/App.tsx`)
+  is hidden until the session has spawned ≥1 child, then shows the tank glyph
+  with a count badge and a popover of links (`name`, `mode·model·repos`,
+  external-link to the child). It is a presence signal, not a permanently
+  disabled affordance. The chip reads `session.spawned_sessions` straight off
+  the durable row (like `rollout_state`/`repos`); it converges over the
+  session-list SSE without refresh.
+- **Icon ownership:** the tank glyph (`TankIcon`) moved here from the rollout
+  chip — the tank belongs to "tank operator", and spawning sessions is the
+  core tank-operator action. The rollout chip took a new `WheelsIcon`
+  ("rolling out"). The two read as a matched pair.
+- **Non-goal:** no transcript message, no live child *status* (the chip is a
+  creation-time link list, not a status feed), no parent backlink rendered on
+  the child, and no general PR/test-slot consolidation — PRs already have
+  their own chip. The chip never gates a control; it is a read-only link
+  affordance over durable lineage.

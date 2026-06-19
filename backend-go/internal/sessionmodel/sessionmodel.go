@@ -164,6 +164,22 @@ func (m ImageVersionMetadata) Clone() ImageVersionMetadata {
 	return NormalizeImageVersionMetadata(m)
 }
 
+// DecodeSpawnedSessions parses the sessions.spawned_sessions jsonb array
+// into typed refs for the snapshot/row layers. A missing column, NULL, or
+// malformed payload decodes to nil ("spawned nothing") rather than an
+// error — the column is a display-only projection, never load-bearing for
+// session correctness, so a bad row must not break the session list.
+func DecodeSpawnedSessions(raw []byte) []SpawnedSessionRef {
+	if len(raw) == 0 {
+		return nil
+	}
+	var parsed []SpawnedSessionRef
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil
+	}
+	return parsed
+}
+
 type SessionRecord struct {
 	ID      string
 	Email   string
@@ -202,6 +218,15 @@ type SessionRecord struct {
 	ActivitySummary []byte         // JSON-marshaled; nil when no chat activity yet
 	TestState       map[string]any // jsonb column, materialized for the handler layer
 	RolloutState    map[string]any // jsonb column
+
+	// SpawnedSessions is the durable parent→child lineage surfaced by the
+	// session-bar "spawned sessions" chip: one ref per session this
+	// session spawned (via spawn_run_session / spawn_test_slot_session).
+	// nil/empty means this session spawned nothing. Appended id-deduped by
+	// sessionregistry.AppendSpawnedSession at child-create; the snapshot/
+	// RowPublisher carry it verbatim so the SPA never re-derives the
+	// relationship from the event ledger. jsonb array column.
+	SpawnedSessions []SpawnedSessionRef
 
 	// Repos is the list of "owner/name" slugs selected at session
 	// creation. Empty slice is the steady-state "no auto-cloning"
@@ -291,6 +316,22 @@ type SessionBugLabel struct {
 	Name        string `json:"name"`
 	Slug        string `json:"slug"`
 	DisplayName string `json:"display_name"`
+}
+
+// SpawnedSessionRef is one entry of SessionRecord.SpawnedSessions: a
+// durable, self-contained handle to a session this session spawned, used
+// by the session-bar "spawned sessions" chip. URL is absolute and stamped
+// at create time by the operator that handled the spawn (so a cross-scope
+// test-slot child carries its own slot host), letting the chip link out
+// without the SPA re-deriving the address. ID dedupes appends.
+type SpawnedSessionRef struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Mode      string   `json:"mode,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Repos     []string `json:"repos,omitempty"`
+	URL       string   `json:"url"`
+	CreatedAt string   `json:"created_at,omitempty"`
 }
 
 type SessionAvatarAssignment struct {

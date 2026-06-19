@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
@@ -291,6 +293,33 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		}
 	}
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
+	// Record the parent→child edge on the calling (origin) session's row so
+	// its session-bar "spawned sessions" chip can link here. Best-effort:
+	// the child is already durably created, so a failed edge write must not
+	// fail the spawn. Gated on the origin header, so human/splash-page
+	// creates (no origin) record nothing. Covers spawn_run_session and
+	// spawn_test_slot_session — both land on this canonical create path.
+	if originSessionID := originSessionIDFromRequest(r, ""); originSessionID != "" {
+		tankUIHost := strings.TrimRight(envDefault("TANK_UI_HOST", "https://tank.romaine.life"), "/")
+		ref := sessionmodel.SpawnedSessionRef{
+			ID:    info.ID,
+			Name:  info.Name,
+			Mode:  info.Mode,
+			Model: info.Model,
+			Repos: info.Repos,
+			URL:   tankUIHost + "/?session=" + info.ID,
+		}
+		if info.CreatedAt != nil {
+			ref.CreatedAt = *info.CreatedAt
+		}
+		if err := s.mgr.AppendSpawnedSession(r.Context(), user.ActorEmail, originSessionID, ref); err != nil {
+			slog.Warn("record spawned-session edge on origin failed",
+				"origin_session_id", originSessionID, "child_session_id", info.ID, "error", err)
+			spawnedSessionLinkTotal.WithLabelValues("error").Inc()
+		} else {
+			spawnedSessionLinkTotal.WithLabelValues("ok").Inc()
+		}
+	}
 	if turnResp != nil {
 		writeJSON(w, http.StatusCreated, struct {
 			sessions.Info

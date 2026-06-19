@@ -14,7 +14,9 @@ work completion, deletion, unread counts, or running state.
 ## Sources Of Truth
 
 - `session_registry` owns session identity, owner, mode, lifecycle, pod
-  metadata, repositories, and clone state.
+  metadata, repositories, clone state, and spawned-session lineage
+  (`sessions.spawned_sessions`, the parent→child links the spawned-sessions
+  chip lists).
 - `session_events` owns turn activity and terminal run outcomes.
 - `sessions.activity_summary` is a projection for sidebar display; it must
   converge from durable events and not replace them as the investigation
@@ -74,5 +76,9 @@ work completion, deletion, unread counts, or running state.
 - Delete does not appear complete until the durable session lifecycle confirms
   it.
 - Reconnect or resync produces the same session bar state as a fresh load.
+- A session spawned by an agent appears in its origin session's
+  spawned-sessions chip as a working link, converging from the durable
+  `sessions.spawned_sessions` row without a manual refresh, and is absent for
+  sessions that spawned nothing or were created without an origin.
 - Tests cover a projection lag or missed wake scenario and prove the sidebar
   catches up from durable state.

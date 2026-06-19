@@ -103,6 +103,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			sessions.activity_summary,
 			sessions.test_state,
 			sessions.rollout_state,
+			sessions.spawned_sessions,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
 			COALESCE(sessions.capabilities, '{}'::text[]),
@@ -165,6 +166,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			name                                                        string
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
+			spawnedSessions                                             []byte
 			providerRateLimitInfo                                       []byte
 			repos, capabilities                                         []string
 			agentAvatarID, systemAvatarID                               string
@@ -184,6 +186,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
+			&spawnedSessions,
 			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID,
 			&model, &effort, &runtimeModel, &runtimeEffort, &runtimeAt,
 			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
@@ -218,6 +221,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			ActivitySummary:                  activitySummary,
 			TestState:                        unmarshalJSONBField(testState),
 			RolloutState:                     unmarshalJSONBField(rolloutState),
+			SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
 			Repos:                            repos,
 			CloneState:                       unmarshalJSONBField(cloneState),
 			Capabilities:                     capabilities,

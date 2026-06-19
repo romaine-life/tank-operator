@@ -42,6 +42,10 @@ import {
   type SessionListDebugEvent,
 } from "./sessionListDebug";
 import { normalizeBugLabelDisplayName } from "./bugLabels";
+import {
+  normalizeSpawnedSessions,
+  type SpawnedSessionRef,
+} from "./spawnedSessions";
 
 export interface SessionBugLabel {
   id?: number;
@@ -78,6 +82,10 @@ export interface SessionRow {
   activity_summary?: Record<string, unknown>;
   test_state?: Record<string, unknown>;
   rollout_state?: Record<string, unknown>;
+  // spawned_sessions is the durable parent→child lineage the session-bar
+  // "spawned sessions" chip lists. Omitted/empty when this session spawned
+  // nothing. Normalized to clean refs at the store boundary.
+  spawned_sessions?: SpawnedSessionRef[];
   // repos is the durable owner/name slug list the user picked at
   // session creation. Always present on the wire (empty array when
   // none picked); the splash chips and the per-session detail view
@@ -536,6 +544,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       rollout_state: isRecord(rowRaw.rollout_state)
         ? (rowRaw.rollout_state as Record<string, unknown>)
         : undefined,
+      spawned_sessions: normalizeSpawnedSessions(rowRaw.spawned_sessions),
       repos: Array.isArray(rowRaw.repos)
         ? (rowRaw.repos as unknown[]).filter(
             (entry): entry is string => typeof entry === "string",

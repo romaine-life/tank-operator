@@ -138,6 +138,9 @@ type rowWireShape struct {
 	ActivitySummary map[string]any `json:"activity_summary,omitempty"`
 	TestState       map[string]any `json:"test_state,omitempty"`
 	RolloutState    map[string]any `json:"rollout_state,omitempty"`
+	// SpawnedSessions: omit-when-empty parent→child lineage for the
+	// session-bar "spawned sessions" chip. Mirrors the snapshot Info field.
+	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
 	// Repos and CloneState: always-emit / omit-when-nil to mirror
 	// the snapshot Info struct field-for-field (see
 	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
@@ -207,6 +210,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			ActivitySummary:                  activity,
 			TestState:                        record.TestState,
 			RolloutState:                     record.RolloutState,
+			SpawnedSessions:                  record.SpawnedSessions,
 			Repos:                            repos,
 			CloneState:                       record.CloneState,
 			Capabilities:                     capabilities,

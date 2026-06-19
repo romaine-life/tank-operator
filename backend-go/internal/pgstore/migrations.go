@@ -2183,6 +2183,23 @@ var schemaMigrations = []migration{
 	// Session reverse lookup (debug/audit + any future per-session guard query).
 	{ID: "0177", SQL: `CREATE INDEX IF NOT EXISTS pending_test_provisions_session
 		ON pending_test_provisions (session_scope, session_id, status)`},
+
+	// Parent→child session lineage for the session-bar "spawned sessions"
+	// chip. When an agent spawns a session via spawn_run_session /
+	// spawn_test_slot_session, the create handler appends a ref
+	// ({id,name,mode,model,repos,url,created_at}) to the ORIGIN (parent)
+	// session's row, keyed by the X-Tank-Origin-Session-Id header. The
+	// column is the durable, snapshot-facing source the RowPublisher fans
+	// out so the parent's chip lists its children without re-deriving the
+	// relationship from the event ledger. jsonb array; NULL/absent means
+	// "spawned nothing". Append is atomic + id-deduped (sessionregistry
+	// AppendSpawnedSession), matched on the full (email, session_scope,
+	// session_id) primary key — session ids are per-scope (session_counters),
+	// so the scope is load-bearing and a scope-less match could hit an
+	// unrelated same-id row. Cross-scope test-slot lineage is a tracked
+	// follow-up (needs the origin scope plumbed from the proxy).
+	{ID: "0178", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS spawned_sessions jsonb`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration
