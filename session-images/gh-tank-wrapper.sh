@@ -27,6 +27,50 @@ mcp_url="${TANK_GIT_CRED_MCP_URL:-http://127.0.0.1:9992/}"
 auth_tok="$(cat "${AUTH_ROMAINE_TOKEN_PATH:-/var/run/secrets/auth.romaine.life/token}" 2>/dev/null || true)"
 [ -n "$auth_tok" ] || exec "$REAL_GH" "$@"
 
+# Restricted-mode `gh pr create` on a Tank session branch is DELEGATED to the
+# in-pod governed handler (the mcp-auth-proxy sidecar at :9999/create-session-pr).
+# That handler holds the GitHub credential and opens the draft PR for the branch,
+# so the agent shell never gets a write token — the same boundary as the
+# read-only mint, extended to the one write the agent needs. Every other `gh`
+# verb (pr view/edit/ready/merge, issue, …) falls through to the normal
+# read-only / break-glass path below.
+if [ "$restricted" = "true" ] && [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
+  pr_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  pr_branch=""
+  [ -n "$pr_top" ] && pr_branch="$(git -C "$pr_top" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  case "$pr_branch" in
+    tank/session/*)
+      pr_title=""; pr_body=""; pr_base=""
+      shift 2
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          -t|--title) pr_title="${2:-}"; shift 2 ;;
+          --title=*) pr_title="${1#*=}"; shift ;;
+          -b|--body) pr_body="${2:-}"; shift 2 ;;
+          --body=*) pr_body="${1#*=}"; shift ;;
+          -B|--base) pr_base="${2:-}"; shift 2 ;;
+          --base=*) pr_base="${1#*=}"; shift ;;
+          *) shift ;;
+        esac
+      done
+      pr_payload="$(jq -nc --arg rp "$pr_top" --arg t "$pr_title" --arg b "$pr_body" --arg base "$pr_base" \
+        '{repo_path:$rp, title:$t, body:$b, base:$base}')"
+      pr_endpoint="${TANK_CREATE_SESSION_PR_URL:-http://127.0.0.1:9999/create-session-pr}"
+      pr_resp="$(curl -sS -m 30 -H "Authorization: Bearer ${auth_tok}" -H "Content-Type: application/json" \
+        -X POST "$pr_endpoint" -d "$pr_payload" 2>/dev/null || true)"
+      pr_ok="$(printf '%s' "$pr_resp" | jq -r '.ok // false' 2>/dev/null || echo false)"
+      pr_link="$(printf '%s' "$pr_resp" | jq -r '.pr_url // empty' 2>/dev/null || true)"
+      if [ "$pr_ok" = "true" ] && [ -n "$pr_link" ]; then
+        printf '%s\n' "$pr_link"
+        exit 0
+      fi
+      pr_reason="$(printf '%s' "$pr_resp" | jq -r '.reason // "unknown error"' 2>/dev/null || echo "unknown error")"
+      printf 'tank(gh): governed PR create failed: %s\n' "$pr_reason" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 # Token repo scope: the session's cloned repos under /workspace, plus an explicit
 # `--repo owner/name` / `-R owner/name` if present on the command line.
 repos=""

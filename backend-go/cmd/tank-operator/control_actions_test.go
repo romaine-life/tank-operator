@@ -21,28 +21,29 @@ import (
 )
 
 type fakeControlActionStore struct {
-	appendCalls     []pgstore.ControlActionEvent
-	appendErr       error
-	listOwner       string
-	listScope       string
-	listSession     string
-	listLimit       int
-	listRows        []pgstore.ControlActionEvent
-	listErr         error
-	breakGlassScope string
-	breakGlassLimit int
-	breakGlassRows  []pgstore.ControlActionEvent
-	breakGlassErr   error
-	getScope        string
-	getSession      string
-	getEventID      string
-	getRow          pgstore.ControlActionEvent
-	getErr          error
-	decisionScope   string
-	decisionSession string
-	decisionRequest string
-	decisionRow     pgstore.ControlActionEvent
-	decisionErr     error
+	appendCalls       []pgstore.ControlActionEvent
+	appendErr         error
+	listOwner         string
+	listScope         string
+	listSession       string
+	listLimit         int
+	listRows          []pgstore.ControlActionEvent
+	listErr           error
+	breakGlassScope   string
+	breakGlassSession string
+	breakGlassLimit   int
+	breakGlassRows    []pgstore.ControlActionEvent
+	breakGlassErr     error
+	getScope          string
+	getSession        string
+	getEventID        string
+	getRow            pgstore.ControlActionEvent
+	getErr            error
+	decisionScope     string
+	decisionSession   string
+	decisionRequest   string
+	decisionRow       pgstore.ControlActionEvent
+	decisionErr       error
 }
 
 func (s *fakeControlActionStore) Append(_ context.Context, event pgstore.ControlActionEvent) (pgstore.ControlActionEvent, error) {
@@ -79,6 +80,26 @@ func (s *fakeControlActionStore) ListBreakGlassRequests(_ context.Context, sessi
 	var out []pgstore.ControlActionEvent
 	for _, row := range s.listRows {
 		if row.SessionScope == sessionScope && isBreakGlassRequestAction(row.Action) {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeControlActionStore) ListBreakGlassRequestsBySession(_ context.Context, sessionScope, sessionID string, limit int) ([]pgstore.ControlActionEvent, error) {
+	s.breakGlassScope = sessionScope
+	s.breakGlassSession = sessionID
+	s.breakGlassLimit = limit
+	if s.breakGlassErr != nil {
+		return nil, s.breakGlassErr
+	}
+	rows := s.breakGlassRows
+	if rows == nil {
+		rows = s.listRows
+	}
+	var out []pgstore.ControlActionEvent
+	for _, row := range rows {
+		if row.SessionScope == sessionScope && row.SessionID == sessionID && isBreakGlassRequestAction(row.Action) {
 			out = append(out, row)
 		}
 	}
@@ -1243,6 +1264,109 @@ func TestHandleAdminBreakGlassRequestsListsPendingAcrossSessions(t *testing.T) {
 	}
 	if store.breakGlassScope != "tank-operator-slot-3" {
 		t.Fatalf("breakGlassScope = %q", store.breakGlassScope)
+	}
+}
+
+func TestHandleListSessionBreakGlassRequestsKeepsLaterSameRepoRequestPending(t *testing.T) {
+	store := &fakeControlActionStore{
+		breakGlassRows: []pgstore.ControlActionEvent{
+			{
+				EventID:      "request-scoped",
+				InvocationID: "invocation-scoped",
+				CreatedAt:    time.Unix(1700000100, 0).UTC(),
+				OwnerEmail:   "owner@example.test",
+				SessionScope: "tank-operator-slot-3",
+				SessionID:    "47",
+				Action:       "github.break_glass.request",
+				Status:       "started",
+				TargetKind:   "github_repository",
+				TargetRef:    "tank://session/47/git-break-glass/repos",
+				RepoOwner:    "romaine-life",
+				RepoName:     "glimmung",
+				Payload: []byte(`{
+					"reason": "push governed branch",
+					"repo_scope": {"kind":"current_repo","repo":"romaine-life/glimmung"},
+					"branch_scope": {"kind":"named","branches":["tank/session/1147/glimmung"]},
+					"operations": ["mint_full_git_token","push_current_head"]
+				}`),
+			},
+			{
+				EventID:      "request-full-api",
+				InvocationID: "invocation-full-api",
+				CreatedAt:    time.Unix(1700000200, 0).UTC(),
+				OwnerEmail:   "owner@example.test",
+				SessionScope: "tank-operator-slot-3",
+				SessionID:    "47",
+				Action:       "github.break_glass.request",
+				Status:       "started",
+				TargetKind:   "github_repository",
+				TargetRef:    "tank://session/47/git-break-glass/repos",
+				RepoOwner:    "romaine-life",
+				RepoName:     "glimmung",
+				Payload: []byte(`{
+					"reason": "open missing PR with full API",
+					"repo_scope": {"kind":"current_repo","repo":"romaine-life/glimmung"},
+					"branch_scope": {"kind":"unlimited"},
+					"operations": ["mint_full_git_token","push_current_head","full_github_api"]
+				}`),
+			},
+		},
+		listRows: []pgstore.ControlActionEvent{
+			{
+				EventID:      "grant-scoped",
+				InvocationID: "grant-scoped",
+				OwnerEmail:   "owner@example.test",
+				SessionScope: "tank-operator-slot-3",
+				SessionID:    "47",
+				Action:       "github.break_glass.grant",
+				Status:       "succeeded",
+				TargetKind:   "github_repository",
+				TargetRef:    "tank://session/47/git-break-glass/repos",
+				RepoOwner:    "romaine-life",
+				RepoName:     "glimmung",
+				Payload: []byte(`{
+					"request_event_id": "request-scoped",
+					"expires_at": "2999-01-01T00:00:00Z",
+					"repo_scope": {"kind":"current_repo","repo":"romaine-life/glimmung"},
+					"branch_scope": {"kind":"named","branches":["tank/session/1147/glimmung"]},
+					"operations": ["mint_full_git_token","push_current_head"]
+				}`),
+			},
+		},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/47/break-glass-requests?status=pending", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "admin@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleListSessionBreakGlassRequests(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Status    string `json:"status"`
+		SessionID string `json:"session_id"`
+		Requests  []struct {
+			Pending bool                   `json:"pending"`
+			Request controlActionEventJSON `json:"request"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "pending" || body.SessionID != "47" || len(body.Requests) != 1 {
+		t.Fatalf("body = %+v", body)
+	}
+	if got := body.Requests[0].Request.EventID; got != "request-full-api" {
+		t.Fatalf("request event = %q", got)
+	}
+	if !body.Requests[0].Pending {
+		t.Fatalf("pending = false")
+	}
+	if store.breakGlassScope != "tank-operator-slot-3" || store.breakGlassSession != "47" {
+		t.Fatalf("break glass lookup scope/session = %q/%q", store.breakGlassScope, store.breakGlassSession)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,18 +83,23 @@ func (s *appServer) handleGetTestSlotStatus(w http.ResponseWriter, r *http.Reque
 		Branch: req.Branch,
 	}
 
-	var watchPRNumber int
-	var watchPROwner, watchPRName string
+	// All the branches/PRs the agent has worked on this session (newest first).
+	// These are what the page lists so the user can pick which to provision.
+	var watches []pgstore.CIWatch
 	if s.ciWatches != nil {
-		if watch, err := s.ciWatches.GetLatestForSession(r.Context(), s.sessionScope, sessionID); err == nil {
-			resp.Watch = testSlotWatchViewFrom(watch)
-			watchPRNumber = watch.PRNumber
-			watchPROwner = strings.TrimSpace(watch.PROwner)
-			watchPRName = strings.TrimSpace(watch.PRName)
-		} else if !errors.Is(err, pgx.ErrNoRows) {
+		var err error
+		watches, err = s.ciWatches.ListForSession(r.Context(), s.sessionScope, sessionID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			recordTestSlotStatus("error")
 			writeError(w, http.StatusInternalServerError, "read PR readiness: "+err.Error())
 			return
+		}
+		for i := range watches {
+			if i == 0 {
+				// Newest watch is the default selection (the prior single-PR behavior).
+				resp.Watch = testSlotWatchViewFrom(watches[i])
+			}
+			resp.PRs = append(resp.PRs, testSlotPRViewFrom(watches[i]))
 		}
 	}
 
@@ -110,18 +116,19 @@ func (s *appServer) handleGetTestSlotStatus(w http.ResponseWriter, r *http.Reque
 
 	result := "durable"
 	if refreshRequested(r) && s.mcpGitHub != nil {
-		// Resolve the preflight against the durable watch's PR BY NUMBER when one
-		// exists, instead of only resolving the open PR by branch. A merged PR has
-		// no *open* PR for the branch, so by-branch resolution reports "no_pr" and
-		// hides that the PR merged; reading it by number sees `merged=true` (→ a
-		// purple "Merged" on the page). Falls back to by-branch resolution of the
-		// current head when there is no watch yet.
+		// Resolve the preflight against a watch's PR BY NUMBER, not the open PR by
+		// branch: a merged PR has no *open* PR for the branch, so by-branch reports
+		// "no_pr" and hides the merge; reading it by number sees `merged=true` (→ a
+		// purple "Merged"). Honor an explicit `?pr=<n>` so the user can preflight
+		// any of the session's branches/PRs; default to the newest watch.
 		preflightReq := req
-		if watchPRNumber > 0 {
-			preflightReq.PRNumber = watchPRNumber
-			if watchPROwner != "" && watchPRName != "" {
-				preflightReq.RepoOwner = watchPROwner
-				preflightReq.RepoName = watchPRName
+		if target := pickWatch(watches, selectedPRNumber(r)); target != nil && target.PRNumber > 0 {
+			preflightReq.PRNumber = target.PRNumber
+			if o := strings.TrimSpace(target.PROwner); o != "" {
+				preflightReq.RepoOwner = o
+			}
+			if n := strings.TrimSpace(target.PRName); n != "" {
+				preflightReq.RepoName = n
 			}
 		}
 		preflight := s.testSlotPreflight(r.Context(), preflightReq)
@@ -143,6 +150,33 @@ func refreshRequested(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+// selectedPRNumber parses the optional `?pr=<n>` selection (the branch/PR the
+// user picked on the page). 0 means "no explicit selection — use the default".
+func selectedPRNumber(r *http.Request) int {
+	n, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("pr")))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// pickWatch chooses which watch to preflight: the explicitly-selected PR when
+// given (and present in the session's set), else the newest. nil when the
+// session has no watches yet.
+func pickWatch(watches []pgstore.CIWatch, selectedPR int) *pgstore.CIWatch {
+	if selectedPR > 0 {
+		for i := range watches {
+			if watches[i].PRNumber == selectedPR {
+				return &watches[i]
+			}
+		}
+	}
+	if len(watches) > 0 {
+		return &watches[0]
+	}
+	return nil
 }
 
 // testSlotPreflight runs the gate's validate step read-only: the same one-shot
@@ -210,9 +244,40 @@ type testSlotStatusResponse struct {
 	RepoError string                 `json:"repo_error"`
 	Repos     []string               `json:"repos"`
 	Watch     *testSlotWatchView     `json:"watch"`
+	// PRs is every branch/PR the agent has worked on this session (newest first),
+	// so the page can list them and let the user pick which to provision.
+	PRs       []testSlotPRView       `json:"prs"`
 	Provision *testSlotProvisionView `json:"provision"`
 	TestState map[string]any         `json:"test_state"`
 	Preflight *testSlotPreflightView `json:"preflight"`
+}
+
+// testSlotPRView is one branch/PR the session has worked on, for the page's
+// picker. Derived from the durable session_ci_watches row.
+type testSlotPRView struct {
+	PRNumber       int     `json:"pr_number"`
+	PRURL          string  `json:"pr_url"`
+	Status         string  `json:"status"`
+	MergeableState string  `json:"mergeable_state"`
+	CheckState     string  `json:"check_state"`
+	Detail         string  `json:"detail"`
+	HeadSHA        string  `json:"head_sha"`
+	LastEventAt    *string `json:"last_event_at"`
+	HasOpenPR      bool    `json:"has_open_pr"`
+}
+
+func testSlotPRViewFrom(watch pgstore.CIWatch) testSlotPRView {
+	return testSlotPRView{
+		PRNumber:       watch.PRNumber,
+		PRURL:          strings.TrimSpace(watch.PRURL),
+		Status:         string(watch.Status),
+		MergeableState: strings.TrimSpace(watch.MergeableState),
+		CheckState:     strings.TrimSpace(watch.CheckState),
+		Detail:         strings.TrimSpace(watch.Detail),
+		HeadSHA:        strings.TrimSpace(watch.HeadSHA),
+		LastEventAt:    rfc3339Ptr(watch.LastEventAt),
+		HasOpenPR:      ciWatchStatusImpliesOpenPR(watch.Status),
+	}
 }
 
 type testSlotRepoView struct {

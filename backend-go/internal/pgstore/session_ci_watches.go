@@ -307,6 +307,37 @@ func (s *CIWatchStore) GetLatestForSession(ctx context.Context, sessionScope, se
 	return scanCIWatch(s.pool.QueryRow(ctx, q, sessionScope, strings.TrimSpace(sessionID)))
 }
 
+// ListForSession returns every watch for a session (any status), newest first.
+// The test-slot page uses it to list the branches/PRs the agent has worked on so
+// the user can pick which one to provision a slot from.
+func (s *CIWatchStore) ListForSession(ctx context.Context, sessionScope, sessionID string) ([]CIWatch, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("ci watch store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	const q = `SELECT ` + ciWatchColumns + `
+		FROM session_ci_watches
+		WHERE session_scope = $1 AND session_id = $2
+		ORDER BY updated_at DESC`
+	rows, err := s.pool.Query(ctx, q, sessionScope, strings.TrimSpace(sessionID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CIWatch
+	for rows.Next() {
+		w, err := scanCIWatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
 // HasActiveForSession reports whether the session owns a watch still in the
 // reaper-protective 'watching' state. 'ready' (awaiting human merge) is
 // intentionally excluded: once CI is green there is no pending agent work, so

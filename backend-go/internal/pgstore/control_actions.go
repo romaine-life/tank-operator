@@ -159,6 +159,48 @@ func (s *ControlActionStore) ListBreakGlassRequests(ctx context.Context, session
 	return out, rows.Err()
 }
 
+func (s *ControlActionStore) ListBreakGlassRequestsBySession(ctx context.Context, sessionScope, sessionID string, limit int) ([]ControlActionEvent, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("control action store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, errors.New("session_id is required")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	const q = `
+		SELECT event_id, invocation_id, created_at, owner_email, session_scope, session_id,
+			source_service, source_tool, action, status, target_kind, target_ref,
+			repo_owner, repo_name, pr_number, result_sha, error, payload
+		FROM control_action_events
+		WHERE session_scope = $1
+		  AND session_id = $2
+		  AND action IN ('github.break_glass.request', 'azure.break_glass.request')
+		ORDER BY created_at DESC, event_id DESC
+		LIMIT $3
+	`
+	rows, err := s.pool.Query(ctx, q, sessionScope, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ControlActionEvent
+	for rows.Next() {
+		event, err := scanControlActionEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
 func (s *ControlActionStore) GetBySessionEvent(ctx context.Context, sessionScope, sessionID, eventID string) (ControlActionEvent, error) {
 	if s == nil || s.pool == nil {
 		return ControlActionEvent{}, errors.New("control action store unavailable")

@@ -174,7 +174,15 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 		switch result.Status {
 		case pgstore.CIWatchReady:
 			recordTestSlotValidate(string(provisionVerdictReady))
-			return s.provisionSlotAfterReady(ctx, req, result.HeadSHA)
+			// Deploy the PR's actual head branch. For a by-branch validate that's
+			// the same as req.Branch; for a by-PR validate (the page's branch/PR
+			// picker) it's the selected PR's branch, which is what we want to ship
+			// to the slot.
+			deployRef := strings.TrimSpace(state.PR.Head.Ref)
+			if deployRef == "" {
+				deployRef = req.Branch
+			}
+			return s.provisionSlotAfterReady(ctx, req, result.HeadSHA, deployRef)
 		case pgstore.CIWatchFailed:
 			detail := "CI failed on " + repoPR
 			if len(result.FailingChecks) > 0 {
@@ -221,8 +229,11 @@ func (s *appServer) resolveProvisionState(ctx context.Context, req provisionTest
 // provisionSlotAfterReady runs the checkout → deploy → SetTestState provision
 // sequence, mirroring checkoutAndDeployOrchestrationReview. Only reached on a
 // ready verdict.
-func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTestSlotRequest, headSHA string) (provisionOutcome, error) {
+func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTestSlotRequest, headSHA, deployRef string) (provisionOutcome, error) {
 	out := provisionOutcome{Verdict: provisionVerdictReady, HeadSHA: headSHA}
+	if strings.TrimSpace(deployRef) == "" {
+		deployRef = req.Branch
+	}
 	workflow := strings.TrimSpace(req.Workflow)
 	checkoutReq := glimmung.CheckoutTestSlotRequest{
 		Project:       req.Project,
@@ -245,7 +256,7 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 		Project:   req.Project,
 		SlotIndex: checkout.SlotIndex,
 		SlotName:  checkout.SlotName,
-		GitRef:    req.Branch,
+		GitRef:    deployRef,
 	})
 	if err != nil {
 		recordTestSlotProvision(provisionStepDeployError)

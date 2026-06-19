@@ -9,7 +9,7 @@
 // `useSessionDrag` hook owns the drag state and the DOM handlers and is rendered
 // against in sessionDrag.test.tsx with real DragEvents.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent } from "react";
 
 import { arrangeSessionTree } from "./sessionTree";
@@ -18,6 +18,7 @@ import {
   placeSessionRelative,
   type DragIntentKind,
 } from "./dragNest";
+import { reportDragStep } from "./dragTelemetry";
 
 // The minimal session shape the drag decision needs. Structural so App's full
 // Session and lightweight test fixtures both satisfy it.
@@ -124,16 +125,31 @@ export function useSessionDrag(
     null,
   );
   const [dragIntent, setDragIntent] = useState<DragIntentKind | null>(null);
+  // The dragging id lives in a ref, not just state: a native `dragover` can fire
+  // before React (concurrent mode) flushes the `setDraggingSessionId` from
+  // `dragstart`, so a state-based guard reads null and bails before
+  // `preventDefault` — the row never becomes a drop target and `drop` never
+  // fires (the real-browser bug the drag telemetry caught: dragstart with no
+  // dragover). The ref updates synchronously, so the guard is always correct.
+  // State stays for the className affordances only.
+  const draggingIdRef = useRef<string | null>(null);
+  // Emit the "dragover" telemetry beacon once per drag, not on every move.
+  const overReportedRef = useRef(false);
 
   const end = () => {
+    draggingIdRef.current = null;
     setDraggingSessionId(null);
     setDragOverSessionId(null);
     setDragIntent(null);
+    overReportedRef.current = false;
   };
 
   const rowHandlers = (id: string): SessionRowDragHandlers => ({
     onDragStart: (event) => {
       if (opts.readOnly) return;
+      reportDragStep("dragstart");
+      draggingIdRef.current = id;
+      overReportedRef.current = false;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", id);
       setDraggingSessionId(id);
@@ -141,11 +157,16 @@ export function useSessionDrag(
     },
     onDragOver: (event) => {
       if (opts.readOnly) return;
-      if (!draggingSessionId || draggingSessionId === id) return;
+      const dragging = draggingIdRef.current;
+      if (!dragging || dragging === id) return;
       // Calling preventDefault on dragover is what makes the row a valid drop
       // target; without it the browser never fires drop.
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
+      if (!overReportedRef.current) {
+        reportDragStep("dragover");
+        overReportedRef.current = true;
+      }
       const rect = event.currentTarget.getBoundingClientRect();
       setDragOverSessionId(id);
       setDragIntent(dropIntentForRow(event.clientY, rect.top, rect.height));
@@ -157,10 +178,14 @@ export function useSessionDrag(
       const rect = event.currentTarget.getBoundingClientRect();
       const intent = dropIntentForRow(event.clientY, rect.top, rect.height);
       const movedId =
-        event.dataTransfer.getData("text/plain") || draggingSessionId || "";
+        event.dataTransfer.getData("text/plain") || draggingIdRef.current || "";
       end();
-      if (opts.readOnly || !opts.enabled || !movedId) return;
+      if (opts.readOnly || !opts.enabled || !movedId) {
+        reportDragStep("drop", "noplan");
+        return;
+      }
       const plan = planSessionDrop(opts.sessions, movedId, id, intent);
+      reportDragStep("drop", plan ? intent.replace("-", "_") : "noplan");
       if (plan) opts.onDrop(plan);
     },
     onDragEnd: end,

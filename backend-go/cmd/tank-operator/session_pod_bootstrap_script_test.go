@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -512,6 +513,130 @@ func TestGhTankWrapperMintsModeAwareToken(t *testing.T) {
 		!strings.Contains(body, "\"write\":false") ||
 		strings.Contains(body, "\"full\":true") {
 		t.Fatalf("restricted gh mint should be read-only, got: %s", body)
+	}
+}
+
+// `gh pr create` on a Tank session branch is delegated to the governed sidecar
+// endpoint (the agent shell never receives a write token); every other gh verb,
+// and pr create off a non-session branch, falls through to the real gh.
+func TestGhTankWrapperDelegatesPrCreate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("gh wrapper script test runs on POSIX only")
+	}
+	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
+	if err != nil {
+		t.Fatalf("resolve gh wrapper path: %v", err)
+	}
+
+	var prBody string
+	var prHits int
+	prSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		prHits++
+		b, _ := io.ReadAll(r.Body)
+		prBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"created":true,"pr_url":"https://github.com/romaine-life/tank-operator/pull/77","pr_number":77}`))
+	}))
+	defer prSrv.Close()
+
+	// Fake mint server for the fall-through (non-delegated) path.
+	mintSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_ro\"}}}\n\n"))
+	}))
+	defer mintSrv.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	// Fake real gh marks the fall-through path so we can assert non-delegation.
+	fakeGh := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'REALGH %s\\n' \"$*\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+
+	// A real git repo on a Tank session branch with a GitHub origin.
+	repo := t.TempDir()
+	git := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("config", "user.email", "a@b.test")
+	git("config", "user.name", "A")
+	git("checkout", "-q", "-b", "tank/session/95/tank-operator")
+	git("commit", "-q", "--allow-empty", "-m", "start")
+	git("remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git")
+
+	runWrapper := func(branch string, args ...string) string {
+		co := exec.Command("git", "checkout", "-q", "-B", branch)
+		co.Dir = repo
+		if out, err := co.CombinedOutput(); err != nil {
+			t.Fatalf("checkout %s: %v\n%s", branch, err, out)
+		}
+		cmd := exec.Command("sh", append([]string{wrapperSrc}, args...)...)
+		cmd.Dir = repo
+		cmd.Env = []string{
+			"TANK_RESTRICTED_GIT=true",
+			"TANK_REAL_GH=" + fakeGh,
+			"TANK_GIT_CRED_MCP_URL=" + mintSrv.URL + "/",
+			"TANK_CREATE_SESSION_PR_URL=" + prSrv.URL + "/create-session-pr",
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"TANK_WORKSPACE_DIR=" + t.TempDir(),
+			"PATH=" + os.Getenv("PATH"),
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("wrapper %v failed: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	// pr create on the session branch -> delegated; prints the PR URL; no real gh.
+	prHits = 0
+	out := runWrapper("tank/session/95/tank-operator", "pr", "create", "--title", "My PR", "--body", "Why")
+	if !strings.Contains(out, "https://github.com/romaine-life/tank-operator/pull/77") {
+		t.Fatalf("delegated pr create did not print the PR URL: %q", out)
+	}
+	if strings.Contains(out, "REALGH") {
+		t.Fatalf("pr create should not fall through to real gh: %q", out)
+	}
+	if prHits != 1 {
+		t.Fatalf("expected exactly one delegation request, got %d", prHits)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(prBody), &sent); err != nil {
+		t.Fatalf("delegation body not JSON: %v (%q)", err, prBody)
+	}
+	if sent["title"] != "My PR" || sent["body"] != "Why" {
+		t.Fatalf("delegation did not forward title/body: %v", sent)
+	}
+	if rp, _ := sent["repo_path"].(string); rp == "" {
+		t.Fatalf("delegation did not send repo_path: %v", sent)
+	}
+
+	// pr view is not a create -> falls through to real gh, no delegation.
+	prHits = 0
+	out = runWrapper("tank/session/95/tank-operator", "pr", "view")
+	if prHits != 0 {
+		t.Fatalf("pr view must not hit the create endpoint, got %d", prHits)
+	}
+	if !strings.Contains(out, "REALGH") {
+		t.Fatalf("pr view should fall through to real gh: %q", out)
+	}
+
+	// pr create on a non-session branch -> falls through, no delegation.
+	prHits = 0
+	out = runWrapper("feature/x", "pr", "create", "--title", "X")
+	if prHits != 0 {
+		t.Fatalf("pr create on a non-session branch must not delegate, got %d", prHits)
+	}
+	if !strings.Contains(out, "REALGH") {
+		t.Fatalf("non-session pr create should fall through to real gh: %q", out)
 	}
 }
 

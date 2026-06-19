@@ -308,6 +308,7 @@ type ciWatchStore interface {
 	Get(context.Context, string) (pgstore.CIWatch, error)
 	GetByPR(context.Context, string, string, int) (pgstore.CIWatch, error)
 	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)
+	ListForSession(context.Context, string, string) ([]pgstore.CIWatch, error)
 	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
 	HasActiveForSession(context.Context, string, string) (bool, error)
 	ListStaleWatching(context.Context, time.Duration, int) ([]pgstore.CIWatch, error)
@@ -365,6 +366,7 @@ type controlActionStore interface {
 	Append(context.Context, pgstore.ControlActionEvent) (pgstore.ControlActionEvent, error)
 	ListBySession(context.Context, string, string, string, int) ([]pgstore.ControlActionEvent, error)
 	ListBreakGlassRequests(context.Context, string, int) ([]pgstore.ControlActionEvent, error)
+	ListBreakGlassRequestsBySession(context.Context, string, string, int) ([]pgstore.ControlActionEvent, error)
 	GetBySessionEvent(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 	BreakGlassDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 	TestSlotModelDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
@@ -413,6 +415,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// responding") with a correlation label tying each block to the
 	// most-recent tank-event / session-switch / scroll the SPA saw.
 	mux.HandleFunc("POST /api/client-metrics/long-tasks", s.handleLongTaskMetrics)
+	// Browser-side sidebar-drag lifecycle beacon. Records each step
+	// (mousedown→dragstart→dragover→drop→persist) on
+	// tank_session_drag_step_total so "the drag does nothing" is diagnosable
+	// from metrics rather than the user's DevTools.
+	mux.HandleFunc("POST /api/client-metrics/session-drag-step", s.handleSessionDragStepMetric)
 
 	// Avatar assets. Reads are authenticated so uploaded backing photos
 	// are not exposed as static public files; writes are admin-only.
@@ -582,6 +589,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
 	mux.HandleFunc("POST /api/sessions/{session_id}/scheduled-wakeups/cancel", s.handleCancelScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
+	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests", s.handleListSessionBreakGlassRequests)
 	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests/{request_event_id}", s.handleGetBreakGlassRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/batch/approve", s.handleApproveBreakGlassRequestsBatch)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/approve", s.handleApproveBreakGlassRequest)

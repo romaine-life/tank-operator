@@ -1130,7 +1130,9 @@ test("break-glass composer action owns approval links and quick approval", () =>
   expect(indexCssSource.includes(".pr-lane-approval")).toBe(false);
   expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
   expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
-  expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
+  expect(appSource).toMatch(/fetchSessionBreakGlassRequests/);
+  expect(appSource).toMatch(/\/break-glass-requests\?status=pending/);
+  expect(appSource.includes("pendingBreakGlassRequests(breakGlassActionRows)")).toBe(false);
   expect(appSource.includes("request.approvalUrl")).toBe(false);
   expect(appSource.includes("auth.romaine.life/admin")).toBe(false);
   // The retired pre-Tank endpoint shape must not return.

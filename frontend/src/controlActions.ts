@@ -184,16 +184,47 @@ export function controlActionRowsToEntries(rows: ControlActionRow[]): ControlAct
   });
 }
 
+export function breakGlassRequestFromControlAction(
+  row: ControlActionRow,
+): BreakGlassRequest | null {
+  const action = nonempty(row.action);
+  if (
+    action !== "github.break_glass.request" &&
+    action !== "azure.break_glass.request"
+  ) {
+    return null;
+  }
+  if (nonempty(row.status) !== "started") return null;
+  const eventId = nonempty(row.event_id);
+  const invocationId = nonempty(row.invocation_id);
+  if (!eventId || !invocationId) return null;
+  const repoOwner = nonempty(row.repo_owner);
+  const repoName = nonempty(row.repo_name);
+  const repo = [repoOwner, repoName].filter(Boolean).join("/");
+  const kind = action === "azure.break_glass.request" ? "azure" : "git";
+  if (kind === "git" && !repo) return null;
+  const payload = payloadObject(row.payload);
+  const target = kind === "azure" ? "azure-personal" : repo;
+  return {
+    eventId,
+    invocationId,
+    kind,
+    createdAt: nonempty(row.created_at),
+    target,
+    repo,
+    repoOwner,
+    repoName,
+    reason: nonempty(payload.reason),
+    source: nonempty(payload.source),
+  };
+}
+
 // pendingBreakGlassRequests surfaces break-glass requests that are still
-// awaiting an admin decision. A grant or deny with payload.request_event_id
-// resolves the exact request; older grant rows without that field also clear
-// matching git repo requests until they expire.
-export function pendingBreakGlassRequests(
-  rows: ControlActionRow[],
-  now: number = Date.now(),
-): BreakGlassRequest[] {
+// awaiting an admin decision. A grant or deny resolves only the exact
+// payload.request_event_id it records; capability grants are not inferred as
+// decisions for other requests.
+export function pendingBreakGlassRequests(rows: ControlActionRow[]): BreakGlassRequest[] {
   const resolvedRequests = new Set<string>();
-  const grantedRepos = new Set<string>();
   for (const row of rows) {
     const action = nonempty(row.action);
     if (
@@ -206,49 +237,14 @@ export function pendingBreakGlassRequests(
     const payload = payloadObject(row.payload);
     const requestEventId = nonempty(payload.request_event_id);
     if (requestEventId) resolvedRequests.add(requestEventId);
-    if (action !== "github.break_glass.grant") continue;
-    if (nonempty(row.status) !== "succeeded") continue;
-    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
-      .filter(Boolean)
-      .join("/");
-    if (!repo) continue;
-    const expiresAt = nonempty(payload.expires_at);
-    if (!expiresAt) continue;
-    const expiry = Date.parse(expiresAt);
-    if (Number.isNaN(expiry) || expiry <= now) continue;
-    grantedRepos.add(repo);
   }
   const byTarget = new Map<string, BreakGlassRequest>();
   for (const row of rows) {
-    const action = nonempty(row.action);
-    if (action !== "github.break_glass.request" && action !== "azure.break_glass.request") continue;
-    if (nonempty(row.status) !== "started") continue;
-    const eventId = nonempty(row.event_id);
-    const invocationId = nonempty(row.invocation_id);
-    if (!eventId || !invocationId) continue;
-    if (resolvedRequests.has(eventId)) continue;
-    const repoOwner = nonempty(row.repo_owner);
-    const repoName = nonempty(row.repo_name);
-    const repo = [repoOwner, repoName].filter(Boolean).join("/");
-    const kind = action === "azure.break_glass.request" ? "azure" : "git";
-    if (kind === "git" && (!repo || grantedRepos.has(repo))) continue;
-    const payload = payloadObject(row.payload);
-    const target = kind === "azure" ? "azure-personal" : repo;
-    const request: BreakGlassRequest = {
-      eventId,
-      invocationId,
-      kind,
-      createdAt: nonempty(row.created_at),
-      target,
-      repo,
-      repoOwner,
-      repoName,
-      reason: nonempty(payload.reason),
-      source: nonempty(payload.source),
-    };
-    const existing = byTarget.get(target);
+    const request = breakGlassRequestFromControlAction(row);
+    if (!request || resolvedRequests.has(request.eventId)) continue;
+    const existing = byTarget.get(request.target);
     if (!existing || (request.createdAt ?? "") > (existing.createdAt ?? "")) {
-      byTarget.set(target, request);
+      byTarget.set(request.target, request);
     }
   }
   return Array.from(byTarget.values()).sort((a, b) =>

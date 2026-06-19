@@ -104,8 +104,12 @@ the whole life of a branch's work. Pick the row that matches what you need:
 - **Just committing on this session's branch** → do nothing. The post-commit
   hook auto-publishes every commit via `publish_current_head`; Tank records the
   SHA and watches CI/mergeability. Retry a failed auto-publish by calling
-  `publish_current_head` again. The governed PR's title/body/merge are still
-  mutated only through the Tank MCP tools above
+  `publish_current_head` again. Opening this branch's PR needs no grant either:
+  `gh pr create` on the session branch is delegated to a governed sidecar route
+  that holds the credential and opens (or idempotently re-opens — e.g. after a
+  squash-merge deletes the branch) its draft PR, the same boundary as the
+  read-only mint, so the agent never receives a write token. The governed PR's
+  title/body/merge are still mutated only through the Tank MCP tools above
   (`rename_current_session_pr` / `update_current_session_pr_body` /
   `merge_current_session_pr`) — do **not** break-glass just to edit the PR body.
 
