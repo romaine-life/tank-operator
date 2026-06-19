@@ -82,9 +82,14 @@ func (s *appServer) handleGetTestSlotStatus(w http.ResponseWriter, r *http.Reque
 		Branch: req.Branch,
 	}
 
+	var watchPRNumber int
+	var watchPROwner, watchPRName string
 	if s.ciWatches != nil {
 		if watch, err := s.ciWatches.GetLatestForSession(r.Context(), s.sessionScope, sessionID); err == nil {
 			resp.Watch = testSlotWatchViewFrom(watch)
+			watchPRNumber = watch.PRNumber
+			watchPROwner = strings.TrimSpace(watch.PROwner)
+			watchPRName = strings.TrimSpace(watch.PRName)
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			recordTestSlotStatus("error")
 			writeError(w, http.StatusInternalServerError, "read PR readiness: "+err.Error())
@@ -105,7 +110,21 @@ func (s *appServer) handleGetTestSlotStatus(w http.ResponseWriter, r *http.Reque
 
 	result := "durable"
 	if refreshRequested(r) && s.mcpGitHub != nil {
-		preflight := s.testSlotPreflight(r.Context(), req)
+		// Resolve the preflight against the durable watch's PR BY NUMBER when one
+		// exists, instead of only resolving the open PR by branch. A merged PR has
+		// no *open* PR for the branch, so by-branch resolution reports "no_pr" and
+		// hides that the PR merged; reading it by number sees `merged=true` (→ a
+		// purple "Merged" on the page). Falls back to by-branch resolution of the
+		// current head when there is no watch yet.
+		preflightReq := req
+		if watchPRNumber > 0 {
+			preflightReq.PRNumber = watchPRNumber
+			if watchPROwner != "" && watchPRName != "" {
+				preflightReq.RepoOwner = watchPROwner
+				preflightReq.RepoName = watchPRName
+			}
+		}
+		preflight := s.testSlotPreflight(r.Context(), preflightReq)
 		resp.Preflight = &preflight
 		result = "live"
 	}
