@@ -91,6 +91,29 @@ All metric names are prefixed `tank_`. The full namespace:
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.
+- `tank_test_slot_pending_provision_oldest_age_seconds` /
+  `tank_test_slot_provision_redrive_total{kind}` /
+  `tank_test_slot_provision_guard_total{result}` — the durable
+  pending-provision backstop for deterministic test-slot provisioning
+  (`pending_test_provisions` + `pending_provision_reconcile_loop.go`). The two
+  background entry points (`provisionOrchestrationReviewSlot`,
+  `runInteractiveTestWorkflow`) run a validate→settle-wait→provision gate in a
+  fire-and-forget goroutine that can wait ~23m for CI; an orchestrator restart
+  mid-wait used to drop the provision with no retry. A durable record is written
+  'pending' at kickoff and terminalized at finish, and a reconcile loop re-drives
+  any record stranded in 'pending' past the settle cap + grace (~25m),
+  idempotently (claim + already-provisioned short-circuit). The **gauge** is the
+  age of the oldest still-'pending' record (0 when none) — the stuck-provision
+  signal `TankTestSlotProvisionStuck` fires on, mirroring `TankCIWatchStalled`.
+  The **redrive counter** (`kind` = `interactive` | `orchestration-review`)
+  increments once per stranded record the backstop actually re-drives — a flat
+  series while the gauge climbs means the loop is not running or every re-drive
+  fails to reach a verdict. The **guard counter** is the interactive endpoint's
+  double-trigger outcomes: `launched` (first trigger admitted), `in_flight` (a
+  second trigger refused 409 because a provision for the target is already
+  pending), `test_state_active` (refused 409 because a test environment is
+  already up for the session). All three label sets are bounded, and `scope` is
+  not a label, so test-slot proliferation does not bloat cardinality.
 - `tank_session_bus_persister_restart_total` +
   `tank_session_bus_stream_{messages,bytes,max_messages,max_bytes,consumers}`
   — supervised persister restarts (a restart is the supervision working;
@@ -147,6 +170,14 @@ All metric names are prefixed `tank_`. The full namespace:
   `forbidden`, `store_error`, `not_configured`. `empty` is its own
   label so a wave of misdirected lookups (wrong scope, wrong id) is
   visible without grepping the audit slog line.
+- `tank_admin_data_browser_reads_total{surface,result}` — admin reads of
+  the read-only database browser (`GET /api/admin/data/tables` and
+  `/api/admin/data/tables/{table}/rows` — the in-app, SQL-free counterpart to
+  the service-principal diagnostic SQL path). `surface` is `table_list` |
+  `rows`; bounded `result` labels: `ok`, `empty`, `bad_request`, `forbidden`,
+  `not_found`, `error`, `not_configured`. The browsed table name is kept off
+  the metric label (cardinality) and on the per-call audit slog line so
+  who-read-what stays answerable without bloating series.
 - `tank_admin_debug_conversation_read_state_reads_total{result}` —
   admin reads of `GET /api/debug/conversation-read-state` (the
   per-session, per-owner read-cursor + activity-summary diagnostic
@@ -331,7 +362,6 @@ All metric names are prefixed `tank_`. The full namespace:
     `turn.started` timestamp for its whole life — only ledger silence
     distinguishes a wedged turn boundary from a live turn. This class
     exists because of sessions 828/829 (tank-operator#1085): the
-    antigravity turn-settle window was cancelled by a
     transcript-rewrite replay and never re-armed, leaving turns open
     and ledger-silent for 30+ minutes while the accepted-only gauge
     read 0. A streaming hit is suspicion, not a verdict (a single long
@@ -452,48 +482,33 @@ All metric names are prefixed `tank_`. The full namespace:
   (docs/session-transcript-capture.md); `result` is a closed set `ok`,
   `skipped` (storage unconfigured — best-effort, retried), `error` (read or
   upload failed). `tank_runner_transcript_capture_lag_ms` gauges the age of the
-  captured file at upload time. Capture is additive and read-only; a sustained
-  nonzero `result="error"` rate is a capture regression, not a turn-loop fault.
-  The orchestrator counterpart is `tank_transcript_upload_total{result}`
-  (`ok|bad_request|forbidden|not_configured|read_error|error`).
+  captured file at upload time. `tank_runner_transcript_resume_total{outcome}`
+  counts resume-bootstrap outcomes on resurrected pods
+  (materialized|not_found|version_mismatch|error). Capture is additive and
+  read-only; a sustained nonzero `result="error"` rate is a capture
+  regression, not a turn-loop fault. The orchestrator counterparts are
+  `tank_transcript_upload_total{result}` and `tank_session_resurrect_total{result}`.
 - `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
   This runner has its own namespace because it drives the native `agy` binary
   rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`
   is the red signal for failed agy turns. `reason="skill_missing"` means the
   backend accepted a skill turn but the runner could not find
-  `$HOME/.gemini/skills/<skill>/SKILL.md`, so the turn fails before provider
-  execution. `reason="provider_executor_error"` means agy emitted a provider
   executor terminal error such as `UNKNOWN (code 500)` or
   `PlannerResponse without ModifiedResponse`; `reason="provider_no_final_answer"`
-  means agy exited successfully after tool activity but produced no assistant
   prose to promote as the final answer. `reason="provider_process_exited"`
-  means the agy process died while a turn was in flight;
-  `reason="provider_process_unavailable"` means a submit arrived after agy was
   already gone (the inert post-fatal drain); `reason="prompt_not_accepted"`
   means the submit-ack watchdog saw no transcript movement at all within
-  `ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS` after the PTY prompt write.
-  `tank_antigravity_runner_process_exit_total{phase}` counts agy exits with
   `during_turn`/`idle`; process death is session-terminal by design (no
   revival) and this counter is the "does this come up often" input to ever
   revisiting that decision.
-  `tank_antigravity_runner_interrupt_outcome_total{outcome}` records how Stop
-  resolved: `graceful_done` (agy settled a DONE response), `grace_forced` (the
-  `ANTIGRAVITY_INTERRUPT_GRACE_MS` window forced the durable terminal), or
-  `process_exited` (the SIGINT killed agy).
-  `tank_antigravity_runner_turn_settle_total{outcome}` records turn-boundary
   settlement: `quiet` means transcript silence confirmed the terminal,
   `extended` means a further step canceled an armed window — the answer-first
   frequency signal that keeps the silence-window constant honest
   (tank-operator#1035; see ARCHITECTURE.md → "Silence Is the Boundary").
-  `tank_antigravity_runner_task_lifecycle_total{event}` records durable
-  `shell_task.*` publishes for agy-tracked background tasks
   (`started`/`completed`), plus the fold-regression signals
   `orphaned_start`/`orphaned_completion` (a task signal whose originating turn
-  was unknowable — the agent-continuation relay for that task renders
   standalone instead of folding; tank-operator#1035) and `publish_error`.
-  `tank_antigravity_runner_step_replay_suppressed_total{context}` records
   transcript steps skipped because the (provider step, status) pair was
-  already observed earlier in the session. agy performs its larger transcript
   writes as an in-place truncate + byte-identical full rewrite (verified live,
   probe session 799); when a sweep's stat lands inside that sub-second window
   the byte cursor rewinds and the whole history re-arrives. Replay is
@@ -502,41 +517,29 @@ All metric names are prefixed `tank_`. The full namespace:
   `context="turn"` is a replay suppressed while a turn was active;
   `context="idle"` is a replay suppressed between turns, where an
   unsuppressed replay would re-buffer history into the next turn or
-  manufacture a phantom self-continuation relay. An antigravity session whose
   later turns re-publish earlier turns' items in `session_events` while this
   counter stays flat is the regression signature for the session-791 turn
   re-attribution bug (expanding turn N showed turns 1..N).
-  `tank_antigravity_runner_submit_watchdog_total{result}` records
   `cleared`/`fired` for the submit-ack watchdog, and
-  `tank_antigravity_runner_provider_fatal_report_total{result}` records the
   runner's provider-fatal report to the orchestrator. The orchestrator side
   counts the same reports as `tank_session_provider_fatal_total{provider,result}`
   on the internal provider-fatal endpoint that moves the session row to
   Failed.
   `reason="transcript_event_source_unavailable"` and
   `reason="transcript_event_source_error"` mean the local file-backed event
-  source for agy's JSONL transcript failed before or during the turn; these are
   durable `turn.failed` outcomes, not silent live-update degradation.
-  `tank_antigravity_runner_transcript_event_source_total{result}` records the
   underlying watcher health with `started`, `unavailable`, and `error` buckets.
-  `tank_antigravity_runner_agy_diagnostic_total{kind}`
-  records bounded non-terminal diagnostics from agy output:
   `auxiliary_userinfo_401` and `telemetry_clearcut_401` classify the known
   placeholder-token profile/telemetry noise and must not be treated as Code
-  Assist auth failure. The real Antigravity auth failure signature is
   proxy-observed
-  `tank_api_proxy_upstream_401_total{provider="antigravity"}` or a
   `provider_auth_failed` terminal.
-  `tank_antigravity_runner_schedule_intent_total{kind}` records the schedule
   decision boundary before durable wakeup registration. `native_schedule_call`
-  means agy emitted the native `schedule` tool, `malformed_schedule_call` means
   the tool call existed but was not registerable, `parked_after_schedule` means
   the runner interrupted the native timer after durable registration, and
   `wait_text_without_schedule` is the diagnostic signature for a planner text
   step that says it will wait while emitting no native schedule tool call.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
-  `provider` (`claude`, `codex`, `antigravity`, `unknown`) and bounded
   `result`.
 - `tank_session_container_terminations_total{container,reason,exit_code}` —
   session pod container terminations observed by the leader-elected K8s watch.
@@ -544,17 +547,53 @@ All metric names are prefixed `tank_`. The full namespace:
   runner cannot reliably emit from inside the killed process. Correlate it with
   durable turn lifecycle and scheduled-wakeup rows to distinguish a missing
   schedule intent from a fired wake whose runner died mid-turn.
+  `reason="error"` (exit-1) is the crash-loop signal
+  `TankSessionContainerCrashLooping` alerts on — the session-979 class where an
+  agent-runner cannot resume a gone provider-session transcript and the kubelet
+  restarts it forever.
+- `tank_session_pod_reaped_total{reason}` — session pods the orchestrator
+  actively deleted to STOP them (distinct from user/idle deletes):
+  `reason="provider_fatal"` is a runner-reported unrecoverable session;
+  `reason="runner_crashloop"` is the K8s-watch restart-budget backstop killing a
+  pod still looping past the budget. Each reap converts an unbounded
+  CrashLoopBackOff into a terminal Failed session; a crash-loop rate with no
+  matching reap is the regression signature.
+- `tank_runner_unrecoverable_exit_total{reason}` — runner terminal exits taken
+  because the session cannot progress on restart.
+  `reason="provider_session_lost"` is a resume whose on-disk transcript was wiped
+  by a container restart (the runner reports `session.provider_fatal` and exits
+  terminally instead of crash-looping); `reason="report_failed"` is a failed
+  provider-fatal POST (the backstop is then the safety net). Steady state is
+  zero.
 - `tank_session_run_config_rejected_total` - backend rejections of invalid
   session mode/model/effort requests before runner dispatch. Labels are bounded:
   `surface` (`create`, `turn`, `runtime_config`, `other`), `provider`
-  (`claude`, `codex`, `antigravity`, `unknown`, `other`), and `reason`
   (`invalid_mode`, `retired_mode`, `unsupported_model`,
   `unsupported_effort`, `missing_model`, `default_model`, `other`). This is the
   red signal for agents or browser prefs attempting retired Codex modes or
   unavailable model strings; the corresponding HTTP response must be a hard
   400 with an actionable allowed-value list, never a silent default.
+- `tank_session_spawn_link_total{result}` — parent→child edge writes onto the
+  origin session row when an agent spawns a session (`spawn_run_session` /
+  `spawn_test_slot_session`), feeding the session-bar spawned-sessions chip.
+  `result` is `ok|error` (bounded, 2 series). The write is best-effort and
+  never fails the spawn, so a rising `error` rate is a quiet user-trust
+  regression — parents are silently losing the links to their children — and
+  is the signal to alert on rather than the (healthy) `ok` volume.
+- `tank_session_reorder_total{result}` — outcomes of the sidebar drag-to-reorder
+  write (`PUT /api/sessions/order`). `result` is `ok|conflict|error` (bounded, 3
+  series). `conflict` is the benign stale-permutation rejection the SPA
+  reconciles by refresh; a nonzero `error` rate means the durable reorder write
+  is failing — this counter exists because the `Store.Reorder` `42P18` bug shipped
+  a 500 on *every* drag that was invisible except in the generic 5xx log, with no
+  per-feature signal to alert on.
+- `tank_session_nest_update_total{action,result}` — manual drag-to-nest / un-nest
+  writes to `parent_session_id` (`PUT /api/sessions/{id}/parent`). `action` is
+  `nest|unnest`, `result` is `ok|rejected|error` (bounded, 6 series). `rejected`
+  is a guard refusal (self-parent, cycle, or missing/cross-scope target → 400 so
+  the durable tree stays acyclic and one tier); a rising `error` rate is a
+  durable-write/republish failure worth alerting on.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
-  label: `provider` ("claude", "codex", or "antigravity"), bound from
   `PROXY_PROVIDER`.
   `tank_api_proxy_upstream_status_total{provider,status_class}` buckets every
   upstream response; `tank_api_proxy_upstream_401_total` and
@@ -573,6 +612,18 @@ All metric names are prefixed `tank_`. The full namespace:
   did not absorb the rotated leaf" and "SDS stats are no longer observable."
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
+- `tank_nats_auth_callout_total{result}` — outcomes of the per-session NATS
+  credential issuer (`backend-go/cmd/nats-auth-callout`, #1128). `result` is
+  bounded to `session` (per-session JWT issued), `denied_no_credentials`,
+  `denied_token_invalid`, `denied_auth_exchange`,
+  `denied_auth_jwt_invalid`, `denied_subject_untrusted`,
+  `denied_identity_mismatch`, and `error`. The
+  callout has no Service — it answers NATS `$SYS.REQ.USER.AUTH`, not HTTP — so
+  it is scraped by the `tank-nats-auth-callout` **PodMonitor**, not a
+  ServiceMonitor. `TankNatsAuthCalloutDenials` alerts on the rejection/error
+  results (the #1148 new-pod auth-failure class that wedges submitted turns),
+  including Glimmung test-slot auth.romaine.life exchange or identity-shape
+  mismatches.
 - `tank_schema_migration*` — startup schema-migration engine
   (`pgstore.RunMigrationsWithMetrics`) counters emitted once per boot,
   before the HTTP/`/metrics` server comes up. `tank_schema_migrations_pending`
@@ -620,6 +671,17 @@ All metric names are prefixed `tank_`. The full namespace:
   many pages it split into (pages seal at `turnPageEventLimit` events). A growing
   tail past the threshold means long (often post-compaction) turns are common,
   signalling the bounded-cost live-page incremental projection is worth landing.
+- `tank_turn_directory_list_total{result}` and `tank_turn_directory_size` — the
+  durable turn directory (`GET /api/sessions/{id}/turns/directory`) that the
+  Turns selector lists its complete turn set from, independent of the bounded
+  `/timeline` window. `result` is `ok` / `truncated` / `error`; the histogram
+  records the per-session turn count returned. The histogram observes the live
+  per-session turn-count distribution so the `TurnDirectoryMaxRows` cap can be
+  revisited (with cursor paging) before it bites, and a sustained `truncated`
+  rate names sessions the cap is eliding. The matching SPA client events
+  (`turn-directory-request` / `-loaded` / `-error`, in the chat-scroll metric
+  allowlist) make a directory load that fails — leaving the retryable Turns
+  error state — diagnosable without browser devtools.
 
 ## Scripted access via Grafana
 
@@ -902,8 +964,6 @@ Response fields:
     observation, `""` if none.
 
 To localize a listed session, read its runner logs and its
-`session_events` ledger tail; for antigravity sessions also check
-`tank_antigravity_runner_turn_settle_total` (a healthy boundary shows
 a `quiet` outcome after the last `extended`). The endpoint never
 mutates state. Emits a structured `slog` line per call
 (`caller_email`, `session_scope`, `threshold_seconds`,
@@ -962,6 +1022,22 @@ Each invocation writes immutable events sharing one `invocation_id`:
 - `succeeded` after the external system accepts the mutation.
 - `failed` when the external system rejects the mutation.
 
+The internal write endpoint (`POST /api/internal/sessions/{id}/control-actions`)
+has two authorized writers, both authenticated by their **verified** IdP
+subject, never a caller-asserted header: a **session pod** (`svc:tank:<id>`)
+writing its *own* session's ledger, and the **orchestrator control plane**
+(`svc:tank-operator:<id>`) writing *any* session's ledger. The second writer is
+what lets the orchestrator-mediated governed merges — the in-app "Merge in Tank"
+button (`handleMergeSessionPR`) and the green-path auto-merge
+(`autoMergeOrchestrationPhasePR`) — record their `github.pull_request.merge`
+audit on the **owning session's** ledger rather than the orchestrator's: the
+orchestrator passes the owning session id to mcp-github (`governed_session_id`),
+so the ledger is identical regardless of who merged
+(docs/event-driven-rollout.md §E). Before this writer was recognized, every
+orchestrator-mediated merge `started` write was rejected `403`, which fails the
+tool closed and surfaced to the user as `merge failed: mcp-github tool error:
+Error executing tool merge_pull_request: …`.
+
 The browser reads the per-session ledger through:
 
 ```
@@ -978,6 +1054,12 @@ Prometheus counters:
 - `tank_control_action_events_total{source_service,source_tool,action,status,result}`
   counts accepted/rejected Tank ledger writes. Labels are deliberately bounded;
   PR numbers, emails, session ids, and SHAs live in Postgres, not metrics.
+- `tank_control_action_internal_write_total{writer,result}` counts internal
+  session-scoped ledger writes by authorized writer class
+  (`session_pod` | `control_plane` | `other`) and authorization outcome
+  (`authorized` | `forbidden`). A rise in `control_plane`/`forbidden` is the
+  signature of the orchestrator-mediated governed-merge regression: the merge
+  button stops working because the control-plane writer is no longer accepted.
 - MCP servers may expose their own action counters. For `mcp-github`, use
   `mcp_github_control_action_total{tool,action,status,result}` and
   `mcp_github_control_action_audit_append_total{status,result}`.
@@ -1099,6 +1181,13 @@ declares one rule group per subsystem:
   `turn.interrupt_requested` persist/publish failures (the durable stop
   boundary; non-zero rate means stops are losing durability or never
   reaching the runner).
+- **Session pod lifecycle**: `TankSessionContainerOOMKilled` (a session
+  container was OOMKilled), `TankSessionContainerCrashLooping` (a session
+  container is exiting non-zero and restarting — the session-979 unrecoverable
+  agent-runner resume class), and `TankSessionProviderFatal` (a runner declared
+  a session terminally Failed and its pod was reaped). The crash-loop alert
+  firing without a matching `tank_session_pod_reaped_total` increment means the
+  runner terminal path or the restart-budget backstop regressed.
 - **Persister pipeline** (tank-operator#1051):
   `TankSessionEventPersisterBacklog` pages when the persister durable's
   pending backlog or processed-event age is sustained — every session's
@@ -1110,6 +1199,14 @@ declares one rule group per subsystem:
   hole). `TankSessionEventStreamTruncated` pages when retention
   discarded events the persister never stored — permanent, unrepairable
   loss that only follows a long-unaddressed backlog.
+- **CI-watch / test-slot backstops**: `TankCIWatchStalled` (a governed-PR
+  CI watch stuck 'watching' with no event for over an hour — the dropped-webhook
+  stall class) and `TankTestSlotProvisionStuck` (a deterministic test-slot
+  provision stuck 'pending' for over an hour — a fire-and-forget gate goroutine
+  lost to an orchestrator restart mid-settle-wait that the reconcile backstop
+  did not recover). Both are durable restart-recovery backstops, not CI polls;
+  the test-slot alert's runbook starts from `pending_test_provisions` and the
+  `tank_test_slot_provision_redrive_total{kind}` counter.
 - **Transcript navigation**: `TankChatScrollUserAtBottomLatched` fires
   when BOTH the browser-side NavigationMode state machine reports
   rising "entered historical-anchor" transitions AND the
@@ -1140,6 +1237,17 @@ declares one rule group per subsystem:
   `docs/tank-conversation-protocol.md` → "Durable turn interruption"
   for the architecture they protect.
 - **NATS**: disconnect storm (>6/min for 5m).
+- **NATS auth-callout** (#1128): `TankNatsAuthCalloutDenials` (warning) fires
+  when the per-session credential issuer rejects session-pod auth
+  (`denied_token_invalid`/`denied_auth_exchange`/
+  `denied_auth_jwt_invalid`/`denied_subject_untrusted`/
+  `denied_identity_mismatch`/`error`) — the #1148
+  class where a pod cannot reach the session bus and its turns stay stuck with
+  no terminal. The same alert covers Glimmung test-slot session runners because
+  they share the production broker and callout. It depends on the
+  `tank-nats-auth-callout` PodMonitor scraping the callout `/metrics` — without
+  it the issuer (the only fleet component with no Service) is invisible to
+  Prometheus.
 - **api-proxy**: upstream 401 rate (refresh-storm signature), refresh
   failures (any non-success result), and sustained upstream 429s
   (`TankApiProxyRateLimited` — the shared provider account's usage cap is

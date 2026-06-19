@@ -332,7 +332,14 @@ func TestHandleCreateStreamTicketAllowsServiceActor(t *testing.T) {
 }
 
 type testSessionRegistry struct {
-	records map[string]map[string]sessionmodel.SessionRecord
+	records        map[string]map[string]sessionmodel.SessionRecord
+	spawnedAppends []recordedSpawnedAppend
+}
+
+type recordedSpawnedAppend struct {
+	Email           string
+	ParentSessionID string
+	Ref             sessionmodel.SpawnedSessionRef
 }
 
 func newTestSessionRegistry(records ...sessionmodel.SessionRecord) *testSessionRegistry {
@@ -400,6 +407,19 @@ func (r *testSessionRegistry) Upsert(_ context.Context, record sessionmodel.Sess
 }
 
 func (r *testSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
+func (r *testSessionRegistry) SetRunConfig(_ context.Context, owner, sessionID, model, effort string) error {
+	if r.records == nil || r.records[owner] == nil {
+		return nil
+	}
+	record, ok := r.records[owner][sessionID]
+	if !ok {
+		return nil
+	}
+	record.Model = model
+	record.Effort = effort
+	r.records[owner][sessionID] = record
+	return nil
+}
 func (r *testSessionRegistry) SetOpenTarget(_ context.Context, owner, sessionID, target string) error {
 	if r.records == nil || r.records[owner] == nil {
 		return nil
@@ -443,7 +463,18 @@ func (r *testSessionRegistry) SetTestState(_ context.Context, owner, sessionID s
 func (r *testSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
+func (r *testSessionRegistry) SetSpokeConfig(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
 func (r *testSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
+func (r *testSessionRegistry) AppendSpawnedSession(_ context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error {
+	r.spawnedAppends = append(r.spawnedAppends, recordedSpawnedAppend{
+		Email:           email,
+		ParentSessionID: parentSessionID,
+		Ref:             ref,
+	})
 	return nil
 }
 func (r *testSessionRegistry) SetRuntimeConfig(_ context.Context, email, sessionID, model, effort string) error {
@@ -470,12 +501,26 @@ func (r *testSessionRegistry) SetRuntimeContextWindow(_ context.Context, email, 
 	if !ok {
 		return nil
 	}
-	if record.RuntimeContextWindowTokens == 0 {
-		record.RuntimeContextWindowTokens = tokens
-		record.RuntimeContextWindowSource = source
-		record.RuntimeContextWindowObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		records[sessionID] = record
+	// Latest-observed-wins, mirroring the store (a mid-session model re-pin
+	// legitimately updates the window).
+	record.RuntimeContextWindowTokens = tokens
+	record.RuntimeContextWindowSource = source
+	record.RuntimeContextWindowObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	records[sessionID] = record
+	return nil
+}
+func (r *testSessionRegistry) SetRuntimeProviderSessionID(_ context.Context, email, sessionID, providerSessionID string) error {
+	records := r.records[email]
+	if records == nil {
+		return nil
 	}
+	record, ok := records[sessionID]
+	if !ok {
+		return nil
+	}
+	record.RuntimeProviderSessionID = providerSessionID
+	record.RuntimeProviderSessionObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	records[sessionID] = record
 	return nil
 }
 func (r *testSessionRegistry) SetProviderRateLimitInfo(_ context.Context, email, sessionID string, info map[string]any) error {
@@ -494,6 +539,18 @@ func (r *testSessionRegistry) SetProviderRateLimitInfo(_ context.Context, email,
 }
 func (r *testSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
+}
+func (r *testSessionRegistry) SetParentSession(_ context.Context, owner, sessionID, parentID string) error {
+	if r.records == nil || r.records[owner] == nil {
+		return nil
+	}
+	record, ok := r.records[owner][sessionID]
+	if !ok {
+		return nil
+	}
+	record.ParentSessionID = parentID
+	r.records[owner][sessionID] = record
+	return nil
 }
 func (r *testSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
 

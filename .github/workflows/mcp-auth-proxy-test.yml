@@ -1,0 +1,37 @@
+name: mcp-auth-proxy tests
+
+# Runs the mcp-auth-proxy pytest suite on PRs that touch the package. Before
+# this workflow the suite (tests/test_server.py) existed but nothing ran it, so
+# regressions in the Tank governed-PR tool handlers (publish/merge/watch) could
+# land unnoticed. Path-filtered so unrelated PRs do not pay for it.
+
+on:
+  pull_request:
+    paths:
+      - 'claude-container/mcp-auth-proxy/**'
+      - '.github/workflows/mcp-auth-proxy-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'claude-container/mcp-auth-proxy/**'
+      - '.github/workflows/mcp-auth-proxy-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: claude-container/mcp-auth-proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install package + test deps
+        run: pip install -e '.[test]'
+      - name: pytest
+        run: python -m pytest -q

@@ -47,10 +47,9 @@ const (
 type Source string
 
 const (
-	SourceTank        Source = "tank"
-	SourceClaude      Source = "claude"
-	SourceCodex       Source = "codex"
-	SourceAntigravity Source = "antigravity"
+	SourceTank   Source = "tank"
+	SourceClaude Source = "claude"
+	SourceCodex  Source = "codex"
 )
 
 // TurnSubmittedSource is an optional payload-level provenance marker for
@@ -59,15 +58,22 @@ const (
 type TurnSubmittedSource string
 
 const (
-	TurnSubmittedSourceScheduleWakeup TurnSubmittedSource = "schedule-wakeup"
-	TurnSubmittedSourceBackgroundTask TurnSubmittedSource = "background-task"
-	TurnSubmittedSourceLaunchDispatch TurnSubmittedSource = "launch-dispatch"
-	// TurnSubmittedSourceAgentContinuation marks a relay turn the antigravity
-	// runner asked the backend to open because agy self-continued after its own
-	// background task finished — NOT a Tank-fired wake. The runner relays agy's
-	// already-emitted output; the PTY is not re-prompted. The turn id reuses the
-	// turn_bgtask- prefix so it folds into the originating user-facing turn.
-	TurnSubmittedSourceAgentContinuation TurnSubmittedSource = "agent-continuation"
+	TurnSubmittedSourceScheduleWakeup        TurnSubmittedSource = "schedule-wakeup"
+	TurnSubmittedSourceBackgroundTask        TurnSubmittedSource = "background-task"
+	TurnSubmittedSourceLaunchDispatch        TurnSubmittedSource = "launch-dispatch"
+	TurnSubmittedSourceBreakGlassApproval    TurnSubmittedSource = "break-glass-approval"
+	TurnSubmittedSourceTestSlotModelApproval TurnSubmittedSource = "test-slot-model-approval"
+	// TurnSubmittedSourceTestSlotDrive marks the backend-owned wake turn the
+	// interactive "Create test slot and test" (drive) variant submits after a
+	// successful, zero-LLM provision: the agent re-enters only here, to validate
+	// its changes against the now-running test slot. Provisioning itself stays
+	// zero-LLM; this source labels the post-ready hand-back to the agent.
+	TurnSubmittedSourceTestSlotDrive TurnSubmittedSource = "test-slot-drive"
+	// TurnSubmittedSourceOrchestrateLaunch marks the backend-owned kickoff turn
+	// the orchestrate launch endpoint enqueues when a GUI chat session is turned
+	// into a spoke-fleet hub: it carries the spoke config, the hub's own id (for
+	// ping-backs), and the break-glass status into the /orchestrate skill.
+	TurnSubmittedSourceOrchestrateLaunch TurnSubmittedSource = "orchestrate-launch"
 )
 
 type Visibility string
@@ -100,6 +106,8 @@ const (
 	EventShellTaskUpdated            EventType = "shell_task.updated"
 	EventShellTaskExited             EventType = "shell_task.exited"
 	EventScheduledWakeupUpdated      EventType = "scheduled_wakeup.updated"
+	EventCIStatusUpdated             EventType = "ci_status.updated"
+	EventTestProvisionUpdated        EventType = "test_provision.updated"
 	EventTurnAwaitingInput           EventType = "turn.awaiting_input"
 	EventTurnAwaitingInputInvocation EventType = "turn.awaiting_input.invocation"
 )
@@ -298,6 +306,22 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("scheduled_wakeup.updated must be actor=system source=tank")
 		}
 		return validateScheduledWakeupPayload(event)
+	case EventCIStatusUpdated:
+		if err := requireFields(event, "timeline_id", "client_nonce"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("ci_status.updated must be actor=system source=tank")
+		}
+		return validateCIStatusPayload(event)
+	case EventTestProvisionUpdated:
+		if err := requireFields(event, "timeline_id", "client_nonce"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("test_provision.updated must be actor=system source=tank")
+		}
+		return validateTestProvisionPayload(event)
 	case EventTurnAwaitingInput:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -738,6 +762,48 @@ func validateScheduledWakeupPayload(event map[string]any) error {
 	return nil
 }
 
+func validateCIStatusPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "kind") != "ci_status" {
+		return fmt.Errorf("payload.kind must be ci_status for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "pr_url") == "" {
+		return fmt.Errorf("payload.pr_url is required for %s", stringField(event, "type"))
+	}
+	switch stringField(payload, "state") {
+	case "merged", "ready", "failed", "conflict":
+	default:
+		return fmt.Errorf("payload.state is invalid for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
+// validateTestProvisionPayload enforces the test_provision.updated payload: a
+// display-only progress record for the deterministic interactive test-slot
+// workflow. Each record is one phase of one provision run (grouped by run_id),
+// projected to a role:system message so the user sees the workflow advance.
+func validateTestProvisionPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "kind") != "test_provision" {
+		return fmt.Errorf("payload.kind must be test_provision for %s", stringField(event, "type"))
+	}
+	switch stringField(payload, "phase") {
+	case "creating", "validating", "waiting", "ready", "error":
+	default:
+		return fmt.Errorf("payload.phase is invalid for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "text") == "" {
+		return fmt.Errorf("payload.text is required for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 func validateTurnInputAnsweredPayload(event map[string]any) error {
 	payload, err := requirePayload(event)
 	if err != nil {
@@ -833,7 +899,7 @@ func validActor(actor Actor) bool {
 
 func validSource(source Source) bool {
 	switch source {
-	case SourceTank, SourceClaude, SourceCodex, SourceAntigravity:
+	case SourceTank, SourceClaude, SourceCodex:
 		return true
 	default:
 		return false
@@ -845,7 +911,10 @@ func validTurnSubmittedSource(source TurnSubmittedSource) bool {
 	case TurnSubmittedSourceScheduleWakeup,
 		TurnSubmittedSourceBackgroundTask,
 		TurnSubmittedSourceLaunchDispatch,
-		TurnSubmittedSourceAgentContinuation:
+		TurnSubmittedSourceBreakGlassApproval,
+		TurnSubmittedSourceTestSlotModelApproval,
+		TurnSubmittedSourceTestSlotDrive,
+		TurnSubmittedSourceOrchestrateLaunch:
 		return true
 	default:
 		return false
@@ -913,6 +982,8 @@ func validEventType(eventType EventType) bool {
 		EventShellTaskUpdated,
 		EventShellTaskExited,
 		EventScheduledWakeupUpdated,
+		EventCIStatusUpdated,
+		EventTestProvisionUpdated,
 		EventTurnAwaitingInput,
 		EventTurnAwaitingInputInvocation:
 		return true

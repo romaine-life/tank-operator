@@ -1014,8 +1014,7 @@ var schemaMigrations = []migration{
 	// container images the orchestrator stamps onto NEW session pods. It backs
 	// the test-slot "point this slot at a branch-built session image" flow
 	// (docs/testing.md): a slot's orchestrator reads the row for its own scope
-	// and stamps the override instead of the chart-pinned SESSION_IMAGE /
-	// CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE, so newly-created sessions
+	// and stamps the override instead of the chart-pinned session images, so newly-created sessions
 	// boot the branch runner code the same way prod boots its pinned image. Keyed
 	// by session_scope so the shared Postgres can never let a slot override bleed
 	// into another slot or prod; the write path additionally refuses the
@@ -1254,7 +1253,6 @@ var schemaMigrations = []migration{
 		ON control_action_events (owner_email, session_scope, session_id, created_at DESC)`},
 	{ID: "0105", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
 		ON control_action_events (source_service, target_kind, target_ref, created_at DESC)`},
-
 	// Repair guard for the runtime-context migrations after a branch image wrote
 	// a production ledger checksum under the same IDs before the final main
 	// migration text landed. These statements are idempotent and intentionally
@@ -1929,6 +1927,300 @@ var schemaMigrations = []migration{
 	// emit resync_required on change.
 	{ID: "0156", SQL: `ALTER TABLE session_transcript_row_backfills
 		ADD COLUMN IF NOT EXISTS rewrite_epoch bigint NOT NULL DEFAULT 0`},
+
+	// The provider-native conversation id last observed by a session runner.
+	// Claude model switches require feeding this id back via explicit resume;
+	// pod-local --continue state is not durable across runner/container restarts.
+	{ID: "0157", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_provider_session_id text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS runtime_provider_session_observed_at timestamptz`},
+
+	// Remove the abandoned third session provider end to end. Existing rows for
+	// its modes are hidden because there is no longer a runner, image, proxy, or
+	// UI surface that can drive them. The test-slot image override column and
+	// deployment image ledger kind are deleted rather than kept as inert
+	// compatibility state.
+	{ID: "0158", SQL: `UPDATE sessions
+		SET visible     = false,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE mode IN (
+			concat('anti', 'gravity', '_config'),
+			concat('anti', 'gravity', '_cli'),
+			concat('anti', 'gravity', '_gui')
+		)
+		  AND visible = true;
+
+		DO $$
+		BEGIN
+			EXECUTE 'ALTER TABLE session_image_overrides DROP COLUMN IF EXISTS '
+				|| quote_ident(concat('anti', 'gravity', '_image'));
+		END $$;
+
+		DELETE FROM deployment_image_versions
+		WHERE image_kind = concat('session_', 'anti', 'gravity');
+
+		ALTER TABLE deployment_image_versions
+			DROP CONSTRAINT IF EXISTS deployment_image_versions_image_kind_check;
+
+		ALTER TABLE deployment_image_versions
+			ADD CONSTRAINT deployment_image_versions_image_kind_check
+			CHECK (image_kind IN ('app', 'session_claude', 'session_codex'))`},
+	{ID: "0159", SQL: `CREATE TABLE IF NOT EXISTS provider_quota_snapshots (
+		session_scope text NOT NULL,
+		provider      text NOT NULL,
+		window_id     text NOT NULL,
+		status        text NOT NULL,
+		utilization   double precision,
+		resets_at     text,
+		observed_at   timestamptz NOT NULL,
+		source        text NOT NULL,
+		raw           jsonb NOT NULL DEFAULT '{}'::jsonb,
+		updated_at    timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, provider, window_id),
+		CHECK (provider IN ('anthropic', 'anthropic_secondary', 'codex')),
+		CHECK (window_id IN ('five_hour', 'weekly', 'opus_weekly')),
+		CHECK (status <> '')
+	)`},
+	{ID: "0160", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_snapshots_scope_observed
+		ON provider_quota_snapshots (session_scope, observed_at DESC)`},
+	{ID: "0161", SQL: `CREATE TABLE IF NOT EXISTS provider_quota_refresh_state (
+		session_scope     text NOT NULL,
+		provider          text NOT NULL,
+		last_attempted_at timestamptz NOT NULL,
+		last_succeeded_at timestamptz,
+		status_code       integer,
+		status            text NOT NULL DEFAULT '',
+		error             text NOT NULL DEFAULT '',
+		next_retry_at     timestamptz,
+		updated_at        timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, provider),
+		CHECK (provider IN ('anthropic', 'anthropic_secondary', 'codex'))
+	)`},
+	{ID: "0162", SQL: `CREATE INDEX IF NOT EXISTS provider_quota_refresh_state_retry
+		ON provider_quota_refresh_state (session_scope, next_retry_at)`},
+	{ID: "0163", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS control_action_events_break_glass_request_decision
+		ON control_action_events (session_scope, session_id, (payload->>'request_event_id'))
+		WHERE action IN (
+			'github.break_glass.grant',
+			'github.break_glass.deny',
+			'azure.break_glass.grant',
+			'azure.break_glass.deny'
+		)
+		  AND payload ? 'request_event_id'
+		  AND payload->>'request_event_id' <> ''`},
+
+	// The durable turn directory (GET /api/sessions/{id}/turns/directory) reads
+	// the COMPLETE, submission-ordered set of turn_activity shell rows so the
+	// Turns selector lists every turn independent of the bounded /timeline
+	// window (transcript-navigation contract: the durable ledger, not the
+	// loaded window, owns the selectable turn set). This partial index serves
+	// that "all shells for one session, ordered" scan without touching the
+	// per-turn child rows the cursor index also covers. Owned by
+	// internal/store/session_transcript_rows.go ListTurnDirectory.
+	{ID: "0164", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_turn_directory
+		ON session_transcript_rows (tank_session_id, row_cursor)
+		WHERE row_kind = 'turn_activity'`},
+
+	// session_ci_watches - durable per-session GitHub PR CI/mergeability watch
+	// (docs/event-driven-rollout.md). One row per (session, PR). The status
+	// column drives three consumers: the webhook receiver wakes the agent on a
+	// red/conflict transition, the idle reaper keeps a 'watching' session alive
+	// so that wake can land, and the human merge surface renders live PR state.
+	{ID: "0165", SQL: `CREATE TABLE IF NOT EXISTS session_ci_watches (
+		watch_id        text PRIMARY KEY,
+		session_scope   text NOT NULL,
+		session_id      text NOT NULL,
+		tank_session_id text NOT NULL,
+		owner_email     text NOT NULL,
+		pr_owner        text NOT NULL,
+		pr_name         text NOT NULL,
+		pr_number       integer NOT NULL,
+		head_sha        text NOT NULL DEFAULT '',
+		status          text NOT NULL,
+		required_checks jsonb NOT NULL DEFAULT '[]'::jsonb,
+		mergeable_state text NOT NULL DEFAULT '',
+		check_state     text NOT NULL DEFAULT '',
+		detail          text NOT NULL DEFAULT '',
+		pr_url          text NOT NULL DEFAULT '',
+		merge_commit    text NOT NULL DEFAULT '',
+		registered_at   timestamptz NOT NULL,
+		last_event_at   timestamptz,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		updated_at      timestamptz NOT NULL DEFAULT now(),
+		CHECK (status IN ('watching', 'ready', 'failed', 'conflict', 'merged', 'superseded', 'cancelled'))
+	)`},
+	{ID: "0166", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_ci_watches_pr
+		ON session_ci_watches (tank_session_id, pr_owner, pr_name, pr_number)`},
+	{ID: "0167", SQL: `CREATE INDEX IF NOT EXISTS session_ci_watches_lookup
+		ON session_ci_watches (pr_owner, pr_name, pr_number)`},
+	{ID: "0168", SQL: `CREATE INDEX IF NOT EXISTS session_ci_watches_active
+		ON session_ci_watches (session_scope, status, updated_at)
+		WHERE status IN ('watching', 'ready')`},
+	// `orchestrations` — one durable row per deterministic multi-phase
+	// orchestration run, the state a future orchestrator executes a
+	// human-approved plan against. `plan` is the frozen, approved plan captured
+	// as an immutable jsonb snapshot and `plan_hash` is its content-addressed
+	// schema_ref (sha256 of the canonical plan document, same freeze idiom as
+	// the schema_migrations checksum): a later edit to the logical plan template
+	// produces a different hash and cannot mutate an already-frozen run's
+	// history. The mutable runtime DAG lives in `orchestration_phases`; this row
+	// owns identity, ownership, target repo, the shared integration branch
+	// (nullable), the run state machine, and approval provenance.
+	{ID: "0169", SQL: `CREATE TABLE IF NOT EXISTS orchestrations (
+		orchestration_id   text PRIMARY KEY,
+		owner_email        text NOT NULL,
+		approver_email     text NOT NULL DEFAULT '',
+		repo_owner         text NOT NULL,
+		repo_name          text NOT NULL,
+		integration_branch text,
+		state              text NOT NULL,
+		plan               jsonb NOT NULL,
+		plan_hash          text NOT NULL,
+		phase_count        integer NOT NULL,
+		created_at         timestamptz NOT NULL DEFAULT now(),
+		updated_at         timestamptz NOT NULL DEFAULT now(),
+		approved_at        timestamptz,
+		CHECK (state IN ('draft', 'approved', 'running', 'awaiting_review', 'done', 'failed'))
+	)`},
+	// `orchestration_phases` — one materialized row per DAG node. The plan
+	// columns (ordinal, phase_key, brief, depends_on, target) are write-once,
+	// materialized from the frozen plan at create time so the DAG is queryable
+	// and the PR->phase reverse lookup can be indexed; the runtime columns
+	// (status, spoke_session_id, pr_*, merge_sha) are the only mutable state.
+	// depends_on holds the phase_keys this node waits on (the DAG edges), jsonb
+	// like session_ci_watches.required_checks. The FK to orchestrations cascades
+	// so a deleted run takes its phases with it.
+	{ID: "0170", SQL: `CREATE TABLE IF NOT EXISTS orchestration_phases (
+		phase_id         text PRIMARY KEY,
+		orchestration_id text NOT NULL REFERENCES orchestrations (orchestration_id) ON DELETE CASCADE,
+		ordinal          integer NOT NULL,
+		phase_key        text NOT NULL,
+		brief            text NOT NULL,
+		depends_on       jsonb NOT NULL DEFAULT '[]'::jsonb,
+		target           text NOT NULL,
+		status           text NOT NULL DEFAULT 'pending',
+		spoke_session_id text NOT NULL DEFAULT '',
+		pr_owner         text NOT NULL DEFAULT '',
+		pr_name          text NOT NULL DEFAULT '',
+		pr_number        integer NOT NULL DEFAULT 0,
+		pr_url           text NOT NULL DEFAULT '',
+		merge_sha        text NOT NULL DEFAULT '',
+		created_at       timestamptz NOT NULL DEFAULT now(),
+		updated_at       timestamptz NOT NULL DEFAULT now(),
+		CHECK (target IN ('main', 'integration')),
+		CHECK (status IN ('pending', 'ready', 'running', 'pr_open', 'merged', 'blocked', 'skipped'))
+	)`},
+	// phase_key uniqueness within a run: depends_on edges reference these keys,
+	// so a duplicate key would make the DAG ambiguous.
+	{ID: "0171", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS orchestration_phases_key
+		ON orchestration_phases (orchestration_id, phase_key)`},
+	// ordinal uniqueness + the canonical parent read order (GetWithPhases reads
+	// a run's phases ordered by ordinal off this index).
+	{ID: "0172", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS orchestration_phases_ordinal
+		ON orchestration_phases (orchestration_id, ordinal)`},
+	// PR -> phase reverse lookup for the eventual merged-PR webhook handler
+	// (repo + PR number -> owning phase), mirroring session_ci_watches_lookup.
+	// Partial: only phases that have actually opened a PR carry pr coordinates.
+	{ID: "0173", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_pr
+		ON orchestration_phases (pr_owner, pr_name, pr_number)
+		WHERE pr_number > 0`},
+	// session -> phase reverse lookup for the advance loop's phase->PR linking:
+	// when a phase's spoke session registers a PR (the CI-watch handoff path),
+	// the orchestrator joins session id back to its owning phase to copy the PR
+	// coordinates on. Partial: only phases that have actually been dispatched
+	// carry a spoke_session_id. Mirrors orchestration_phases_pr.
+	{ID: "0174", SQL: `CREATE INDEX IF NOT EXISTS orchestration_phases_spoke
+		ON orchestration_phases (spoke_session_id)
+		WHERE spoke_session_id <> ''`},
+
+	// pending_test_provisions — durable backstop record for an in-flight
+	// deterministic test-slot provision. The two background entry points
+	// (provisionOrchestrationReviewSlot, runInteractiveTestWorkflow) run the
+	// validate→settle-wait→provision gate in a fire-and-forget goroutine that can
+	// wait ~23 min for CI to settle; an orchestrator restart mid-wait used to
+	// drop that provision with no retry. A row is written 'pending' at kickoff and
+	// terminalized ('done'/'failed') when the run reaches a verdict or infra
+	// error. A record stranded in 'pending' past the settle cap + grace is the
+	// signature of a restart, and the reconcile loop re-drives it idempotently —
+	// the same durable-backstop shape as session_ci_watches' stale re-drive.
+	// One row per (session, repo, branch, kind): the deterministic provision_id
+	// makes a re-kickoff of the same target the same row, so the interactive
+	// endpoint's double-trigger guard and the backstop's re-drive both address
+	// the in-flight record instead of duplicating it.
+	{ID: "0175", SQL: `CREATE TABLE IF NOT EXISTS pending_test_provisions (
+		provision_id     text PRIMARY KEY,
+		session_scope    text NOT NULL,
+		session_id       text NOT NULL,
+		tank_session_id  text NOT NULL,
+		owner_email      text NOT NULL DEFAULT '',
+		repo_owner       text NOT NULL,
+		repo_name        text NOT NULL,
+		branch           text NOT NULL DEFAULT '',
+		project          text NOT NULL DEFAULT '',
+		workflow         text NOT NULL DEFAULT '',
+		kind             text NOT NULL,
+		pr_number        integer NOT NULL DEFAULT 0,
+		expected_sha     text NOT NULL DEFAULT '',
+		head_sha         text NOT NULL DEFAULT '',
+		orchestration_id text NOT NULL DEFAULT '',
+		status           text NOT NULL,
+		detail           text NOT NULL DEFAULT '',
+		attempt_count    integer NOT NULL DEFAULT 0,
+		started_at       timestamptz NOT NULL,
+		last_event_at    timestamptz,
+		created_at       timestamptz NOT NULL DEFAULT now(),
+		updated_at       timestamptz NOT NULL DEFAULT now(),
+		CHECK (kind IN ('interactive', 'orchestration-review')),
+		CHECK (status IN ('pending', 'done', 'failed'))
+	)`},
+	// Stale-pending scan predicate for the reconcile backstop: only 'pending'
+	// rows, ordered by last activity. Partial so the index stays tiny (terminal
+	// rows fall out of it).
+	{ID: "0176", SQL: `CREATE INDEX IF NOT EXISTS pending_test_provisions_pending
+		ON pending_test_provisions (COALESCE(last_event_at, started_at))
+		WHERE status = 'pending'`},
+	// Session reverse lookup (debug/audit + any future per-session guard query).
+	{ID: "0177", SQL: `CREATE INDEX IF NOT EXISTS pending_test_provisions_session
+		ON pending_test_provisions (session_scope, session_id, status)`},
+
+	// Parent→child session lineage for the session-bar "spawned sessions"
+	// chip. When an agent spawns a session via spawn_run_session /
+	// spawn_test_slot_session, the create handler appends a ref
+	// ({id,name,mode,model,repos,url,created_at}) to the ORIGIN (parent)
+	// session's row, keyed by the X-Tank-Origin-Session-Id header. The
+	// column is the durable, snapshot-facing source the RowPublisher fans
+	// out so the parent's chip lists its children without re-deriving the
+	// relationship from the event ledger. jsonb array; NULL/absent means
+	// "spawned nothing". Append is atomic + id-deduped (sessionregistry
+	// AppendSpawnedSession), matched on the full (email, session_scope,
+	// session_id) primary key — session ids are per-scope (session_counters),
+	// so the scope is load-bearing and a scope-less match could hit an
+	// unrelated same-id row. Cross-scope test-slot lineage is a tracked
+	// follow-up (needs the origin scope plumbed from the proxy).
+	{ID: "0178", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS spawned_sessions jsonb`},
+
+	// Child→parent (origin) pointer for sidebar nesting. The spawned_sessions
+	// column above lives on the PARENT and is written by a SEPARATE, later
+	// UPDATE than the child row's INSERT, so a freshly spawned child first
+	// paints as a top-level row and only re-nests once the parent's append
+	// propagates — a visible reflow. parent_session_id lives on the CHILD and is
+	// stamped in the SAME INSERT that creates the child (from the
+	// X-Tank-Origin-Session-Id header), so the child is "born nested": the first
+	// snapshot/row-update that carries the child already carries its parent.
+	// NULL means "not spawned" (human/splash create) or a pre-column session.
+	// Scalar text, same per-scope id space as session_id; the SPA only nests
+	// when the referenced parent is present in the same (email, scope) list, so
+	// a cross-scope test-slot origin stored here never produces a phantom nest.
+	{ID: "0179", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS parent_session_id text`},
+
+	// Hub-side spoke-fleet launch config persisted by the orchestrate endpoint.
+	// NULL until set; read by the RowPublisher/snapshot path. Same jsonb style
+	// as rollout_state (0176) and spawned_sessions (0178).
+	{ID: "0180", SQL: `ALTER TABLE sessions
+	ADD COLUMN IF NOT EXISTS spoke_config jsonb`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

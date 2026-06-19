@@ -32,13 +32,12 @@ type appVersionImage struct {
 }
 
 type appVersionResponse struct {
-	AppImage                appVersionImage `json:"app_image"`
-	SessionImage            appVersionImage `json:"session_image"`
-	CodexSessionImage       appVersionImage `json:"codex_session_image"`
-	AntigravitySessionImage appVersionImage `json:"antigravity_session_image"`
-	SessionScope            string          `json:"session_scope"`
-	PodName                 string          `json:"pod_name,omitempty"`
-	FetchedAt               string          `json:"fetched_at"`
+	AppImage          appVersionImage `json:"app_image"`
+	SessionImage      appVersionImage `json:"session_image"`
+	CodexSessionImage appVersionImage `json:"codex_session_image"`
+	SessionScope      string          `json:"session_scope"`
+	PodName           string          `json:"pod_name,omitempty"`
+	FetchedAt         string          `json:"fetched_at"`
 }
 
 func (s *appServer) handleAdminAppVersion(w http.ResponseWriter, r *http.Request) {
@@ -75,13 +74,12 @@ func (s *appServer) appVersionBody(ctx context.Context, now time.Time) appVersio
 
 func appVersionBodyFromRows(now time.Time, rows map[string]pgstore.DeploymentImageVersion) appVersionResponse {
 	return appVersionResponse{
-		AppImage:                imageVersionFromRow(rows, pgstore.DeploymentImageKindApp, os.Getenv("TANK_OPERATOR_IMAGE"), os.Getenv("TANK_OPERATOR_IMAGE_METADATA")),
-		SessionImage:            imageVersionFromRow(rows, pgstore.DeploymentImageKindSessionClaude, os.Getenv("SESSION_IMAGE"), os.Getenv("SESSION_IMAGE_METADATA")),
-		CodexSessionImage:       imageVersionFromRow(rows, pgstore.DeploymentImageKindSessionCodex, os.Getenv("CODEX_SESSION_IMAGE"), os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
-		AntigravitySessionImage: imageVersionFromRow(rows, pgstore.DeploymentImageKindSessionAntigravity, os.Getenv("ANTIGRAVITY_SESSION_IMAGE"), os.Getenv("ANTIGRAVITY_SESSION_IMAGE_METADATA")),
-		SessionScope:            normalizeSessionScope(os.Getenv("SESSION_REGISTRY_SCOPE")),
-		PodName:                 strings.TrimSpace(os.Getenv("HOSTNAME")),
-		FetchedAt:               now.Format(time.RFC3339Nano),
+		AppImage:          imageVersionFromRow(rows, pgstore.DeploymentImageKindApp, os.Getenv("TANK_OPERATOR_IMAGE"), os.Getenv("TANK_OPERATOR_IMAGE_METADATA")),
+		SessionImage:      imageVersionFromRow(rows, pgstore.DeploymentImageKindSessionClaude, os.Getenv("SESSION_IMAGE"), os.Getenv("SESSION_IMAGE_METADATA")),
+		CodexSessionImage: imageVersionFromRow(rows, pgstore.DeploymentImageKindSessionCodex, os.Getenv("CODEX_SESSION_IMAGE"), os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
+		SessionScope:      normalizeSessionScope(os.Getenv("SESSION_REGISTRY_SCOPE")),
+		PodName:           strings.TrimSpace(os.Getenv("HOSTNAME")),
+		FetchedAt:         now.Format(time.RFC3339Nano),
 	}
 }
 
@@ -213,14 +211,6 @@ func observedDeploymentImageVersions(scope, podName string, observedAt time.Time
 			ImageKind:    pgstore.DeploymentImageKindSessionCodex,
 			ImageRef:     os.Getenv("CODEX_SESSION_IMAGE"),
 			Metadata:     sessionmodel.ParseImageVersionMetadata(os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
-			ObservedAt:   observedAt,
-		},
-		{
-			SessionScope: scope,
-			PodName:      podName,
-			ImageKind:    pgstore.DeploymentImageKindSessionAntigravity,
-			ImageRef:     os.Getenv("ANTIGRAVITY_SESSION_IMAGE"),
-			Metadata:     sessionmodel.ParseImageVersionMetadata(os.Getenv("ANTIGRAVITY_SESSION_IMAGE_METADATA")),
 			ObservedAt:   observedAt,
 		},
 	}

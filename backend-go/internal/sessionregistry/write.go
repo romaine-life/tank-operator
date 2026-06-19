@@ -102,12 +102,14 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			mode, pod_name, name, visible, session_image, session_image_metadata,
 			requested_at, created_at, updated_at,
 			status, ready_at,
-			repos, capabilities, model, effort, agent_avatar_id, system_avatar_id, sidebar_position
+			repos, capabilities, model, effort, agent_avatar_id, system_avatar_id, sidebar_position,
+			parent_session_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, COALESCE($11, now()), $12,
 			COALESCE(NULLIF($13, ''), 'Pending'), $14,
-			$15, $16, $17, $18, NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, 0), nextval('sessions_row_version_seq'))
+			$15, $16, $17, $18, NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, 0), nextval('sessions_row_version_seq')),
+			NULLIF($22, '')
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -147,6 +149,11 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		strings.TrimSpace(record.AgentAvatarID),
 		strings.TrimSpace(record.SystemAvatarID),
 		sidebarPosition,
+		// parent_session_id is write-once: set on the create INSERT, absent from
+		// the ON CONFLICT DO UPDATE set above, so later status/created_at
+		// re-upserts (the only other Upsert caller is Create's own refresh)
+		// preserve the origin pointer stamped at birth.
+		strings.TrimSpace(record.ParentSessionID),
 	)
 	return err
 }
@@ -159,9 +166,11 @@ func validateSessionRecordForWrite(record sessionmodel.SessionRecord) error {
 }
 
 // SetRuntimeConfig records the model/effort options the pod-side runner
-// actually handed to the provider executable or SDK. The intended session
-// config is immutable after create; this applied surface is allowed to
-// update on runner restart so the UI reflects the current process.
+// actually handed to the provider executable or SDK (the RUNTIME/applied
+// surface). The user-chosen config (the model/effort columns) is mutable
+// post-create via SetRunConfig; this applied surface tracks what the runner
+// last pinned, updating on runner restart and on a mid-session re-pin so the
+// UI reflects the current process.
 func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	sessionID = strings.TrimSpace(sessionID)
@@ -181,10 +190,12 @@ func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, e
 	return err
 }
 
-// SetRuntimeContextWindow records the first provider-observed model context
-// window for a session. The requested session model is immutable after create,
-// so later differing values are treated as provider/runtime anomalies and do
-// not silently change the durable UI denominator.
+// SetRuntimeContextWindow records the provider-observed model context window
+// for a session. It is latest-observed-wins: the runner reports the window
+// once per pinned model and resets its latch on a mid-session model re-pin, so
+// a model switch legitimately updates the durable UI denominator (a switch to
+// a model with a different window must not leave the old denominator stale).
+// Unchanged values are skipped so the row_version cursor does not churn.
 func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	sessionID = strings.TrimSpace(sessionID)
@@ -196,15 +207,41 @@ func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID st
 		UPDATE sessions
 		SET runtime_context_window_tokens      = $4,
 			runtime_context_window_source      = $5,
-			runtime_context_window_observed_at = COALESCE(runtime_context_window_observed_at, now()),
+			runtime_context_window_observed_at = now(),
 			updated_at                         = now(),
 			row_version                        = nextval('sessions_row_version_seq')
 		WHERE email = $1
 			AND session_scope = $2
 			AND session_id = $3
-			AND runtime_context_window_tokens = 0
+			AND runtime_context_window_tokens IS DISTINCT FROM $4
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, tokens, source)
+	return err
+}
+
+// SetRuntimeProviderSessionID stores the latest provider-native conversation
+// id observed by the runner. This is latest-observed-wins because a provider
+// resume failure can legitimately create a new conversation id, and future
+// restarts must resume the conversation the runner is actually using now.
+func (s *Store) SetRuntimeProviderSessionID(ctx context.Context, email, sessionID, providerSessionID string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	providerSessionID = strings.TrimSpace(providerSessionID)
+	if normalized == "" || sessionID == "" || providerSessionID == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET runtime_provider_session_id          = $4,
+			runtime_provider_session_observed_at = now(),
+			updated_at                           = now(),
+			row_version                          = nextval('sessions_row_version_seq')
+		WHERE email = $1
+			AND session_scope = $2
+			AND session_id = $3
+			AND runtime_provider_session_id IS DISTINCT FROM $4
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, providerSessionID)
 	return err
 }
 
@@ -270,6 +307,53 @@ func (s *Store) SetOpenTarget(ctx context.Context, email, sessionID, target stri
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, target)
+	return err
+}
+
+// SetRunConfig updates the user-chosen run config (model/effort) for an SDK
+// chat session after create. Tank's model/effort are no longer immutable after
+// create: a user may change them mid-session from the composer, the next
+// submit_turn carries the new values (the turn handler reads these columns),
+// and the runner re-pins on the next turn at an idle boundary. Like SetName,
+// missing-session is a no-op and the row_version bump keeps the row-update
+// cursor advancing so open tabs converge. Validation (provider allowlist,
+// default-alias rejection, Antigravity exclusion) lives in the handler.
+func (s *Store) SetRunConfig(ctx context.Context, email, sessionID, model, effort string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET model       = $4,
+			effort      = $5,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, strings.TrimSpace(model), strings.TrimSpace(effort))
+	return err
+}
+
+// SetParentSession sets or clears the durable child→parent nesting edge
+// (sessions.parent_session_id) for one session. Unlike the write-once stamp the
+// create Upsert applies for agent-spawned children, this is the explicit
+// user-driven mutation behind drag-to-nest and the "Un-nest" menu action. An
+// empty parentID writes NULL (un-nest). The row_version bump keeps open tabs
+// converging; ownership/cycle validation lives in Manager.SetParentSession.
+func (s *Store) SetParentSession(ctx context.Context, email, sessionID, parentID string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET parent_session_id = NULLIF($4, ''),
+			updated_at        = now(),
+			row_version       = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, strings.TrimSpace(sessionID), strings.TrimSpace(parentID))
 	return err
 }
 
@@ -374,6 +458,13 @@ func (s *Store) SetRolloutState(ctx context.Context, email, sessionID string, st
 	return s.setJSONBColumn(ctx, "rollout_state", clearColumn, email, sessionID, state)
 }
 
+// SetSpokeConfig replaces the row's spoke_config jsonb — the hub's
+// spoke-fleet launch config persisted by the orchestrate endpoint. nil
+// clears the column. Bumps row_version so the snapshot/SSE re-reads.
+func (s *Store) SetSpokeConfig(ctx context.Context, email, sessionID string, config map[string]any) error {
+	return s.setJSONBColumn(ctx, "spoke_config", "", email, sessionID, config)
+}
+
 func skillStateActive(state map[string]any) bool {
 	active, _ := state["active"].(bool)
 	return active
@@ -384,6 +475,47 @@ func skillStateActive(state map[string]any) bool {
 // partial clone progress/failures are visible in the durable session row.
 func (s *Store) SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error {
 	return s.setJSONBColumn(ctx, "clone_state", "", email, sessionID, state)
+}
+
+// AppendSpawnedSession appends one child ref to the parent row's
+// spawned_sessions jsonb array, deduped by child id so a spawn retry is
+// idempotent. Matches the parent on the full (email, session_scope,
+// session_id) primary-key prefix like every other row writer — session ids
+// are only unique within a scope (session_counters is per-scope), so a
+// scope-less match could append the child onto an unrelated same-id row in
+// another scope. Bumps row_version so the snapshot/SSE catch-up re-reads the
+// row. No-op on empty inputs.
+//
+// Consequence: lineage is recorded whenever the spawn is handled in the
+// parent's scope — every same-scope spawn, i.e. spawn_run_session. A
+// cross-scope test-slot spawn handled by a different-scope operator would
+// need the origin scope plumbed through (a follow-up) to land on the prod
+// parent; this deliberately writes nothing rather than risk the wrong row.
+func (s *Store) AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	parent := strings.TrimSpace(parentSessionID)
+	childID := strings.TrimSpace(ref.ID)
+	if normalized == "" || parent == "" || childID == "" {
+		return nil
+	}
+	raw, err := json.Marshal(ref)
+	if err != nil {
+		return fmt.Errorf("sessionregistry: marshal spawned session: %w", err)
+	}
+	const q = `
+		UPDATE sessions
+		SET spawned_sessions = COALESCE(spawned_sessions, '[]'::jsonb) || jsonb_build_array($4::jsonb),
+			updated_at = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM jsonb_array_elements(COALESCE(spawned_sessions, '[]'::jsonb)) elem
+			WHERE elem->>'id' = $5
+		  )
+	`
+	_, err = s.pool.Exec(ctx, q, normalized, s.scope, parent, raw, childID)
+	return err
 }
 
 func (s *Store) setJSONBColumn(ctx context.Context, column, clearColumn, email, sessionID string, state map[string]any) error {
@@ -440,6 +572,9 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.activity_summary,
 			sessions.test_state,
 			sessions.rollout_state,
+			sessions.spoke_config,
+			sessions.spawned_sessions,
+			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
 			COALESCE(sessions.capabilities, '{}'::text[]),
@@ -451,6 +586,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.runtime_context_window_tokens,
 			sessions.runtime_context_window_source,
 			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			sessions.runtime_provider_session_id,
+			COALESCE(to_char(sessions.runtime_provider_session_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_provider_session_observed_at,
 			sessions.provider_rate_limit_info,
 			COALESCE(to_char(sessions.provider_rate_limit_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS provider_rate_limit_observed_at,
 			sessions.compaction_count,
@@ -494,11 +631,14 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		name                                                           string
 		visible                                                        bool
 		sessionImageMetadata                                           []byte
-		activitySummary, testState, rolloutState, cloneState           []byte
-		providerRateLimitInfo                                          []byte
-		repos, capabilities                                            []string
-		model, effort, runtimeModel, runtimeEffort, runtimeAt          string
-		runtimeContextWindowSource, runtimeContextWindowAt             string
+		activitySummary, testState, rolloutState, spokeConfig, cloneState []byte
+		spawnedSessions                                                   []byte
+		parentSessionID                                                   string
+		providerRateLimitInfo                                             []byte
+		repos, capabilities                                               []string
+		model, effort, runtimeModel, runtimeEffort, runtimeAt             string
+		runtimeContextWindowSource, runtimeContextWindowAt                string
+		runtimeProviderSessionID, runtimeProviderSessionObservedAt     string
 		providerRateLimitObservedAt                                    string
 		openTarget                                                     string
 		agentAvatarID, systemAvatarID                                  string
@@ -512,10 +652,13 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&mode, &podName, &name, &visible, &sessionImage, &sessionImageMetadata,
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
-		&activitySummary, &testState, &rolloutState,
+		&activitySummary, &testState, &rolloutState, &spokeConfig,
+		&spawnedSessions,
+		&parentSessionID,
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
+		&runtimeProviderSessionID, &runtimeProviderSessionObservedAt,
 		&providerRateLimitInfo, &providerRateLimitObservedAt,
 		&compactionCount,
 		&userMessageCount,
@@ -538,46 +681,51 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		mode = sessionmodel.DefaultSessionMode
 	}
 	record := sessionmodel.SessionRecord{
-		ID:                             sessionID,
-		Email:                          normalized,
-		Mode:                           mode,
-		Scope:                          s.scope,
-		PodName:                        podName,
-		SessionImage:                   sessionImage,
-		SessionImageMetadata:           sessionmodel.DecodeImageVersionMetadata(sessionImageMetadata),
-		Name:                           name,
-		Visible:                        visible,
-		RequestedAt:                    requestedAt,
-		CreatedAt:                      createdAt,
-		UpdatedAt:                      updatedAt,
-		Status:                         status,
-		ReadyAt:                        readyAt,
-		TerminatingAt:                  terminatingAt,
-		ActivitySummary:                activitySummary,
-		TestState:                      unmarshalJSONB(testState),
-		RolloutState:                   unmarshalJSONB(rolloutState),
-		Repos:                          repos,
-		CloneState:                     unmarshalJSONB(cloneState),
-		Capabilities:                   capabilities,
-		Model:                          model,
-		Effort:                         effort,
-		RuntimeModel:                   runtimeModel,
-		RuntimeEffort:                  runtimeEffort,
-		RuntimeConfiguredAt:            runtimeAt,
-		RuntimeContextWindowTokens:     runtimeContextWindowTokens,
-		RuntimeContextWindowSource:     runtimeContextWindowSource,
-		RuntimeContextWindowObservedAt: runtimeContextWindowAt,
-		ProviderRateLimitInfo:          unmarshalJSONB(providerRateLimitInfo),
-		ProviderRateLimitObservedAt:    providerRateLimitObservedAt,
-		CompactionCount:                compactionCount,
-		UserMessageCount:               userMessageCount,
-		OpenTarget:                     openTarget,
-		AgentAvatarID:                  agentAvatarID,
-		SystemAvatarID:                 systemAvatarID,
-		SidebarPosition:                sidebarPosition,
-		RowVersion:                     rowVersion,
-		BugLabel:                       bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
-		BugLabels:                      bugLabelsFromJSON(bugLabelsRaw),
+		ID:                               sessionID,
+		Email:                            normalized,
+		Mode:                             mode,
+		Scope:                            s.scope,
+		PodName:                          podName,
+		SessionImage:                     sessionImage,
+		SessionImageMetadata:             sessionmodel.DecodeImageVersionMetadata(sessionImageMetadata),
+		Name:                             name,
+		Visible:                          visible,
+		RequestedAt:                      requestedAt,
+		CreatedAt:                        createdAt,
+		UpdatedAt:                        updatedAt,
+		Status:                           status,
+		ReadyAt:                          readyAt,
+		TerminatingAt:                    terminatingAt,
+		ActivitySummary:                  activitySummary,
+		TestState:                        unmarshalJSONB(testState),
+		RolloutState:                     unmarshalJSONB(rolloutState),
+		SpokeConfig:                      unmarshalJSONB(spokeConfig),
+		SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
+		ParentSessionID:                  parentSessionID,
+		Repos:                            repos,
+		CloneState:                       unmarshalJSONB(cloneState),
+		Capabilities:                     capabilities,
+		Model:                            model,
+		Effort:                           effort,
+		RuntimeModel:                     runtimeModel,
+		RuntimeEffort:                    runtimeEffort,
+		RuntimeConfiguredAt:              runtimeAt,
+		RuntimeContextWindowTokens:       runtimeContextWindowTokens,
+		RuntimeContextWindowSource:       runtimeContextWindowSource,
+		RuntimeContextWindowObservedAt:   runtimeContextWindowAt,
+		RuntimeProviderSessionID:         runtimeProviderSessionID,
+		RuntimeProviderSessionObservedAt: runtimeProviderSessionObservedAt,
+		ProviderRateLimitInfo:            unmarshalJSONB(providerRateLimitInfo),
+		ProviderRateLimitObservedAt:      providerRateLimitObservedAt,
+		CompactionCount:                  compactionCount,
+		UserMessageCount:                 userMessageCount,
+		OpenTarget:                       openTarget,
+		AgentAvatarID:                    agentAvatarID,
+		SystemAvatarID:                   systemAvatarID,
+		SidebarPosition:                  sidebarPosition,
+		RowVersion:                       rowVersion,
+		BugLabel:                         bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
+		BugLabels:                        bugLabelsFromJSON(bugLabelsRaw),
 	}
 	return record, true, nil
 }
@@ -656,13 +804,19 @@ func (s *Store) Reorder(ctx context.Context, email string, orderedIDs []string) 
 	for i := range cleaned {
 		positions[i] = int64(len(cleaned) - i)
 	}
+	// Bind order is ($1 email, $2 scope, $3 ids, $4 positions): the unnest
+	// placeholders MUST be $3/$4, matching cleaned/positions below. They were
+	// $4/$5 once, which left $3 bound-but-unreferenced (Postgres "could not
+	// determine data type of parameter $3", SQLSTATE 42P18) and referenced a
+	// nonexistent $5 — a 500 on every reorder. The DSN-gated Reorder round-trip
+	// test guards this; the hermetic suite stubs Reorder and cannot.
 	const updateQ = `
 		WITH updated AS (
 			UPDATE sessions
 			SET sidebar_position = v.position,
 				updated_at = now(),
 				row_version = nextval('sessions_row_version_seq')
-			FROM unnest($4::text[], $5::bigint[]) AS v(session_id, position)
+			FROM unnest($3::text[], $4::bigint[]) AS v(session_id, position)
 			WHERE sessions.email = $1
 			  AND sessions.session_scope = $2
 			  AND sessions.visible = true
@@ -870,6 +1024,12 @@ func (s *Store) ClaimIdleForReap(ctx context.Context, cutoff time.Time, limit in
 					WHERE p.session_scope = c.session_scope
 						AND p.session_id = c.session_id
 						AND p.status IN ('awaiting_bytes', 'ready', 'claiming')
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM session_ci_watches cw
+					WHERE cw.session_scope = c.session_scope
+						AND cw.session_id = c.session_id
+						AND cw.status = 'watching'
 				)
 			ORDER BY c.updated_at ASC
 			LIMIT $3

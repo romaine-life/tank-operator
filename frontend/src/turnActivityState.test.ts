@@ -9,8 +9,11 @@ import {
   turnActivityGroupIsActive,
   turnActivityShouldStartLoad,
   turnActivityShellIsDurablyActive,
+  turnActivityStuckEvent,
+  TURN_ACTIVITY_STUCK_THRESHOLD_MS,
   type TurnActivityLoadSnapshot,
   type TurnActivityLoadState,
+  type TurnActivityLoadStatus,
 } from "./turnActivityState.ts";
 
 type Entry = { id: string };
@@ -136,6 +139,31 @@ test("load errors expose retry state without fabricating partial activity", () =
 
   expect(failed?.status).toBe("error");
   expect(turnActivityLoadVisibleSnapshot(failed)).toBeUndefined();
+});
+
+test("turnActivityStuckEvent: unloaded/absent selected turn reports the strand", () => {
+  // The activity body is on "Loading activity..." with NO load ever started —
+  // the strand the existing turn_activity_load_* events record nothing for.
+  expect(turnActivityStuckEvent(undefined)).toBe("turn_activity_stuck_unloaded");
+  expect(turnActivityStuckEvent("unloaded")).toBe("turn_activity_stuck_unloaded");
+});
+
+test("turnActivityStuckEvent: loading reports the hung/slow case distinctly", () => {
+  expect(turnActivityStuckEvent("loading")).toBe("turn_activity_stuck_loading");
+});
+
+test("turnActivityStuckEvent: terminal states are not stuck", () => {
+  for (const status of ["loaded", "error"] as TurnActivityLoadStatus[]) {
+    expect(turnActivityStuckEvent(status)).toBeNull();
+  }
+});
+
+test("stuck watchdog threshold is a sane positive value below the load timeout", () => {
+  // TURN_ACTIVITY_LOAD_TIMEOUT_MS is 15_000 in App.tsx; the watchdog must fire
+  // before that so an `unloaded` strand is observed well before a slow load
+  // would time out on its own.
+  expect(TURN_ACTIVITY_STUCK_THRESHOLD_MS).toBeGreaterThan(0);
+  expect(TURN_ACTIVITY_STUCK_THRESHOLD_MS).toBeLessThan(15_000);
 });
 
 test("live refresh failures keep the last coherent snapshot visible", () => {

@@ -106,6 +106,14 @@ func TestSessionEventStreamClientEventLabelClamp(t *testing.T) {
 	if got := sessionEventStreamClientEventLabel("turn_activity_collapse_projection_mismatch"); got != "turn_activity_collapse_projection_mismatch" {
 		t.Fatalf("turn activity collapse label = %q", got)
 	}
+	// The behavior-free stuck watchdog: both sub-states must ride the counter
+	// (not clamp to "other"), so the strand is measurable in prod data.
+	if got := sessionEventStreamClientEventLabel("turn_activity_stuck_unloaded"); got != "turn_activity_stuck_unloaded" {
+		t.Fatalf("turn activity stuck (unloaded) label = %q", got)
+	}
+	if got := sessionEventStreamClientEventLabel("turn_activity_stuck_loading"); got != "turn_activity_stuck_loading" {
+		t.Fatalf("turn activity stuck (loading) label = %q", got)
+	}
 	if got := sessionEventStreamClientEventLabel("malicious-event-name"); got != "other" {
 		t.Fatalf("unknown event should clamp to other, got %q", got)
 	}

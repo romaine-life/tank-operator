@@ -21,7 +21,6 @@ working names (`scheduled`).
 ## Problem
 
 When the agent schedules its own continuation (Claude `ScheduleWakeup`,
-Antigravity `schedule`, and the same shape for `run_in_background` task wakes)
 it is **not done** — it has parked itself and will resume on a clock. Today the
 runner emits `turn.completed` for
 that turn, so:
@@ -181,12 +180,8 @@ what the SDK reported. The change lives in the durable Tank projection:
   signals so the bidirectional ready↔scheduled fold stays correct: (1) the durable
   Tank wake tables above, for Claude/Codex — their SDKs cannot self-continue, so
   Tank owns the wake row and fires it; and (2) a self-managing agent's own report —
-  Antigravity (`agy`) stamps `turn.completed.payload.background_work_pending` while
-  a background task it owns is in flight, and has NO Tank wake row (agy fires its
-  own clock and the runner relays the continuation via `/agent-continuation`). The
   fold surfaces the runner's flag through `ActivityFoldStats.BackgroundWorkPending`;
   the override parks on either source and never strands `scheduled` when both clear.
-  See `backend-go/cmd/antigravity-runner/ARCHITECTURE.md`.
 - **Race** — the runner registers the wake *after* `turn.completed`
   (`claude-runner/src/runner.ts -> registerWakeup`), so a naive fold flashes
   `ready` before the row exists. Land the schedule intent at the terminal (emit

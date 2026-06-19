@@ -10,6 +10,14 @@ export type SessionCostEstimate = {
   tokens: number;
 };
 
+export type TokenUsageBreakdown = {
+  total: number;
+  input: number;
+  output: number;
+  cachedInput: number;
+  reasoningOutput: number;
+};
+
 type ModelRates = {
   input: number;
   cachedInput?: number;
@@ -146,6 +154,47 @@ export function formatCompactTokens(value: number): string {
   return formatCompactMillionTokens(safeValue);
 }
 
+export function tokenUsageBreakdown(usage: unknown): TokenUsageBreakdown | null {
+  if (!isRecord(usage)) return null;
+  const outputTokens =
+    numberField(usage, "output_tokens") ??
+    numberField(usage, "completion_tokens") ??
+    0;
+  const reasoningOutputTokens = numberField(usage, "reasoning_output_tokens") ?? 0;
+  const inputTokens = numberField(usage, "input_tokens") ?? numberField(usage, "prompt_tokens") ?? 0;
+  const cachedInputTokens =
+    classifyUsageShape(usage) === "claude"
+      ? (numberField(usage, "cache_read_input_tokens") ?? 0) +
+        (numberField(usage, "cache_creation_input_tokens") ?? 0)
+      : openAiCachedInputTokens(usage);
+  const totalTokens =
+    numberField(usage, "total_tokens") ??
+    usageTokenCountFromParts({
+      inputTokens,
+      outputTokens,
+      reasoningOutputTokens,
+      cachedInputTokens,
+      cachedIsAdditive: classifyUsageShape(usage) === "claude",
+    });
+  const total = Math.max(0, Math.floor(totalTokens));
+  if (
+    total === 0 &&
+    inputTokens === 0 &&
+    outputTokens === 0 &&
+    cachedInputTokens === 0 &&
+    reasoningOutputTokens === 0
+  ) {
+    return null;
+  }
+  return {
+    total,
+    input: Math.max(0, Math.floor(inputTokens)),
+    output: Math.max(0, Math.floor(outputTokens)),
+    cachedInput: Math.max(0, Math.floor(cachedInputTokens)),
+    reasoningOutput: Math.max(0, Math.floor(reasoningOutputTokens)),
+  };
+}
+
 function formatCompactMillionTokens(value: number): string {
   const wholeMillions = Math.floor(value / 1_000_000);
   const millionHundredths = Math.floor((value % 1_000_000) / 10_000);
@@ -264,12 +313,33 @@ function usageTokenCount(usage: unknown): number {
   const cacheReadTokens =
     numberField(usage, "cache_read_input_tokens") ??
     openAiCachedInputTokens(usage);
+  return usageTokenCountFromParts({
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    cachedInputTokens: cacheWriteTokens + cacheReadTokens,
+    cachedIsAdditive: classifyUsageShape(usage) === "claude",
+  });
+}
+
+function usageTokenCountFromParts({
+  inputTokens,
+  outputTokens,
+  reasoningOutputTokens,
+  cachedInputTokens,
+  cachedIsAdditive,
+}: {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  cachedInputTokens: number;
+  cachedIsAdditive: boolean;
+}): number {
   return Math.max(0, Math.floor(
     inputTokens +
-    cacheWriteTokens +
-    cacheReadTokens +
     outputTokens +
-    reasoningOutputTokens,
+    reasoningOutputTokens +
+    (cachedIsAdditive ? cachedInputTokens : 0),
   ));
 }
 

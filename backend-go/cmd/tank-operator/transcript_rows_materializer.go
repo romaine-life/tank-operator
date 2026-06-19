@@ -791,6 +791,13 @@ func stampTurnNumbers(sessionID string, numbers map[string]int64, entries []map[
 				}
 			}
 		}
+		if questionTarget, _ := entry["questionTarget"].(map[string]any); questionTarget != nil {
+			if questionTurnID := transcriptMapString(questionTarget, "turnId"); questionTurnID != "" {
+				if number, ok := numbers[questionTurnID]; ok {
+					questionTarget["turnNumber"] = number
+				}
+			}
+		}
 		if transcriptMapString(entry, "kind") == "turn_activity" {
 			// Background-wake continuation turns are unnumbered BY DESIGN:
 			// migration 0139 excludes them from the allocator because

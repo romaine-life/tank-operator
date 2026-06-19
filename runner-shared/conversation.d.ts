@@ -11,7 +11,6 @@ export const TANK_EVENT_SOURCES: readonly [
   "tank",
   "claude",
   "codex",
-  "antigravity",
 ];
 export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
 
@@ -40,6 +39,8 @@ export const TANK_EVENT_TYPES: readonly [
   "shell_task.updated",
   "shell_task.exited",
   "scheduled_wakeup.updated",
+  "ci_status.updated",
+  "test_provision.updated",
   "turn.awaiting_input",
   "turn.awaiting_input.invocation",
 ];

@@ -337,12 +337,13 @@ func TestEnqueueSessionTurnSeparatesDisplayTextFromRunnerPrompt(t *testing.T) {
 func TestEnqueueSessionTurnUsesSessionOwnedRunConfig(t *testing.T) {
 	bus := &recordingSessionBus{}
 	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
-		ID:      "63",
-		Email:   "user@example.com",
-		Mode:    sessionmodel.ClaudeGUIMode,
-		Visible: true,
-		Model:   "claude-opus-4-7",
-		Effort:  "high",
+		ID:                       "63",
+		Email:                    "user@example.com",
+		Mode:                     sessionmodel.ClaudeGUIMode,
+		Visible:                  true,
+		Model:                    "claude-opus-4-7",
+		Effort:                   "high",
+		RuntimeProviderSessionID: "db0a8b4b-64cd-4a9a-a592-ad5622075dc8",
 	})
 	app := testTurnsAppWithRegistry(
 		t,
@@ -369,6 +370,9 @@ func TestEnqueueSessionTurnUsesSessionOwnedRunConfig(t *testing.T) {
 	got := bus.commands[0]
 	if got.Model != "claude-opus-4-7" || got.Effort != "high" {
 		t.Fatalf("command run config = model %q effort %q, want session-owned model/effort", got.Model, got.Effort)
+	}
+	if got.ProviderSessionID != "db0a8b4b-64cd-4a9a-a592-ad5622075dc8" {
+		t.Fatalf("command provider session id = %q, want durable runtime provider session id", got.ProviderSessionID)
 	}
 }
 
@@ -504,26 +508,6 @@ func TestCreateSessionRejectsCodexWithoutExplicitModel(t *testing.T) {
 	}
 }
 
-func TestCreateSessionRejectsAntigravityWithoutExplicitModel(t *testing.T) {
-	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
-		"mode":"antigravity_gui"
-	}`))
-	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-
-	app.handleCreateSession(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if !strings.Contains(resp.Body.String(), "model is required for Antigravity sessions") {
-		t.Fatalf("body = %s, want explicit Antigravity model error", resp.Body.String())
-	}
-}
-
 func TestCreateSessionRejectsCodexDefaultModelAlias(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)
@@ -641,27 +625,6 @@ func TestCreateSessionWithContextRejectsRetiredCodexGUIMode(t *testing.T) {
 	}
 	if !strings.Contains(resp.Body.String(), "session mode codex_app_server is retired; use codex_gui") {
 		t.Fatalf("body = %s, want retired mode error", resp.Body.String())
-	}
-}
-
-func TestCreateSessionRejectsAntigravityDefaultModelAlias(t *testing.T) {
-	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
-		"mode":"antigravity_gui",
-		"model":"antigravity-default"
-	}`))
-	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-
-	app.handleCreateSession(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if !strings.Contains(resp.Body.String(), "default is not accepted") {
-		t.Fatalf("body = %s, want default rejection", resp.Body.String())
 	}
 }
 
@@ -922,47 +885,6 @@ func TestEnqueueSessionTurnRejectsCodexWithoutExplicitModel(t *testing.T) {
 	}
 }
 
-func TestEnqueueSessionTurnForwardsAntigravityModel(t *testing.T) {
-	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-88", "88", "user@example.com", sessionmodel.AntigravityGUIMode, "antigravity-runner"))
-	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-agy-model","prompt":"hello","model":"Gemini 3.1 Pro"}`)
-	resp := httptest.NewRecorder()
-
-	app.handleEnqueueSessionTurn(resp, req)
-
-	if resp.Code != http.StatusAccepted {
-		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if len(bus.commands) != 1 {
-		t.Fatalf("published commands = %d, want 1", len(bus.commands))
-	}
-	if got := bus.commands[0].Provider; got != "antigravity" {
-		t.Fatalf("provider = %q, want antigravity", got)
-	}
-	if got := bus.commands[0].Model; got != "Gemini 3.1 Pro" {
-		t.Fatalf("model = %q, want Antigravity model", got)
-	}
-}
-
-func TestEnqueueSessionTurnRejectsAntigravityWithoutExplicitModel(t *testing.T) {
-	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-88", "88", "user@example.com", sessionmodel.AntigravityGUIMode, "antigravity-runner"))
-	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-agy-no-model","prompt":"hello"}`)
-	resp := httptest.NewRecorder()
-
-	app.handleEnqueueSessionTurn(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if !strings.Contains(resp.Body.String(), "model is required for Antigravity turns") {
-		t.Fatalf("body = %s, want explicit Antigravity model error", resp.Body.String())
-	}
-	if len(bus.commands) != 0 {
-		t.Fatalf("published commands = %d, want 0", len(bus.commands))
-	}
-}
-
 func TestEnqueueSessionTurnRejectsCodexDefaultModelAlias(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
@@ -1069,25 +991,6 @@ func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
 
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if got := bus.commands[0].SkillName; got != "test" {
-		t.Fatalf("skill_name = %q, want test", got)
-	}
-}
-
-func TestEnqueueSessionTurnAcceptsAntigravitySkillTrigger(t *testing.T) {
-	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-88", "88", "user@example.com", sessionmodel.AntigravityGUIMode, "antigravity-runner"))
-	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-antigravity-skill","prompt":"$test","model":"Gemini 3.5 Flash (Medium)","skill_name":"test"}`)
-	resp := httptest.NewRecorder()
-
-	app.handleEnqueueSessionTurn(resp, req)
-
-	if resp.Code != http.StatusAccepted {
-		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if got := bus.commands[0].Provider; got != "antigravity" {
-		t.Fatalf("provider = %q, want antigravity", got)
 	}
 	if got := bus.commands[0].SkillName; got != "test" {
 		t.Fatalf("skill_name = %q, want test", got)
@@ -1249,6 +1152,77 @@ func TestAnswerSessionTurnPublishesInputReply(t *testing.T) {
 	}
 	if gotTurn, _ := es.upserts[1]["turn_id"].(string); gotTurn != conversation.TurnIDForClientNonce(got.ClientNonce) {
 		t.Fatalf("answer user turn_id = %q, want continuation turn for %q", gotTurn, got.ClientNonce)
+	}
+}
+
+// TestAnswerSessionTurnCarriesDisplayAttachments proves a screenshot attached
+// to the answer is threaded into all three sinks — the input_reply command (so
+// the runner can read it), the durable turn.input_answered marker, and the
+// Tank-visible user_message.created turn (so the transcript renders the chip) —
+// rather than being silently dropped (the reported bug).
+func TestAnswerSessionTurnCarriesDisplayAttachments(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
+	app.sessionEvents = &recordingSessionEventStore{
+		turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "What does the screen show?")},
+	}
+	body := `{
+		"provider_item_id": "toolu_123",
+		"timeline_id": "turn-question_123:item:toolu_123",
+		"answers": {"What does the screen show?": ["Other"]},
+		"annotations": {"What does the screen show?": {"notes": "see attached"}},
+		"display_attachments": [
+			{"label": "Screenshot 1", "name": "screenshot.png", "kind": "image", "path": "screenshots/3.png", "abs_path": "/workspace/screenshots/3.png", "size": 4096}
+		]
+	}`
+	req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
+	resp := httptest.NewRecorder()
+
+	app.handleAnswerSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+
+	// Sink 1: the input_reply command carries the attachment metadata.
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	cmdAttachments := bus.commands[0].Attachments
+	if len(cmdAttachments) != 1 {
+		t.Fatalf("command attachments = %#v, want 1", cmdAttachments)
+	}
+	if cmdAttachments[0].Kind != "image" || cmdAttachments[0].AbsPath != "/workspace/screenshots/3.png" {
+		t.Fatalf("command attachment = %#v, want image at /workspace/screenshots/3.png", cmdAttachments[0])
+	}
+
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 3 {
+		t.Fatalf("session-event upserts = %d, want 3", len(es.upserts))
+	}
+	// Sink 2: the durable turn.input_answered marker carries attachments.
+	answeredPayload, _ := es.upserts[0]["payload"].(map[string]any)
+	if attachmentLen(answeredPayload["attachments"]) != 1 {
+		t.Fatalf("turn.input_answered attachments = %#v, want 1", answeredPayload["attachments"])
+	}
+	// Sink 3: the Tank-visible user_message.created turn carries attachments so
+	// the transcript renders the screenshot chip on the answer bubble.
+	userPayload, _ := es.upserts[1]["payload"].(map[string]any)
+	if attachmentLen(userPayload["attachments"]) != 1 {
+		t.Fatalf("user_message.created attachments = %#v, want 1", userPayload["attachments"])
+	}
+}
+
+// attachmentLen counts a stamped payload `attachments` field regardless of
+// whether it is []map[string]any (builder output) or []any (round-tripped).
+func attachmentLen(raw any) int {
+	switch v := raw.(type) {
+	case []map[string]any:
+		return len(v)
+	case []any:
+		return len(v)
+	default:
+		return 0
 	}
 }
 

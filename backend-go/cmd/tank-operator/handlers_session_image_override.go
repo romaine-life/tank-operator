@@ -18,15 +18,15 @@ type imageOverrideAdapter struct {
 	store *pgstore.SessionImageOverrideStore
 }
 
-func (a imageOverrideAdapter) Get(ctx context.Context, scope string) (claudeImage, codexImage, antigravityImage string, ok bool, err error) {
+func (a imageOverrideAdapter) Get(ctx context.Context, scope string) (claudeImage, codexImage string, ok bool, err error) {
 	ov, getErr := a.store.Get(ctx, scope)
 	if getErr != nil {
 		if errors.Is(getErr, pgstore.ErrSessionImageOverrideNotFound) {
-			return "", "", "", false, nil
+			return "", "", false, nil
 		}
-		return "", "", "", false, getErr
+		return "", "", false, getErr
 	}
-	return ov.ClaudeImage, ov.CodexImage, ov.AntigravityImage, true, nil
+	return ov.ClaudeImage, ov.CodexImage, true, nil
 }
 
 // requireServiceOrAdminCaller authenticates an internal call that may be driven
@@ -105,10 +105,9 @@ func (s *appServer) handleInternalSetSessionImageOverride(w http.ResponseWriter,
 		return
 	}
 	var body struct {
-		ClaudeImage      string `json:"claude_image"`
-		CodexImage       string `json:"codex_image"`
-		AntigravityImage string `json:"antigravity_image"`
-		GitRef           string `json:"git_ref"`
+		ClaudeImage string `json:"claude_image"`
+		CodexImage  string `json:"codex_image"`
+		GitRef      string `json:"git_ref"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -116,9 +115,8 @@ func (s *appServer) handleInternalSetSessionImageOverride(w http.ResponseWriter,
 	}
 	claudeImage := strings.TrimSpace(body.ClaudeImage)
 	codexImage := strings.TrimSpace(body.CodexImage)
-	antigravityImage := strings.TrimSpace(body.AntigravityImage)
-	if claudeImage == "" && codexImage == "" && antigravityImage == "" {
-		writeError(w, http.StatusBadRequest, "at least one of claude_image / codex_image / antigravity_image is required")
+	if claudeImage == "" && codexImage == "" {
+		writeError(w, http.StatusBadRequest, "at least one of claude_image / codex_image is required")
 		return
 	}
 	setBy := user.ActorEmail
@@ -126,12 +124,11 @@ func (s *appServer) handleInternalSetSessionImageOverride(w http.ResponseWriter,
 		setBy = user.Email
 	}
 	if err := s.imageOverrides.Upsert(r.Context(), pgstore.SessionImageOverride{
-		SessionScope:     scope,
-		ClaudeImage:      claudeImage,
-		CodexImage:       codexImage,
-		AntigravityImage: antigravityImage,
-		GitRef:           strings.TrimSpace(body.GitRef),
-		SetBy:            setBy,
+		SessionScope: scope,
+		ClaudeImage:  claudeImage,
+		CodexImage:   codexImage,
+		GitRef:       strings.TrimSpace(body.GitRef),
+		SetBy:        setBy,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -172,12 +169,11 @@ func (s *appServer) handleInternalDeleteSessionImageOverride(w http.ResponseWrit
 
 func sessionImageOverrideResponse(ov pgstore.SessionImageOverride) map[string]any {
 	return map[string]any{
-		"session_scope":     ov.SessionScope,
-		"claude_image":      ov.ClaudeImage,
-		"codex_image":       ov.CodexImage,
-		"antigravity_image": ov.AntigravityImage,
-		"git_ref":           ov.GitRef,
-		"set_by":            ov.SetBy,
-		"set_at":            ov.SetAt,
+		"session_scope": ov.SessionScope,
+		"claude_image":  ov.ClaudeImage,
+		"codex_image":   ov.CodexImage,
+		"git_ref":       ov.GitRef,
+		"set_by":        ov.SetBy,
+		"set_at":        ov.SetAt,
 	}
 }

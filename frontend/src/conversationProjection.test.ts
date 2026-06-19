@@ -60,6 +60,48 @@ test("origin session avatar id projects onto user message entry", () => {
   }
 });
 
+test("test_provision thread renders as visible system messages (info phases survive the fold filter)", () => {
+  const provision = (phase: string, payload: Record<string, unknown>, order: string) =>
+    ev(`test-provision:run-1:${phase}`, "test_provision.updated", {
+      actor: "system",
+      source: "tank",
+      timeline_id: `test-provision:run-1:${phase}`,
+      client_nonce: "test-provision-run-1",
+      order_key: order,
+      payload: { kind: "test_provision", run_id: "run-1", phase, ...payload },
+    });
+
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      provision("creating", { text: "Creating test slot." }, "0001"),
+      provision("validating", { text: "Validating PR readiness…" }, "0002"),
+      provision(
+        "ready",
+        { text: "Test environment ready at https://slot-1.example/", url: "https://slot-1.example/" },
+        "0003",
+      ),
+    ]),
+  );
+
+  const systemMessages = projection.entries.filter(
+    (entry) => entry.kind === "message" && entry.role === "system",
+  );
+  // All three phases render — the info-severity creating/validating records are
+  // NOT dropped as session-startup noise.
+  expect(systemMessages.map((m) => (m.kind === "message" ? m.text : ""))).toEqual([
+    "Creating test slot.",
+    "Validating PR readiness…",
+    "Test environment ready at https://slot-1.example/",
+  ]);
+  const ready = systemMessages[2];
+  if (ready.kind === "message") {
+    expect(ready.action).toEqual({
+      label: "Open test environment",
+      href: "https://slot-1.example/",
+    });
+  }
+});
+
 test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order_key", () => {
   const projection = projectConversationState(
     reduceConversationEvents([

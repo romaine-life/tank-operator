@@ -43,13 +43,7 @@ resource "azurerm_key_vault_secret" "api_proxy_client_id" {
   key_vault_id = data.azurerm_key_vault.main.id
 }
 
-# The antigravity-api-proxy reuses this same UAMI (vault-wide Secrets Officer),
-# so it can read/write `antigravity-credentials` and read the Google OAuth
 # installed-app client_secret. That client_secret lives in KV under
-# `antigravity-oauth-client-secret` and is seeded OUT-OF-BAND (not declared
 # here), exactly like the provider credential blobs (`claude-code-credentials`,
-# `codex-credentials`, `antigravity-credentials`) which the login wizard mints.
-# The value is extractable from the public agy binary via `strings`, so it is
 # not confidential, but keeping it out of TF state matches the credential
 # convention. The api-proxy config ExternalSecret syncs it into the
-# ANTIGRAVITY_CLIENT_SECRET env (see k8s/templates/api-proxy.yaml).

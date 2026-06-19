@@ -54,3 +54,26 @@ Named behaviors in the artifacts-and-files surface. See
 - **Evidence:** `frontend/src/FileImageViewer.test.tsx`,
   `frontend/src/appRoutes.test.ts`, and a browser validation of a
   `/sessions/{id}/files/<workspace-path>` image preview route.
+
+## mobile-files-master-detail
+
+- **Status:** shipped
+- **Intent:** Make the files panel usable on a phone, where the fixed two-pane
+  layout is too narrow, by switching to a single-column master-detail: the file
+  list by default, the viewer full-width when a file is open.
+- **Render model:** at <= BP_PHONE (640px) the `App.tsx` `ChatPane`
+  `.run-files-body` grid drops from the fixed `18rem 1fr` to one column. The list
+  shows by default; opening a *file* sets `.run-files-body-detail` (driven by
+  `isPhone && selectedFile`), which hides the list and shows the full-width viewer
+  with an in-header back button (`.run-files-viewer-back`) that clears
+  `selectedFile`. Opening a *directory* navigates in place. This reuses the
+  existing `selectedFile` state; there is no new route and no mobile-only files
+  scaffold. Desktop is unchanged.
+- **Security invariant (unchanged):** the viewer still fetches protected bytes
+  over the same authenticated `authedFileRawURL(session.id, selectedFile.path)`
+  preview path; the single-column reflow is layout only and adds no new read path.
+  No `border-right: 1px solid var(--border-subtle)` is introduced.
+- **Evidence:** `frontend/src/mobileShell.test.ts` ("files view becomes
+  single-column master-detail on a phone") pins the reflow and the detail/back
+  wiring; `frontend/src/migrationPolicy.test.ts` keeps the authed `files/raw`
+  preview path on `selectedFile`.

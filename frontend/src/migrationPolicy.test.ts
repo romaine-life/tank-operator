@@ -8,6 +8,12 @@ function readSource(path: string): string {
   );
 }
 
+function cssRule(source: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(source);
+  return match?.[1] ?? "";
+}
+
 const appSource = readSource("./App.tsx");
 const appRoutesSource = readSource("./appRoutes.ts");
 const authSource = readSource("./auth.ts");
@@ -82,6 +88,7 @@ const chatScrollMetricsHandlerSource = readSource(
 );
 const appConfigMapSource = readSource("../../k8s/templates/app-configmap.yaml");
 const appDeploymentSource = readSource("../../k8s/templates/deployment.yaml");
+const observabilitySource = readSource("../../k8s/templates/observability.yaml");
 const tankServerGoSource = readSource(
   "../../backend-go/cmd/tank-operator/server.go",
 );
@@ -100,10 +107,42 @@ const initialModeGoLongSource = readSource(
 const initialModeTestSource = readSource(
   "../../k8s/app-config/initial-mode-test.md",
 );
+const dockerBuildCheckWorkflowSource = readSource(
+  "../../.github/workflows/docker-build-check.yaml",
+);
+const k8sValuesSource = readSource("../../k8s/values.yaml");
+const testingDocsSource = readSource("../../docs/testing.md");
+const tankOperatorTestSkillSource = readSource(
+  "../../k8s/session-config/skills/common/test/references/repos/tank-operator.md",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   expect(appSource.includes("POLL_INTERVAL_MS")).toBe(false);
   expect(/setInterval\(\s*refreshSessionActivity/.test(appSource)).toBe(false);
+});
+
+test("Glimmung app image deploys stay fingerprint-first", () => {
+  expect(dockerBuildCheckWorkflowSource.includes("Compute image fingerprint")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Build and push proof image")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Tag app image by CI run lookup")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource).toMatch(/if: matrix\.name == 'app' &&/);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-pr-${PR_NUMBER}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-ref-${short_ref_hash}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("--source \"romainecr.azurecr.io/${{ matrix.image-repo }}:${src}\"")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("--image \"${{ matrix.image-repo }}:${lookup_tag}\"")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("Tag image by commit SHA")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("commit-SHA tag")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("sha='${{ github.event.pull_request.head.sha || github.sha }}'")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource).not.toMatch(/image-repo\s*\}\}:\$\{\{\s*github\.(?:sha|event\.pull_request\.head\.sha)/);
+  expect(dockerBuildCheckWorkflowSource).not.toMatch(/\$\{\{\s*matrix\.image-repo\s*\}\}:\$\{sha\}/);
+
+  expect(k8sValuesSource.includes("Fingerprint-pinned. The build workflow")).toBe(true);
+  expect(k8sValuesSource.includes("SHA-pinned")).toBe(false);
+
+  expect(testingDocsSource.includes("CI-run lookup tag")).toBe(true);
+  expect(testingDocsSource).toMatch(/raw commit-SHA image\s+alias/);
+  expect(tankOperatorTestSkillSource.includes("commit ref")).toBe(true);
+  expect(tankOperatorTestSkillSource.includes("branch or SHA")).toBe(false);
 });
 
 test("App-root holds no periodic React state setters (cascade-prone pattern)", () => {
@@ -192,11 +231,14 @@ test("stop control waits for durable turn interruption", () => {
 test("AskUserQuestion answers submit a continuation turn via POST /answer", () => {
   // The answer is durably recorded by POST /turns/{askingTurnId}/answer,
   // surfaced as a normal user submission, and delivered to the paused provider
-  // callback as input_reply. There is still no terminal socket path or retired
+  // callback as input_reply. The open Turns question page refreshes its cached
+  // server projection after accept, since turn.input_answered is not itself a
+  // visible transcript row. There is still no terminal socket path or retired
   // /input-reply browser route.
   expect(appSource.includes("sendStdin")).toBe(false);
   expect(appSource.includes("/input-reply")).toBe(false);
   expect(appSource.includes("/answer")).toBe(true);
+  expect(appSource.includes("silentlyRefreshCachedTurnActivity(turnID)")).toBe(true);
 });
 
 // The AskUserQuestion cutover (durable canUseTool resolution) deletes
@@ -235,7 +277,7 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
         )).toBe(true);
 });
 
-test("AskUserQuestion questions are the assistant message and the answer form is owned by Turns", () => {
+test("AskUserQuestion renders the question widget inline in the main transcript", () => {
   const messagesMatch = appSource.match(
     /export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/,
   );
@@ -260,15 +302,33 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("function RunAwaitingInputNotice")).toBe(false);
   expect(appSource.includes("function RunNeedsInputAnnouncement")).toBe(false);
   expect(appSource.includes('data-kind="needs-input-announcement"')).toBe(false);
-  expect(appSource.includes("Answer in Turns")).toBe(true);
-  expect(appSource.includes("run-msg-question-action")).toBe(true);
   expect(appSource.includes('data-variant="assistant"')).toBe(true);
   expect(appSource.includes("<SessionAvatarIcon avatar={avatar}")).toBe(true);
-  expect(appSource.includes(
-          'onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true })',
-        )).toBe(true);
+  // The navigate-to-Turns question shortcuts are retired: the question widget
+  // renders inline in the main transcript, so the assistant-message
+  // "Answer in Turns"/"View questions" button, its handler, and its CSS are
+  // gone (the general TurnViewButton stays).
+  expect(appSource.includes("run-msg-question-action")).toBe(false);
+  expect(
+    appSource.includes(
+      'onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true })',
+    ),
+  ).toBe(false);
   expect(indexCssSource.includes(".run-needs-input-announcement-copy")).toBe(false);
-  expect(indexCssSource.includes(".run-msg-question-action")).toBe(true);
+  expect(indexCssSource.includes(".run-msg-question-action")).toBe(false);
+  // The pending question renders inline on the ASKING turn, as the widget in
+  // place of the derived "summary" question message — not inside the synthetic
+  // question turn. The card shows only Q1; advancing leaves for Q2+'s pages.
+  expect(appSource.includes("function isPendingInlineQuestionEntry")).toBe(true);
+  expect(appSource.includes("function RunInlineAskUserQuestion")).toBe(true);
+  expect(
+    appSource.includes(
+      "isPendingInlineQuestionEntry(g.entry)",
+    ),
+  ).toBe(true);
+  expect(appSource.includes("firstQuestionOnly")).toBe(true);
+  // The synthetic needs_input turn is not surfaced as its own block in chat.
+  expect(appSource.includes("groups.push(group)")).toBe(false);
   expect(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}')).toBe(true);
   expect(indexCssSource.includes(".run-turn-view {\n  display: flex;")).toBe(true);
   expect(indexCssSource.includes('.run-turn-view-body[data-page-kind="question"]')).toBe(true);
@@ -280,9 +340,39 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("Next question")).toBe(true);
   expect(appSource.includes("Question set ${selectedPageInfo.questionSet}")).toBe(false);
   expect(appSource.includes("Answer every question before submit.")).toBe(true);
+  // The question page heading is a system-narrated message (system avatar +
+  // label), not an orphaned full-width banner. The "Question N of M" frame is
+  // Tank's narration around the agent's question — like RunMetaBlock status
+  // lines and the background-wake prompt — so it speaks through the shared
+  // system-avatar frame (data-variant="system"), not the agent avatar. The old
+  // pinned page-head template is retired.
   expect(appSource.includes(
           "Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}",
-        )).toBe(true);
+        )).toBe(false);
+  expect(appSource.includes('className="run-turn-question-page-head"')).toBe(false);
+  expect(appSource.includes("function RunQuestionHeadingMessage")).toBe(true);
+  expect(appSource.includes("<RunQuestionHeadingMessage")).toBe(true);
+  expect(appSource.includes('data-kind="question-heading"')).toBe(true);
+  expect(appSource).toMatch(
+    /data-variant="system"\s+data-role="system"\s+data-kind="question-heading"/,
+  );
+  expect(appSource.includes("${questionIndex} of ${questionCount}")).toBe(true);
+  // The "Open question page" tool-target shortcut and its helpers are retired
+  // along with the navigate-to-Turns model.
+  expect(appSource.includes("Open question page")).toBe(false);
+  expect(appSource.includes("AskUserQuestionToolTargetButton")).toBe(false);
+  expect(appSource.includes("askUserQuestionTargetHref")).toBe(false);
+  expect(appSource.includes("run-tool-question-target")).toBe(false);
+  expect(indexCssSource.includes(".run-tool-question-target")).toBe(false);
+  // Q2+ pages carry the asking turn's triggering prompt under a "continued from
+  // previous turn" header so the question stays fused to what produced it.
+  expect(appSource.includes("Question prompt continued from previous turn")).toBe(
+    true,
+  );
+  expect(appSource.includes("turnContextContinued")).toBe(true);
+  expect(indexCssSource.includes(".run-turn-view-context-continued-label")).toBe(
+    true,
+  );
 });
 
 test("background wake prompts stay hidden from chat but visible in Turns activity", () => {
@@ -389,6 +479,12 @@ test("Turns collapse uses server-projected final answers instead of page-local a
   expect(appSource.includes("finalAnswerEntries: loaded.finalAnswerEntries")).toBe(true);
   expect(appSource.includes("collapse: loaded.collapse")).toBe(true);
   expect(appSource.includes('entry.turnDetailRole !== "final_answer"')).toBe(true);
+  // An asking turn's hand-off final answer can be an AskUserQuestion card whose
+  // "View questions"/"Answer in Turns" shortcut needs onOpenTurn; without it the
+  // shortcut silently disappears when the card renders in the final-answer slot.
+  expect(appSource).toMatch(
+    /const renderFinalAnswerEntry = \(entry: TranscriptEntry\) => \([\s\S]{0,700}onOpenTurn=\{onOpenTurn\}/,
+  );
   expect(appSource.includes("selected?.shell?.activityIds ??")).toBe(false);
   expect(appSource.includes("selected?.shell?.activity?.compactedEntryIds ??")).toBe(false);
   expect(appSource.includes("turn_activity_collapse_applied")).toBe(true);
@@ -396,21 +492,33 @@ test("Turns collapse uses server-projected final answers instead of page-local a
 });
 
 test("collapsed Turns prompt context stays a minimal one-line entry, not hidden", () => {
-  // Collapsing the prompt must NOT remove the body outright. Instead the
-  // RunMessageBubble renders in compact mode: the avatar stays at full size
-  // and the text collapses to a single ellipsis-truncated line. This pins the
-  // wiring (compact follows the collapsed flag) and the compact renderer so a
-  // future refactor can't silently revert to hiding the prompt. Compact mode
-  // is text-only: controls remain full-size and are laid out beside the
-  // preview line, never stacked under a one-line prompt.
+  // Collapsing the prompt must NOT remove the body outright. The
+  // RunMessageBubble renders in compact mode: the avatar stays at full size and
+  // the text collapses to a single ellipsis-truncated line. Collapse is a pure
+  // CSS restyle of the SAME DOM the expanded prompt renders — the prompt text
+  // and its inline footer are never remounted — so toggling collapsed/expanded
+  // never flickers. This pins the wiring (compact follows the collapsed flag)
+  // and the stable-DOM renderer so a future refactor can't revert to hiding the
+  // prompt OR to the old dual-DOM that swapped a .run-msg-compact-text preview
+  // (and the footer's parent) in and out on every toggle.
   expect(appSource.includes("compact?: boolean;")).toBe(true);
   expect(appSource.includes("compact={selectedTurnContextCollapsed}")).toBe(true);
-  expect(appSource.includes("run-msg-compact-text")).toBe(true);
-  expect(appSource.includes("Compact mode only changes")).toBe(true);
+  // The retired dual-DOM preview element is deleted end to end (App + CSS).
+  expect(appSource.includes("run-msg-compact-text")).toBe(false);
+  expect(indexCssSource.includes("run-msg-compact-text")).toBe(false);
+  // Collapse is CSS-only over a stable tree: the full prompt rides the title
+  // attribute instead of a separate preview element.
+  expect(appSource.includes("const collapsedTitle =")).toBe(true);
+  expect(appSource).toMatch(/title=\{compact \? collapsedTitle : undefined\}/);
   expect(appSource.includes("{!compact && variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(false);
   expect(appSource.includes("{!compact && (\n          <div\n            className=\"run-msg-footer\"")).toBe(false);
   expect(appSource.includes("{variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(true);
-  expect(appSource.includes("<div\n          className=\"run-msg-footer\"")).toBe(true);
+  expect(appSource.includes("const messageFooter = (")).toBe(true);
+  expect(appSource.includes("className=\"run-msg-footer\"")).toBe(true);
+  // Footer renders in exactly one position for a no-attachment user prompt
+  // (inline, inside the message text) in both collapsed and expanded states.
+  expect(appSource.includes("{inlineFooter && messageFooter}")).toBe(true);
+  expect(appSource.includes("{!inlineFooter && showFooter && messageFooter}")).toBe(true);
   expect(appSource.includes("data-has-attachments=")).toBe(false);
   expect(indexCssSource).toMatch(
     /\.run-transcript-message-content\s*\{[^}]*width:\s*100%/,
@@ -423,11 +531,16 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   );
   expect(indexCssSource).not.toMatch(/--run-msg-footer-reserve/);
   expect(indexCssSource).not.toMatch(/\.run-msg-footer\s*\{[^}]*position:\s*absolute/);
+  // Compact is a CSS restyle of the stable tree: the content stays a block while
+  // the message text becomes the single flex row that holds the prompt + footer.
   expect(indexCssSource).toMatch(
-    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*display:\s*flex;[\s\S]*flex-wrap:\s*wrap/,
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*display:\s*block/,
   );
   expect(indexCssSource).toMatch(
-    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*margin-left:\s*auto;[\s\S]*white-space:\s*nowrap/,
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-text\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*flex-end/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*flex:\s*0\s+0\s+auto;[\s\S]*white-space:\s*nowrap/,
   );
   expect(indexCssSource).toMatch(
     /\.run-turn-activity-divider-controls\s*\{[^}]*width:\s*calc\(96px \+ 0\.4rem\)/,
@@ -435,12 +548,19 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   expect(styleguidePortfolioTranscriptSource.includes("collapsed-text-preview-controls-inline")).toBe(true);
   // The old "hide the whole bubble when collapsed" gate must be gone.
   expect(appSource.includes("{!selectedTurnContextCollapsed && (")).toBe(false);
-  // CSS: the compact line truncates with an ellipsis without changing the
-  // avatar's top anchor from the expanded row.
-  expect(indexCssSource).toMatch(/\.run-msg-compact-text\s*\{[^}]*text-overflow:\s*ellipsis/);
+  // CSS: the prompt text element itself (not a separate preview) truncates with
+  // an ellipsis under data-compact, and the avatar's top anchor is unchanged.
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-plain-message-text\s*\{[^}]*text-overflow:\s*ellipsis/,
+  );
   expect(indexCssSource).toMatch(
     /\.run-transcript-message\[data-compact="true"\]\s*\{[^}]*align-items:\s*start/,
   );
+});
+
+test("Turns prompt context styleguide includes system-authored wake prompt state", () => {
+  expect(styleguidePortfolioTranscriptSource.includes("system-background-wake-context")).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes("Background task finished - agent re-invoked")).toBe(true);
 });
 
 test("transcript meta status lines are attributed to the session system identity", () => {
@@ -506,6 +626,50 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   expect(appSource.includes('kind !== "turn_activity"')).toBe(true);
 });
 
+test("selected turn activity spinner render emits bounded diagnostics", () => {
+  expect(appSource.includes("turnActivityLoadStatusMetricCode")).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-loading-stranded"')).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-loading-slow"')).toBe(true);
+  expect(appSource.includes('"turn-activity-selected-route-session-mismatch"')).toBe(true);
+  expect(appSource.includes("selectedActivityRouteSessionMismatch")).toBe(true);
+  expect(appSource.includes("window.setTimeout")).toBe(true);
+  expect(appSource.includes("TURN_ACTIVITY_STUCK_THRESHOLD_MS")).toBe(true);
+  expect(appSource.includes("activityLoadingSessionSwitchTelemetry")).toBe(true);
+  expect(appSource.includes("activityLoadingTelemetrySource")).toBe(true);
+  expect(appSource.includes("activityLoadingPreviousSessionId")).toBe(true);
+  expect(appSource.includes('"session-switch"')).toBe(true);
+  expect(appSource.includes('"turns-selected"')).toBe(true);
+  expect(appSource.includes("previousSessionId: activityLoadingPreviousSessionId")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("previousSessionId?: string")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("routeSessionId?: string")).toBe(true);
+  expect(chatScrollTelemetrySource.includes("selectedTurnId?: string")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("PreviousSessionID")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("RouteSessionID")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes("SelectedTurnID")).toBe(true);
+  expect(appSource.includes("reason: selectedLoadingReason")).toBe(true);
+  expect(appSource.includes("key: selectedTurnIdForTelemetry")).toBe(true);
+  expect(appSource.includes(
+          "status: turnActivityLoadStatusMetricCode(selectedLoadStatus)",
+        )).toBe(true);
+  expect(appSource.includes("activityEntries: selectedTurnActivityChildCount")).toBe(true);
+  expect(appSource.includes("durableActiveTurnActivityShells")).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-loading-stranded"',
+        )).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-loading-slow"',
+        )).toBe(true);
+  expect(chatScrollMetricsHandlerSource.includes(
+          '"turn-activity-selected-route-session-mismatch"',
+        )).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedLoadingStranded")).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedRouteSessionMismatch")).toBe(true);
+  expect(observabilitySource.includes("TankTurnActivitySelectedLoadingSlow")).toBe(true);
+  expect(observabilitySource.includes(
+          'tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-stranded",surface="session"}',
+        )).toBe(true);
+});
+
 test("public message links render a read-only unauthenticated transcript shell", () => {
   expect(appSource.includes("readInitialPublicMessageLinkRoute")).toBe(true);
   expect(appSource.includes("function PublicMessageLinkApp")).toBe(true);
@@ -525,20 +689,23 @@ test("server-projected active turn activity shells own thinking row active state
           "turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)",
         )).toBe(true);
   expect(appSource.includes("function turnActivityGroupNeedsInput")).toBe(true);
-  expect(appSource.includes("function turnActivityGroupIsNeedsInputTarget")).toBe(true);
+  // needs_input turns no longer condense to an "Answer requested" thinking-row
+  // pointer into Turns — their activity group is emitted inline so the question
+  // widget renders in the main transcript. The needs-input-target helper and the
+  // needs_input thinking-group creation are retired; the active-turn thinking
+  // row stays for in-progress (non-needs-input) turns.
+  expect(appSource.includes("function turnActivityGroupIsNeedsInputTarget")).toBe(false);
   expect(appSource.includes("function insertActiveTurnTailGroups")).toBe(false);
   expect(appSource.includes("const pendingNeedsInputGroups")).toBe(false);
   expect(appSource.includes(
           "pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)",
         )).toBe(false);
-  expect(appSource).toMatch(/group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/);
-  expect(appSource.includes('turnThinkingGroup(group.turnId, entry, "needs_input")')).toBe(true);
+  expect(appSource).toMatch(/group\.active &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/);
+  expect(appSource.includes('turnThinkingGroup(group.turnId, entry, "needs_input")')).toBe(false);
   expect(appSource.includes("data-status={status}")).toBe(true);
-  expect(appSource.includes("Answer requested")).toBe(true);
-  expect(indexCssSource.includes(
-          '[data-kind="turn-thinking"][data-status="needs_input"]',
-        )).toBe(true);
-  expect(appSource.includes("groups.push(group);")).toBe(false);
+  // needs_input turns are hidden in chat (no thinking row, no activity block);
+  // the question renders inline on the asking turn instead.
+  expect(appSource.includes("groups.push(group)")).toBe(false);
   expect(appSource.includes(
           "turnActivityShellIsDurablyActive(group.shell.activity)",
         )).toBe(true);
@@ -579,7 +746,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   // and every primary surface is URL-addressable, including the file-browser and
   // background panes; the definition is multi-line, turns-first.
   expect(appRoutesSource).toMatch(
-    /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"files"[\s\S]*?"background"/,
+    /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"pull-requests"[\s\S]*?"files"[\s\S]*?"background"/,
   );
   expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help" | "cluster";')).toBe(true);
   expect(appRoutesSource.includes("readAppRouteFromPathname")).toBe(true);
@@ -732,9 +899,6 @@ test("turn view entry points open at the turn bottom", () => {
   expect(appSource.includes(
           'onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" })',
         )).toBe(true);
-  // AskUserQuestion uses the same turn navigation path, but with resetPage so
-  // the server default opens the pending question page.
-  expect(appSource.includes('{ anchor: "top", resetPage: true }')).toBe(true);
   expect(appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })')).toBe(true);
   expect(appSource.includes('(variant === "assistant" || variant === "user")')).toBe(true);
   expect(appSource.includes("function TurnViewButton")).toBe(true);
@@ -919,10 +1083,50 @@ test("home splash test action stays disabled on the splash page", () => {
         )).toBe(false);
 });
 
-test("pull request composer action persists before a PR URL exists", () => {
+test("break-glass composer action owns approval links and quick approval", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
-  expect(appSource).toMatch(/const pullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \|\| "";/);
-  expect(appSource).toMatch(/pullRequestURL \? \([\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?disabled[\s\S]*?aria-label="Pull request link unavailable"/);
+  // The PR control is a self-contained popup menu, not a single hard-coded link.
+  expect(appSource).toMatch(/function PullRequestMenuButton\(/);
+  expect(appSource).toMatch(/<PullRequestMenuButton \{\.\.\.pullRequest\} \/>/);
+  expect(appSource).toMatch(/function BreakGlassApprovalMenuButton\(/);
+  expect(appSource).toMatch(/<BreakGlassApprovalMenuButton \{\.\.\.breakGlass\} \/>/);
+  // Latest PR and the linked PR are computed as distinct menu entries.
+  expect(appSource).toMatch(
+    /const latestPullRequestURL = agentGitActivity\.pullRequests\[0\]\?\.href \?\? "";/,
+  );
+  expect(appSource).toMatch(
+    /const linkedPullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \?\? "";/,
+  );
+  // The retired single-URL link shape must not come back.
+  expect(appSource.includes("aria-label=\"Pull request link unavailable\"")).toBe(false);
+  expect(appSource.includes("aria-label=\"Open pull request in new tab\"")).toBe(false);
+  // Break-glass approval is a Tank-owned deep link and Tank-owned decision
+  // endpoint. Auth authenticates the admin; it must not render or post grants
+  // for Tank's app-specific request.
+  expect(appSource).toMatch(/function breakGlassRequestUrl\(/);
+  expect(appSource).toMatch(/"break-glass"/);
+  expect(appSource).toMatch(/<BreakGlassRequestPage/);
+  expect(appSource).toMatch(/Quick approve/);
+  expect(appSource).toMatch(/appRouteUrl\("settings", "admin", "break-glass"\)/);
+  expect(appSource).toMatch(/quickApproveBreakGlassMenuItem/);
+  expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
+  expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
+  expect(appSource.includes("function PRLaneApprovalIndicator")).toBe(false);
+  expect(appSource.includes("<PRLaneApprovalIndicator")).toBe(false);
+  expect(appSource).toMatch(/type BreakGlassApprovalMenuKind = "github" \| "azure" \| "model" \| "pr-lane";/);
+  expect(appSource).toMatch(/pendingPRLaneRequests\(controlActionRows\)/);
+  expect(appSource).toMatch(/prLaneApprovalMenuItems\(sessionId, prLaneRequests\)/);
+  expect(appSource).toMatch(/onApprovePRLane/);
+  expect(indexCssSource.includes(".pr-lane-approval")).toBe(false);
+  expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
+  expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
+  expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
+  expect(appSource.includes("request.approvalUrl")).toBe(false);
+  expect(appSource.includes("auth.romaine.life/admin")).toBe(false);
+  // The retired pre-Tank endpoint shape must not return.
+  expect(appSource.includes("git-break-glass/approve")).toBe(false);
+  expect(appSource.includes("/admin/git-break-glass")).toBe(false);
+  // Disabled placeholder composers still omit a live PR menu.
   expect((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length).toBe(2);
   expect(appSource.includes("testState?.active && testState.pull_request_url")).toBe(false);
 });
@@ -1129,6 +1333,33 @@ test("web search transcript tools use the web glyph", () => {
   expect(appSource).toMatch(/if \(isWebToolName\(name\)\) \{[\s\S]{0,160}return \{[\s\S]{0,80}Icon: GlobeIcon,[\s\S]{0,80}colorClass: "tool-color-search",[\s\S]{0,80}tooltip: "Web tool call"[\s\S]{0,80}\};[\s\S]{0,80}\}/);
 });
 
+test("expanded tool dumps preserve indentation instead of soft wrapping", () => {
+  for (const selector of [
+    ".run-tool-default-pre",
+    ".run-tool-bash-cmd",
+    ".run-tool-bash-out",
+    ".run-tool-output pre",
+  ]) {
+    const rule = cssRule(indexCssSource, selector);
+    expect(rule, selector).toContain("white-space: pre;");
+    expect(rule, selector).toContain("overflow-wrap: normal;");
+    expect(rule, selector).toContain("word-break: normal;");
+    expect(rule, selector).not.toContain("white-space: pre-wrap;");
+    expect(rule, selector).not.toContain("overflow-wrap: anywhere;");
+  }
+});
+
+test("turn-view tool rows align with the activity message content column", () => {
+  const rule = cssRule(
+    indexCssSource,
+    ".run-turn-view-body > .run-transcript-tool-single .run-transcript-tool",
+  );
+
+  expect(rule).toContain("grid-template-columns: 2.625rem minmax(0, 1fr);");
+  expect(rule).toContain("column-gap: 0.55rem;");
+  expect(rule).toContain("padding-right: 0;");
+});
+
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
   expect(appSource).toMatch(/type InitialMessageMode =[\s\S]{0,260}\| "direct"[\s\S]{0,80}\| "diagnose"[\s\S]{0,80}\| "bug_report"[\s\S]{0,80}\| "quality_gaps"[\s\S]{0,80}\| "go_long"[\s\S]{0,80}\| "test"/);
   expect(appSource.includes("composeInitialMessageModePrompt")).toBe(true);
@@ -1258,7 +1489,9 @@ test("mounted chat reactivation resets local timeline state before bootstrap", (
   expect(appSource.includes("reduceTimelineBootstrap")).toBe(true);
   expect(appSource.includes("scrollToLatestOnReady: !hasExplicitTarget")).toBe(true);
   expect(appSource.includes('requestScrollToLatest("auto", source)')).toBe(true);
-  expect(appSource).toMatch(/useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/);
+  expect(appSource).toMatch(
+    /useLayoutEffect\(\(\) => \{[\s\S]{0,500}const previousSessionId = sessionIdRef\.current;[\s\S]{0,500}setActivityLoadingSessionSwitchTelemetry[\s\S]{0,500}sessionIdRef\.current = session\.id;[\s\S]{0,500}resetSdkTimelineBootstrapState\("session-change"/,
+  );
   expect(appSource).toMatch(/if \(timelineBootstrap\.status !== "idle"\) return;/);
 });
 

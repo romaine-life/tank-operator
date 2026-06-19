@@ -1,9 +1,82 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ThreadOptions } from "@openai/codex-sdk";
 
 import { CodexAppServerTransport, appServerItemToCodexItem } from "./appServerTransport.js";
 import { registry } from "./metrics.js";
+
+test("ensureThread re-resumes under a new model when model/effort change (mid-session re-pin)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codex-repin-"));
+  const applied: ThreadOptions[] = [];
+  const transport = new CodexAppServerTransport({
+    cwd,
+    onRequestUserInput: async () => ({ answers: {} }),
+    onRuntimeConfigApplied: (o) => {
+      applied.push(o);
+    },
+  });
+  const calls: { method: string; config: Record<string, unknown> }[] = [];
+  let n = 0;
+  const internals = transport as unknown as {
+    ensureThread: (o: ThreadOptions) => Promise<string>;
+    request: (method: string, params: unknown) => Promise<unknown>;
+  };
+  internals.request = async (method, params) => {
+    calls.push({
+      method,
+      config: ((params as Record<string, unknown>)?.config ?? {}) as Record<
+        string,
+        unknown
+      >,
+    });
+    return { thread: { id: `thread-${++n}` } };
+  };
+
+  try {
+    const id1 = await internals.ensureThread({
+      model: "codex-model-a",
+      modelReasoningEffort: "low",
+    } as ThreadOptions);
+    // Same options again: the live thread is reused, no new create.
+    const id1b = await internals.ensureThread({
+      model: "codex-model-a",
+      modelReasoningEffort: "low",
+    } as ThreadOptions);
+    // Different model/effort: drop the thread and re-create under the new
+    // config (the mid-session model switch).
+    const id2 = await internals.ensureThread({
+      model: "codex-model-b",
+      modelReasoningEffort: "high",
+    } as ThreadOptions);
+
+    assert.equal(id1, "thread-1");
+    assert.equal(id1b, "thread-1", "same options reuse the cached thread");
+    const creates = calls.filter(
+      (c) => c.method === "thread/start" || c.method === "thread/resume",
+    );
+    assert.equal(
+      creates.length,
+      2,
+      "one create for the first pin, one re-create for the re-pin",
+    );
+    assert.equal(
+      creates[1].config.model,
+      "codex-model-b",
+      "the re-pin applies the new model",
+    );
+    assert.equal(creates[1].config.model_reasoning_effort, "high");
+    assert.equal(
+      applied.length,
+      2,
+      "onRuntimeConfigApplied fires per (re-)pin so the chip updates",
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("appServerItemToCodexItem preserves unified exec process metadata", () => {
   const item = appServerItemToCodexItem({

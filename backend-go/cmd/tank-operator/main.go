@@ -24,6 +24,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
 	"github.com/romaine-life/tank-operator/backend-go/internal/avataruploads"
+	"github.com/romaine-life/tank-operator/backend-go/internal/azurepersonal"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversationreadstate"
 	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
@@ -62,6 +63,31 @@ func buildMCPGitHubClient() *mcpgithub.Client {
 		ExchangeURL:  envDefault("MCP_GITHUB_EXCHANGE_URL", mcpgithub.DefaultExchangeURL),
 		MCPGitHubURL: envDefault("MCP_GITHUB_URL", mcpgithub.DefaultMCPGitHubURL),
 		SATokenPath:  saPath,
+	})
+}
+
+// buildAzurePersonalClient wires the azure-personal internal client used to fire
+// /internal/grant-activated when an azure break-glass grant goes active. Returns
+// a true-nil AzurePersonalNotifier (and logs) when the auth.romaine.life-audience
+// projected SA token isn't mounted — the trigger then no-ops and the agent still
+// gets the approval turn. Returning the interface type (not *Client) avoids Go's
+// typed-nil gotcha so s.azurePersonal == nil is honest. Endpoint overrides
+// (AZURE_PERSONAL_INTERNAL_URL, AZURE_PERSONAL_EXCHANGE_URL,
+// AZURE_PERSONAL_SA_TOKEN_PATH) let tests point at fakes.
+func buildAzurePersonalClient() AzurePersonalNotifier {
+	saPath := strings.TrimSpace(os.Getenv("AZURE_PERSONAL_SA_TOKEN_PATH"))
+	if saPath == "" {
+		saPath = azurepersonal.DefaultSATokenPath
+	}
+	if _, err := os.Stat(saPath); err != nil {
+		slog.Warn("azure-personal grant-activated trigger disabled (auth-romaine projected SA token volume not mounted)",
+			"path", saPath, "error", err)
+		return nil
+	}
+	return azurepersonal.NewClient(azurepersonal.Options{
+		BaseURL:     envDefault("AZURE_PERSONAL_INTERNAL_URL", azurepersonal.DefaultBaseURL),
+		ExchangeURL: envDefault("AZURE_PERSONAL_EXCHANGE_URL", azurepersonal.DefaultExchangeURL),
+		SATokenPath: saPath,
 	})
 }
 
@@ -248,12 +274,21 @@ func main() {
 	var backgroundTaskWakeStore *pgstore.BackgroundTaskWakeStore
 	var controlActionStore *pgstore.ControlActionStore
 	var pendingLaunchStore *pgstore.PendingLaunchStore
+	var ciWatchStore *pgstore.CIWatchStore
+	var pendingTestProvisionStore *pgstore.PendingTestProvisionStore
+	var orchestrationStore *pgstore.OrchestrationStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
 		backgroundTaskWakeStore = pgstore.NewBackgroundTaskWakeStore(pgPool, sessionScope)
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
+		ciWatchStore = pgstore.NewCIWatchStore(pgPool, sessionScope)
+		pendingTestProvisionStore = pgstore.NewPendingTestProvisionStore(pgPool, sessionScope)
+		// The orchestration store carries no session scope — a run is owned by an
+		// email and targets a repo, not bound to a session_scope.
+		orchestrationStore = pgstore.NewOrchestrationStore(pgPool)
 	}
+	githubWebhookSecret := strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET"))
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
 	// NATS session bus (per-email subject), replacing the prior
@@ -261,6 +296,7 @@ func main() {
 	namespace := envDefault("SESSIONS_NAMESPACE", sessionmodel.SessionsNamespace)
 	sessionServiceAccount := envDefault("SESSION_SERVICE_ACCOUNT", sessionmodel.SessionServiceAccount)
 	tankOperatorInternalURL := envDefault("TANK_OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local")
+	tankUIHost := envDefault("TANK_UI_HOST", "https://tank.romaine.life")
 	designSelectionNamespace := envDefault("DESIGN_SELECTION_NAMESPACE", currentPodNamespace())
 
 	// Session image tags come from the chart's values.yaml session.*
@@ -273,12 +309,10 @@ func main() {
 	// every claude_gui session crashlooped).
 	sessionImage := os.Getenv("SESSION_IMAGE")
 	codexSessionImage := os.Getenv("CODEX_SESSION_IMAGE")
-	antigravitySessionImage := os.Getenv("ANTIGRAVITY_SESSION_IMAGE")
-	if sessionImage == "" || codexSessionImage == "" || antigravitySessionImage == "" {
-		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE to fingerprinted tags",
+	if sessionImage == "" || codexSessionImage == "" {
+		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE to fingerprinted tags",
 			"SESSION_IMAGE", sessionImage,
 			"CODEX_SESSION_IMAGE", codexSessionImage,
-			"ANTIGRAVITY_SESSION_IMAGE", antigravitySessionImage,
 		)
 		os.Exit(1)
 	}
@@ -332,27 +366,26 @@ func main() {
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
-			SessionsNamespace:               namespace,
-			SessionServiceAccount:           sessionServiceAccount,
-			SessionConfigMap:                envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
-			ArgoCDTrackingApp:               envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
-			SessionImage:                    sessionImage,
-			CodexSessionImage:               codexSessionImage,
-			AntigravitySessionImage:         antigravitySessionImage,
-			SessionImageMetadata:            sessionmodel.ParseImageVersionMetadata(os.Getenv("SESSION_IMAGE_METADATA")),
-			CodexSessionImageMetadata:       sessionmodel.ParseImageVersionMetadata(os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
-			AntigravitySessionImageMetadata: sessionmodel.ParseImageVersionMetadata(os.Getenv("ANTIGRAVITY_SESSION_IMAGE_METADATA")),
-			SessionScope:                    sessionScope,
-			TankOperatorInternalURL:         tankOperatorInternalURL,
-			NATSURL:                         envDefault("NATS_URL", ""),
-			NATSStream:                      envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
-			NATSCommandStream:               envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),
-			NATSAuthSecret:                  envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
-			SpireLensTailscaleOIDCClientID:  envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
-			SpireLensTailscaleTailnet:       envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
-			SpireLensTailscaleAuthTag:       envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
-			SpireLensHost:                   envDefault("SESSION_SPIRELENS_HOST", ""),
-			SpireLensMCPPort:                envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
+			SessionsNamespace:              namespace,
+			SessionServiceAccount:          sessionServiceAccount,
+			SessionConfigMap:               envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
+			ArgoCDTrackingApp:              envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:                   sessionImage,
+			CodexSessionImage:              codexSessionImage,
+			SessionImageMetadata:           sessionmodel.ParseImageVersionMetadata(os.Getenv("SESSION_IMAGE_METADATA")),
+			CodexSessionImageMetadata:      sessionmodel.ParseImageVersionMetadata(os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
+			SessionScope:                   sessionScope,
+			TankOperatorInternalURL:        tankOperatorInternalURL,
+			TankUIHost:                     tankUIHost,
+			NATSURL:                        envDefault("NATS_URL", ""),
+			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+			NATSCommandStream:              envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),
+			NATSAuthSecret:                 envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
+			SpireLensTailscaleOIDCClientID: envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
+			SpireLensTailscaleTailnet:      envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
+			SpireLensTailscaleAuthTag:      envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
+			SpireLensHost:                  envDefault("SESSION_SPIRELENS_HOST", ""),
+			SpireLensMCPPort:               envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
 			// Test-slot SDK-runner hot-swap. Off by default; the chart
 			// turns this on only when the chart runs in hot test-slot mode.
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
@@ -363,7 +396,6 @@ func main() {
 		APIProxyHost:                os.Getenv("CLAUDE_API_PROXY_HOST"),
 		ClaudeSecondaryAPIProxyHost: os.Getenv("CLAUDE_SECONDARY_API_PROXY_HOST"),
 		CodexAPIProxyHost:           os.Getenv("CODEX_API_PROXY_HOST"),
-		AntigravityAPIProxyHost:     os.Getenv("ANTIGRAVITY_API_PROXY_HOST"),
 		ImageOverrides:              imageOverrideResolver,
 		OnImageOverrideApplied: func(scope, mode, kind string) {
 			recordSessionImageOverrideApplied(scope, kind)
@@ -621,8 +653,11 @@ func main() {
 		turnActivity:             newTurnActivityCache(),
 		mcpGitHub:                buildMCPGitHubClient(),
 		glimmung:                 buildGlimmungClient(),
+		azurePersonal:            buildAzurePersonalClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
+		ciWatches:                ciWatchStore,
+		githubWebhookSecret:      githubWebhookSecret,
 		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
 		deploymentVersions:       deploymentVersionStore,
@@ -638,6 +673,25 @@ func main() {
 	// non-nil so `s.pendingLaunch == nil` stays true in stub mode.
 	if pendingLaunchStore != nil {
 		srv.pendingLaunch = pendingLaunchStore
+	}
+	// Admin read-only DB browser. Only wired when a real pool exists; in stub
+	// mode the field stays a true nil interface and the handlers return 503.
+	if pgPool != nil {
+		srv.dataBrowser = pgstore.NewDataBrowser(pgPool)
+	}
+	// Same typed-nil-interface guard for the durable pending-provision backstop.
+	if pendingTestProvisionStore != nil {
+		srv.pendingTestProvisions = pendingTestProvisionStore
+	}
+	// The deterministic orchestration advance engine: bound to the durable
+	// store and the real spoke spawner (mgr.Create + enqueueSDKTurn). The
+	// webhook + CI-watch register handlers call it on the hot path; the
+	// reconcile loop below is the dropped-webhook backstop.
+	if orchestrationStore != nil {
+		srv.orchestrationRuns = orchestrationStore
+		srv.orchestrations = newOrchestrationEngine(orchestrationStore, srv.spawnPhaseSpoke)
+		srv.orchestrations.reviewReady = srv.emitOrchestrationReviewReadyRecord
+		srv.orchestrations.phaseMerged = srv.handleOrchestrationPhaseMerged
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {
@@ -700,6 +754,41 @@ func main() {
 		go func() {
 			if err := runSessionRowReconcileLoop(workerCtx, srv, sessionRegStore, rowWriter, sessionRowReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("session row reconcile loop stopped", "error", err)
+			}
+		}()
+	}
+	// Orchestration advance backstop: re-drive every non-terminal run so a
+	// dropped merged-PR webhook degrades to a delay, never a hung run, and a
+	// freshly-approved run's root phases get dispatched. Per-replica idempotent
+	// (every effect is a guarded write). Needs the engine, which needs both the
+	// durable store and the spoke spawner — nil in stub mode.
+	if srv.orchestrations != nil {
+		go func() {
+			if err := runOrchestrationReconcileLoop(workerCtx, srv.orchestrations, orchestrationReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("orchestration reconcile loop stopped", "error", err)
+			}
+		}()
+	}
+	// Durable stranded-watch backstop: re-drive 'watching' CI watches that have
+	// seen no event past the staleness window, so a dropped webhook (or an
+	// in-memory mergeability retry lost to a restart) degrades to a delay, not a
+	// hung watch that keeps its session reaper-protected and asleep.
+	if srv.ciWatches != nil && srv.mcpGitHub != nil {
+		go func() {
+			if err := runCIWatchReconcileLoop(workerCtx, srv, ciWatchReconcileInterval, ciWatchStaleAfter); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("ci watch reconcile loop stopped", "error", err)
+			}
+		}()
+	}
+	// Durable pending-provision backstop: re-drive test-slot provisions stranded
+	// in 'pending' by an orchestrator restart mid-settle-wait, so a fire-and-forget
+	// provision goroutine that died with its pod degrades to a delay, not a lost
+	// provision with no retry. Idempotent (claim + already-provisioned short
+	// circuit + guarded writes). Postgres-only — the store is nil in stub mode.
+	if srv.pendingTestProvisions != nil {
+		go func() {
+			if err := runPendingTestProvisionReconcileLoop(workerCtx, srv, pendingProvisionReconcileInterval, pendingProvisionStaleAfter); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("pending test provision reconcile loop stopped", "error", err)
 			}
 		}()
 	}
@@ -1073,9 +1162,8 @@ func buildSessionBus(scope string) *sessionbus.Bus {
 	defer cancel()
 	bus, err := sessionbus.Connect(ctx, sessionbus.Config{
 		URL: url,
-		// NATS_USER set = static user/password auth (#1128 stage 2: the
-		// orchestrator is an auth_callout-exempt named user; password is
-		// the same NATS_TOKEN value). Unset = legacy token auth.
+		// The orchestrator is an auth_callout-exempt named user; NATS_TOKEN
+		// carries that user's password, not a shared session-pod token.
 		User:              os.Getenv("NATS_USER"),
 		Token:             os.Getenv("NATS_TOKEN"),
 		Stream:            envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
@@ -1150,6 +1238,7 @@ func (r *stubSessionRegistry) Upsert(_ context.Context, _ sessionmodel.SessionRe
 }
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
 func (r *stubSessionRegistry) SetOpenTarget(_ context.Context, _, _, _ string) error   { return nil }
+func (r *stubSessionRegistry) SetRunConfig(_ context.Context, _, _, _, _ string) error { return nil }
 func (r *stubSessionRegistry) SetBugLabel(_ context.Context, _, _ string, _ *sessionmodel.SessionBugLabel) error {
 	return nil
 }
@@ -1162,13 +1251,20 @@ func (r *stubSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map
 func (r *stubSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
+func (r *stubSessionRegistry) SetSpokeConfig(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
 func (r *stubSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
+func (r *stubSessionRegistry) AppendSpawnedSession(_ context.Context, _, _ string, _ sessionmodel.SpawnedSessionRef) error {
 	return nil
 }
 func (r *stubSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
 }
-func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
+func (r *stubSessionRegistry) SetParentSession(_ context.Context, _, _, _ string) error { return nil }
+func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error         { return nil }
 
 func envDefault(name, fallback string) string {
 	v := strings.TrimSpace(os.Getenv(name))

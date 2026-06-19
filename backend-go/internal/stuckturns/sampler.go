@@ -32,12 +32,8 @@
 //     when the fold OUTPUT changes, so for a healthy long streaming turn
 //     it is pinned at the turn.started moment — comparing it would flag
 //     every long turn. Only ledger silence distinguishes a wedged
-//     boundary from a live turn. This class exists because of sessions
-//     828/829 (2026-06-12): the antigravity runner's turn-settle window
-//     was cancelled by a transcript-rewrite replay and never re-armed,
-//     leaving turns open and ledger-silent for 30+ minutes while this
-//     gauge read 0 (the accepted-only blind spot, tank-operator#1085).
-//     A streaming row is suspicion, not a verdict — a single quiet tool
+//     boundary from a live turn. A streaming row is suspicion, not a verdict —
+//     a single quiet tool
 //     call can legitimately exceed the threshold; the row localizes,
 //     the stranded-turn sweep (2h floor) remains the terminal-writing
 //     backstop.

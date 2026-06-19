@@ -18,34 +18,22 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
 )
 
-// stubResolver maps SA tokens to pods and pods to storage keys without a
-// cluster: the Kubernetes seam under test elsewhere stays out of the
+// stubResolver maps pod identity tokens to storage keys without contacting
+// auth.romaine.life: the identity seam under test elsewhere stays out of the
 // authorization-semantics tests.
 type stubResolver struct {
-	tokens map[string]string // SA token -> pod name
-	pods   map[string]string // pod name -> storage key
+	tokens map[string]string // pod token -> storage key
 }
 
-func (s *stubResolver) ResolvePodFromToken(_ context.Context, token string) (string, error) {
-	pod, ok := s.tokens[token]
+func (s *stubResolver) SessionStorageKeyFromToken(_ context.Context, token string) (string, error) {
+	key, ok := s.tokens[token]
 	if !ok {
 		return "", errors.New("token rejected")
-	}
-	return pod, nil
-}
-
-func (s *stubResolver) SessionStorageKeyForPod(_ context.Context, podName string) (string, error) {
-	key, ok := s.pods[podName]
-	if !ok {
-		return "", errors.New("no session binding")
 	}
 	return key, nil
 }
 
-const (
-	testLegacyToken = "legacy-fleet-token"
-	testCalloutPass = "callout-pw"
-)
+const testCalloutPass = "callout-pw"
 
 // startCalloutServer runs an embedded nats-server with auth_callout enabled
 // and the callout service subscribed — the REAL authorization path end to
@@ -123,10 +111,10 @@ func testService(t *testing.T) *calloutService {
 		issuer:  issuer,
 		account: natsGlobalAccount,
 		resolver: &stubResolver{
-			tokens: map[string]string{"sa-token-864": "session-pod-864"},
-			pods:   map[string]string{"session-pod-864": "864"},
+			tokens: map[string]string{
+				"pod-token-864": "864",
+			},
 		},
-		legacyToken:   testLegacyToken,
 		commandStream: defaultCommandStream,
 		providers:     defaultProviders,
 		userTTL:       time.Hour,
@@ -164,7 +152,7 @@ func TestSessionPodGetsOwnSubjectsOnly(t *testing.T) {
 	svc := testService(t)
 	_, url := startCalloutServer(t, svc)
 
-	nc, err := nats.Connect(url, nats.UserInfo("864", "sa-token-864"))
+	nc, err := nats.Connect(url, nats.UserInfo("864", "pod-token-864"))
 	if err != nil {
 		t.Fatalf("session pod connect: %v", err)
 	}
@@ -180,6 +168,9 @@ func TestSessionPodGetsOwnSubjectsOnly(t *testing.T) {
 	if err := nc.Publish("$JS.API.CONSUMER.MSG.NEXT."+defaultCommandStream+"."+durable, []byte("{}")); err != nil {
 		t.Fatalf("publish own consumer next: %v", err)
 	}
+	if err := nc.Publish("$JS.ACK."+defaultCommandStream+"."+durable+".1.2.3.4.5", []byte{}); err != nil {
+		t.Fatalf("publish own consumer ack: %v", err)
+	}
 	if violations := errs(); len(violations) != 0 {
 		t.Fatalf("own-session subjects must be allowed, got violations: %v", violations)
 	}
@@ -193,8 +184,11 @@ func TestSessionPodGetsOwnSubjectsOnly(t *testing.T) {
 	if err := nc.Publish("$JS.API.CONSUMER.MSG.NEXT."+defaultCommandStream+"."+other, []byte("{}")); err != nil {
 		t.Fatalf("publish queues locally even when denied: %v", err)
 	}
+	if err := nc.Publish("$JS.ACK."+defaultCommandStream+"."+other+".1.2.3.4.5", []byte{}); err != nil {
+		t.Fatalf("publish queues locally even when denied: %v", err)
+	}
 	violations := errs()
-	if len(violations) != 2 {
+	if len(violations) != 3 {
 		t.Fatalf("cross-session subjects must violate, got: %v", violations)
 	}
 	for _, v := range violations {
@@ -208,7 +202,7 @@ func TestSessionPodCannotSubscribeToOtherSubjects(t *testing.T) {
 	svc := testService(t)
 	_, url := startCalloutServer(t, svc)
 
-	nc, err := nats.Connect(url, nats.UserInfo("864", "sa-token-864"))
+	nc, err := nats.Connect(url, nats.UserInfo("864", "pod-token-864"))
 	if err != nil {
 		t.Fatalf("session pod connect: %v", err)
 	}
@@ -236,42 +230,15 @@ func TestSessionPodCannotSubscribeToOtherSubjects(t *testing.T) {
 	}
 }
 
-func TestLegacySharedTokenKeepsFullAccess(t *testing.T) {
-	svc := testService(t)
-	_, url := startCalloutServer(t, svc)
-
-	// Old pods present the fleet token via the token field (nats.Token /
-	// nats.js token:) with no username.
-	nc, err := nats.Connect(url, nats.Token(testLegacyToken))
-	if err != nil {
-		t.Fatalf("legacy pod connect: %v", err)
-	}
-	defer nc.Close()
-	errs := permissionErrors(t, nc)
-
-	if err := nc.Publish(sessionbus.SessionEventSubject("864"), []byte("{}")); err != nil {
-		t.Fatalf("legacy publish: %v", err)
-	}
-	if err := nc.Publish(sessionbus.SessionEventSubject("865"), []byte("{}")); err != nil {
-		t.Fatalf("legacy publish: %v", err)
-	}
-	if _, err := nc.SubscribeSync("tank.session.>"); err != nil {
-		t.Fatalf("legacy subscribe: %v", err)
-	}
-	if violations := errs(); len(violations) != 0 {
-		t.Fatalf("legacy token must keep pre-callout access, got: %v", violations)
-	}
-}
-
 func TestUnknownCredentialsAreRejected(t *testing.T) {
 	svc := testService(t)
 	_, url := startCalloutServer(t, svc)
 
 	if _, err := nats.Connect(url, nats.UserInfo("864", "wrong-token")); err == nil {
-		t.Fatalf("bad SA token must be rejected at connect")
+		t.Fatalf("bad pod token must be rejected at connect")
 	}
-	if _, err := nats.Connect(url, nats.Token("not-the-fleet-token")); err == nil {
-		t.Fatalf("bad legacy token must be rejected at connect")
+	if _, err := nats.Connect(url, nats.Token("shared-fleet-token")); err == nil {
+		t.Fatalf("bare shared token must be rejected at connect")
 	}
 	if _, err := nats.Connect(url); err == nil {
 		t.Fatalf("credential-less connect must be rejected")
@@ -285,7 +252,7 @@ func TestClaimedIdentityMustMatchPodBinding(t *testing.T) {
 	// The token is valid and binds to session 864 — claiming 865 is a
 	// mis-wired or hostile pod and must be rejected, not silently
 	// downgraded to the claimed session.
-	if _, err := nats.Connect(url, nats.UserInfo("865", "sa-token-864")); err == nil {
+	if _, err := nats.Connect(url, nats.UserInfo("865", "pod-token-864")); err == nil {
 		t.Fatalf("identity mismatch must be rejected at connect")
 	}
 }

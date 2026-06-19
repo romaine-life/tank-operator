@@ -7,6 +7,8 @@ export function reportRuntimeConfig(
     effort?: string;
     contextWindowTokens?: number;
     contextWindowSource?: string;
+    providerSessionId?: string;
     providerRateLimitInfo?: Record<string, unknown>;
+    providerUsageSnapshot?: Record<string, unknown>;
   },
 ): Promise<boolean>;

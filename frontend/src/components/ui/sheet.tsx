@@ -42,7 +42,7 @@ function SheetOverlay({
   )
 }
 
-type SheetSide = "left" | "right"
+type SheetSide = "left" | "right" | "bottom"
 
 function SheetContent({
   className,
@@ -59,11 +59,13 @@ function SheetContent({
         data-slot="sheet-content"
         data-side={side}
         className={cn(
-          "fixed inset-y-0 z-50 flex outline-none duration-200 data-open:animate-in data-closed:animate-out",
+          "fixed z-50 flex outline-none duration-200 data-open:animate-in data-closed:animate-out",
           side === "left" &&
-            "left-0 data-open:slide-in-from-left data-closed:slide-out-to-left",
+            "inset-y-0 left-0 data-open:slide-in-from-left data-closed:slide-out-to-left",
           side === "right" &&
-            "right-0 data-open:slide-in-from-right data-closed:slide-out-to-right",
+            "inset-y-0 right-0 data-open:slide-in-from-right data-closed:slide-out-to-right",
+          side === "bottom" &&
+            "inset-x-0 bottom-0 data-open:slide-in-from-bottom data-closed:slide-out-to-bottom",
           className,
         )}
         {...props}

@@ -103,6 +103,13 @@ export const inputReplyAnswerShapeTotal = new Counter({
   registers: [registry],
 });
 
+export const inputReplyAttachmentTotal = new Counter({
+  name: "tank_runner_input_reply_attachment_total",
+  help: "Files attached to an AskUserQuestion answer, by kind (image|file) and how the runner delivered them into the resolved tool result: delivered (inline image block or path line), read_failed (image present but unreadable/too large), or missing (path could not be located under /workspace). A missing/read_failed image is a silent-screenshot-loss regression signature.",
+  labelNames: ["kind", "result"],
+  registers: [registry],
+});
+
 export const terminalPublishDeferredTotal = new Counter({
   name: "tank_runner_terminal_publish_deferred_total",
   help: "Turn terminals that exhausted publish retries and were parked for JetStream redelivery instead of wedging the data plane (issue #1078 item 1).",
@@ -142,6 +149,27 @@ export const providerErrorTotal = new Counter({
   name: "tank_runner_provider_error_total",
   help: "Errors raised by the provider SDK (the query iterator or interrupt() call).",
   labelNames: ["kind"],
+  registers: [registry],
+});
+
+// unrecoverableExitTotal counts runner terminal exits taken because the
+// session is UNRECOVERABLE — a container restart cannot make progress, so
+// instead of the normal exit(1)-to-restart the runner reports
+// session.provider_fatal and exits terminally (exit code 3). The load-bearing
+// reason is `provider_session_lost`: the SDK could not resume the
+// provider-session because its on-disk transcript was wiped by a container
+// restart (the transcript is container-ephemeral, not on a volume — by design,
+// there is no per-session PVC). Before this counter existed that case became a
+// silent unbounded CrashLoopBackOff (session 979, 2026-06-16) with only a
+// transient-looking turn.failed{provider_failure} and a flapping session
+// status. Steady state is zero; any `provider_session_lost` increment is a
+// session that died and could not self-heal. `report_failed` counts a
+// provider-fatal POST that itself failed — the orchestrator restart-budget
+// backstop is then the safety net that still reaps the pod.
+export const unrecoverableExitTotal = new Counter({
+  name: "tank_runner_unrecoverable_exit_total",
+  help: "Runner terminal exits taken because the session is unrecoverable (a restart cannot progress). reason='provider_session_lost' is a resume whose on-disk transcript was wiped by a container restart; the runner reports session.provider_fatal and exits terminally instead of crash-looping. reason='report_failed' is a failed provider-fatal POST. Steady state is zero.",
+  labelNames: ["reason"],
   registers: [registry],
 });
 
@@ -369,18 +397,34 @@ export const optionsPinnedTotal = new Counter({
   registers: [registry],
 });
 
-// optionsOverrideIgnoredTotal increments when a submit_turn after the
-// first one carries a different model or effort than what's already
-// pinned. The runner ignores the override (Options is sealed once
-// query() runs), but the counter exposes the silent-divergence so a
-// future bug or product change ("let me switch model mid-session") is
-// visible in metrics before it surfaces as a user-reported "why didn't
-// my pick take effect?" ticket. Labels intentionally name the *field*
-// that diverged, not the values, to keep cardinality low.
-export const optionsOverrideIgnoredTotal = new Counter({
-  name: "tank_runner_options_override_ignored_total",
-  help: "Submit_turn commands whose model/effort differed from the pinned options (override is silently ignored — model/effort are pod-lifetime).",
-  labelNames: ["field"],
+// optionsRepinnedTotal increments when the runner re-pins model/effort
+// mid-session: at an idle turn boundary it tears down the current SDK query
+// and rebuilds it with provider-session resume + the new options, so a user's
+// mid-session model/effort change takes effect on the next turn. Labels are
+// the *applied* values (like optionsPinnedTotal) so a re-pin is comparable
+// against the original pin. model/effort are no longer pod-lifetime — they are
+// sealed within a turn and re-pinnable between turns. Correlate a spike here
+// with tank_runner_provider_failure_signature_total{...thinking_block_modified}
+// to catch a cross-model resume the provider rejects.
+export const optionsRepinnedTotal = new Counter({
+  name: "tank_runner_options_repinned_total",
+  help: "Mid-session model/effort re-pins applied by rebuilding the SDK query with provider-session resume.",
+  labelNames: ["model", "effort"],
+  registers: [registry],
+});
+
+// breakGlassMcpRebuildTotal increments when the runner rebuilds the SDK query
+// to surface a newly-granted break-glass MCP server's tools. A break-glass
+// approval turn carries mcp_activate_name; the granted server's tools only
+// appear in a freshly built query — reconnectMcpServer on the live query does
+// NOT re-register tools, and a server written into .mcp.json mid-session is not
+// re-read. The rebuild re-reads .mcp.json + re-handshakes every server so the
+// now-unlocked azure-personal / tank-git-break-glass tools become callable.
+// Steady state is one increment per approved break-glass activation; a flat
+// zero while grants are being approved means surfacing has regressed again.
+export const breakGlassMcpRebuildTotal = new Counter({
+  name: "tank_runner_break_glass_mcp_rebuild_total",
+  help: "SDK query rebuilds triggered by a break-glass approval turn to surface newly-granted MCP tools.",
   registers: [registry],
 });
 

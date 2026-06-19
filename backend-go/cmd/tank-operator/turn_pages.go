@@ -116,6 +116,19 @@ func readUserFacingTurnEventsWithChain(ctx context.Context, eventStore store.Ses
 	}
 	candidates := []string{turnID}
 	noteObserved(turnID, events)
+	if askingTurnID := askUserQuestionAskingTurnID(turnID, events); askingTurnID != "" {
+		askingEvents, err := readAllTurnEvents(ctx, eventStore, sessionID, askingTurnID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		candidates = append(candidates, askingTurnID)
+		noteObserved(askingTurnID, askingEvents)
+		events = append(events, askingTurnFinalAnswerContextEvents(turnID, events, askingEvents)...)
+		// Carry the asking turn's triggering user prompt onto the question turn so
+		// Q2+ pages can render it under a "continued from previous turn" header,
+		// keeping the question fused to the context that produced it.
+		events = append(events, askingTurnPromptContextEvents(turnID, askingEvents)...)
+	}
 	// Transitively pull the entire background-wake continuation chain rooted at
 	// turnID. A wake turn can itself launch a background task whose terminal
 	// wakes a further continuation turn (wake-of-a-wake); the whole chain folds
@@ -140,6 +153,218 @@ func readUserFacingTurnEventsWithChain(ctx context.Context, eventStore store.Ses
 		frontier = append(frontier, backgroundWakeTurnIDsForParentEvents(wakeEvents, wakeTurnID)...)
 	}
 	return orderedTranscriptEvents(events), candidates, observed, nil
+}
+
+const questionFinalAnswerContextForTurnField = "_tank_question_final_answer_context_for_turn"
+
+func askUserQuestionAskingTurnFinalAnswer(questionTurnID string, events []map[string]any) (string, map[string]bool) {
+	if questionTurnID == "" {
+		return "", nil
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if !isQuestionOnlyAwaitingInputEvent(event) {
+			continue
+		}
+		payload := transcriptPayload(event)
+		if transcriptMapString(payload, "question_turn_id") != questionTurnID {
+			continue
+		}
+		askingTurnID := transcriptMapString(payload, "asking_turn_id")
+		finalAnswerIDs := finalAnswerTimelineIDsFromPayload(payload, "asking_turn_final_answer")
+		if askingTurnID != "" && askingTurnID != questionTurnID && len(finalAnswerIDs) > 0 {
+			return askingTurnID, finalAnswerIDs
+		}
+	}
+	return "", nil
+}
+
+// askUserQuestionAskingTurnID resolves the turn that asked the question for a
+// question-only turn, independent of whether a durable final-answer snapshot was
+// captured. askUserQuestionAskingTurnFinalAnswer requires final-answer timeline
+// ids (it drives the answer-candidate copy); the prompt-context copy only needs
+// the asking turn id, so it has its own resolver.
+func askUserQuestionAskingTurnID(questionTurnID string, events []map[string]any) string {
+	if questionTurnID == "" {
+		return ""
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if !isQuestionOnlyAwaitingInputEvent(event) {
+			continue
+		}
+		payload := transcriptPayload(event)
+		if transcriptMapString(payload, "question_turn_id") != questionTurnID {
+			continue
+		}
+		askingTurnID := transcriptMapString(payload, "asking_turn_id")
+		if askingTurnID != "" && askingTurnID != questionTurnID {
+			return askingTurnID
+		}
+	}
+	return ""
+}
+
+func finalAnswerTimelineIDsFromPayload(payload map[string]any, field string) map[string]bool {
+	raw, _ := payload[field].(map[string]any)
+	rawIDs, _ := raw["timeline_ids"].([]any)
+	if len(rawIDs) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, rawID := range rawIDs {
+		id, _ := rawID.(string)
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out[id] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func askingTurnFinalAnswerContextEvents(questionTurnID string, questionEvents, askingEvents []map[string]any) []map[string]any {
+	if questionTurnID == "" {
+		return nil
+	}
+	_, finalAnswerIDs := askUserQuestionAskingTurnFinalAnswer(questionTurnID, questionEvents)
+	if len(finalAnswerIDs) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(finalAnswerIDs))
+	for _, event := range orderedTranscriptEvents(askingEvents) {
+		if transcriptString(event, "type") != "item.completed" || transcriptString(event, "actor") != "assistant" {
+			continue
+		}
+		if !finalAnswerIDs[transcriptString(event, "timeline_id")] {
+			continue
+		}
+		context := cloneAnyMap(event)
+		context[questionFinalAnswerContextForTurnField] = questionTurnID
+		out = append(out, context)
+	}
+	return out
+}
+
+func eventIsQuestionFinalAnswerContextForTurn(event map[string]any, turnID string) bool {
+	return turnID != "" && transcriptString(event, questionFinalAnswerContextForTurnField) == turnID
+}
+
+// questionPromptContextForTurnField tags a clone of the asking turn's triggering
+// user_message.created so it rides into the question turn's event window. Like
+// the final-answer-context tag, ownTurnPageEvents strips it from the page bodies
+// and projectQuestionPromptContextEntry surfaces it as the question turn's prompt
+// context (under a "continued from previous turn" header on Q2+ pages).
+const questionPromptContextForTurnField = "_tank_question_prompt_context_for_turn"
+
+// askingTurnPromptContextEvents copies the asking turn's triggering user message
+// into the question turn's window, tagged for question turnID. It returns at most
+// one event (the first user_message.created of the asking turn). A background-wake
+// asking turn has no user_message.created and yields nothing — the question page
+// then falls back to the "Question N of M" heading.
+func askingTurnPromptContextEvents(questionTurnID string, askingEvents []map[string]any) []map[string]any {
+	if questionTurnID == "" {
+		return nil
+	}
+	for _, event := range orderedTranscriptEvents(askingEvents) {
+		if transcriptString(event, "type") != "user_message.created" {
+			continue
+		}
+		context := cloneAnyMap(event)
+		context[questionPromptContextForTurnField] = questionTurnID
+		return []map[string]any{context}
+	}
+	return nil
+}
+
+func eventIsQuestionPromptContextForTurn(event map[string]any, turnID string) bool {
+	return turnID != "" && transcriptString(event, questionPromptContextForTurnField) == turnID
+}
+
+func ownTurnPageEvents(events []map[string]any, turnID string) []map[string]any {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		if eventIsQuestionFinalAnswerContextForTurn(event, turnID) {
+			continue
+		}
+		if eventIsQuestionPromptContextForTurn(event, turnID) {
+			continue
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
+// projectQuestionPromptContextEntry builds the question turn's prompt-context
+// entry from the tagged copy of the asking turn's triggering user message. It
+// runs against the FULL event set (before ownTurnPageEvents strips the tag) and
+// marks the entry turnContextContinued so the Turns view labels it "Question
+// prompt continued from previous turn".
+func projectQuestionPromptContextEntry(turnID string, events []map[string]any) map[string]any {
+	if strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if !eventIsQuestionPromptContextForTurn(event, turnID) {
+			continue
+		}
+		entry := projectUserMessageEvent(event)
+		if entry == nil {
+			return nil
+		}
+		entry = cloneAnyMap(entry)
+		entry["id"] = transcriptMapString(entry, "id") + ":question_prompt_context"
+		entry["turnContext"] = true
+		entry["turnContextContinued"] = true
+		return entry
+	}
+	return nil
+}
+
+func projectQuestionFinalAnswerContextEntries(turnID string, events []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, event := range orderedTranscriptEvents(events) {
+		if !eventIsQuestionFinalAnswerContextForTurn(event, turnID) {
+			continue
+		}
+		entry := projectQuestionFinalAnswerContextEvent(event)
+		if entry != nil {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func projectQuestionFinalAnswerContextEvent(event map[string]any) map[string]any {
+	item := &projectionItem{
+		ID:             transcriptString(event, "timeline_id"),
+		TurnID:         transcriptString(event, "turn_id"),
+		ParentID:       transcriptString(event, "parent_id"),
+		ProviderItemID: transcriptString(event, "provider_item_id"),
+		Actor:          transcriptString(event, "actor"),
+		Kind:           projectionFirstNonEmpty(transcriptPayloadString(event, "kind"), defaultProjectionItemKind(event)),
+		Status:         "completed",
+		Title:          transcriptPayloadString(event, "title"),
+		Text:           transcriptPayloadString(event, "text"),
+		Payload:        transcriptPayload(event),
+		OrderKey:       transcriptString(event, "order_key"),
+		SourceEventID:  transcriptString(event, "event_id"),
+		CreatedAt:      transcriptString(event, "created_at"),
+		StartedAt:      transcriptString(event, "created_at"),
+		CompletedAt:    transcriptString(event, "created_at"),
+	}
+	entry := projectProjectionItem(item)
+	if entry == nil {
+		return nil
+	}
+	entry = cloneAnyMap(entry)
+	entry["id"] = transcriptMapString(entry, "id") + ":question_final_answer_context"
+	entry["questionFinalAnswerContext"] = true
+	entry["turnOnly"] = true
+	return entry
 }
 
 func backgroundWakeTurnIDsForParentEvents(events []map[string]any, parentTurnID string) []string {
@@ -361,6 +586,18 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 				flushPendingQuestionPages(event)
 				continue
 			}
+			// Stop drives a question turn to its dismissing turn.interrupted via a
+			// preceding turn.interrupt_requested on the same turn. That pre-terminal
+			// marker is not itself a dismissal terminal, so without this guard it
+			// breaks the pending-question fold below and spills the Stop sequence
+			// into a spurious trailing activity page — which then becomes the
+			// dismissed turn's default page and strands the Turns prompt slot on
+			// "Prompt context unavailable" (#1312). Hold the fold open across it so
+			// the dismissal terminal still seals the question page; the turn shell
+			// folds the marker from the complete event set regardless.
+			if isQuestionInterruptRequested(event, pendingQuestionTurnID) {
+				continue
+			}
 			flushPendingQuestionPages(nil)
 		}
 		if isTurnAwaitingInputEvent(event) {
@@ -475,6 +712,17 @@ func isQuestionDismissalTerminal(event map[string]any, questionTurnID string) bo
 	return false
 }
 
+// isQuestionInterruptRequested reports whether event is the turn.interrupt_requested
+// that Stop emits on the question turn before the dismissing turn.interrupted. It is
+// a pre-terminal control marker, not a dismissal terminal, so the page fold must
+// hold the pending question pages open across it instead of spilling it (and the
+// terminal that follows) into a spurious trailing activity page.
+func isQuestionInterruptRequested(event map[string]any, questionTurnID string) bool {
+	return questionTurnID != "" &&
+		transcriptString(event, "turn_id") == questionTurnID &&
+		transcriptString(event, "type") == "turn.interrupt_requested"
+}
+
 func isTurnInputAnsweredForQuestion(event map[string]any, questionTimelineID string) bool {
 	if transcriptString(event, "type") != "turn.input_answered" {
 		return false
@@ -519,15 +767,25 @@ func turnPageStatusIsLive(status string) bool {
 // shell summary comes from a complete fold over every event (terminal-correct),
 // while page bodies come from each page's own event range.
 func projectTurnPages(turnID string, events []map[string]any) turnPagesProjection {
-	pageSlices := splitTurnEventsIntoSemanticPages(events)
-	wakeParents := backgroundWakeParentTurnsFromEvents(events)
-	turnContext := projectTurnContextEntry(turnID, events)
-	finalAnswerIDs := finalAnswerIDsFromTurnEvents(events)
+	questionFinalAnswerContextEntries := projectQuestionFinalAnswerContextEntries(turnID, events)
+	ownEvents := ownTurnPageEvents(events, turnID)
+	pageSlices := splitTurnEventsIntoSemanticPages(ownEvents)
+	wakeParents := backgroundWakeParentTurnsFromEvents(ownEvents)
+	turnContext := projectTurnContextEntry(turnID, ownEvents)
+	if turnContext == nil {
+		// A question-only turn has no user_message.created of its own (the agent
+		// started it by invoking AskUserQuestion). Surface the asking turn's
+		// triggering prompt as the question turn's context so Q2+ pages render it
+		// under the "continued from previous turn" header instead of only the
+		// "Question N of M" heading.
+		turnContext = projectQuestionPromptContextEntry(turnID, events)
+	}
+	finalAnswerIDs := finalAnswerIDsFromTurnEvents(ownEvents)
 
 	// Terminal-correct shell from the COMPLETE event set: the full projection
 	// folds the whole turn, so its activity summary always reflects the
 	// terminal regardless of how many events the turn has.
-	full := projectTranscriptEvents(events)
+	full := projectTranscriptEvents(ownEvents)
 	status := ""
 	shell := map[string]any{}
 	activityBody := full.ActivityBodies[turnID]
@@ -535,7 +793,17 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		shell = cloneAnyMap(activityBody.Summary)
 		status = activityBody.Status
 	}
-	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(events), turnCompletedTerminalCount(events) > 1)
+	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(ownEvents), turnCompletedTerminalCount(ownEvents) > 1)
+	// An asking turn that paused on AskUserQuestion / ExitPlanMode never reaches
+	// turn.completed (the answer rotates execution onto a separate continuation
+	// turn), so the turn.completed.final_answer path above yields nothing and the
+	// Turns view would render "No turn activity". Its hand-off IS its final
+	// answer: the agent's preamble prose plus the AskUserQuestion card. The
+	// question widget renders inline in the main transcript; there is no longer a
+	// navigate-to-question-turn shortcut.
+	if len(finalAnswerEntries) == 0 && activityBody.Summary["awaitingInputHandoff"] == true {
+		finalAnswerEntries = awaitingInputHandoffFinalAnswerEntries(activityBody.Entries, turnID, askingTurnHandoffPreambleIDs(ownEvents, turnID))
+	}
 	finalAnswerIDs = mergeFinalAnswerEntryIDs(finalAnswerIDs, finalAnswerEntries)
 	collapse := turnActivityCollapseSummary(activityBody, finalAnswerEntries, finalAnswerIDs)
 	live := turnPageStatusIsLive(status)
@@ -549,6 +817,9 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		sealed := number < len(pageSlices) || !live
 		questionSet, questionIndex, questionCount, answered := turnPageQuestionSetState(slice)
 		entries := reassignBackgroundWakeProjectedEntries(projectPageBodyEntries(slice.Events), wakeParents)
+		if slice.Kind == "question" && len(questionFinalAnswerContextEntries) > 0 {
+			entries = append(cloneProjectedEntries(questionFinalAnswerContextEntries), entries...)
+		}
 		page := turnPage{
 			Number:        number,
 			Kind:          slice.Kind,
@@ -581,7 +852,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	}
 
 	shell["pageCount"] = len(pages)
-	shell["totalEventCount"] = len(events)
+	shell["totalEventCount"] = len(ownEvents)
 	shell["pages"] = directory
 
 	return turnPagesProjection{
@@ -591,8 +862,19 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		FinalAnswerEntries: finalAnswerEntries,
 		Collapse:           collapse,
 		Pages:              pages,
-		TotalEventCount:    len(events),
+		TotalEventCount:    len(ownEvents),
 	}
+}
+
+func cloneProjectedEntries(entries []map[string]any) []map[string]any {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, cloneAnyMap(entry))
+	}
+	return out
 }
 
 // finalAnswerIDsFromTurnEvents resolves the turn-detail final answer for a
@@ -679,6 +961,74 @@ func turnFinalAnswerEntries(entries []map[string]any, turnID string, finalAnswer
 	return out
 }
 
+// askingTurnHandoffPreambleIDs returns the timeline ids of the asking turn's
+// preamble — the assistant prose the runner snapshotted as
+// asking_turn_final_answer when it handed off to the question turn. The asking
+// turn's own assistant_message.created hand-off event carries that snapshot in
+// payload.awaiting_input.asking_turn_final_answer, using the same
+// final_answer.timeline_ids shape turn.completed uses. Empty when the agent
+// paused with no preceding prose.
+func askingTurnHandoffPreambleIDs(events []map[string]any, turnID string) map[string]bool {
+	if turnID == "" {
+		return nil
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if transcriptString(event, "turn_id") != turnID {
+			continue
+		}
+		if transcriptString(event, "type") != "assistant_message.created" {
+			continue
+		}
+		awaiting := transcriptAnyMap(transcriptPayload(event)["awaiting_input"])
+		if len(awaiting) == 0 {
+			continue
+		}
+		if ids := finalAnswerTimelineIDsFromPayload(awaiting, "asking_turn_final_answer"); len(ids) > 0 {
+			return ids
+		}
+	}
+	return nil
+}
+
+// awaitingInputHandoffFinalAnswerEntries builds the final-answer bundle for an
+// asking turn that paused on AskUserQuestion / ExitPlanMode. The hand-off is the
+// turn's terminal Tank-visible response, so it plays the final-answer role: the
+// agent's preamble prose (the asking_turn_final_answer items named by
+// preambleIDs) followed by the AskUserQuestion card, whose awaitingInput carries
+// the shortcut to the question turn. Entries are returned in display order
+// (preamble, then card) and tagged turnDetailRole=final_answer like any other
+// final answer. Returns nil when no hand-off card is present.
+func awaitingInputHandoffFinalAnswerEntries(entries []map[string]any, turnID string, preambleIDs map[string]bool) []map[string]any {
+	var preamble []map[string]any
+	var card map[string]any
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") != turnID || !isProjectedAssistantMessage(entry) {
+			continue
+		}
+		if awaiting, _ := entry["awaitingInput"].(map[string]any); len(awaiting) > 0 {
+			questionTurnID := transcriptMapString(awaiting, "questionTurnId")
+			askingTurnID := transcriptMapString(awaiting, "askingTurnId")
+			if questionTurnID != "" && questionTurnID != turnID && (askingTurnID == "" || askingTurnID == turnID) {
+				card = entry
+			}
+			continue
+		}
+		if preambleIDs[transcriptMapString(entry, "id")] {
+			preamble = append(preamble, entry)
+		}
+	}
+	if card == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(preamble)+1)
+	for _, entry := range append(preamble, card) {
+		next := cloneAnyMap(entry)
+		next["turnDetailRole"] = "final_answer"
+		out = append(out, next)
+	}
+	return out
+}
+
 func mergeFinalAnswerEntryIDs(finalAnswerIDs map[string]bool, entries []map[string]any) map[string]bool {
 	if len(entries) == 0 {
 		return finalAnswerIDs
@@ -737,7 +1087,44 @@ func projectTurnContextEntry(turnID string, events []map[string]any) map[string]
 		entry["turnContext"] = true
 		return entry
 	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if transcriptString(event, "type") != "turn.submitted" ||
+			transcriptString(event, "turn_id") != turnID ||
+			transcriptPayloadString(event, "source") != "background-task" {
+			continue
+		}
+		entry := projectSystemSubmittedTurnContextEvent(event)
+		if entry == nil {
+			return nil
+		}
+		return entry
+	}
 	return nil
+}
+
+func projectSystemSubmittedTurnContextEvent(event map[string]any) map[string]any {
+	text := strings.TrimSpace(transcriptPayloadString(event, "prompt"))
+	turnID := transcriptString(event, "turn_id")
+	clientNonce := transcriptString(event, "client_nonce")
+	eventID := transcriptString(event, "event_id")
+	if text == "" || turnID == "" || clientNonce == "" || eventID == "" {
+		return nil
+	}
+	return map[string]any{
+		"id":                eventID + ":turn_context",
+		"kind":              "message",
+		"role":              "user",
+		"authorKind":        "system",
+		"text":              text,
+		"turnId":            turnID,
+		"clientNonce":       clientNonce,
+		"time":              transcriptString(event, "created_at"),
+		"sourceEventId":     eventID,
+		"orderKey":          transcriptString(event, "order_key"),
+		"turnContext":       true,
+		"turnContextSource": transcriptPayloadString(event, "source"),
+		"display":           map[string]any{"kind": "plain"},
+	}
 }
 
 func defaultTurnActivityPageNumber(projection turnPagesProjection) int {

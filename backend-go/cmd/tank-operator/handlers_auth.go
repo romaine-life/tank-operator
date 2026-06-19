@@ -22,6 +22,7 @@ const (
 
 	streamKindSessionList   = "session-list"
 	streamKindSessionEvents = "session-events"
+	streamKindOrchestration = "orchestration-events"
 	streamKindPinnedRepos   = "pinned-repos"
 	streamKindFileRaw       = "file-raw"
 )
@@ -154,6 +155,23 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 		if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 			recordStreamAuthTicket("create", streamKind, "denied")
 			writeError(w, status, err.Error())
+			return
+		}
+	case streamKindOrchestration:
+		if sessionID == "" {
+			recordStreamAuthTicket("create", streamKind, "invalid")
+			writeError(w, http.StatusBadRequest, "session_id is required for orchestration event streams")
+			return
+		}
+		if s.orchestrationRuns == nil {
+			recordStreamAuthTicket("create", streamKind, "denied")
+			writeError(w, http.StatusServiceUnavailable, "orchestration store unavailable")
+			return
+		}
+		orch, _, err := s.orchestrationRuns.GetWithPhases(r.Context(), sessionID)
+		if err != nil || orch.OwnerEmail != orchestrationActorEmail(user) {
+			recordStreamAuthTicket("create", streamKind, "denied")
+			writeError(w, http.StatusNotFound, "orchestration not found")
 			return
 		}
 	case streamKindFileRaw:

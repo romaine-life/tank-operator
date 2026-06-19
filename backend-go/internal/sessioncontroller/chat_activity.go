@@ -543,14 +543,11 @@ func (e *ChatActivityEmitter) applyScheduledWakeOverride(
 	}
 	// Two independent sources can park a would-be-ready turn into the non-summoning
 	// "scheduled" status, unified here so the bidirectional fold stays correct:
-	// (1) a Tank-owned wake row (ScheduleWakeup / background-task wake) for
-	// Claude/Codex, read from the durable wake tables; (2) the runner's
-	// payload.background_work_pending on the latest turn.completed for a
-	// self-managing agent (antigravity), which owns and fires its own work and so has
-	// no Tank wake row. A nil checker (degraded boot before Postgres) never strands a
-	// session in "scheduled" — pending stays false unless the runner annotated it.
-	// See docs/scheduled-turn-continuity.md and
-	// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+	// (1) a Tank-owned wake row (ScheduleWakeup / background-task wake), read
+	// from the durable wake tables; (2) payload.background_work_pending on the
+	// latest turn.completed. A nil checker (degraded boot before Postgres) never
+	// strands a session in "scheduled" — pending stays false unless the runner
+	// annotated it. See docs/scheduled-turn-continuity.md.
 	pending := backgroundWorkPending
 	if !pending && e.Wakes != nil {
 		wakePending, err := e.Wakes.HasPendingWake(ctx, e.Scope, publicID)

@@ -16,6 +16,8 @@
 // runner; persistent failures will surface via session-bus publish errors.
 
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { resolve as resolvePath, sep as pathSep } from "node:path";
 import {
   createSdkMcpServer,
   query,
@@ -65,15 +67,18 @@ import {
 } from "./sessionCommands.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
+import { reportProviderFatal } from "../../runner-shared/providerFatal.js";
 import {
   backgroundTaskWakeTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
   inputReplyAnswerShapeTotal,
+  inputReplyAttachmentTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
-  optionsOverrideIgnoredTotal,
   optionsPinnedTotal,
+  optionsRepinnedTotal,
+  breakGlassMcpRebuildTotal,
   providerApiRetryTotal,
   providerControlTotal,
   providerErrorTotal,
@@ -86,6 +91,7 @@ import {
   scheduledWakeupRegisterTotal,
   toolPermissionDeniedTotal,
   unmappedProviderEventTotal,
+  unrecoverableExitTotal,
   terminalPublishDeferredTotal,
   inputReplyRecoveryTotal,
   askUserQuestionDismissedTotal,
@@ -238,6 +244,19 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
     return "auth";
   }
   return "other";
+}
+
+// isConversationNotFoundMessage detects the Claude SDK resume failure where the
+// on-disk conversation transcript for the resumed provider-session id no longer
+// exists — e.g. the runner container restarted and the transcript (which lives
+// on the container-ephemeral filesystem, NOT on a mounted volume, by design —
+// there is no per-session PVC) was wiped. The SDK surfaces this only as a
+// thrown Error whose message is "No conversation found with session ID: <uuid>"
+// with no structured error code, so a signature match is the only available
+// discriminator. It is isolated here (and unit-tested) so a future SDK error
+// class can replace the match without touching run()'s terminal control flow.
+export function isConversationNotFoundMessage(message: string): boolean {
+  return /no conversation found with session id/i.test(String(message ?? ""));
 }
 
 // classifyApiRetryError maps a Claude SDK system/api_retry frame's `error`
@@ -494,6 +513,7 @@ function answersForClaudeInput(
 
 function askUserQuestionToolResult(
   answers: Record<string, string>,
+  attachmentBlocks: CallToolResult["content"] = [],
 ): CallToolResult {
   const lines = Object.entries(answers).map(
     ([question, answer]) => `${question}\n${answer}`,
@@ -507,10 +527,148 @@ function askUserQuestionToolResult(
             ? `User answered:\n\n${lines.join("\n\n")}`
             : "User answered with no selected options or notes.",
       },
+      // Files the user attached to the answer follow the text. An image is an
+      // inline image content block (pixels in context by construction — on an
+      // answer the screenshot often IS the answer); a non-image or unreadable
+      // file is a text line carrying its workspace path so the agent can Read
+      // it. Built by buildAnswerAttachmentBlocks from the input_reply command's
+      // attachments; empty for a text-only answer.
+      ...attachmentBlocks,
     ],
     structuredContent: { answers },
     _meta: { tankAskUserQuestion: true },
   };
+}
+
+// WORKSPACE_ROOT is the shared emptyDir the runner and the user's uploads both
+// see inside the `sandbox` container. Answer attachments land here (pasted
+// screenshots at /workspace/screenshots/<n>.<ext>) and the runner reads the
+// bytes at delivery time — they never travel the durable ledger.
+const WORKSPACE_ROOT = "/workspace";
+// Anthropic rejects base64 images past ~5 MiB; over that we emit a path line
+// instead of inlining so the agent can Read the file rather than the turn
+// failing on an oversized tool result. Uploads already cap at 8 MiB backend-side.
+const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+};
+
+function attachmentExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0 || dot === name.length - 1) return "";
+  return name.slice(dot + 1).toLowerCase();
+}
+
+function isImageAttachment(kind: string, name: string): boolean {
+  if (kind === "image") return true;
+  if (kind === "file") return false;
+  return attachmentExtension(name) in IMAGE_MIME_BY_EXT;
+}
+
+function imageMimeForName(name: string): string {
+  return IMAGE_MIME_BY_EXT[attachmentExtension(name)] ?? "image/png";
+}
+
+// resolveWorkspaceAttachmentPath maps a command attachment to an absolute path
+// inside /workspace, rejecting anything that escapes the workspace root (a
+// path-traversal guard: the command is user-influenced). Prefers abs_path,
+// falls back to the workspace-relative path. Returns null when neither is
+// present or the resolved path is outside /workspace.
+function resolveWorkspaceAttachmentPath(
+  absPath: string,
+  relPath: string,
+  rootDir: string = WORKSPACE_ROOT,
+): string | null {
+  const root = resolvePath(rootDir);
+  let candidate = "";
+  if (absPath) candidate = resolvePath(absPath);
+  else if (relPath) candidate = resolvePath(root, relPath);
+  else return null;
+  if (candidate !== root && !candidate.startsWith(root + pathSep)) {
+    return null;
+  }
+  return candidate;
+}
+
+// buildAnswerAttachmentBlocks turns the input_reply command's attachments into
+// tool-result content blocks. Images are read from /workspace and inlined as
+// base64 image blocks; non-images become a path line; a missing or unreadable
+// image becomes a visible note (never a silent drop). Every outcome is counted
+// on inputReplyAttachmentTotal so screenshot loss is observable.
+export async function buildAnswerAttachmentBlocks(
+  attachments: SessionCommandRecord["attachments"],
+  rootDir: string = WORKSPACE_ROOT,
+): Promise<CallToolResult["content"]> {
+  if (!attachments || attachments.length === 0) return [];
+  const blocks: CallToolResult["content"] = [];
+  for (const attachment of attachments) {
+    const name = String(attachment.name ?? attachment.label ?? "").trim();
+    const label =
+      String(attachment.label ?? attachment.name ?? "").trim() || "attachment";
+    const kind = String(attachment.kind ?? "").trim();
+    const relPath = String(attachment.path ?? "").trim();
+    const absPath = String(attachment.abs_path ?? "").trim();
+    const display = relPath || absPath || label;
+    if (!isImageAttachment(kind, name || display)) {
+      inputReplyAttachmentTotal.labels("file", "delivered").inc();
+      blocks.push({
+        type: "text",
+        text: `Attached file "${label}" is at ${display} in the workspace; read it if you need its contents.`,
+      });
+      continue;
+    }
+    const resolved = resolveWorkspaceAttachmentPath(absPath, relPath, rootDir);
+    if (!resolved) {
+      inputReplyAttachmentTotal.labels("image", "missing").inc();
+      blocks.push({
+        type: "text",
+        text: `Attached image "${label}" could not be located in the workspace (${display}).`,
+      });
+      continue;
+    }
+    try {
+      const bytes = await readFile(resolved);
+      if (bytes.byteLength > MAX_INLINE_IMAGE_BYTES) {
+        inputReplyAttachmentTotal.labels("image", "read_failed").inc();
+        blocks.push({
+          type: "text",
+          text: `Attached image "${label}" is too large to inline (${bytes.byteLength} bytes); read it at ${display}.`,
+        });
+        continue;
+      }
+      inputReplyAttachmentTotal.labels("image", "delivered").inc();
+      blocks.push({
+        type: "image",
+        data: bytes.toString("base64"),
+        mimeType: imageMimeForName(name || display),
+      });
+    } catch (err) {
+      inputReplyAttachmentTotal.labels("image", "read_failed").inc();
+      blocks.push({
+        type: "text",
+        text: `Attached image "${label}" could not be read (${display}): ${String(
+          (err as Error)?.message ?? err,
+        )}.`,
+      });
+    }
+  }
+  return blocks;
+}
+
+// exitPlanModePlanText extracts the plan markdown from an ExitPlanMode tool
+// input. The SDK passes `{ plan, allowedPrompts? }`; we render `plan`. Returns
+// "" when absent/malformed so the pause still renders (just without a body).
+function exitPlanModePlanText(input: unknown): string {
+  if (input && typeof input === "object" && "plan" in input) {
+    const plan = (input as { plan?: unknown }).plan;
+    if (typeof plan === "string" && plan.trim()) return plan;
+  }
+  return "";
 }
 
 type InputReplyAnswerShape =
@@ -527,6 +685,24 @@ function inputReplyAnswerShape(
   if (note) return "free_form_only";
   if (labels.length > 0) return "selection_only";
   return "empty";
+}
+
+function sanitizeProviderSessionID(value: unknown): string {
+  const id = String(value ?? "").trim();
+  if (!/^[A-Za-z0-9._:-]{1,160}$/.test(id)) return "";
+  return id;
+}
+
+function commandProviderSessionID(record: SessionCommandRecord): string {
+  return sanitizeProviderSessionID(record.provider_session_id);
+}
+
+function claudeProviderSessionID(message: ClaudeProviderEvent): string {
+  for (const key of ["session_id", "sessionId"]) {
+    const id = sanitizeProviderSessionID(message[key]);
+    if (id) return id;
+  }
+  return "";
 }
 
 export interface PendingTurn {
@@ -637,15 +813,24 @@ type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
 //     (server-side allowlist)
 const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_EFFORT: EffortLevel = "high";
+const CLAUDE_PROVIDER = "claude";
+// Process exit code for the unrecoverable-session terminal path: run() reports
+// session.provider_fatal then exits with this code instead of the normal
+// exit(1)-to-restart. Distinct from 1 so a terminated container's exit code
+// names the cause in `tank_session_container_terminations_total`; the
+// authoritative terminal signal is the provider-fatal POST, this is secondary.
+const UNRECOVERABLE_EXIT_CODE = 3;
 const TANK_MCP_SERVER_NAME = "tank";
 const TANK_ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const TANK_ASK_USER_QUESTION_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_ASK_USER_QUESTION_TOOL}`;
+// ExitPlanMode is the SDK-native "I've finished planning" tool. Tank reuses the
+// AskUserQuestion human-in-the-loop rail for it: the alias routes the native
+// call to a Tank MCP tool whose handler pauses the turn for plan approval
+// (Approve / Request changes) and resolves when the user answers.
+const TANK_EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
+const TANK_EXIT_PLAN_MODE_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_EXIT_PLAN_MODE_TOOL}`;
 
-const askUserQuestionInputSchema = {
-  question: z
-    .string()
-    .optional()
-    .describe("Single question text when not using the questions array."),
+export const askUserQuestionInputSchema = {
   questions: z
     .array(
       z
@@ -666,8 +851,17 @@ const askUserQuestionInputSchema = {
         })
         .passthrough(),
     )
+    .min(1)
     .optional()
-    .describe("One or more questions to ask the user."),
+    .describe(
+      "One or more questions to ask the user. For a single question, either pass a one-element array or use the top-level question fields.",
+    ),
+  question: z
+    .string()
+    .optional()
+    .describe(
+      "Single-question shorthand. Equivalent to questions: [{ question, options, allowFreeForm }].",
+    ),
   options: z
     .array(
       z
@@ -678,12 +872,17 @@ const askUserQuestionInputSchema = {
         })
         .passthrough(),
     )
+    .optional(),
+  allowFreeForm: z.boolean().optional(),
+};
+
+const exitPlanModeInputSchema = {
+  plan: z
+    .string()
     .optional()
-    .describe("Options for the single-question shorthand."),
-  allowFreeForm: z
-    .boolean()
-    .optional()
-    .describe("Whether the user may answer with free-form text."),
+    .describe(
+      "The completed implementation plan to present to the Tank user for approval, as markdown.",
+    ),
 };
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
@@ -924,7 +1123,7 @@ function permissionDeniedLabels(event: {
 export class Runner {
   private readonly sink: SessionEventSink;
   private readonly commandBus: SessionCommandBus;
-  private readonly userQueue = new AsyncQueue<SDKUserMessage>();
+  private userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
   // pendingInterrupts holds interrupt_turn records that landed before
   // the matching submit_turn was dispatched on this runner. See the
@@ -953,18 +1152,33 @@ export class Runner {
   private readonly firedBackgroundTaskWakes = new Set<string>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
+  // activeResumeID is the provider-session id the live sdkQuery was built to
+  // RESUME (null when it was a fresh `continue:true` boot, not a resume). It
+  // scopes the unrecoverable-resume classifier: a "No conversation found"
+  // thrown by a resume is terminal (the transcript is gone for good), whereas
+  // the same SDK message on a non-resume boot is not the resume-lost case.
+  private activeResumeID: string | null = null;
   private tankAskUserQuestionSequence = 0;
-  // Model + effort are pinned at pod boot from the first submit_turn
-  // that arrives, with the DEFAULT_* fallbacks above for empty fields.
-  // Once set, both are sealed for the runner's lifetime — the SDK's
-  // Options object is consumed by query() at construction and cannot
-  // be re-keyed without tearing the iterator down. Subsequent commands
-  // whose model/effort differ are honored only for "what did the user
-  // pick" metrics (optionsOverrideIgnoredTotal) and otherwise ignored.
-  // The dropdown lock in the SPA reflects this contract so users don't
-  // expect a mid-session switch to take effect.
+  // Model + effort are pinned from the first submit_turn that arrives, with
+  // the DEFAULT_* fallbacks above for empty fields. The SDK's Options object
+  // is consumed by query() at construction and cannot be re-keyed on a live
+  // query — so a mid-session model/effort change is applied by RE-PINNING: at
+  // an idle turn boundary the runner tears down the current query and rebuilds
+  // it with provider-session resume + the new options (see ensureSdkQuery /
+  // performRebuild). The invariant is "sealed within a turn; re-pinnable
+  // between turns," not "pod-lifetime." pendingRepin holds a requested change
+  // until the next idle boundary; rebuildInProgress lets run()'s loop tell an
+  // intentional query teardown from a fatal one.
   private pinnedModel: string | null = null;
   private pinnedEffort: EffortLevel | null = null;
+  private pendingRepin: { model: string; effort: EffortLevel } | null = null;
+  // pendingMcpRebuild is set when a break-glass approval turn (carrying
+  // mcp_activate_name) needs the SDK query rebuilt so a now-granted MCP server's
+  // tools surface. Consumed at the same idle turn boundary as pendingRepin (via
+  // performRebuild), but it keeps the current pinned model/effort — the rebuild
+  // exists only to re-read .mcp.json and re-handshake servers.
+  private pendingMcpRebuild = false;
+  private rebuildInProgress = false;
   private sdkStderrBuffer = "";
   // reportedContextWindowTokens latches the per-turn ModelUsage context
   // window so the runner POSTs it to the orchestrator exactly once per
@@ -972,6 +1186,7 @@ export class Runner {
   // app-server transport's first-observed latch. Stays null until the first
   // `result` message carries a usable window.
   private reportedContextWindowTokens: number | null = null;
+  private reportedProviderSessionID = "";
   // providerRetryStall tracks an in-flight Claude SDK api_retry{error:"rate_limit"}
   // storm against the turn it is stalling. It is armed on the first such frame
   // for a turn and cleared by resetProviderRetryStall() the moment the turn
@@ -984,13 +1199,18 @@ export class Runner {
     count: number;
   } | null = null;
   private providerRetryStallMs = PROVIDER_RETRY_STALL_MS;
+  private providerUsageReportInFlight = false;
+  private providerUsageLastAttemptMs = 0;
   // sdkReady gates run()'s for-await loop on the first submit_turn
   // arriving so we can pin model/effort from that command's payload
   // before constructing query(). resolveSdkReady is called exactly once
   // by ensureSdkQuery; second-and-onward submit_turns hit the no-op
   // early-return.
-  private readonly sdkReady: Promise<void>;
+  private sdkReady: Promise<void>;
   private resolveSdkReady: () => void = () => {};
+  // runSignal is the run() abort signal, stored so performRebuild (driven from
+  // the command consumer) can bail when the runner is shutting down.
+  private runSignal: AbortSignal | null = null;
 
   constructor(private readonly cfg: Config) {
     this.sink = new SessionEventSink(cfg);
@@ -1032,6 +1252,12 @@ export class Runner {
       this.sdkQuery?.interrupt();
     };
     signal.addEventListener("abort", onAbort, { once: true });
+    this.runSignal = signal;
+    // Captured in the catch so the fatal-exit block below can pick the terminal
+    // path: an unrecoverable provider-session resume reports
+    // session.provider_fatal and exits terminally instead of the normal
+    // exit(1)-to-restart (which would crash-loop on the same dead resume).
+    let unrecoverableResumeErr: unknown = null;
     try {
       // Block until the first submit_turn arrives (ensureSdkQuery resolves
       // sdkReady after pinning options and constructing query()), or until
@@ -1042,14 +1268,47 @@ export class Runner {
       if (signal.aborted || !this.sdkQuery) {
         return;
       }
-      for await (const message of this.sdkQuery) {
+      // Outer loop: a mid-session re-pin (performRebuild) swaps this.sdkQuery
+      // for a fresh query that resumed the conversation under the new model.
+      // When the old query's iterator unwinds we re-enter on the new one; only
+      // a genuine query end (this.sdkQuery unchanged) falls through to the
+      // fatal drain below.
+      while (!signal.aborted) {
+        const pass: Query | null = this.sdkQuery;
+        if (!pass) break;
+        try {
+          for await (const message of pass) {
+            if (signal.aborted) break;
+            await this.handleEvent(message);
+          }
+        } catch (err) {
+          if (this.rebuildInProgress || this.sdkQuery !== pass) {
+            console.warn(
+              "claude-runner: prior SDK query unwound during model re-pin:",
+              err,
+            );
+          } else {
+            throw err;
+          }
+        }
         if (signal.aborted) break;
-        await this.handleEvent(message);
+        if (this.sdkQuery !== pass) {
+          // Intentional rebuild: consume the freshly-resumed query.
+          continue;
+        }
+        break;
       }
     } catch (err) {
       console.error("SDK query exited with error:", err);
       providerErrorTotal.labels("query").inc();
-      await this.failActiveCommandTurn(err);
+      if (this.isUnrecoverableResumeFailure(err)) {
+        unrecoverableResumeErr = err;
+        // Resolve the active turn durably with the honest reason (not the
+        // generic provider_failure) so the transcript names the real cause.
+        await this.failActiveCommandTurn(err, "provider_session_lost");
+      } else {
+        await this.failActiveCommandTurn(err);
+      }
     } finally {
       signal.removeEventListener("abort", onAbort);
       stopConsumer();
@@ -1060,6 +1319,18 @@ export class Runner {
       this.userQueue.close();
     }
     if (!signal.aborted) {
+      if (unrecoverableResumeErr !== null) {
+        // Terminal: a container restart cannot recover this session — the SDK
+        // conversation transcript for the resumed provider-session is gone
+        // (container-ephemeral, wiped by the restart). The normal
+        // exit(1)-to-restart would resume the same dead id and crash-loop
+        // forever, so instead mark the whole session durably Failed via
+        // session.provider_fatal and exit terminally; the orchestrator reaps
+        // the pod so the kubelet stops restarting it. See
+        // docs/features/agent-runners/contract.md → "Failure And Recovery".
+        await this.reportUnrecoverableResume(unrecoverableResumeErr);
+        return;
+      }
       // Issue #1078 item 5: the SDK query loop is dead but the open NATS
       // socket would keep Node alive — a permanently inert runner whose
       // consumers are stopped and whose sdkQuery is never rebuilt; every
@@ -1077,8 +1348,47 @@ export class Runner {
     }
   }
 
-  // exitProcess is a seam for tests; production always process.exit(1)s.
+  // exitProcess is a seam for tests; production process.exit()s with the given
+  // code (1 = restart-and-resume; UNRECOVERABLE_EXIT_CODE = terminal, do not
+  // resume).
   exitProcess: (code: number) => void = (code) => process.exit(code);
+
+  // isUnrecoverableResumeFailure is true when the live query was built to
+  // RESUME a provider-session and the SDK threw the conversation-not-found
+  // signature: the on-disk transcript for that id is gone (wiped by a container
+  // restart) and every future restart would resume the same dead id. Terminal
+  // for the session, not a transient query death.
+  private isUnrecoverableResumeFailure(err: unknown): boolean {
+    if (!this.activeResumeID) return false;
+    const message = err instanceof Error ? err.message : String(err);
+    return isConversationNotFoundMessage(message);
+  }
+
+  // reportUnrecoverableResume marks the session durably Failed via
+  // session.provider_fatal (the loud, terminal session-level banner) and exits
+  // terminally. It deliberately does NOT take the exit(1)-to-restart path: a
+  // restart would resume the same gone transcript and crash-loop. The
+  // orchestrator reaps the pod on the provider-fatal report; its restart-budget
+  // backstop is the safety net if this report never lands.
+  private async reportUnrecoverableResume(err: unknown): Promise<void> {
+    const message = err instanceof Error ? err.message : String(err);
+    unrecoverableExitTotal.labels("provider_session_lost").inc();
+    console.error(
+      "claude-runner: provider session unrecoverable (conversation transcript gone after restart); reporting provider-fatal and exiting terminally",
+    );
+    try {
+      await reportProviderFatal(this.cfg, {
+        provider: CLAUDE_PROVIDER,
+        reason: "provider_session_lost",
+        exitCode: UNRECOVERABLE_EXIT_CODE,
+        message: message.slice(0, 500),
+      });
+    } catch (reportErr) {
+      unrecoverableExitTotal.labels("report_failed").inc();
+      console.error("provider-fatal report failed:", reportErr);
+    }
+    this.exitProcess(UNRECOVERABLE_EXIT_CODE);
+  }
 
   private async drainTurnsForFatalExit(): Promise<void> {
     const turns = [this.activeTurn, ...this.pendingTurns];
@@ -1103,30 +1413,25 @@ export class Runner {
     }
   }
 
-  // ensureSdkQuery is the one-time pinning point for model + effort.
-  // First call: read the command's model/effort (with DEFAULT_* fallback
-  // when empty), build SDK Options, construct query(), and unblock
-  // run()'s for-await loop. Subsequent calls: compare the incoming
-  // values against the pinned ones and bump optionsOverrideIgnoredTotal
-  // when they differ — the override is intentionally a no-op because
-  // Options is sealed by the running query iterator.
+  // ensureSdkQuery pins model + effort and constructs query() lazily from the
+  // first submit_turn (so the user's dropdown pick drives the model). On a
+  // later turn whose model/effort differ from what's pinned it does NOT ignore
+  // the change: it schedules a re-pin (pendingRepin) that performRebuild
+  // applies at the next idle turn boundary by rebuilding query() with
+  // provider-session resume. model/effort are sealed within a turn, re-pinnable
+  // between turns.
   private ensureSdkQuery(record: SessionCommandRecord): void {
     const requestedModel = String(record.model ?? "").trim();
     const requestedEffort = String(record.effort ?? "").trim();
     if (this.sdkQuery !== null) {
-      if (requestedModel && requestedModel !== this.pinnedModel) {
-        optionsOverrideIgnoredTotal.labels("model").inc();
-        console.warn(
-          "session command requested model override; ignoring (model is pinned for the runner's lifetime)",
-          { requested: requestedModel, pinned: this.pinnedModel },
-        );
-      }
-      if (requestedEffort && requestedEffort !== this.pinnedEffort) {
-        optionsOverrideIgnoredTotal.labels("effort").inc();
-        console.warn(
-          "session command requested effort override; ignoring (effort is pinned for the runner's lifetime)",
-          { requested: requestedEffort, pinned: this.pinnedEffort },
-        );
+      const model = requestedModel || this.pinnedModel || DEFAULT_MODEL;
+      const effort = (requestedEffort ||
+        this.pinnedEffort ||
+        DEFAULT_EFFORT) as EffortLevel;
+      if (model !== this.pinnedModel || effort !== this.pinnedEffort) {
+        // Apply on the next idle boundary (acceptCommandTurn), not here:
+        // Options is sealed on the running query and must be rebuilt.
+        this.pendingRepin = { model, effort };
       }
       return;
     }
@@ -1138,15 +1443,33 @@ export class Runner {
     // wire-shape regression would surface as the SDK rejecting the value
     // (visible via providerErrorTotal{kind="query"}).
     const effort = (requestedEffort || DEFAULT_EFFORT) as EffortLevel;
+    this.buildSdkQuery(model, effort, commandProviderSessionID(record));
+  }
+
+  // buildSdkQuery constructs query() with the given pinned model/effort and
+  // (when present) a provider-session resume id, wires the runtime-config
+  // report, and unblocks run()'s loop. It runs for the first pin
+  // (ensureSdkQuery) and every mid-session re-pin (performRebuild). It reads
+  // this.userQueue at call time, so performRebuild installs a fresh queue
+  // before calling.
+  private buildSdkQuery(
+    model: string,
+    effort: EffortLevel,
+    providerSessionID: string,
+  ): void {
     this.pinnedModel = model;
     this.pinnedEffort = effort;
+    // Latch whether this query is a RESUME (vs a fresh continue:true boot) so
+    // the unrecoverable-resume classifier can tell a "conversation not found"
+    // thrown by a doomed resume from the same message on a non-resume start.
+    this.activeResumeID = providerSessionID || null;
     optionsPinnedTotal.labels(model, effort).inc();
     console.log(
       JSON.stringify({
-        msg: "claude-runner pinning SDK options from first turn",
+        msg: "claude-runner pinning SDK options",
         model,
         effort,
-        source_command_id: record.id,
+        provider_session_id: providerSessionID,
       }),
     );
 
@@ -1162,16 +1485,23 @@ export class Runner {
       allowDangerouslySkipPermissions: true,
       toolAliases: {
         [TANK_ASK_USER_QUESTION_TOOL]: TANK_ASK_USER_QUESTION_TOOL_ALIAS,
+        [TANK_EXIT_PLAN_MODE_TOOL]: TANK_EXIT_PLAN_MODE_TOOL_ALIAS,
       },
-      // Default: resume an on-disk JSONL if one exists from a prior process
-      // life (e.g., claude-runner restart within the same pod). First boot with
-      // no JSONL: no-op. On a resurrected pod the resume bootstrap has
-      // materialized the dead session's transcript at its exact path and pinned
-      // its SDK session id, so we `resume` that specific session instead —
-      // cross-pod conversation resurrection. Non-resurrect pods are unchanged.
-      ...(this.cfg.resumeSessionId
-        ? { resume: this.cfg.resumeSessionId }
-        : { continue: true }),
+      // Resume precedence:
+      //  1. providerSessionID — an in-pod re-pin (mid-session model/effort
+      //     change) rebuilding query() against the live provider session.
+      //  2. cfg.resumeSessionId — a resurrected pod's FIRST boot: the resume
+      //     bootstrap materialized the dead session's transcript at its exact
+      //     path and pinned its SDK session id, so we `resume` it (cross-pod
+      //     conversation resurrection).
+      //  3. continue: true — resume an on-disk JSONL from a prior process life
+      //     (claude-runner restart within the same pod). First boot, no JSONL:
+      //     no-op. Non-resurrect pods take this path, unchanged.
+      ...(providerSessionID
+        ? { resume: providerSessionID }
+        : this.cfg.resumeSessionId
+          ? { resume: this.cfg.resumeSessionId }
+          : { continue: true }),
       // include_partial_messages keeps the typewriter effect — the SPA
       // renders stream_event deltas live and snapshots to the canonical
       // assistant message when it arrives.
@@ -1187,12 +1517,73 @@ export class Runner {
     void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
       console.warn("runtime config report failed:", err);
     });
+    this.providerUsageLastAttemptMs = 0;
+    this.scheduleProviderUsageReport(5000);
     // The model's context window is reported later, from the first SDK
     // `result` message's per-model ModelUsage (see maybeReportContextWindow).
     // The Anthropic Models API path was removed: `GET /v1/models/{model}`
     // returns HTTP 401 under the subscription-OAuth proxy, so Claude sessions
     // never got a window from it.
     this.resolveSdkReady();
+  }
+
+  // performRebuild applies a scheduled rebuild at an idle turn boundary — a
+  // model/effort re-pin (pendingRepin) or a break-glass MCP activation
+  // (pendingMcpRebuild): it builds + swaps in a fresh query() that resumes the
+  // live conversation under the new options, THEN tears down the old idle
+  // query. Building before teardown means run()'s outer loop sees this.sdkQuery
+  // already swapped when the old iterator unwinds, so it re-enters on the new
+  // query instead of falling through to the fatal drain. Only ever called when
+  // idle (activeTurn === null, nothing queued) — the data-plane consumer's
+  // max_ack_pending=1 guarantees that at acceptCommandTurn time.
+  private async performRebuild(): Promise<void> {
+    const repin = this.pendingRepin;
+    const mcpRebuild = this.pendingMcpRebuild;
+    this.pendingRepin = null;
+    this.pendingMcpRebuild = false;
+    if ((!repin && !mcpRebuild) || this.runSignal?.aborted) {
+      return;
+    }
+    // A model/effort re-pin carries new options. A break-glass MCP rebuild keeps
+    // the current pinned options and exists only to re-read .mcp.json and
+    // re-handshake every server, surfacing the now-granted break-glass tools.
+    const model = repin?.model ?? this.pinnedModel ?? DEFAULT_MODEL;
+    const effort = repin?.effort ?? this.pinnedEffort ?? DEFAULT_EFFORT;
+    const oldQuery = this.sdkQuery;
+    const oldQueue = this.userQueue;
+    // The live conversation's provider session id (latched from SDK events),
+    // not the command's stale id — this is what resumes the running thread.
+    const resumeID = this.reportedProviderSessionID;
+    this.rebuildInProgress = true;
+    try {
+      // Build + swap the new query FIRST: fresh input queue + sdkReady gate,
+      // and reset the per-process context-window latch so the new model
+      // re-reports its window.
+      this.userQueue = new AsyncQueue<SDKUserMessage>();
+      this.sdkReady = new Promise<void>((resolve) => {
+        this.resolveSdkReady = resolve;
+      });
+      this.reportedContextWindowTokens = null;
+      this.buildSdkQuery(model, effort, resumeID);
+      if (repin) {
+        optionsRepinnedTotal.labels(model, effort).inc();
+      }
+      if (mcpRebuild) {
+        breakGlassMcpRebuildTotal.inc();
+        console.log(JSON.stringify({ msg: "break_glass_mcp_rebuilt" }));
+      }
+      // Tear down the old idle query: interrupt() + closing its prompt queue
+      // ends its iterator (the same teardown onAbort uses). run()'s outer loop
+      // then re-enters on the swapped-in new query.
+      try {
+        oldQuery?.interrupt();
+      } catch (err) {
+        console.warn("rebuild: interrupting the old query failed:", err);
+      }
+      oldQueue.close();
+    } finally {
+      this.rebuildInProgress = false;
+    }
   }
 
   private handleSdkStderr(data: string): void {
@@ -1240,6 +1631,19 @@ export class Runner {
     }).catch(console.warn);
   }
 
+  private maybeReportProviderSessionID(message: ClaudeProviderEvent): void {
+    const providerSessionID = claudeProviderSessionID(message);
+    if (!providerSessionID || providerSessionID === this.reportedProviderSessionID) {
+      return;
+    }
+    this.reportedProviderSessionID = providerSessionID;
+    void reportRuntimeConfig(this.cfg, {
+      providerSessionId: providerSessionID,
+    }).catch((err) => {
+      console.warn("provider session id report failed:", err);
+    });
+  }
+
   // launchSdkQuery wraps the SDK's query() construction in a method so
   // runner.test.ts can substitute a stub iterator without spawning the
   // real claude binary. The split has no observable runtime effect — the
@@ -1266,6 +1670,13 @@ export class Runner {
           async (input) => this.handleTankAskUserQuestion(input),
           { alwaysLoad: true },
         ),
+        tool(
+          TANK_EXIT_PLAN_MODE_TOOL,
+          "Present your completed plan to the Tank user and wait for approval before implementing. The user approves or requests changes.",
+          exitPlanModeInputSchema,
+          async (input) => this.handleTankExitPlanMode(input),
+          { alwaysLoad: true },
+        ),
       ],
     });
   }
@@ -1285,6 +1696,17 @@ export class Runner {
     }
     const providerItemID = this.nextTankAskUserQuestionProviderItemID(turn);
     const questions = claudeQuestionsToTankShape(input);
+    if (questions.length === 0) {
+      return Promise.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "AskUserQuestion requires questions: a non-empty array of question objects, or a top-level question string.",
+          },
+        ],
+      });
+    }
     return this.pauseTurnForInput(turn, questions, providerItemID);
   }
 
@@ -1293,13 +1715,68 @@ export class Runner {
     return `tank_ask_user_question_${turn.turnID}_${this.tankAskUserQuestionSequence}`;
   }
 
+  // handleTankExitPlanMode mirrors handleTankAskUserQuestion: ExitPlanMode is
+  // aliased to this Tank MCP tool, so the agent's native "exit plan mode" call
+  // pauses the turn for plan approval instead of streaming past as an inert
+  // tool item. The plan body rides the awaiting_input handoff (rendered as the
+  // dedicated plan page); the binary decision reuses the AskUserQuestion
+  // option/answer rail — "Approve" resumes into the implementation turn,
+  // "Request changes" returns the user's feedback so the agent revises.
+  private handleTankExitPlanMode(input: unknown): Promise<CallToolResult> {
+    const turn = this.activeTurn;
+    if (!turn) {
+      return Promise.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "ExitPlanMode cannot pause the turn because no active Tank turn exists.",
+          },
+        ],
+      });
+    }
+    const providerItemID = this.nextTankExitPlanModeProviderItemID(turn);
+    const questions = [
+      {
+        question: "Approve this plan?",
+        header: "Plan ready for review",
+        options: [
+          {
+            label: "Approve",
+            description: "Proceed with implementing this plan.",
+          },
+          {
+            label: "Request changes",
+            description: "Send the plan back with feedback to revise.",
+          },
+        ],
+        multiSelect: false,
+        allowFreeForm: true,
+        secret: false,
+      },
+    ];
+    return this.pauseTurnForInput(
+      turn,
+      questions,
+      providerItemID,
+      exitPlanModePlanText(input),
+    );
+  }
+
+  private nextTankExitPlanModeProviderItemID(turn: PendingTurn): string {
+    this.tankAskUserQuestionSequence += 1;
+    return `tank_exit_plan_mode_${turn.turnID}_${this.tankAskUserQuestionSequence}`;
+  }
+
   private async handleEvent(message: SDKMessage): Promise<void> {
     const providerEvent = message as ClaudeProviderEvent;
+    this.maybeReportProviderSessionID(providerEvent);
     // The per-turn `result` message carries ModelUsage with the provider's
     // context window. Read it before any early-return branching below so the
     // window still latches even when the active turn was already interrupted.
     if (providerEvent.type === "result") {
       this.maybeReportContextWindow(message);
+      this.scheduleProviderUsageReport(0);
     }
     const activeTurn = await this.ensureActiveTurn(providerEvent);
     if (isClaudePermissionDeniedEvent(providerEvent)) {
@@ -1495,6 +1972,58 @@ export class Runner {
     return rateLimitInfo;
   }
 
+  private reportProviderRateLimitRetryStallInfo(message: ClaudeProviderEvent): void {
+    const rateLimitInfo =
+      claudeRateLimitInfo(message) ??
+      ({
+        provider: "claude",
+        status: "rejected",
+        rateLimitType: "api_retry",
+        ...(typeof message.uuid === "string" && message.uuid.trim()
+          ? { uuid: message.uuid.trim().slice(0, 512) }
+          : {}),
+        ...(typeof message.session_id === "string" && message.session_id.trim()
+          ? { session_id: message.session_id.trim().slice(0, 512) }
+          : {}),
+      } satisfies Record<string, unknown>);
+    void reportRuntimeConfig(this.cfg, {
+      providerRateLimitInfo: rateLimitInfo,
+    }).catch((err) => {
+      console.warn("provider retry-stall rate-limit info report failed:", err);
+    });
+  }
+
+  private scheduleProviderUsageReport(delayMs: number): void {
+    const timer = setTimeout(() => {
+      void this.reportProviderUsageSnapshot();
+    }, Math.max(0, delayMs));
+    const nodeTimer = timer as unknown as { unref?: () => void };
+    if (typeof nodeTimer.unref === "function") {
+      nodeTimer.unref();
+    }
+  }
+
+  private async reportProviderUsageSnapshot(): Promise<void> {
+    if (this.runSignal?.aborted || this.providerUsageReportInFlight) return;
+    const query = this.sdkQuery;
+    if (!query) return;
+    const now = Date.now();
+    if (now - this.providerUsageLastAttemptMs < 60_000) return;
+    this.providerUsageLastAttemptMs = now;
+    this.providerUsageReportInFlight = true;
+    try {
+      const usage = await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      if (!usage || typeof usage !== "object") return;
+      await reportRuntimeConfig(this.cfg, {
+        providerUsageSnapshot: usage,
+      });
+    } catch (err) {
+      console.warn("provider usage snapshot report failed:", err);
+    } finally {
+      this.providerUsageReportInFlight = false;
+    }
+  }
+
   private async failTurnForProviderRateLimit(
     turn: PendingTurn,
     message: ClaudeProviderEvent,
@@ -1580,6 +2109,7 @@ export class Runner {
     retryCount: number,
   ): Promise<void> {
     providerRateLimitDecisionTotal.labels("retry_stall_failed").inc();
+    this.reportProviderRateLimitRetryStallInfo(message);
     if (turn.terminalEmitted) return;
     providerFailureClassTotal.labels("rate_limit").inc();
     const error =
@@ -1845,18 +2375,42 @@ export class Runner {
       pendingTurn.interruptOnStart = bufferedInterrupts;
     }
     // Pin model + effort from the first submit_turn and construct the SDK
-    // query() lazily so the user's dropdown pick is what actually drives
-    // the model running in this pod. Second-and-onward calls are a no-op
-    // here (the override is logged + counted inside ensureSdkQuery). MUST
-    // happen before pushing onto userQueue: query() is what consumes the
-    // queue, and a message landing while sdkQuery is still null would sit
-    // unread until something else triggers ensureSdkQuery.
+    // query() lazily so the user's dropdown pick is what actually drives the
+    // model running in this pod. A later submit_turn whose model/effort differ
+    // schedules a re-pin inside ensureSdkQuery; we apply it just below, before
+    // this turn is fed to the SDK. MUST happen before pushing onto userQueue:
+    // query() is what consumes the queue, and a message landing while sdkQuery
+    // is still null would sit unread until something else triggers
+    // ensureSdkQuery.
     //
-    // We still pin model/effort even on the interrupt-on-start path:
-    // the user's dropdown pick remains the right choice for the pod's
-    // lifetime, even though we won't actually feed THIS turn into the
-    // SDK below.
+    // We still pin/re-pin model + effort even on the interrupt-on-start path:
+    // the user's dropdown pick is the right choice for subsequent turns even
+    // though we won't feed THIS turn into the SDK below.
     this.ensureSdkQuery(record);
+    // Break-glass surfacing: a break-glass approval turn carries
+    // mcp_activate_name — a now-granted MCP server whose tools must surface for
+    // this session. Reconnecting that server on the live query does NOT
+    // re-register its tools, and a server written into .mcp.json mid-session is
+    // never re-read — so the only reliable path is a full query rebuild, which
+    // re-reads .mcp.json (loadConfiguredMcpServers) and re-handshakes every
+    // server, fetching the now-unlocked tools. Flag it here; the idle-boundary
+    // performRebuild just below applies it before this turn is fed, so the tools
+    // are live for the very turn the user sees.
+    if (String(record.mcp_activate_name ?? "").trim()) {
+      this.pendingMcpRebuild = true;
+    }
+    // Apply a scheduled mid-session re-pin at this idle boundary (no active
+    // turn, nothing queued yet) before feeding the turn, so THIS turn runs on
+    // the new model. max_ack_pending=1 on the data consumer guarantees idle
+    // here; if a turn is somehow still active the re-pin stays pending for the
+    // next idle submit_turn.
+    if (
+      (this.pendingRepin || this.pendingMcpRebuild) &&
+      this.activeTurn === null &&
+      this.pendingTurns.length === 0
+    ) {
+      await this.performRebuild();
+    }
     pendingTurn.stopCommandHeartbeat =
       this.commandBus.startCommandHeartbeat(record);
     this.pendingTurns.push(pendingTurn);
@@ -2312,6 +2866,7 @@ export class Runner {
     turn: PendingTurn,
     questions: unknown,
     providerItemID: string,
+    plan?: string,
   ): Promise<CallToolResult> {
     if (turn.terminalEmitted) {
       return {
@@ -2333,6 +2888,8 @@ export class Runner {
       providerItemID,
       providerTimelineID: timelineID,
       questions: questions as unknown[],
+      finalAnswer: turn.finalAnswer,
+      ...(plan && plan.trim() ? { plan } : {}),
     });
     const replyKey = inputReplyKey(turn.turnID, timelineID, providerItemID);
     const waitForReply = new Promise<CallToolResult>((resolve) => {
@@ -2444,9 +3001,16 @@ export class Runner {
     }
     this.pendingInputReplies.delete(pendingKey);
     await this.rotateTurnForInputReply(pending.turn, record);
+    // Read any attached files from /workspace and turn them into tool-result
+    // content blocks (inline image, or a path line) BEFORE resolving, so the
+    // screenshot rides the same resolved AskUserQuestion result as the text.
+    const attachmentBlocks = await buildAnswerAttachmentBlocks(
+      record.attachments,
+    );
     pending.resolve(
       askUserQuestionToolResult(
         answersForClaudeInput(record.answers, record.annotations),
+        attachmentBlocks,
       ),
     );
     await this.commandBus.markCompleted(record);
@@ -2862,7 +3426,10 @@ export class Runner {
     }
   }
 
-  private async failActiveCommandTurn(err: unknown): Promise<void> {
+  private async failActiveCommandTurn(
+    err: unknown,
+    reason: "provider_failure" | "provider_session_lost" = "provider_failure",
+  ): Promise<void> {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
     if (!turn?.commandRecord) return;
     if (!turn.terminalEmitted) {
@@ -2870,8 +3437,14 @@ export class Runner {
       // Classify the provider failure before it becomes an opaque
       // turn.failed terminal. `thinking_block_modified` is the regression
       // sentinel for the extended-thinking resume bug (session 340); it
-      // must stay at zero after the SDK ^0.3.158 bump.
-      providerFailureClassTotal.labels(classifyProviderFailure(message)).inc();
+      // must stay at zero after the SDK ^0.3.158 bump. provider_session_lost
+      // is a LOCAL resume failure (the transcript is gone), not an upstream
+      // Anthropic signature, so it is counted by
+      // tank_runner_unrecoverable_exit_total instead and must not inflate the
+      // provider-signature classifier.
+      if (reason === "provider_failure") {
+        providerFailureClassTotal.labels(classifyProviderFailure(message)).inc();
+      }
       await this.publishTurnTerminalOrDefer(
         turn,
         turnEvent({
@@ -2880,7 +3453,7 @@ export class Runner {
           clientNonce: turn.clientNonce,
           source: "claude",
           type: "turn.failed",
-          reason: "provider_failure",
+          reason,
           error: message,
         }),
         "turn.failed",

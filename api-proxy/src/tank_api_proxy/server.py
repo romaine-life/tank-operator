@@ -119,18 +119,6 @@ ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
 
-# Antigravity (Gemini-Ultra via Google's `agy` CLI) authenticates with a
-# standard Google OAuth2 "consumer" chain. The client_id below is the consumer
-# OAuth client embedded in the public agy binary (a second, enterprise client
-# also ships but is not the consumer flow). Confirmed by refreshing a live
-# consumer refresh_token against Google's token endpoint. The client_secret is
-# an installed-app secret (also embedded in the public binary, hence not
-# confidential) but is sourced from env so it stays out of source control.
-# Unlike the Claude/Codex custom OAuth servers, Google's /token endpoint
-# requires application/x-www-form-urlencoded, not JSON (token_request_form).
-GOOGLE_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-
 # The session launchers write this placeholder into
 # ~/.claude/.credentials.json's accessToken (and matching refreshToken).
 # Used as the discriminator for "this is a request that wants OAuth-
@@ -145,7 +133,7 @@ PLACEHOLDER_BEARER = "Bearer managed-by-tank-operator"
 # survive its own restart on a low-traffic provider: without continuous
 # traffic to trigger a reactive 401-refresh, the keeper warms the token on
 # boot and keeps it warm, and it runs the refresh + KV write in a long-lived
-# task that a short-lived agy request stream cannot cancel mid-flight.
+# task that a short-lived request stream cannot cancel mid-flight.
 REFRESH_SKEW_MS = 10 * 60 * 1000
 PROACTIVE_REFRESH_POLL_SECONDS = 60
 
@@ -160,9 +148,6 @@ class ProxyConfig:
     account_header: str | None = None
     fedramp_header: str | None = None
     patch_last_refresh: bool = False
-    # When True, POST the token refresh as application/x-www-form-urlencoded
-    # (Google's OAuth2 /token contract) instead of JSON (Claude/Codex).
-    token_request_form: bool = False
 
 
 def _config_from_env() -> ProxyConfig:
@@ -177,16 +162,6 @@ def _config_from_env() -> ProxyConfig:
             account_header="ChatGPT-Account-ID",
             fedramp_header="X-OpenAI-Fedramp",
             patch_last_refresh=True,
-        )
-    if provider == "antigravity":
-        return ProxyConfig(
-            provider="antigravity",
-            credentials_file=_required_env("ANTIGRAVITY_CREDENTIALS_FILE"),
-            token_url=os.environ.get("ANTIGRAVITY_TOKEN_URL", GOOGLE_TOKEN_URL),
-            client_id=os.environ.get("ANTIGRAVITY_CLIENT_ID", GOOGLE_CLIENT_ID),
-            client_secret=_required_env("ANTIGRAVITY_CLIENT_SECRET"),
-            kv_secret_name=_required_env("ANTIGRAVITY_CREDENTIALS_KV_KEY"),
-            token_request_form=True,
         )
     if provider != "claude":
         raise RuntimeError(f"unknown PROXY_PROVIDER={provider!r}")
@@ -250,7 +225,6 @@ def _patch_blob(
             elif key in ("expiresAt", "expires_at"):
                 node[key] = expires_at_ms
             elif key == "expiry":
-                # Google (antigravity) blob: RFC3339 string, not epoch ms.
                 node[key] = expiry_rfc3339
             elif patch_last_refresh and key == "last_refresh":
                 node[key] = last_refresh
@@ -356,6 +330,10 @@ def _classify_refresh_failure(resp: httpx.Response) -> tuple[str, str]:
     return reason, text
 
 
+def _is_transient_usage_failure(status_code: int) -> bool:
+    return status_code == 0 or status_code == 429 or status_code >= 500
+
+
 class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
     def __init__(self, config: ProxyConfig | None = None) -> None:
         self._config = config or _config_from_env()
@@ -364,6 +342,7 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         self._cached_account_id: str | None = None
         self._cached_fedramp: bool = False
         self._cached_blob: dict[str, Any] | None = None
+        self._cached_usage_snapshot: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
         # Set when an upstream 401 is observed for the current cached
         # token. The next request_headers callback awaits the in-flight
@@ -519,11 +498,11 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 if self._refresh_task is None or self._refresh_task.done():
                     self._refresh_task = asyncio.create_task(self._refresh())
                 # Also wake the long-lived keeper. The create_task above lives
-                # in this request handler's lineage and can be cancelled when
-                # agy's short stream closes before the refresh + KV write land
-                # (the antigravity cold-start failure). The keeper re-runs the
-                # refresh from a task that outlives the stream, so the rotation
-                # and KV persist always complete.
+                # in this request handler's lineage and can be cancelled when a
+                # short request stream closes before the refresh + KV write
+                # land. The keeper re-runs the refresh from a task that
+                # outlives the stream, so the rotation and KV persist always
+                # complete.
                 self._refresh_wakeup.set()
         return ext_proc_pb2.ProcessingResponse(response_headers=ext_proc_pb2.HeadersResponse())
 
@@ -574,8 +553,8 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 if k in ("expiresAt", "expires_at") and isinstance(v, int):
                     candidates.append(v)
                 elif k in ("last_refresh", "expiry") and isinstance(v, str):
-                    # last_refresh: Codex auth.json. expiry: Google/antigravity
-                    # RFC3339 access-token expiry.
+                    # last_refresh: Codex auth.json. expiry: RFC3339
+                    # access-token expiry.
                     parsed = _iso_ms(v)
                     if parsed is not None:
                         candidates.append(parsed)
@@ -699,9 +678,8 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         it lives for the whole process, not a single request stream — it is the
         path that guarantees the refresh *and* the KV write-back run to
         completion. A reactive 401-triggered refresh created inside a request
-        handler can be cancelled when agy's short stream closes (the antigravity
-        cold-start failure: turn 1 stranded the rotation, turn 2 stranded the KV
-        persist); the keeper re-runs it here where nothing cancels it.
+        handler can be cancelled when its stream closes; the keeper re-runs it
+        here where nothing cancels it.
         """
         while not self._stopping:
             try:
@@ -820,17 +798,11 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 }
                 if self._config.client_secret is not None:
                     payload["client_secret"] = self._config.client_secret
-                if self._config.token_request_form:
-                    # Google's OAuth2 /token endpoint requires
-                    # application/x-www-form-urlencoded; httpx sets the
-                    # content-type from data=.
-                    resp = await http.post(self._config.token_url, data=payload)
-                else:
-                    resp = await http.post(
-                        self._config.token_url,
-                        json=payload,
-                        headers={"Content-Type": "application/json"},
-                    )
+                resp = await http.post(
+                    self._config.token_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
         except Exception:
             log.exception("refresh request crashed; keeping existing tokens")
             record_refresh("request_failed", time.monotonic() - refresh_start)
@@ -929,7 +901,9 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         headers = self._usage_headers(token)
         last_error = ""
         last_status = 0
-        for attempt in range(2):
+        refreshed_after_unauthorized = False
+        while True:
+            retry_after_refresh = False
             for url in urls:
                 try:
                     async with httpx.AsyncClient(timeout=15.0) as http:
@@ -937,42 +911,95 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 except Exception as err:
                     log.warning("%s usage request failed: %s", self._config.provider, err)
                     last_error = f"request_failed: {err}"
+                    last_status = 0
                     continue
                 last_status = resp.status_code
-                if resp.status_code == 401 and attempt == 0:
+                if resp.status_code == 401 and not refreshed_after_unauthorized:
                     self._access_invalidated = True
                     await self._refresh()
                     token = await self._get_access_token()
                     headers = self._usage_headers(token)
+                    refreshed_after_unauthorized = True
+                    retry_after_refresh = True
                     break
                 if resp.status_code == 404 and len(urls) > 1:
                     last_error = "usage endpoint not found"
                     continue
                 if resp.status_code < 200 or resp.status_code >= 300:
+                    resp_headers = getattr(resp, "headers", {})
+                    request_id = resp_headers.get("x-request-id") or resp_headers.get(
+                        "request-id"
+                    )
+                    retry_after = resp_headers.get("retry-after")
+                    log.warning(
+                        "%s usage request returned non-success: status=%s request_id=%s retry_after=%s",
+                        self._config.provider,
+                        resp.status_code,
+                        request_id or "-",
+                        retry_after or "-",
+                    )
                     last_error = resp.text[:500]
-                    continue
+                    cached = self._cached_usage_for_transient_failure(
+                        "error", resp.status_code, last_error
+                    )
+                    if cached is not None:
+                        return cached
+                    return self._usage_error("error", resp.status_code, last_error)
                 try:
                     body = resp.json()
                 except Exception as err:
-                    return {
-                        "provider": self._config.provider,
-                        "status": "error",
-                        "status_code": resp.status_code,
-                        "error": f"usage response was not JSON: {err}",
-                    }
-                return {
+                    last_error = f"usage response was not JSON: {err}"
+                    cached = self._cached_usage_for_transient_failure(
+                        "invalid_json", resp.status_code, last_error
+                    )
+                    if cached is not None:
+                        return cached
+                    return self._usage_error("error", resp.status_code, last_error)
+                payload = {
                     "provider": self._config.provider,
                     "status": "ok",
                     "status_code": resp.status_code,
                     "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "usage": body,
                 }
+                self._cached_usage_snapshot = dict(payload)
+                return payload
+            if retry_after_refresh:
+                continue
+            break
+        cached = self._cached_usage_for_transient_failure("error", last_status, last_error)
+        if cached is not None:
+            return cached
+        return self._usage_error("error", last_status or None, last_error or "usage request failed")
+
+    def _usage_error(
+        self, status: str, status_code: int | None, error: str
+    ) -> dict[str, Any]:
         return {
             "provider": self._config.provider,
-            "status": "error",
-            "status_code": last_status or None,
-            "error": last_error or "usage request failed",
+            "status": status,
+            "status_code": status_code,
+            "error": error,
         }
+
+    def _cached_usage_for_transient_failure(
+        self, status: str, status_code: int, error: str
+    ) -> dict[str, Any] | None:
+        if self._cached_usage_snapshot is None:
+            return None
+        if not _is_transient_usage_failure(status_code):
+            return None
+        payload = dict(self._cached_usage_snapshot)
+        payload["status"] = "ok"
+        payload["cached"] = True
+        payload["stale"] = True
+        payload["served_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        payload["source_status"] = status
+        if status_code:
+            payload["source_status_code"] = status_code
+        if error:
+            payload["source_error"] = error
+        return payload
 
     def _usage_urls(self) -> list[str]:
         if self._config.provider == "claude":
@@ -1080,8 +1107,8 @@ async def serve(port: int) -> tuple[grpc.aio.Server, AuthInjector]:
     await server.start()
     log.info("%s ext_proc listening on 0.0.0.0:%d", config.provider, port)
     # Start the proactive refresh keeper as a long-lived task so it outlives any
-    # single request stream (see run_refresh_keeper / the antigravity cold-start
-    # incident). Stored on the injector so __main__ can cancel it on shutdown.
+    # single request stream. Stored on the injector so __main__ can cancel it on
+    # shutdown.
     injector._keeper_task = asyncio.create_task(injector.run_refresh_keeper())
     return server, injector
 

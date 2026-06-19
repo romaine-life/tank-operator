@@ -16,6 +16,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { ChatComposer } from "../ChatComposer";
+import { RunMessages, type TranscriptEntry } from "../App";
 import { McpIcon } from "../McpIcon";
 import { WorkspaceShell } from "../WorkspaceShell";
 import {
@@ -58,6 +59,7 @@ const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
 
 function TranscriptMessage({
   variant,
+  authorKind,
   highlighted,
   ownedByActivity,
   showAssistantAvatar = !ownedByActivity,
@@ -65,6 +67,7 @@ function TranscriptMessage({
   children,
 }: {
   variant: "assistant" | "user" | "system";
+  authorKind?: "system";
   highlighted?: boolean;
   ownedByActivity?: boolean;
   showAssistantAvatar?: boolean;
@@ -72,6 +75,30 @@ function TranscriptMessage({
   children: ReactNode;
 }) {
   const avatar = getSessionAvatarByID("jp1-malcolm");
+  // Mirrors RunMessageBubble: a no-attachment user message keeps its footer
+  // inside the message text in both states, so collapse is a CSS-only restyle
+  // of one stable tree (no remount). data-compact drives the one-line clamp.
+  const inlineFooter = variant === "user";
+  const footer = (
+    <div className="run-msg-footer" data-always-visible>
+      {variant !== "system" && (
+        <>
+          <button className="run-msg-action run-msg-copy" type="button" aria-label="Copy message">
+            <CopyIcon size={12} aria-hidden="true" />
+          </button>
+          <button className="run-msg-action run-msg-link" type="button" aria-label="Copy message link">
+            <LinkIcon size={12} aria-hidden="true" />
+          </button>
+        </>
+      )}
+      <div className="run-msg-timings">
+        <span className="run-msg-timing-row">
+          <TimerIcon size={9} aria-hidden="true" />
+          1.4s
+        </span>
+      </div>
+    </div>
+  );
   return (
     <div
       className="run-transcript-message"
@@ -79,10 +106,12 @@ function TranscriptMessage({
       data-variant={variant}
       data-role={variant}
       data-compact={compact ? "true" : undefined}
+      data-author-kind={authorKind}
       data-owner={ownedByActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
+      data-inline-footer={inlineFooter ? "true" : undefined}
       data-design-component="TranscriptMessage"
-      data-design-state={highlighted ? "highlighted" : variant}
+      data-design-state={highlighted ? "highlighted" : authorKind ?? variant}
       data-inspectable
     >
       {variant === "assistant" && avatar && showAssistantAvatar && (
@@ -91,8 +120,16 @@ function TranscriptMessage({
         </span>
       )}
       {variant === "user" && (
-        <span className="run-msg-avatar" aria-hidden="true">
-          <span className="avatar">NG</span>
+        <span
+          className="run-msg-avatar"
+          data-author-kind={authorKind}
+          aria-hidden="true"
+        >
+          {authorKind === "system" ? (
+            <CheckCircle2Icon size={16} strokeWidth={2.1} />
+          ) : (
+            <span className="avatar">NG</span>
+          )}
         </span>
       )}
       {variant === "system" && (
@@ -102,35 +139,10 @@ function TranscriptMessage({
       )}
       <div className="run-transcript-message-content" data-slot="message-content">
         <div className="run-transcript-message-text" data-slot="message-text">
-          {compact ? (
-            <span
-              className="run-msg-compact-text"
-              title="Please inspect the completed turn with a long initiating prompt. The divider owns the section controls while the prompt preview stays readable."
-            >
-              Please inspect the completed turn with a long initiating prompt. The divider owns the section controls while the prompt preview stays readable.
-            </span>
-          ) : (
-            children
-          )}
+          {children}
+          {inlineFooter && footer}
         </div>
-        <div className="run-msg-footer" data-always-visible>
-          {variant !== "system" && (
-            <>
-              <button className="run-msg-action run-msg-copy" type="button" aria-label="Copy message">
-                <CopyIcon size={12} aria-hidden="true" />
-              </button>
-              <button className="run-msg-action run-msg-link" type="button" aria-label="Copy message link">
-                <LinkIcon size={12} aria-hidden="true" />
-              </button>
-            </>
-          )}
-          <div className="run-msg-timings">
-            <span className="run-msg-timing-row">
-              <TimerIcon size={9} aria-hidden="true" />
-              1.4s
-            </span>
-          </div>
-        </div>
+        {!inlineFooter && footer}
       </div>
     </div>
   );
@@ -297,13 +309,28 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
           data-section-divider="true"
           data-design-component="TurnPromptContext"
           data-design-state="expanded-with-divider"
+          data-design-scenario="long-prompt-scroll-capped"
           data-inspectable
         >
           <TranscriptMessage variant="user" ownedByActivity>
             <p style={{ margin: 0 }}>
               Please inspect the completed turn with a long initiating prompt.
-              The divider owns section collapse controls while the user avatar
-              identifies the prompt context.
+              The initial request includes repository context, validation
+              expectations, UI constraints, and a detailed description of the
+              failure mode where the prompt message grows tall enough to push
+              the turn section controls below the viewport. The prompt continues
+              with enough detail to model a real operator handoff: keep the
+              prompt visible as the user-authored context for the turn, keep the
+              avatar gutter aligned with activity messages, keep the divider
+              controls directly reachable, and make only the prompt body scroll
+              once it exceeds the bounded view size. This fixture intentionally
+              repeats the kind of dense setup text that appears in long coding
+              sessions, including implementation notes, validation notes,
+              acceptance criteria, and constraints about preserving existing
+              transcript behavior. The long body should not stretch the turn
+              pane until the controls leave the screen; the prompt bubble should
+              remain readable inside its own scroll area while the activity
+              divider stays in place below it.
             </p>
           </TranscriptMessage>
         </div>
@@ -401,10 +428,29 @@ function TurnPromptStateSpecimens() {
         data-inspectable
       >
         <TranscriptMessage variant="user" ownedByActivity compact>
-          <p style={{ margin: 0 }}>
+          <span className="run-plain-message-text">
             Please inspect the completed turn with a long initiating prompt.
             The collapsed preview stays visible while section controls live on
             the divider.
+          </span>
+        </TranscriptMessage>
+      </div>
+      <div
+        className="run-turn-view-context"
+        aria-label="System-authored turn prompt"
+        data-collapsed="false"
+        data-context-loaded="true"
+        data-design-component="TurnPromptContext"
+        data-design-state="system-background-wake-context"
+        data-inspectable
+      >
+        <TranscriptMessage variant="user" authorKind="system" ownedByActivity>
+          <p style={{ margin: 0 }}>
+            Background task finished - agent re-invoked
+          </p>
+          <p style={{ margin: "6px 0 0" }}>
+            Task task-ci: Tank re-invoked the agent to pick up the result and
+            report the outcome.
           </p>
         </TranscriptMessage>
       </div>
@@ -455,6 +501,99 @@ function TranscriptSpecimen({
           on the message content. The footer stays visible while the pulse is active.
         </p>
       </TranscriptMessage>
+    </div>
+  );
+}
+
+const avatarContinuationEntries: TranscriptEntry[] = [
+  {
+    id: "avatar-continuation-before",
+    kind: "message",
+    role: "assistant",
+    text: "The regression test now checks both sides of the issue: blank text stays out, and real streamed output still lands.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:00:00.000Z",
+    orderKey: "000001",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-tool-1",
+    kind: "tool",
+    toolName: "file_change",
+    toolStatus: "completed",
+    toolInput: "frontend/src/App.tsx",
+    toolOutput: "Updated avatar grouping helper.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:00:12.000Z",
+    orderKey: "000002",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-tool-2",
+    kind: "tool",
+    toolName: "npm test",
+    toolStatus: "completed",
+    toolInput: "npm test --prefix frontend",
+    toolOutput: "77 files passed.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:00:40.000Z",
+    orderKey: "000003",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-after-tools",
+    kind: "message",
+    role: "assistant",
+    text: "The focused suite passes with the new guard. I am checking the final diff/status now.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:01:00.000Z",
+    orderKey: "000004",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-boundary",
+    kind: "meta",
+    meta: {
+      title: "Turn failed",
+      detail: "A meta boundary still starts the next avatar run.",
+      severity: "error",
+    },
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:01:08.000Z",
+    orderKey: "000005",
+  } as TranscriptEntry,
+  {
+    id: "avatar-continuation-after-meta",
+    kind: "message",
+    role: "assistant",
+    text: "This follow-up keeps its avatar because the preceding meta row is a boundary.",
+    turnId: "turn-avatar-continuation",
+    time: "2026-06-15T08:01:20.000Z",
+    orderKey: "000006",
+  } as TranscriptEntry,
+];
+
+function ActualAvatarContinuationSpecimen() {
+  const avatar = getSessionAvatarByID("jp1-malcolm");
+  return (
+    <div
+      style={{
+        height: 360,
+        border: "1px solid var(--border-soft)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--bg-base)",
+        overflow: "hidden",
+      }}
+    >
+      <RunMessages
+        entries={avatarContinuationEntries}
+        avatar={avatar}
+        sessionId="styleguide-avatar-continuation"
+        sessionMode="styleguide"
+        telemetrySurface="styleguide"
+        showThinking={false}
+        autoExpandTools={false}
+        showTimestamps
+        showDuration={false}
+        userKey="styleguide"
+        scrollParent={null}
+      />
     </div>
   );
 }
@@ -672,6 +811,13 @@ export function StyleguidePortfolioTranscript() {
               />
             </div>
           </div>
+        </section>
+
+        <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
+          <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "var(--text-lg)" }}>
+            actual renderer avatar continuation
+          </h2>
+          <ActualAvatarContinuationSpecimen />
         </section>
 
         <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>

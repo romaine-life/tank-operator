@@ -62,10 +62,6 @@ spec:
               value: {{ .Values.session.codexImage | quote }}
             - name: CODEX_SESSION_IMAGE_METADATA
               value: {{ .Values.session.imageMetadata.codex | default dict | toJson | quote }}
-            - name: ANTIGRAVITY_SESSION_IMAGE
-              value: {{ .Values.session.antigravityImage | quote }}
-            - name: ANTIGRAVITY_SESSION_IMAGE_METADATA
-              value: {{ .Values.session.imageMetadata.antigravity | default dict | toJson | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ include "tank-operator.sessionServiceAccount" . | quote }}
             - name: SESSION_CONFIGMAP
@@ -136,8 +132,6 @@ spec:
               value: {{ include "tank-operator.claudeSecondaryApiProxyHost" . | quote }}
             - name: CODEX_API_PROXY_HOST
               value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
-            - name: ANTIGRAVITY_API_PROXY_HOST
-              value: {{ include "tank-operator.antigravityApiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state
@@ -157,8 +151,6 @@ spec:
               value: {{ include "tank-operator.claudeSecondaryCredentialsKvKey" . | quote }}
             - name: CODEX_CREDENTIALS_KV_KEY
               value: {{ include "tank-operator.codexCredentialsKvKey" . | quote }}
-            - name: ANTIGRAVITY_CREDENTIALS_KV_KEY
-              value: {{ include "tank-operator.antigravityCredentialsKvKey" . | quote }}
             {{- end }}
             - name: AZURE_FEDERATED_TOKEN_FILE
               value: /var/run/secrets/azure/tokens/azure-identity-token
@@ -244,6 +236,17 @@ spec:
             # the redirect to complete.
             - name: GITHUB_APP_SLUG
               value: {{ .Values.github.appSlug | quote }}
+            # HMAC secret for the inbound GitHub CI-watch webhook
+            # (POST /webhooks/github). Mirrored from KV into a Secret by
+            # externalsecret-github-webhook.yaml (production only). Marked
+            # optional so test-slot pods, which receive no GitHub deliveries
+            # and have no such Secret, start cleanly with the receiver disabled.
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalSecret.githubWebhook.secretName | quote }}
+                  key: {{ .Values.externalSecret.githubWebhook.secretKey | quote }}
+                  optional: true
             # Cluster operator email used when Tank mints GitHub MCP
             # attestations for the host's sessions.
             - name: HOST_EMAIL
@@ -255,7 +258,7 @@ spec:
             # Public hostname the orchestrator uses to build session URLs in
             # internal session API responses (mcp-tank-operator uses these).
             - name: TANK_UI_HOST
-              value: {{ .Values.internalApi.tankUiHost | quote }}
+              value: {{ include "tank-operator.publicUIHost" . | quote }}
             # Projected SA token used by /api/github/repos. The backend
             # exchanges it on-behalf-of the SPA caller at auth.romaine.life,
             # then calls mcp-github over the cluster network.

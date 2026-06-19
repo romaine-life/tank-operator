@@ -6,6 +6,9 @@ export type ControlActionRow = {
   event_id?: string;
   invocation_id?: string;
   created_at?: string;
+  owner_email?: string;
+  session_scope?: string;
+  session_id?: string;
   source_service?: string;
   source_tool?: string;
   action?: string;
@@ -43,8 +46,47 @@ export type ControlActionBackgroundEntry = {
   controlActionSha?: string;
 };
 
+export type PRLaneRequest = {
+  eventId: string;
+  invocationId: string;
+  createdAt?: string;
+  repo?: string;
+  repos?: string[];
+  allRepos?: boolean;
+  laneName: string;
+  allocationRequest?: boolean;
+  laneNames?: string[];
+  proposedBranches?: string[];
+  requestedCount?: number;
+  unlimited?: boolean;
+  relationship?: string;
+  base?: string;
+  scope?: string;
+  reason?: string;
+  proposedBranch?: string;
+};
+
+export type BreakGlassRequest = {
+  eventId: string;
+  invocationId: string;
+  createdAt?: string;
+  kind: "git" | "azure";
+  target: string;
+  repo?: string;
+  repoOwner?: string;
+  repoName?: string;
+  reason?: string;
+  source?: string;
+};
+
 function nonempty(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function payloadObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function normalizeControlActionStatus(status: string | undefined): ControlActionStatus {
@@ -84,8 +126,52 @@ function actionTitle(action: string | undefined): string {
   switch (action) {
     case "github.pull_request.merge":
       return "GitHub PR merge";
+    case "github.pull_request.rename":
+      return "GitHub PR renamed";
     case "github.pull_request.ready_for_review":
       return "GitHub PR ready";
+    case "github.pull_request.open":
+      return "GitHub PR opened";
+    case "github.pull_request.mergeability":
+      return "GitHub PR mergeability";
+    case "github.commit.push":
+      return "Git push";
+    case "github.commit.write":
+      return "GitHub commit";
+    case "github.commit.ci":
+      return "GitHub CI";
+    case "github.break_glass.request":
+      return "GitHub break-glass request";
+    case "github.break_glass.grant":
+      return "GitHub break-glass grant";
+    case "github.break_glass.deny":
+      return "GitHub break-glass denied";
+    case "github.break_glass.token":
+      return "GitHub break-glass token";
+    case "github.break_glass.push":
+      return "GitHub break-glass push";
+    case "azure.break_glass.request":
+      return "Azure break-glass request";
+    case "azure.break_glass.grant":
+      return "Azure break-glass grant";
+    case "azure.break_glass.deny":
+      return "Azure break-glass denied";
+    case "azure.break_glass.use":
+      return "Azure break-glass use";
+    case "tank.test_slot_model.request":
+      return "Test-slot model request";
+    case "tank.test_slot_model.grant":
+      return "Test-slot model grant";
+    case "github.pr_lane.request":
+      return "PR lane request";
+    case "github.pr_lane.approve":
+      return "PR lane approved";
+    case "github.pr_lane.deny":
+      return "PR lane denied";
+    case "github.pr_lane.auto_approve":
+      return "PR lane auto-approval";
+    case "github.pr_lane.create":
+      return "PR lane created";
     default:
       return "Control action";
   }
@@ -126,4 +212,153 @@ export function controlActionRowsToEntries(rows: ControlActionRow[]): ControlAct
       controlActionSha: sha,
     }];
   });
+}
+
+export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[] {
+  const resolvedInvocations = new Set<string>();
+  for (const row of rows) {
+    const action = nonempty(row.action);
+    if (
+      action !== "github.pr_lane.approve" &&
+      action !== "github.pr_lane.deny" &&
+      action !== "github.pr_lane.auto_approve"
+    ) {
+      continue;
+    }
+    const invocationID = nonempty(row.invocation_id);
+    if (invocationID) resolvedInvocations.add(invocationID);
+  }
+  return rows.flatMap((row) => {
+    if (nonempty(row.action) !== "github.pr_lane.request") return [];
+    if (nonempty(row.status) !== "started") return [];
+    const eventId = nonempty(row.event_id);
+    const invocationId = nonempty(row.invocation_id);
+    if (!eventId || !invocationId || resolvedInvocations.has(invocationId)) {
+      return [];
+    }
+    const payload = payloadObject(row.payload);
+    const allocationRequest = payload.allocation_request === true;
+    const branchScope = payloadObject(payload.branch_scope);
+    const repoScope = payloadObject(payload.repo_scope);
+    const laneNames = Array.isArray(branchScope.branches)
+      ? branchScope.branches.flatMap((value) => {
+          const name = nonempty(value);
+          return name ? [name] : [];
+        })
+      : [];
+    const proposedBranches = Array.isArray(payload.proposed_branches)
+      ? payload.proposed_branches.flatMap((value) => {
+          const branch = nonempty(value);
+          return branch ? [branch] : [];
+        })
+      : [];
+    const repos = Array.isArray(repoScope.repos)
+      ? repoScope.repos.flatMap((value) => {
+          const repo = nonempty(value);
+          return repo ? [repo] : [];
+        })
+      : [];
+    const laneName = nonempty(payload.lane_name) ?? (allocationRequest ? "branch allocation" : undefined);
+    if (!laneName) return [];
+    const requestedCount =
+      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
+        ? branchScope.count
+        : undefined;
+    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
+      .filter(Boolean)
+      .join("/");
+    const request: PRLaneRequest = {
+      eventId,
+      invocationId,
+      createdAt: nonempty(row.created_at),
+      repo: repo || undefined,
+      laneName,
+      relationship: nonempty(payload.relationship),
+      base: nonempty(payload.base),
+      scope: nonempty(payload.scope),
+      reason: nonempty(payload.reason),
+      proposedBranch: nonempty(payload.proposed_branch),
+    };
+    if (allocationRequest) request.allocationRequest = true;
+    if (laneNames.length > 0) request.laneNames = laneNames;
+    if (proposedBranches.length > 0) request.proposedBranches = proposedBranches;
+    if (nonempty(repoScope.repo)) request.repo = nonempty(repoScope.repo);
+    if (repos.length > 0) request.repos = repos;
+    if (repoScope.kind === "all_repos") request.allRepos = true;
+    if (branchScope.kind === "count" && requestedCount !== undefined) request.requestedCount = requestedCount;
+    if (branchScope.kind === "unlimited") request.unlimited = true;
+    return [request];
+  });
+}
+
+// pendingBreakGlassRequests surfaces break-glass requests that are still
+// awaiting an admin decision. A grant or deny with payload.request_event_id
+// resolves the exact request; older grant rows without that field also clear
+// matching git repo requests until they expire.
+export function pendingBreakGlassRequests(
+  rows: ControlActionRow[],
+  now: number = Date.now(),
+): BreakGlassRequest[] {
+  const resolvedRequests = new Set<string>();
+  const grantedRepos = new Set<string>();
+  for (const row of rows) {
+    const action = nonempty(row.action);
+    if (
+      action !== "github.break_glass.grant" &&
+      action !== "github.break_glass.deny" &&
+      action !== "azure.break_glass.grant" &&
+      action !== "azure.break_glass.deny"
+    )
+      continue;
+    const payload = payloadObject(row.payload);
+    const requestEventId = nonempty(payload.request_event_id);
+    if (requestEventId) resolvedRequests.add(requestEventId);
+    if (action !== "github.break_glass.grant") continue;
+    if (nonempty(row.status) !== "succeeded") continue;
+    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
+      .filter(Boolean)
+      .join("/");
+    if (!repo) continue;
+    const expiresAt = nonempty(payload.expires_at);
+    if (!expiresAt) continue;
+    const expiry = Date.parse(expiresAt);
+    if (Number.isNaN(expiry) || expiry <= now) continue;
+    grantedRepos.add(repo);
+  }
+  const byTarget = new Map<string, BreakGlassRequest>();
+  for (const row of rows) {
+    const action = nonempty(row.action);
+    if (action !== "github.break_glass.request" && action !== "azure.break_glass.request") continue;
+    if (nonempty(row.status) !== "started") continue;
+    const eventId = nonempty(row.event_id);
+    const invocationId = nonempty(row.invocation_id);
+    if (!eventId || !invocationId) continue;
+    if (resolvedRequests.has(eventId)) continue;
+    const repoOwner = nonempty(row.repo_owner);
+    const repoName = nonempty(row.repo_name);
+    const repo = [repoOwner, repoName].filter(Boolean).join("/");
+    const kind = action === "azure.break_glass.request" ? "azure" : "git";
+    if (kind === "git" && (!repo || grantedRepos.has(repo))) continue;
+    const payload = payloadObject(row.payload);
+    const target = kind === "azure" ? "azure-personal" : repo;
+    const request: BreakGlassRequest = {
+      eventId,
+      invocationId,
+      kind,
+      createdAt: nonempty(row.created_at),
+      target,
+      repo,
+      repoOwner,
+      repoName,
+      reason: nonempty(payload.reason),
+      source: nonempty(payload.source),
+    };
+    const existing = byTarget.get(target);
+    if (!existing || (request.createdAt ?? "") > (existing.createdAt ?? "")) {
+      byTarget.set(target, request);
+    }
+  }
+  return Array.from(byTarget.values()).sort((a, b) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
 }

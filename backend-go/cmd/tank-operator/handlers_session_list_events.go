@@ -103,6 +103,9 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			sessions.activity_summary,
 			sessions.test_state,
 			sessions.rollout_state,
+			sessions.spoke_config,
+			sessions.spawned_sessions,
+			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
 			COALESCE(sessions.capabilities, '{}'::text[]),
@@ -116,6 +119,8 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			sessions.runtime_context_window_tokens,
 			sessions.runtime_context_window_source,
 			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			sessions.runtime_provider_session_id,
+			COALESCE(to_char(sessions.runtime_provider_session_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_provider_session_observed_at,
 			sessions.provider_rate_limit_info,
 			COALESCE(to_char(sessions.provider_rate_limit_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS provider_rate_limit_observed_at,
 			sessions.sidebar_position,
@@ -162,7 +167,9 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			status, readyAt, terminatingAt                              string
 			name                                                        string
 			visible                                                     bool
-			activitySummary, testState, rolloutState, cloneState        []byte
+			activitySummary, testState, rolloutState, spokeConfig, cloneState []byte
+			spawnedSessions                                                   []byte
+			parentSessionID                                             string
 			providerRateLimitInfo                                       []byte
 			repos, capabilities                                         []string
 			agentAvatarID, systemAvatarID                               string
@@ -170,6 +177,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			runtimeModel, runtimeEffort, runtimeAt                      string
 			runtimeContextWindowTokens                                  int64
 			runtimeContextWindowSource, runtimeContextWindowAt          string
+			runtimeProviderSessionID, runtimeProviderSessionObservedAt  string
 			providerRateLimitObservedAt                                 string
 			sidebarPosition, rowVersion                                 int64
 			bugLabelID                                                  sql.NullInt64
@@ -180,10 +188,13 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			&sessionID, &mode, &podName, &name, &visible,
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
-			&activitySummary, &testState, &rolloutState,
+			&activitySummary, &testState, &rolloutState, &spokeConfig,
+			&spawnedSessions,
+			&parentSessionID,
 			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID,
 			&model, &effort, &runtimeModel, &runtimeEffort, &runtimeAt,
 			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
+			&runtimeProviderSessionID, &runtimeProviderSessionObservedAt,
 			&providerRateLimitInfo, &providerRateLimitObservedAt,
 			&sidebarPosition,
 			&rowVersion,
@@ -198,41 +209,46 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			mode = sessionmodel.DefaultSessionMode
 		}
 		out = append(out, sessionmodel.SessionRecord{
-			ID:                             sessionID,
-			Email:                          strings.ToLower(strings.TrimSpace(owner)),
-			Mode:                           mode,
-			Scope:                          scope,
-			PodName:                        podName,
-			Name:                           name,
-			Visible:                        visible,
-			RequestedAt:                    requestedAt,
-			CreatedAt:                      createdAt,
-			UpdatedAt:                      updatedAt,
-			Status:                         status,
-			ReadyAt:                        readyAt,
-			TerminatingAt:                  terminatingAt,
-			ActivitySummary:                activitySummary,
-			TestState:                      unmarshalJSONBField(testState),
-			RolloutState:                   unmarshalJSONBField(rolloutState),
-			Repos:                          repos,
-			CloneState:                     unmarshalJSONBField(cloneState),
-			Capabilities:                   capabilities,
-			AgentAvatarID:                  agentAvatarID,
-			SystemAvatarID:                 systemAvatarID,
-			Model:                          model,
-			Effort:                         effort,
-			RuntimeModel:                   runtimeModel,
-			RuntimeEffort:                  runtimeEffort,
-			RuntimeConfiguredAt:            runtimeAt,
-			RuntimeContextWindowTokens:     runtimeContextWindowTokens,
-			RuntimeContextWindowSource:     runtimeContextWindowSource,
-			RuntimeContextWindowObservedAt: runtimeContextWindowAt,
-			ProviderRateLimitInfo:          unmarshalJSONBField(providerRateLimitInfo),
-			ProviderRateLimitObservedAt:    providerRateLimitObservedAt,
-			SidebarPosition:                sidebarPosition,
-			RowVersion:                     rowVersion,
-			BugLabel:                       bugLabelFromSessionListScan(bugLabelID, bugLabelName, bugLabelSlug),
-			BugLabels:                      bugLabelsFromSessionListJSON(bugLabelsRaw),
+			ID:                               sessionID,
+			Email:                            strings.ToLower(strings.TrimSpace(owner)),
+			Mode:                             mode,
+			Scope:                            scope,
+			PodName:                          podName,
+			Name:                             name,
+			Visible:                          visible,
+			RequestedAt:                      requestedAt,
+			CreatedAt:                        createdAt,
+			UpdatedAt:                        updatedAt,
+			Status:                           status,
+			ReadyAt:                          readyAt,
+			TerminatingAt:                    terminatingAt,
+			ActivitySummary:                  activitySummary,
+			TestState:                        unmarshalJSONBField(testState),
+			RolloutState:                     unmarshalJSONBField(rolloutState),
+			SpokeConfig:                      unmarshalJSONBField(spokeConfig),
+			SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
+			ParentSessionID:                  parentSessionID,
+			Repos:                            repos,
+			CloneState:                       unmarshalJSONBField(cloneState),
+			Capabilities:                     capabilities,
+			AgentAvatarID:                    agentAvatarID,
+			SystemAvatarID:                   systemAvatarID,
+			Model:                            model,
+			Effort:                           effort,
+			RuntimeModel:                     runtimeModel,
+			RuntimeEffort:                    runtimeEffort,
+			RuntimeConfiguredAt:              runtimeAt,
+			RuntimeContextWindowTokens:       runtimeContextWindowTokens,
+			RuntimeContextWindowSource:       runtimeContextWindowSource,
+			RuntimeContextWindowObservedAt:   runtimeContextWindowAt,
+			RuntimeProviderSessionID:         runtimeProviderSessionID,
+			RuntimeProviderSessionObservedAt: runtimeProviderSessionObservedAt,
+			ProviderRateLimitInfo:            unmarshalJSONBField(providerRateLimitInfo),
+			ProviderRateLimitObservedAt:      providerRateLimitObservedAt,
+			SidebarPosition:                  sidebarPosition,
+			RowVersion:                       rowVersion,
+			BugLabel:                         bugLabelFromSessionListScan(bugLabelID, bugLabelName, bugLabelSlug),
+			BugLabels:                        bugLabelsFromSessionListJSON(bugLabelsRaw),
 		})
 	}
 	return out, rows.Err()

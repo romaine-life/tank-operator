@@ -46,7 +46,7 @@ require_absent() {
   fi
 }
 
-for provider in claude codex antigravity; do
+for provider in claude codex; do
   configmap="${provider}-api-proxy-envoy"
   block="$(extract_configmap "${configmap}")"
   if [ -z "${block}" ]; then

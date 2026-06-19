@@ -4,12 +4,10 @@ This ledger names user-facing behavior under the claude-runners feature area. It
 is not a backlog. Add entries only when the behavior needs a stable handle for
 planning, review, tests, incident follow-up, or retirement.
 
-## Antigravity no-answer provider failure terminal
 
 Status: in progress
 
 Intent:
-When Antigravity (`agy`) exits with code 0 after producing tool activity but no
 assistant prose, the turn must resolve as a durable failure instead of a
 successful empty completion. Originating incident: session 711 on 2026-06-08
 ran 61 tool steps, logged `agent executor error: UNKNOWN (code 500)` /
@@ -24,27 +22,20 @@ Contract impact:
 - Converts a provider failure that previously masqueraded as success into
   exactly one durable `turn.failed`, satisfying "Provider failures must become
   durable failure events instead of silent strandings."
-- A normal successful Antigravity turn requires assistant prose that can be
   promoted as `final_answer`; tool activity alone is not a successful user
-  answer. When agy starts background work (a `schedule` timer or a `run_command`
   build) it narrates alongside it ("I will wait and report back"), so a
   background-work turn still has prose to promote and its terminal carries
   `background_work_pending=true` — see the self-continuation relay capability below.
-- The Antigravity adapter mirrors the SDK's completed-response boundary where
-  possible from agy's JSONL: only a `MODEL` `PLANNER_RESPONSE` that is `DONE`
   and has non-empty text can become assistant prose. `IN_PROGRESS` records may
   start the turn but cannot open tools, close tools, or consume a step index
   before the later settled transition.
-- The driver is event-driven: it watches agy's data directory and drains
   transcript records on filesystem/output/process-exit notifications, then
   performs one final reconciliation drain after exit. It does not run a fixed
   transcript polling loop. The transcript tailer owns per-file byte cursors and
-  partial-line buffers, so long cumulative Antigravity transcripts are not
   reread from the beginning on every file event.
 - Transcript event-source health is explicit. Watcher startup failure or a
   watcher error becomes a bounded `turn.failed` reason
   (`transcript_event_source_unavailable` / `transcript_event_source_error`) and
-  increments `tank_antigravity_runner_transcript_event_source_total{result}`;
   live-update degradation is not silent.
 - Provider executor stderr such as `UNKNOWN (code 500)` and
   `PlannerResponse without ModifiedResponse` is counted separately as
@@ -53,30 +44,23 @@ Contract impact:
 
 Evidence (Go runner; the TS runner this entry originally cited was replaced
 by the Go spike in #994 and its test files no longer exist):
-- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestTurnRunFailsWhenProviderProducesNoFinalAnswer` pins the no-answer
   terminal; `TestTurnRunClassifiesExecutorErrorOnNoFinalAnswer` pins the
   `provider_executor_error` vs `provider_no_final_answer` classification).
-- Metrics/docs: `tank_antigravity_runner_provider_error_total{reason}` with
   `provider_executor_error` and `provider_no_final_answer` implemented and
   documented in `docs/observability.md`.
 - Outstanding from the original TS-era scope: transcript event-source health
-  (`tank_antigravity_runner_transcript_event_source_total`,
   `transcript_event_source_*` failure reasons) and the
-  `agy_diagnostic`/`schedule_intent` counters are documented but not yet
   implemented in the Go runner; this entry stays in progress until they are.
 
-## Antigravity process death is session-terminal
 
 Status: in progress
 
 Intent:
-When the `agy` process exits (crash, OOM, or a Stop whose SIGINT proved
 fatal), the session is done by explicit product decision (2026-06-10): no
 in-place respawn, no container-restart revival — both resume the chat with an
 agent that silently lost the conversation. The runner instead resolves
 everything durably and the session row moves to `Failed` exactly like pod
-death. `tank_antigravity_runner_process_exit_total` /
 `tank_session_provider_fatal_total` measure how often this happens; revival
 gets designed deliberately if that rate ever matters.
 
@@ -84,7 +68,6 @@ Affected contracts:
 - Agent Runners
 
 Contract impact:
-- An in-flight turn resolves with exactly one durable terminal when agy
   exits: `turn.interrupted` if a Stop was in flight, else
   `turn.failed{reason:"provider_process_exited"}` — "provider failures must
   become durable failure events instead of silent strandings."
@@ -92,52 +75,34 @@ Contract impact:
   `submit_turn` commands drain to durable
   `turn.failed{reason:"provider_process_unavailable"}` with normal acks, so
   the command queue cannot strand. The runner must not exit — kubelet's
-  restart policy would relaunch agy with amnesia (forbidden revival).
 - The runner reports `POST /api/internal/sessions/{id}/provider-fatal`
   (projected SA token, self-session only); the orchestrator applies the
   `session.provider_fatal` RowWriter transition → row status `Failed`, same
   downstream behavior as `session.pod_failed`.
 - Two liveness bounds share the same turn-resolution select: the submit-ack
-  watchdog (`ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS`, default 60s) fails a turn
   whose PTY prompt write produced no transcript movement at all
   (`prompt_not_accepted`, no auto-retry — a re-written prompt can
   double-execute), and the interrupt grace window
-  (`ANTIGRAVITY_INTERRUPT_GRACE_MS`, default 10s) forces the durable
   `turn.interrupted` when a Stop is neither settled nor fatal. Interrupts
-  with no active turn are ignored rather than SIGINTing idle agy.
 
 Evidence:
-- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
-  (`TestHandleSubmitTurnFailsDurablyWhenAgyExits`,
-  `TestHandleSubmitTurnDrainsCommandsAfterAgyExit`,
   `TestHandleSubmitTurnWatchdogFailsSwallowedPrompt`,
   `TestHandleSubmitTurnInterruptGraceForcesDurableStop`,
-  `TestInterruptWithoutActiveTurnDoesNotSignalIdleAgy`).
 - Backend: `backend-go/internal/sessioncontroller/provider_fatal_test.go`
   (`session.provider_fatal` derives row status `Failed`).
-- Metrics: `tank_antigravity_runner_process_exit_total{phase}`,
-  `tank_antigravity_runner_interrupt_outcome_total{outcome}`,
-  `tank_antigravity_runner_submit_watchdog_total{result}`,
-  `tank_antigravity_runner_provider_fatal_report_total{result}`,
   `tank_session_provider_fatal_total{provider,result}` — taxonomy in
   `docs/observability.md`.
-- Design record: `backend-go/cmd/antigravity-runner/ARCHITECTURE.md` →
   "Process Death Is Session-Terminal (No Revival)".
 
-## Antigravity self-continuation relay (timer + background work)
 
 Status: in progress
 
 Intent:
-Antigravity (`agy`) is the first long-running, self-managing agent in the
 codebase: one persistent process that schedules its own work (`schedule` timers,
 `run_command` builds/shells), runs it in the background, and **continues itself**
-when that work finishes — no Tank clock involved. The runner keeps agy alive,
 OBSERVES its self-continuation, and RELAYS it through a backend-authored turn
-boundary. One user request becomes one user-facing turn that spans agy's
 background work: non-summoning through the wait, summoning at the report.
 Originating saga: ~20 PRs across 2026-06 tried to make "timer waking" work by
-having Tank own and fire agy's clock (the puppeteer model). Session 781 was the
 last failure of the Go rewrite (#996), which had dropped wakeup registration; an
 earlier `firstEnv` token-path bug then made a "registered" log line lie with no
 durable row. The whole inject approach was the wrong shape — it double-wakes an
@@ -147,48 +112,35 @@ Affected contracts:
 - Agent Runners
 
 Contract impact:
-- **Tank never owns a clock for agy.** `supportsScheduledWakeups` and the
-  background-task-wake register endpoint REJECT antigravity (the single
   `providerSelfContinues` realm-split predicate); the runner registers no
   `session_scheduled_wakeups` / `session_background_task_wakes` row. Those tables
   and their fire loops are the Claude/Codex model, where the agent genuinely
   cannot self-continue.
-- **The runner observes + relays.** agy's idle self-continuation (a `MODEL` step
   with no active turn, after one of its tracked tasks fired) POSTs
-  `/api/internal/sessions/{id}/agent-continuation`. The backend — the sole
-  producer of `turn.submitted` — authors the boundary (`source=agent-continuation`,
   `OmitUserMessage`) reusing the `turn_bgtask-<task>` client nonce so the relay
   turn folds into the originating user-facing turn. `handleSubmitTurn` skips the
-  PTY write for `agent-continuation` and replays agy's already-emitted steps.
 - **The fold edge is durable (tank-operator#1035).** Reusing the
   `turn_bgtask-<task>` id shape is necessary but not sufficient to fold: the
   transcript projection derives the relay → originating-turn parent edge from
   durable `shell_task.*` lifecycle events, and only recognized
   `turn.submitted` sources mark continuation turns. The runner therefore
-  publishes `shell_task.started` at agy's RUNNING marker (carrying the
   originating turn id; `task_id` is the stableIDPart form so it round-trips
   through the relay turn id) and `shell_task.exited` at the `sender=`
   completion, and `isBackgroundTaskWakeTurnEvent` recognizes
-  `source=agent-continuation` alongside `background-task`. The same events
   make the pending task visible at rest in the Background-activity screen
   (it renders the `shell_task.*` ledger set). Session 790's two symptoms —
   "nothing in background tasks" and a standalone turn for the woke-up
   report — were both this missing edge. A signal whose originating turn is
   unknowable publishes nothing and counts
-  `tank_antigravity_runner_task_lifecycle_total{event="orphaned_start"|"orphaned_completion"}`
   — the fold-regression signal.
 - **User-facing-turn projection (the #906 spine).** The runner stamps
   `turn.completed.background_work_pending` from the pending-set; the activity fold
   folds a would-be-`ready` terminal to the non-summoning `scheduled` status when
   it is set. `applyScheduledWakeOverride` unifies the two pending sources — the
-  Tank wake tables (Claude/Codex) OR `background_work_pending` (antigravity) — so a
-  parked agy turn reads as `scheduled` with no Tank wake row. `working → scheduled`
   does not ring; `working → ready` (nothing pending) rings.
-- **Silence is the turn boundary (turn-settle window).** agy writes no
   end-of-burst marker anywhere (verified empirically across transcripts,
   messages/, task logs, cli.log — tank-operator#1035); its planner loop runs
   multiple rounds per burst. The runner publishes `turn.completed` only after
-  a settled prose response plus `ANTIGRAVITY_TURN_SETTLE_MS` (default 2s) of
   transcript silence, so the answer-first sequence stays inside one turn with
   a correct `background_work_pending` stamp — no false `ready`/ring, no
   untracked self-wake relay. Only a genuinely NEW step may move the boundary:
@@ -202,33 +154,24 @@ Contract impact:
   an early close degrades to the relay+fold machinery (cosmetic), a
   never-close violates "exactly one durable terminal per turn" and is
   structurally excluded by replay invisibility.
-  `tank_antigravity_runner_turn_settle_total{outcome}` counts quiet vs
   extended boundaries.
-- **The pending-set is the load-bearing signal.** agy routes all background work
   through one uniform task framework: a `MODEL` `status=RUNNING`
   "running as a background task with task id: X" marker adds X; a SYSTEM_MESSAGE
   `sender=X` completion removes X. The RUNNING marker always lands before the SDK
   `turn.completed`, so the runner knows at the terminal whether work is pending —
   no race.
-- **No untracked self-wake.** agy continues only after a tracked task completion;
   a self-continuation with no preceding completion is logged loudly (the
   forbidden-self-wake signature) rather than silently resurrecting a closed turn.
 - **Idempotent + resurrection-safe relay.** The relay turn id is deterministic
   per task; the endpoint re-enqueues only while no terminal exists
   (`FindTurnTerminal`), and JetStream `WithMsgID` dedups the deterministic command
-  so a retry never double-delivers. `agent-continuation` is a self-resume source,
   so a transient publish-fail writes no `command_failed` terminal and the runner's
   retry recovers.
 
 Evidence:
-- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestRunnerSelfContinuationContract` AST-asserts the runner owns no Tank wake
-  and POSTs only `/agent-continuation`; `TestNoteTaskSignalTracksPendingSet`;
   `TestTurnCompletedStampsBackgroundWorkPending`).
 - Orchestrator reject/relay: `backend-go/cmd/tank-operator/scheduled_wakeups_test.go`
-  (`TestSupportsScheduledWakeupsRejectsAntigravity`); `background_task_wakes_test.go`
-  (`TestProviderSelfContinues`, `sdkTurnSource` includes `agent-continuation`);
-  `handleInternalAgentContinuation` + the antigravity reject in
   `handleInternalRegisterBackgroundTaskWake` (`background_task_wakes.go`).
 - Projection: `backend-go/internal/sessioncontroller/chat_activity_test.go`
   (`TestApplyScheduledWakeOverride` background_work_pending cases park even with a
@@ -236,8 +179,6 @@ Evidence:
   (`ActivityFoldStats.BackgroundWorkPending`).
 - Guards: `scripts/check-removed-chat-runtime.mjs` (runner self-continuation
   contract check — no `registerScheduledWakeup` / wake-endpoint literals in the
-  runner main.go, `/agent-continuation` present); the AST test above.
-- Turn settle: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestTurnSettleKeepsAnswerFirstBurstInOneTurn` replays slot-1 round 1's
   exact answer-first burst into one terminal;
   `TestTurnSettleQuietCompletesAfterWindow`,
@@ -247,27 +188,20 @@ Evidence:
   `TestReplayedTaskSignalsKeepPendingSetSettled` pins the companion guard —
   a replayed RUNNING marker cannot resurrect a completed task into
   `background_work_pending` at the terminal).
-- Fold edge: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestTaskLifecycleEventsPublishDurableFoldEdge`,
   `TestTaskLifecycleStartWhileIdlePublishesNothing`);
   `backend-go/cmd/tank-operator/transcript_projection_test.go`
   (`TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn`
   — session 790's exact event shape folds and never surfaces standalone).
 - Metrics: `tank_agent_continuation_total{provider,result}`;
-  `tank_background_task_wake_register_total{result="rejected_antigravity"}`;
-  `tank_antigravity_runner_task_lifecycle_total{event}`.
-- Contract: `backend-go/cmd/antigravity-runner/ARCHITECTURE.md`
   ("The long-running-agent harness contract"); the `scheduled` status spine in
   `docs/scheduled-turn-continuity.md`.
 
-## Antigravity transcript-rewrite replay suppression (turn re-attribution)
 
 Status: in progress
 
 Intent:
-agy performs its larger writes to `transcript_full.jsonl` as an in-place
 truncate + byte-identical full rewrite (same inode, prefix cksum-stable —
-verified live on probe session 799, agy CLI 1.0.6). When a tailer sweep's
 stat lands inside that sub-second window, `size < offset` rewinds the byte
 cursor and the entire history re-arrives — an intermittent race correlated
 with large step outputs (zero on light sessions; routine on real workloads:
@@ -295,7 +229,6 @@ Contract impact:
   dedupe (`taskEventsPublished`) that #1035 added for repeating task markers.
 - The idle path is guarded too: a replayed idle MODEL step is not re-buffered
   into the next attaching turn and does not manufacture a phantom
-  agent-continuation relay — only a genuinely new idle MODEL step is agy
   self-continuing (the no-untracked-resumption rule).
 - Replayed bytes prove aliveness only: the submit-ack watchdog clears, and
   nothing else moves. The durable publish is suppressed, the settle window is
@@ -306,7 +239,6 @@ Contract impact:
   transiently resurrect a dead task into a terminal's
   `background_work_pending` stamp, and a replayed completion must not reset
   the consumed relay attribution).
-- Scoped to process memory deliberately: agy process death is
   session-terminal (no revival), so no replay must survive a restart that the
   tailer's startup byte-cursor skip does not already cover.
 - Pre-fix sessions' duplicated `session_events` rows were scrubbed on
@@ -316,13 +248,11 @@ Contract impact:
   keeps old data alive (migration policy).
 
 Evidence:
-- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestCumulativeTranscriptReplayDoesNotReattributeStepsAcrossTurns` replays
   session 791's shape — full-history re-arrival under a second turn publishes
   nothing and the second turn's final answer stays its own;
   `TestIdleCumulativeReplayDoesNotBufferOrManufactureContinuation` pins the
   idle buffer + phantom-relay guard).
-- Ledger diagnosis: session 791 `session_events` — same agy step ids under up
   to 4 turn_ids, 0 of 501 step/status pairs with divergent content across
   copies (the re-publications were byte-identical replays).
 - Writer-behavior verification (probe sessions 798/799, 2026-06-11): 0.3s
@@ -331,9 +261,7 @@ Evidence:
   durable ledger recorded a full mid-turn re-publication on the heavy turn,
   proving the sub-second in-place truncate+rewrite race (the runner's
   fsnotify-paced stats catch windows wall-clock samplers cannot).
-- Metrics: `tank_antigravity_runner_step_replay_suppressed_total{context}` —
   taxonomy in `docs/observability.md`.
-- Design record: `backend-go/cmd/antigravity-runner/ARCHITECTURE.md` →
   "The Transcript Writer Rewrites In Place (session-scoped step dedupe)".
 
 ## Background-task completion wake
@@ -344,7 +272,6 @@ Intent:
 When a session backgrounds provider work and then ends its turn, the work
 finishing later must re-invoke the agent. Two provider shapes are covered:
 Claude's `run_in_background` Bash tasks (the original), and Codex's
-unified-exec background shells (added after the antigravity fold work proved
 the rails provider-generic — tank-operator#1035 follow-up). Codex parity has
 three legs: the app-server transport surfaces idle item notifications instead
 of dropping them at the active-queue guard, the adapter remembers each
@@ -435,7 +362,6 @@ Contract impact:
   completion_source: runner_restart}` on the originating turn with a
   deterministic event id (repeated restarts dedupe instead of stacking wake
   generations) and registers the unknown-status wake demanding the agent
-  verify and report. Antigravity needs no re-adoption: agy process death is
   session-terminal by design (#1034).
 
 Evidence:
@@ -625,7 +551,7 @@ configs are identical, so old and new runners coexist freely.
 
 ## Per-session NATS runner credentials
 
-Status: in progress (stage 3 implemented; stage 4 blocked on legacy-flatline)
+Status: shipped
 
 Intent:
 Session pods must not share a fleet-wide NATS token. The NATS bus carries
@@ -641,24 +567,23 @@ Affected contracts:
 - Observability
 
 Contract impact:
-- Claude, Codex, and Antigravity runner sidecars receive
   `NATS_USER=<session storage key>` and
   `NATS_PASSWORD_FILE=/var/run/secrets/auth.romaine.life/token`; they no
   longer mount `tank-nats-auth` as `NATS_TOKEN`.
-- The NATS auth-callout validates the projected token via TokenReview, reads
-  the orchestrator-written pod labels, equality-checks the claimed storage key,
-  and returns a NATS user JWT scoped to that session's event subject and command
-  consumers.
+- The NATS auth-callout exchanges the projected token at auth.romaine.life,
+  verifies the returned service JWT, equality-checks the claimed storage key,
+  and returns a NATS user JWT scoped to that session's event subject and
+  command consumers. Production session pods exchange into `svc:tank:<id>`;
+  Glimmung validation slot pods exchange into `svc:tank:slot-N-session-<id>`,
+  which maps to the existing `tank-operator-slot-N:<id>` storage key.
 - JavaScript runners use the NATS authenticator hook and read the projected
   token file during auth, so reconnects can observe Kubernetes token rotation.
-  Antigravity's Go runner reads the projected token file at boot/connect and
   relies on the existing permanent-close container restart path if auth is
   later revoked.
-- Stage 4 is not optional: after
-  `tank_nats_auth_callout_total{result="legacy"}` stays flat for a full
-  pre-stage-3 pod-age window, remove `NATS_CALLOUT_LEGACY_TOKEN` and the
-  session-namespace `tank-nats-auth` ExternalSecret. Until then the legacy grant
-  exists only to avoid breaking live pre-stage-3 pods.
+- The migration is closed: the callout has no shared-token authorization
+  branch, no legacy-token env, and no session-namespace `tank-nats-auth`
+  ExternalSecret. The remaining `tank-nats-auth` Secret is the orchestrator
+  namespace's static password for `NATS_USER=tank-operator`.
 
 Evidence:
 - Manifest: `backend-go/internal/sessionmodel/sessionmodel_test.go`
@@ -667,11 +592,16 @@ Evidence:
 - JavaScript runner: `claude-runner/src/sessionBus.test.ts`
   (`connect uses per-session user and projected token file authenticator`) pins
   file-backed user/pass auth.
-- Antigravity runner: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestLoadConfigReadsPerSessionNATSAuth`,
   `TestReadTrimmedFileRejectsEmptyNATSPasswordFile`).
 - Migration guard: `scripts/check-removed-chat-runtime.mjs` blocks reintroducing
   shared `NATS_TOKEN` injection into session runner envs.
+- Observability: the callout exposes `tank_nats_auth_callout_total{result}` on
+  `:9100`, scraped by the `tank-nats-auth-callout` PodMonitor in
+  `k8s/templates/observability.yaml`. `TankNatsAuthCalloutDenials` pages the
+  #1148 new-pod auth-failure class (`denied_*`/`error`), including bounded
+  denial reasons for invalid subjects, untrusted slot namespaces, and pod scope
+  mismatches.
 
 ## Runner correctness cluster (issue #1078)
 
@@ -728,7 +658,6 @@ Evidence:
   overlapping subjects across streams). WorkQueue retention deletes each
   command when its (single, filter-exclusive) consumer acks it; `DiscardNew`
   REJECTS publishes at limit pressure — a failed submit instead of someone
-  else's silent loss. All three runners (claude, codex, antigravity) bind
   their data/control durables to it via `NATS_COMMAND_STREAM`; events keep
   riding `TANK_SESSION_BUS`. The orphan-consumer sweep scans both streams.
 - **Cutover:** the backend dual-publishes every command to the legacy
@@ -742,3 +671,127 @@ Evidence:
   pre-split copies approaching the rejection threshold);
   command-stream publish failures ride the existing
   publish-failure counter with `cmd_stream_`-prefixed reasons.
+
+
+Status: done
+
+Intent:
+An unrecoverable agent-runner restart must become a loud, durable, terminal
+session failure — never a silent crash-loop. Originating incident: session 979
+on 2026-06-16. The runner container restarted mid-turn (16 concurrent background
+builds/tests under memory pressure); on every restart the Claude SDK could not
+resume the provider-session because its on-disk transcript lives on the
+container-ephemeral filesystem (no per-session PVC, by design) and was wiped. The
+SDK threw "No conversation found with session ID", the runner took its normal
+exit(1)-to-restart path, and the pod crash-looped (CrashLoopBackOff, restartCount
+5+) until it would have hit the ~24h idle reaper. The only signals were a
+transient-looking `turn.failed{provider_failure}` and a session status flapping
+Failed↔Active — no alert (the only termination alert keyed on oom_killed; this
+was reason=error).
+
+Affected contracts:
+- Agent Runners
+
+Contract impact:
+- Satisfies "Provider failures must become durable failure events instead of
+  silent strandings": an unrecoverable resume becomes
+  `turn.failed{reason:"provider_session_lost"}` plus a session-level
+  `session.provider_fatal{reason:"provider_session_lost"}` Failed banner, and the
+  runner exits terminally instead of looping.
+- The orchestrator reaps the pod on provider-fatal so the kubelet crash-loop
+  actually stops; a restart-budget backstop (`CrashloopRestartBudget`, default 5)
+  reaps any runner crash-loop the runner never classified, marking it
+  `session.provider_fatal{reason:"runner_crashloop"}`.
+- A terminal Failed (provider-fatal / pod-terminating, which stamp
+  `terminating_at`) is sticky — a later pod-ready observation can no longer flip
+  the row back to Active, killing the 979 status flapping. A transient
+  `pod_failed` that may recover stays non-sticky.
+
+Observability:
+- Runner `tank_runner_unrecoverable_exit_total{reason}` (`provider_session_lost`,
+  `report_failed`); orchestrator `tank_session_pod_reaped_total{reason}`
+  (`provider_fatal`, `runner_crashloop`) and the existing
+  `tank_session_provider_fatal_total{provider,result}`.
+- Alerts `TankSessionContainerCrashLooping` (reason=error crash loop, the
+  previously un-alerted gap) and `TankSessionProviderFatal`.
+
+Evidence:
+- Runner (claude-runner/src/runner.test.ts):
+  `isConversationNotFoundMessage matches the SDK resume-not-found signature
+  only`, `isUnrecoverableResumeFailure fires only for a resume`,
+  `reportUnrecoverableResume POSTs session.provider_fatal and exits terminally`,
+  `failActiveCommandTurn emits the honest provider_session_lost reason`.
+- Orchestrator (internal/sessioncontroller): `TestBackstopReapsCrashlooping
+  RunnerPastBudget`, `TestBackstopDoesNotReapUnderBudget`,
+  `TestBackstopDoesNotReapRecoveredRunner`, `TestCrashloopFatalEventIsSticky
+  Terminal` (k8s_watch_test.go); the `provider_fatal → status Failed +
+  terminating_at (sticky)` and guarded recovery rows in
+  `TestDeriveRowColumnChangesPerEventType` (writer_test.go).
+
+
+## AskUserQuestion answer attachments (screenshot-in-answer)
+
+Status: shipped
+
+Intent:
+A file the user attaches while answering an AskUserQuestion must reach the
+model — not be silently discarded. Originating report: a user answered a
+question with both typed text and a pasted screenshot; the text arrived as the
+answer's free-form note, the screenshot was dropped. Root cause: the answer
+path (`POST /…/answer` → `input_reply`) was built text-only across all four
+layers it crosses (frontend composer, backend `handlers_turns.go`, sessionbus
+`Command`, runner) and had no attachment field anywhere. The normal turn path
+already solved the same problem (upload to `/workspace`, carry
+`display_attachments`), so the fix reuses that plumbing rather than inventing a
+new one.
+
+Affected contracts:
+- Agent Runners
+- Transcript
+- Artifacts And Files
+
+Contract impact:
+- Satisfies the new Agent Runners invariant "a file attached to an
+  AskUserQuestion answer must reach the model, not be silently dropped." The
+  attachment is carried end to end as path metadata only: the bytes stay
+  pod-local in the shared `/workspace`, ride nothing on the durable ledger
+  except `path`/`abs_path`, and the Claude runner reads them at delivery and
+  returns an image as an inline image content block in the resolved
+  AskUserQuestion tool result (non-image → path line; missing/oversize/
+  unreadable → visible note; never a silent drop).
+- The answer's attachment is also stamped on the durable `turn.input_answered`
+  record and on the Tank-visible `user_message.created` continuation turn, so
+  the transcript renders the attachment chip on the answer bubble (Transcript /
+  Artifacts-And-Files contracts).
+- Additive across the wire: `Command.attachments` /
+  `turn.input_answered.payload.attachments` are absent on text-only answers, so
+  pre-deploy session pods keep delivering text answers unchanged (no consumer
+  migration required).
+
+Non-goal / named gap:
+- Codex GUI model-side delivery. The Codex app-server answer is a structured
+  per-question response with no inline-image or free-text channel, so
+  codex-runner does not yet put the attachment in front of the Codex model — it
+  records the attachment on the transcript turn (backend-stamped, provider-
+  agnostic) but the image is not delivered to the agent. A future agent wiring
+  Codex answer attachments should append the workspace path to the Codex answer
+  (mirroring how Codex consumes normal-turn attachment paths) or use whatever
+  image channel the app-server gains.
+
+Observability:
+- Runner `tank_runner_input_reply_attachment_total{kind,result}`
+  (`kind` = `image|file`, `result` = `delivered|read_failed|missing`). A
+  `missing`/`read_failed` image with a populated
+  `turn.input_answered.attachments` is the silent-screenshot-loss signature.
+
+Evidence:
+- Backend (cmd/tank-operator/handlers_turns_test.go):
+  `TestAnswerSessionTurnCarriesDisplayAttachments` proves the attachment
+  reaches all three sinks (input_reply command, `turn.input_answered`,
+  `user_message.created`).
+- Sessionbus (internal/sessionbus/commands_test.go):
+  `TestNormalizeCommandAttachments`,
+  `TestNormalizeCommandAttachmentsEmptyStaysNil`.
+- Runner (claude-runner/src/runner.answer-attachments.test.ts): inline image
+  block, non-image path line, missing/oversize/escaping-path visible note,
+  text-only no-op.

@@ -165,6 +165,7 @@ type projectionAwaitingInput struct {
 	ProviderTimelineID string
 	TimelineID         string
 	Questions          []any
+	Plan               string
 	QuestionIndex      int
 	QuestionSet        int
 	OrderKey           string
@@ -338,6 +339,8 @@ func (s *projectionState) apply(event map[string]any) {
 		s.upsertBackgroundTask(event, status)
 	case "scheduled_wakeup.updated":
 		s.upsertScheduledWakeup(event)
+	case "test_provision.updated":
+		s.applyTestProvision(event)
 	case "turn.awaiting_input":
 		// The agent asked the user a question as the Tank-visible response.
 		// The durable question set owns the Turn question page; the main
@@ -412,6 +415,16 @@ func projectUserMessageEvent(event map[string]any) map[string]any {
 	// the user bubble does not borrow the human owner's Gravatar.
 	if authorKind := transcriptString(event, "author_kind"); authorKind != "" {
 		entry["authorKind"] = authorKind
+	}
+	// Per-turn run config: the model/effort this turn ran on, stamped by
+	// UserSubmissionEventMaps. Surfaced on the user-message entry so the
+	// renderer can show which model answered each turn even after a
+	// mid-session re-pin (the composer chip only shows the next turn's model).
+	if model := transcriptPayloadString(event, "model"); model != "" {
+		entry["model"] = model
+	}
+	if effort := transcriptPayloadString(event, "effort"); effort != "" {
+		entry["effort"] = effort
 	}
 	return entry
 }
@@ -564,6 +577,11 @@ func (s *projectionState) applyTurnProgress(event map[string]any, status string)
 		"orderKey":       transcriptString(event, "order_key"),
 		"progressStatus": status,
 	}
+	if status == "submitted" {
+		if source := strings.TrimSpace(transcriptPayloadString(event, "source")); source != "" {
+			entry["submittedSource"] = source
+		}
+	}
 	s.turnProgress = append(s.turnProgress, projectedEntryItem{
 		entry:    entry,
 		orderKey: transcriptString(event, "order_key"),
@@ -611,6 +629,47 @@ func (s *projectionState) applySessionStatus(event map[string]any) {
 	})
 }
 
+// applyTestProvision projects a display-only test_provision.updated record as a
+// top-level role:system message. Each phase of one interactive test-slot
+// provision run (creating → validating → waiting → ready/error) carries its own
+// timeline_id, so the messages append in order and group under one system
+// avatar (the adjacent-system-message grouping path). Unlike happy-path
+// session.status lifecycle these are NOT marked with sessionStatus, so they are
+// never folded into a turn — they are deliberate, conversation-altitude
+// feedback for a zero-LLM workflow that has no owning turn. A terminal "ready"
+// record may carry the test-environment URL as a click-through action.
+func (s *projectionState) applyTestProvision(event map[string]any) {
+	text := transcriptPayloadString(event, "text")
+	if transcriptString(event, "timeline_id") == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	entry := map[string]any{
+		"id":            transcriptString(event, "timeline_id"),
+		"kind":          "message",
+		"role":          "system",
+		"text":          strings.TrimSpace(text),
+		"time":          transcriptString(event, "created_at"),
+		"sourceEventId": transcriptString(event, "event_id"),
+		"orderKey":      transcriptString(event, "order_key"),
+	}
+	if transcriptPayloadString(event, "severity") == "error" {
+		entry["severity"] = "error"
+	} else {
+		entry["severity"] = "info"
+	}
+	if url := strings.TrimSpace(transcriptPayloadString(event, "url")); url != "" {
+		entry["action"] = map[string]any{
+			"label": "Open test environment",
+			"href":  url,
+		}
+	}
+	s.messages = append(s.messages, projectedEntryItem{
+		entry:    entry,
+		orderKey: transcriptString(event, "order_key"),
+		index:    len(s.messages),
+	})
+}
+
 // applyBackgroundWakePrompt records the wake/continuation boundary as a META
 // chip, not a user message. The prompt text on turn.submitted.payload.prompt
 // is AGENT-DIRECTED harness instruction ("Review the task's output…"); a
@@ -634,10 +693,6 @@ func (s *projectionState) applyBackgroundWakePrompt(event map[string]any) {
 		// pinned together by test.
 		title = "Background task lost from view — agent re-invoked"
 		detail = "Tank could no longer observe the task and re-invoked the agent to verify its real state and report."
-	}
-	if transcriptPayloadString(event, "source") == string(conversation.TurnSubmittedSourceAgentContinuation) {
-		title = "Agent continued on its own"
-		detail = "The agent resumed by itself after its background task finished."
 	}
 	if taskID != "" {
 		detail = "Task " + taskID + ": " + detail
@@ -736,6 +791,7 @@ func (s *projectionState) applyAwaitingInput(event map[string]any) {
 		ProviderTimelineID: transcriptMapString(payload, "provider_timeline_id"),
 		TimelineID:         projectionFirstNonEmpty(transcriptMapString(payload, "timeline_id"), transcriptString(event, "timeline_id")),
 		Questions:          questions,
+		Plan:               transcriptMapString(payload, "plan"),
 		QuestionIndex:      projectionAwaitingInputQuestionIndex(event),
 		QuestionSet:        projectionAwaitingInputQuestionSet(event),
 		OrderKey:           transcriptString(event, "order_key"),
@@ -785,7 +841,7 @@ func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
 		"toolName":       "AskUserQuestion",
 		"toolStatus":     "completed",
 		"toolInput":      projectionFormatValue(map[string]any{"questions": questions}),
-		"toolOutput":     "Question set opened on the next turn page.",
+		"toolOutput":     "Question set opened on the linked turn page.",
 		"turnId":         turnID,
 		"providerItemId": transcriptPayloadString(event, "provider_item_id"),
 		"time":           transcriptString(event, "created_at"),
@@ -797,11 +853,33 @@ func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
 	if summary != "" {
 		entry["toolSummary"] = summary
 	}
+	if questionTarget := projectedAwaitingInputInvocationQuestionTarget(event); questionTarget != nil {
+		entry["questionTarget"] = questionTarget
+	}
 	s.awaitingInputTools = append(s.awaitingInputTools, projectedEntryItem{
 		entry:    entry,
 		orderKey: orderKey,
 		index:    len(s.awaitingInputTools),
 	})
+}
+
+func projectedAwaitingInputInvocationQuestionTarget(event map[string]any) map[string]any {
+	payload := transcriptPayload(event)
+	questionTurnID := transcriptMapString(payload, "question_turn_id")
+	if questionTurnID == "" {
+		return nil
+	}
+	target := map[string]any{
+		"turnId": questionTurnID,
+		"page":   1,
+	}
+	if timelineID := transcriptMapString(payload, "question_timeline_id"); timelineID != "" {
+		target["timelineId"] = timelineID
+	}
+	if page, ok := transcriptNumeric(payload["question_page"]); ok && page > 0 {
+		target["page"] = int(page)
+	}
+	return target
 }
 
 func projectionAwaitingInputQuestions(event map[string]any) []any {
@@ -1082,6 +1160,7 @@ func (s *projectionState) upsertScheduledWakeup(event map[string]any) {
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
+	s.fillAwaitingInputToolQuestionTargets()
 	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.scheduledWakeups)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.wakePrompts)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
@@ -1214,6 +1293,62 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 		out = append(out, annotateProjectionTerminal(item.entry, s.turnTerminals))
 	}
 	return out
+}
+
+func (s *projectionState) fillAwaitingInputToolQuestionTargets() {
+	if len(s.awaitingInputTools) == 0 || len(s.messages) == 0 {
+		return
+	}
+	for toolIdx := range s.awaitingInputTools {
+		toolEntry := s.awaitingInputTools[toolIdx].entry
+		if toolEntry == nil {
+			continue
+		}
+		if questionTarget, _ := toolEntry["questionTarget"].(map[string]any); questionTarget != nil {
+			continue
+		}
+		toolTurnID := transcriptMapString(toolEntry, "turnId")
+		toolProviderItemID := transcriptMapString(toolEntry, "providerItemId")
+		toolID := transcriptMapString(toolEntry, "id")
+		for _, message := range s.messages {
+			awaiting, _ := message.entry["awaitingInput"].(map[string]any)
+			if awaiting == nil {
+				continue
+			}
+			if askingTurnID := transcriptMapString(awaiting, "askingTurnId"); askingTurnID != "" && askingTurnID != toolTurnID {
+				continue
+			}
+			target := questionTargetFromProjectedAwaitingInput(awaiting)
+			if target == nil {
+				continue
+			}
+			providerItemID := transcriptMapString(awaiting, "providerItemId")
+			if providerItemID != "" && providerItemID == toolProviderItemID {
+				toolEntry["questionTarget"] = target
+				break
+			}
+			providerTimelineID := transcriptMapString(awaiting, "providerTimelineId")
+			if providerTimelineID != "" && (toolID == providerTimelineID || strings.HasPrefix(toolID, providerTimelineID+":")) {
+				toolEntry["questionTarget"] = target
+				break
+			}
+		}
+	}
+}
+
+func questionTargetFromProjectedAwaitingInput(awaiting map[string]any) map[string]any {
+	questionTurnID := transcriptMapString(awaiting, "questionTurnId")
+	if questionTurnID == "" {
+		return nil
+	}
+	target := map[string]any{
+		"turnId": questionTurnID,
+		"page":   1,
+	}
+	if timelineID := transcriptMapString(awaiting, "timelineId"); timelineID != "" {
+		target["timelineId"] = timelineID
+	}
+	return target
 }
 
 func (s *projectionState) backgroundProviderItemIDs() map[string]bool {
@@ -1562,7 +1697,7 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	out["turnTerminalAt"] = terminal.Time
 	out["turnTerminalEventId"] = terminal.SourceEventID
 	out["turnTerminalOrderKey"] = terminal.OrderKey
-	if transcriptMapString(entry, "metaKind") != "turn_usage" {
+	if terminalUsageAppliesToEntry(entry, terminal) {
 		if terminal.Usage != nil {
 			out["turnUsage"] = terminal.Usage
 		}
@@ -1571,6 +1706,16 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 		}
 	}
 	return out
+}
+
+func terminalUsageAppliesToEntry(entry map[string]any, terminal turnTerminalProjection) bool {
+	if transcriptMapString(entry, "metaKind") == "turn_usage" {
+		return false
+	}
+	if len(terminal.FinalAnswerIDs) > 0 {
+		return terminal.FinalAnswerIDs[transcriptMapString(entry, "id")]
+	}
+	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "assistant"
 }
 
 func compactProjectedTranscript(entries []map[string]any, activeTurnID string, runStatus string, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool, wakeParents map[string]string) transcriptProjection {
@@ -1683,7 +1828,48 @@ func buildTurnActivityShellRow(activity turnActivityBody, turnEntries []map[stri
 	if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
 		shell["usageObservation"] = usageObservation
 	}
+	// Carry the per-turn run config on the shell too. The turn's user-message
+	// entry carries the model/effort the turn ran on, but a turn-page
+	// deep-link loads the shell (the turn row), not the full transcript, so the
+	// frontend can't always reach that message entry. The shell is always
+	// loaded for the viewed turn, so it is the reliable per-turn carrier.
+	for _, entry := range turnEntries {
+		if transcriptMapString(entry, "turnId") != activity.TurnID || !isProjectedUserMessage(entry) {
+			continue
+		}
+		if m := transcriptMapString(entry, "model"); m != "" {
+			shell["model"] = m
+			// Also carry it inside the activity summary: that is the field the
+			// frontend's turn-summary normalizer preserves (top-level shell
+			// fields are reconstructed away in the row-merge path), and it is
+			// the same carrier startedAt/completedAt ride.
+			activity.Summary["model"] = m
+		}
+		if e := transcriptMapString(entry, "effort"); e != "" {
+			shell["effort"] = e
+			activity.Summary["effort"] = e
+		}
+		break
+	}
+	if source := turnSubmittedSource(turnEntries, activity.TurnID); source != "" {
+		shell["submittedSource"] = source
+		activity.Summary["submittedSource"] = source
+	}
 	return shell
+}
+
+func turnSubmittedSource(entries []map[string]any, turnID string) string {
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") != turnID ||
+			!isProjectionTurnProgress(entry) ||
+			transcriptMapString(entry, "progressStatus") != "submitted" {
+			continue
+		}
+		if source := transcriptMapString(entry, "submittedSource"); source != "" {
+			return source
+		}
+	}
+	return ""
 }
 
 func foldBackgroundWakeContinuationActivities(projection transcriptProjection, wakeParents map[string]string) transcriptProjection {
@@ -1834,14 +2020,6 @@ func isBackgroundTaskWakeTurnEvent(event map[string]any) bool {
 	case string(conversation.TurnSubmittedSourceBackgroundTask):
 		// Claude background-task wake: Tank fired the durable wake row.
 		return true
-	case string(conversation.TurnSubmittedSourceAgentContinuation):
-		// Antigravity self-continuation relay (tank-operator#1030): agy fired
-		// its own timer/task and the runner relayed it. Same continuation
-		// semantics — the turn folds into the one that started the task and
-		// must never surface standalone. Missing from this predicate was half
-		// of tank-operator#1035 (the other half: the antigravity runner never
-		// published the durable shell_task parent edge).
-		return true
 	}
 	return false
 }
@@ -1967,6 +2145,9 @@ func applyActivityAnchorSummary(summary map[string]any, anchors []map[string]any
 		last := anchors[len(anchors)-1]
 		summary["lastActivityAt"] = transcriptMapString(last, "time")
 		summary["endOrderKey"] = transcriptMapString(last, "orderKey")
+	}
+	if source := transcriptMapString(first, "submittedSource"); source != "" {
+		summary["submittedSource"] = source
 	}
 }
 
@@ -2216,6 +2397,7 @@ func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectio
 		"timeline_id":          awaiting.TimelineID,
 		"provider_timeline_id": awaiting.ProviderTimelineID,
 		"questions":            awaiting.Questions,
+		"plan":                 awaiting.Plan,
 		"question_index":       awaiting.QuestionIndex,
 		"question_set":         awaiting.QuestionSet,
 	}, answered, answer)
@@ -2270,6 +2452,11 @@ func projectionAwaitingInputPayloadFromMap(raw map[string]any, answered bool, an
 	}
 	if answer.Annotations != nil {
 		out["annotations"] = answer.Annotations
+	}
+	// ExitPlanMode plan-approval pauses carry the plan markdown; the Turns
+	// question page renders it above the Approve/Request-changes question.
+	if plan := transcriptMapString(raw, "plan"); plan != "" {
+		out["plan"] = plan
 	}
 	return out
 }

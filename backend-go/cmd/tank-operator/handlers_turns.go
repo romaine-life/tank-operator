@@ -387,6 +387,12 @@ type answerRequest struct {
 	TimelineID     string                      `json:"timeline_id"`
 	Answers        map[string][]string         `json:"answers"`
 	Annotations    map[string]answerAnnotation `json:"annotations,omitempty"`
+	// DisplayAttachments carries files the user attached to the answer (the
+	// screenshot-in-answer path). Same shape and upload plumbing as the normal
+	// turn path's display_attachments; normalized by normalizeDisplayAttachments
+	// and threaded into the transcript chip, the durable turn.input_answered
+	// record, and the input_reply command. Empty for text-only answers.
+	DisplayAttachments []conversation.UserMessageAttachment `json:"display_attachments,omitempty"`
 }
 
 // answerAnnotation carries optional preview/notes the user attached to a
@@ -524,6 +530,11 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "answer too large")
 		return
 	}
+	displayAttachments, status, detail := normalizeDisplayAttachments(body.DisplayAttachments)
+	if detail != "" {
+		writeError(w, status, detail)
+		return
+	}
 
 	owner := user.OwnerEmail()
 	info, err := s.mgr.GetByOwner(r.Context(), owner, sessionID)
@@ -580,6 +591,7 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		QuestionTimelineID: timelineID,
 		Answers:            answers,
 		Annotations:        annotationsToDisplayMap(annotations),
+		Attachments:        displayAttachments,
 		Now:                time.Now().UTC(),
 	})
 	if err := s.persistBackendEvent(r.Context(), storageKey, answerEvent); err != nil {
@@ -602,7 +614,8 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		Display: map[string]any{
 			"kind": "plain",
 		},
-		Now: time.Now().UTC(),
+		Attachments: displayAttachments,
+		Now:         time.Now().UTC(),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "build answer turn: "+err.Error())
@@ -630,6 +643,7 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		TargetProviderItemID: providerItemID,
 		Answers:              answers,
 		Annotations:          commandAnswerAnnotations(annotations),
+		Attachments:          commandAttachments(displayAttachments),
 		CreatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
 		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
@@ -762,6 +776,27 @@ func commandAnswerAnnotations(in map[string]answerAnnotation) map[string]session
 	return out
 }
 
+// commandAttachments converts already-normalized answer attachments into the
+// input_reply command shape the runner consumes. Path metadata only — the bytes
+// stay pod-local in /workspace and the runner reads them at delivery time.
+func commandAttachments(in []conversation.UserMessageAttachment) []sessionbus.CommandAttachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]sessionbus.CommandAttachment, 0, len(in))
+	for _, attachment := range in {
+		out = append(out, sessionbus.CommandAttachment{
+			Label:   attachment.Label,
+			Name:    attachment.Name,
+			Kind:    attachment.Kind,
+			Path:    attachment.Path,
+			AbsPath: attachment.AbsPath,
+			Size:    attachment.Size,
+		})
+	}
+	return out
+}
+
 func askUserQuestionAnswerTranscriptText(answers map[string][]string, annotations map[string]answerAnnotation) string {
 	var b strings.Builder
 	questions := make([]string, 0, len(answers))
@@ -787,10 +822,14 @@ func askUserQuestionAnswerTranscriptText(answers map[string][]string, annotation
 			b.WriteString("Answer: ")
 			b.WriteString(strings.Join(cleanLabels, ", "))
 			if note != "" {
-				b.WriteString("\n")
+				// The picked option is the answer; the free-form note is
+				// supplementary, so give it its own label instead of a second
+				// "Answer:" line.
+				b.WriteString("\nAdditional text: ")
+				b.WriteString(note)
 			}
-		}
-		if note != "" {
+		} else if note != "" {
+			// Free-form only (no option picked): the note IS the answer.
 			b.WriteString("Answer: ")
 			b.WriteString(note)
 		}
@@ -873,6 +912,12 @@ type sdkTurnRequest struct {
 	// system identity instead of the human owner's Gravatar. Empty for
 	// interactive human turns. Set via authorKindForUser at the HTTP edge.
 	AuthorKind string
+	// MCPActivateName / MCPActivateURL, when set, ride this submit_turn so the
+	// pod-side runner auto-surfaces the named MCP server at the next idle
+	// boundary (break-glass activation). Set by the break-glass approval turns;
+	// empty for ordinary turns.
+	MCPActivateName string
+	MCPActivateURL  string
 }
 
 // authorKindForUser maps an authenticated caller to the durable AuthorKind
@@ -919,7 +964,7 @@ type sessionRunConfig struct {
 
 func isDefaultModelAlias(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "default", "codex-account-default", "antigravity-default":
+	case "default", "codex-account-default":
 		return true
 	default:
 		return false
@@ -927,24 +972,19 @@ func isDefaultModelAlias(v string) bool {
 }
 
 func providerRequiresExplicitModel(provider string) bool {
-	return provider == "codex" || provider == "antigravity"
+	return provider == "codex"
 }
 
 func explicitModelRequiredMessage(provider, noun string) string {
 	switch provider {
 	case "codex":
 		return "model is required for Codex " + noun
-	case "antigravity":
-		return "model is required for Antigravity " + noun
 	default:
 		return "model is required"
 	}
 }
 
 func effortUnsupportedMessage(provider, noun string) string {
-	if provider == "antigravity" {
-		return "effort is not supported for Antigravity " + noun
-	}
 	if provider == "codex" {
 		return "effort is invalid; want one of low|medium|high|xhigh"
 	}
@@ -1082,6 +1122,10 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		recordSessionRunConfigRejected("turn", provider, "missing_model")
 		return nil, http.StatusBadRequest, explicitModelRequiredMessage(provider, "turns")
 	}
+	providerSessionID := ""
+	if regErr == nil && provider == "claude" {
+		providerSessionID = sanitizeProviderSessionID(registered.RuntimeProviderSessionID)
+	}
 	if !req.AllowBeforeReady {
 		if podName == nil {
 			return nil, http.StatusServiceUnavailable, "session pod not ready"
@@ -1108,6 +1152,8 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		Message:               map[string]any{"role": "user", "content": displayText},
 		Attachments:           displayAttachments,
 		Runtime:               provider,
+		Model:                 model,
+		Effort:                effort,
 		SkillName:             skillName,
 		Display:               req.Display,
 		OriginSessionID:       strings.TrimSpace(req.OriginSessionID),
@@ -1140,10 +1186,13 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		ClientNonce:       clientNonce,
 		Prompt:            prompt,
 		Model:             model,
+		ProviderSessionID: providerSessionID,
 		Effort:            effort,
 		PermissionMode:    validateTurnArg(req.PermissionMode),
 		SkillName:         skillName,
 		FollowUp:          req.FollowUp,
+		MCPActivateName:   strings.TrimSpace(req.MCPActivateName),
+		MCPActivateURL:    strings.TrimSpace(req.MCPActivateURL),
 		CreatedAt:         createdAt.Format(time.RFC3339Nano),
 	}
 	// Boundary events are backend-owned: the orchestrator accepted the turn,
@@ -1223,8 +1272,12 @@ func sdkTurnSource(source string) string {
 		return string(conversation.TurnSubmittedSourceBackgroundTask)
 	case string(conversation.TurnSubmittedSourceLaunchDispatch):
 		return string(conversation.TurnSubmittedSourceLaunchDispatch)
-	case string(conversation.TurnSubmittedSourceAgentContinuation):
-		return string(conversation.TurnSubmittedSourceAgentContinuation)
+	case string(conversation.TurnSubmittedSourceBreakGlassApproval):
+		return string(conversation.TurnSubmittedSourceBreakGlassApproval)
+	case string(conversation.TurnSubmittedSourceTestSlotModelApproval):
+		return string(conversation.TurnSubmittedSourceTestSlotModelApproval)
+	case string(conversation.TurnSubmittedSourceTestSlotDrive):
+		return string(conversation.TurnSubmittedSourceTestSlotDrive)
 	default:
 		return "sdk"
 	}
@@ -1342,8 +1395,6 @@ func sdkProviderForMode(mode string) (string, bool) {
 		return "codex", true
 	case sessionmodel.CodexAppServerMode:
 		return "codex", true
-	case sessionmodel.AntigravityGUIMode:
-		return "antigravity", true
 	default:
 		return "", false
 	}

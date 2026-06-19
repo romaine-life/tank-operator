@@ -26,6 +26,14 @@ export type SessionListDebugRow = {
   requested_at?: string | null;
   created_at?: string | null;
   ready_at?: string | null;
+  // Sidebar nesting projection (spawned sub-session lineage). parent_session_id
+  // is the id of the direct spawning session when present in the same list,
+  // else null; nest_depth is the rendered indent tier (0 root, 1 nested) so a
+  // "my sub-session didn't nest" report is diagnosable from the capture without
+  // re-deriving lineage. Enriched only by the batch projection
+  // (sessionListDebugRows), which sees the whole list.
+  parent_session_id?: string | null;
+  nest_depth?: number | null;
 };
 
 export type SessionListDebugIssue = {

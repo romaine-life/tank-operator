@@ -13,11 +13,14 @@ set -eu
 
 configure_claude() {
   mkdir -p "$HOME/.claude"
+  mkdir -p /workspace/.tank/claude
+  settings_path="/workspace/.tank/claude/settings.json"
   if [ -x /opt/tank/session-config/write-claude-settings.sh ]; then
-    /opt/tank/session-config/write-claude-settings.sh "$HOME/.claude/settings.json"
+    /opt/tank/session-config/write-claude-settings.sh "$settings_path"
   else
-    sh /opt/tank/session-config/write-claude-settings.sh "$HOME/.claude/settings.json"
+    sh /opt/tank/session-config/write-claude-settings.sh "$settings_path"
   fi
+  ln -sf "$settings_path" "$HOME/.claude/settings.json"
 
   mcp_enabled='[]'
   if [ -f /workspace/.mcp.json ]; then

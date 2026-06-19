@@ -4,6 +4,8 @@
 // the static chrome it exposes. See docs/design-system.md -> "Compact / mobile
 // posture" and the app-chrome "Mobile Session Triage" capability.
 
+import { ChevronDownIcon } from "lucide-react";
+
 import { MobileTopBar } from "../MobileTopBar";
 import { AgentAvatarIcon, requireSessionAvatar } from "../sessionAvatars";
 import {
@@ -59,6 +61,32 @@ export function StyleguideMobileShell() {
               statusLabel="Agent working"
               onOpenNav={() => {}}
             />
+          </div>
+        </section>
+
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>turn/page pager — compact</h2>
+          <p style={captionStyle}>
+            The desktop turn/page stepper collapses to one always-present
+            position button that opens the full navigation in a bottom sheet.
+            Never hidden while a turn is selected (disabled “No turns” when
+            empty). See the transcript-navigation “Compact transcript pager”
+            capability.
+          </p>
+          <div style={{ ...frameStyle, padding: "var(--space-3)" }}>
+            <button type="button" className="run-turn-pager-compact-trigger">
+              <span className="run-turn-pager-compact-label">
+                <span className="run-turn-view-combined-turn">Turn 3</span>
+                <span
+                  className="run-turn-pager-compact-sep"
+                  aria-hidden="true"
+                >
+                  ·
+                </span>
+                <span>Page 2</span>
+              </span>
+              <ChevronDownIcon size={14} aria-hidden="true" />
+            </button>
           </div>
         </section>
 

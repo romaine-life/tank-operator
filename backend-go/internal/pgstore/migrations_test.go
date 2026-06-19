@@ -101,6 +101,48 @@ func TestAppliedMigration0078ChecksumIsStable(t *testing.T) {
 	t.Fatalf("migration %s not found", id)
 }
 
+func TestAppliedMigration0138ChecksumIsStable(t *testing.T) {
+	const (
+		id       = "0138"
+		checksum = "be99723e51f85af7bb67eeec24e97ad45464e090c70961f3fe4364ce6139218d"
+	)
+
+	for _, m := range schemaMigrations {
+		if m.ID != id {
+			continue
+		}
+		if got := migrationChecksum(m.SQL); got != checksum {
+			t.Fatalf("migration %s checksum = %s, want %s", id, got, checksum)
+		}
+		if !strings.Contains(m.SQL, "antigravity_image") {
+			t.Fatalf("migration %s no longer preserves the applied antigravity_image SQL", id)
+		}
+		return
+	}
+	t.Fatalf("migration %s not found", id)
+}
+
+func TestAppliedMigration0147ChecksumIsStable(t *testing.T) {
+	const (
+		id       = "0147"
+		checksum = "f16f2cb824f63332789f50f6d6e7b604f66b71a224ce5b00e24b1707072975e0"
+	)
+
+	for _, m := range schemaMigrations {
+		if m.ID != id {
+			continue
+		}
+		if got := migrationChecksum(m.SQL); got != checksum {
+			t.Fatalf("migration %s checksum = %s, want %s", id, got, checksum)
+		}
+		if !strings.Contains(m.SQL, "session_antigravity") {
+			t.Fatalf("migration %s no longer preserves the applied session_antigravity SQL", id)
+		}
+		return
+	}
+	t.Fatalf("migration %s not found", id)
+}
+
 func TestAppliedLegacyChecksumsAreAccepted(t *testing.T) {
 	cases := []struct {
 		id              string
@@ -185,6 +227,32 @@ func TestProviderRateLimitColumnsExist(t *testing.T) {
 	for _, want := range []string{
 		"ADD COLUMN IF NOT EXISTS provider_rate_limit_info jsonb",
 		"ADD COLUMN IF NOT EXISTS provider_rate_limit_observed_at timestamptz",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+}
+
+func TestProviderQuotaTablesExist(t *testing.T) {
+	migrations := joinedMigrationSQL()
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS provider_quota_snapshots",
+		"CREATE TABLE IF NOT EXISTS provider_quota_refresh_state",
+		"PRIMARY KEY (session_scope, provider)",
+		"provider_quota_refresh_state_retry",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+}
+
+func TestRuntimeProviderSessionColumnsExist(t *testing.T) {
+	migrations := joinedMigrationSQL()
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS runtime_provider_session_id text NOT NULL DEFAULT ''",
+		"ADD COLUMN IF NOT EXISTS runtime_provider_session_observed_at timestamptz",
 	} {
 		if !strings.Contains(migrations, want) {
 			t.Fatalf("schema migrations missing %q", want)

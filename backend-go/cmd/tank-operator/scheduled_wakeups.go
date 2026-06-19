@@ -150,10 +150,6 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 
 func supportsScheduledWakeups(provider string) bool {
 	switch strings.TrimSpace(provider) {
-	// Antigravity self-continues natively (agy fires its own timer/task and emits
-	// the continuation); Tank must not own a clock for it. Only Claude, whose SDK
-	// genuinely hands control back on ScheduleWakeup, is fired by the orchestrator.
-	// See backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
 	case "claude":
 		return true
 	default:
@@ -519,19 +515,14 @@ func (s *appServer) resolveFailedWake(ctx context.Context, owner, sessionID, tur
 	}
 }
 
-// isSelfResumeTurnSource reports whether a submitted turn is the agent resuming
-// itself rather than a user or launch submission: a Claude ScheduleWakeup timer,
-// a Claude background-task wake, or an antigravity self-continuation relay. For
-// these, enqueueSDKTurn skips its generic turn.command_failed marker on a publish
-// failure. The schedule/background-task wake fire paths own the away-tagged
-// failure and re-fire from their durable rows; the antigravity relay is retried
-// by the runner that observed the self-continuation (and its FindTurnTerminal
-// guard re-enqueues only while no terminal exists). Writing the generic marker
-// would strand the turn at a terminal that blocks that recovery and, for the wake
-// paths, collide on the deterministic event_id and drop the away tag.
+// isSelfResumeTurnSource reports whether a submitted turn is a Tank-owned
+// continuation rather than a user or launch submission. enqueueSDKTurn skips
+// its generic turn.command_failed marker on publish failure for these because
+// the schedule/background-task wake fire paths own the away-tagged failure and
+// re-fire from their durable rows.
 func isSelfResumeTurnSource(source string) bool {
 	switch strings.TrimSpace(source) {
-	case "schedule-wakeup", "background-task", "agent-continuation":
+	case "schedule-wakeup", "background-task":
 		return true
 	default:
 		return false

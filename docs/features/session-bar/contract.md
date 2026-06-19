@@ -14,7 +14,9 @@ work completion, deletion, unread counts, or running state.
 ## Sources Of Truth
 
 - `session_registry` owns session identity, owner, mode, lifecycle, pod
-  metadata, repositories, and clone state.
+  metadata, repositories, clone state, and spawned-session lineage
+  (`sessions.spawned_sessions`, the parent→child links the spawned-sessions
+  chip lists).
 - `session_events` owns turn activity and terminal run outcomes.
 - `sessions.activity_summary` is a projection for sidebar display; it must
   converge from durable events and not replace them as the investigation
@@ -74,5 +76,28 @@ work completion, deletion, unread counts, or running state.
 - Delete does not appear complete until the durable session lifecycle confirms
   it.
 - Reconnect or resync produces the same session bar state as a fresh load.
+- A session spawned by an agent appears in its origin session's
+  spawned-sessions chip as a working link, converging from the durable
+  `sessions.spawned_sessions` row without a manual refresh, and is absent for
+  sessions that spawned nothing or were created without an origin.
+- A same-scope spawned child renders as a single indented tier directly under
+  its origin in the session list, grouped from the child's durable
+  `sessions.parent_session_id` (stamped in the same write that creates the
+  child). Because the pointer arrives with the child row, the child appears
+  already nested on its first snapshot/row-update — it must not first render as
+  a top-level row and then reflow into place. Nesting never exceeds one tier
+  (deeper lineage is clamped to the same tier under the top-level ancestor), and
+  a cross-scope test-slot child — whose origin is not in the
+  `(email, session_scope)`-scoped list — does not nest. The grouping must not
+  drop, duplicate, or reorder a root relative to the durable `sidebar_position`
+  order.
 - Tests cover a projection lag or missed wake scenario and prove the sidebar
   catches up from durable state.
+- Dragging a session row persists its order to durable `sidebar_position`
+  without an error (the `PUT /api/sessions/order` path must not regress to the
+  `42P18` 500), and the order survives reload. Dragging onto a row's middle band
+  nests it under that row (durable `parent_session_id`) and converges in every
+  open list over the row-update stream without a refresh; dragging onto an edge
+  band reorders at that level; the "…"-menu Un-nest (or dragging a child to a
+  root slot) clears nesting. A self/cycle/cross-scope nest is rejected (400) with
+  no durable change, and the durable tree never exceeds one rendered tier.

@@ -106,7 +106,7 @@ test("does not rewrite existing markdown links", () => {
   expect(linkTextTargetsInMarkdown(markdown)).toBe(markdown);
 });
 
-test("rewrites agy workspace file markdown links before hardening", () => {
+test("rewrites workspace file markdown links before hardening", () => {
   const markdown = [
     "See [visual_verification_report.md](file:///workspace/chess-tactics/visual_verification_report.md).",
     "Open [app.js](<file:///workspace/chess-tactics/frontend/app.js:42> \"source\").",
@@ -120,7 +120,7 @@ test("rewrites agy workspace file markdown links before hardening", () => {
   ].join("\n"));
 });
 
-test("does not rewrite agy file links inside inline or fenced code", () => {
+test("does not rewrite file links inside inline or fenced code", () => {
   const markdown = [
     "Use `[app.js](file:///workspace/chess-tactics/frontend/app.js)` literally.",
     "",

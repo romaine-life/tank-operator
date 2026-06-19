@@ -156,6 +156,34 @@ Named behaviors in the session-bar surface. See
   - Live validation on a Glimmung `tank-operator` test slot via `static`
     hot-swap (keyboard + click + "+" exercised in the browser).
 
+## splash-launch-defaults
+
+- **Status:** shipped
+- **Intent:** Keep the pre-session splash from turning the last created
+  session's launch settings into durable defaults. Fresh splash state defaults
+  to Claude GUI, direct initial message, server-owned best models, max reasoning
+  for Claude, Codex's highest supported reasoning (`xhigh`), and restricted
+  Git. User edits remain a tab-scoped draft while they navigate away and back,
+  but successful session creation clears the draft back to those defaults.
+- **Affected contracts:** Session Bar, Session Lifecycle. The session-create
+  payload still owns the durable session row; this capability only governs how
+  the browser stages the next create.
+- **Mechanism:** splash mode/interaction, model, effort, initial-message mode,
+  and Restricted Git opt-out state use `sessionStorage` draft keys, not
+  profile-backed or `localStorage` defaults. `resetHomeLaunchDefaults()` runs
+  after a successful `POST /api/sessions`, clears those draft keys, resets the
+  in-memory splash state, and writes durable run prefs without launch-model or
+  launch-effort keys so stale profile values retire on the next sync. The
+  boot-time `main.tsx` localStorage reaper no longer allowlists retired
+  durable splash keys (`tank.defaultSessionMode`, `tank.defaultInteraction`,
+  or the old Restricted Git key).
+- **Evidence:** `frontend/src/modelEffortDefaults.test.ts` pins launch
+  model/effort as tab-scoped prefs, default Claude/Codex reasoning, and
+  reset-on-create. `frontend/src/homePreferences.test.tsx` covers the
+  Restricted Git draft key and clear behavior. `frontend/src/main.test.ts`
+  guards that retired durable splash keys are not allowlisted. Full frontend
+  Vitest and production build cover the App integration.
+
 ## session-bug-labels
 
 - **Status:** introduced
@@ -196,6 +224,254 @@ Named behaviors in the session-bar surface. See
   `unreadScanCap` (2000) candidate rows per count and saturates there — the
   badge is a signal, not an audit. Read-state advancement (the cursor) is
   unaffected; only the displayed magnitude is capped.
-- **Non-goal:** per-event emit fidelity. The last event of a class carries
+- **Non-goal:** per-event emit accuracy. The last event of a class carries
   the whole batch by design because every class recomputes from durable
   state; restoring per-event emits restores the unbounded derivation cost.
+
+## drawer-touch-targets
+
+- **Status:** shipped
+- **Intent:** Make the session list usable by touch when it renders inside the
+  compact navigation drawer, where the desktop row density and the hover-revealed
+  delete control are too small for a finger.
+- **Render model:** same `sidebarBody` fragment as desktop — this is
+  density/touch-target tuning only, scoped to the drawer (`.sidebar-in-drawer`,
+  `App.tsx`) at <= BP_PHONE. The per-session delete/close control becomes a
+  ~40px (2.5rem) target and the `.session-open` rows get `var(--space-2)` of
+  vertical padding. No source-of-truth, gesture, or behavior change; desktop is
+  unchanged.
+- **Evidence:** `frontend/src/mobileShell.test.ts` ("drawer session rows are
+  touch-sized on compact").
+
+## unrestricted-git-row-indicator
+
+- **Status:** shipped
+- **Intent:** Restricted (Tank-governed) Git is the default for new sessions,
+  so the noteworthy state is the *opt-out*. Give every session row a standing,
+  glanceable marker of whether the session has **ungoverned** Git, so a user
+  working across many sessions can spot the unrestricted exceptions without
+  opening each one.
+- **Durable source:** `sessions.capabilities text[]` (the `restricted_git`
+  member), echoed to the SPA on every session-list row. The indicator reads
+  durable session state only — it adds no browser-local flag and cannot
+  contradict the registry. A GUI session *without* the `restricted_git` member
+  is the flagged (unrestricted) case.
+- **Runtime behavior:** for an unrestricted GUI session the session-row
+  interaction chip renders a git glyph (lucide `GitBranchIcon`) in place of the
+  GUI monitor glyph and tints itself red with the `--unrestricted-git-*` accent.
+  Restricted GUI sessions (the default) keep the plain monitor glyph. The swap
+  is gated on the `gui` interaction because `restricted_git` is only ever
+  granted to repo-backed GUI modes (`REPO_SUPPORTED_MODES`); a non-gui row keeps
+  its normal glyph regardless. The chip's `title`/`aria-label` read
+  "unrestricted git" so hover and assistive tech carry the same signal.
+- **Single source of truth:** the capability string, membership test, and the
+  glyph-swap decision live in `frontend/src/sessionModes.ts`
+  (`RESTRICTED_GIT_CAPABILITY`, `hasRestrictedGit`, `interactionIconKind`) and
+  are unit-tested in `sessionModes.test.ts`. The string mirrors the backend
+  constant `SessionCapabilityRestrictedGit`
+  (`backend-go/internal/sessionmodel`); a test pins the literal so backend
+  drift surfaces.
+- **Non-goal:** the indicator does not change Git enforcement, gate any
+  control, or imply the GUI/CLI surface of the session beyond what the
+  capability already encodes. It is a read-only display affordance.
+
+## spawned-sessions-chip
+
+- **Status:** shipped
+- **Intent:** When an agent spawns a session (the `spawn_run_session` /
+  `spawn_test_slot_session` MCP tools), the human needs a durable, clickable
+  handle to the new session — not a one-line "I started session 1132, boss"
+  in the transcript that the agent may describe uselessly or never link. The
+  composer toolbar gets a "tank operator" chip that lists the sessions spawned
+  from the current one, each a working link, so the relationship survives
+  reloads and is reachable without reading the conversation.
+- **Durable source:** `sessions.spawned_sessions jsonb` on the **origin
+  (parent)** row (migration `0178`). Each entry is a self-contained
+  `{id,name,mode,model,repos,url,created_at}` ref. The absolute `url` is
+  stamped server-side by whichever operator handled the spawn, so a
+  cross-scope test-slot child carries its own slot host. The column is the
+  snapshot/SSE-facing source of truth; the SPA never re-derives the
+  parent→child relationship from the event ledger.
+- **Write path:** `handleInternalCreateSession` appends to the origin row when
+  the `X-Tank-Origin-Session-Id` header is present (the proxy stamps it on
+  every MCP call), via `sessionregistry.AppendSpawnedSession`. The append is
+  atomic and id-deduped (a spawn retry is idempotent) and matches the parent
+  on its full `(email, session_scope, session_id)` key — session ids are only
+  unique within a scope, so the scope is load-bearing. Same-scope spawns
+  (`spawn_run_session`) record lineage; a cross-scope test-slot spawn needs
+  the origin scope plumbed through to reach a prod parent, a tracked
+  follow-up (the write never targets the wrong row in the meantime). It is
+  **best-effort**: the child is already durably created, so a failed edge
+  write never fails the spawn. Counter `tank_session_spawn_link_total{result}`.
+- **Runtime behavior:** `SpawnedSessionsMenuButton` (`frontend/src/App.tsx`)
+  is hidden until the session has spawned ≥1 child, then shows the tank glyph
+  with a count badge and a popover of links (`name`, `mode·model·repos`,
+  external-link to the child). It is a presence signal, not a permanently
+  disabled affordance. The chip reads `session.spawned_sessions` straight off
+  the durable row (like `rollout_state`/`repos`); it converges over the
+  session-list SSE without refresh.
+- **Icon ownership:** the tank glyph (`TankIcon`) moved here from the rollout
+  chip — the tank belongs to "tank operator", and spawning sessions is the
+  core tank-operator action. The rollout chip took a new `WheelsIcon`
+  ("rolling out"). The two read as a matched pair.
+- **Non-goal:** no transcript message, no live child *status* (the chip is a
+  creation-time link list, not a status feed), no parent backlink rendered on
+  the child, and no general PR/test-slot consolidation — PRs already have
+  their own chip. The chip never gates a control; it is a read-only link
+  affordance over durable lineage.
+
+## nested-spawned-sessions
+
+- **Status:** shipped
+- **Intent:** A session can spawn other sessions (`spawn_run_session`), and a
+  running sub-session is too easy to lose in a flat, position-sorted list. The
+  session list groups each spawned child as **one indented tier directly under
+  its origin**, with a ├─/└─ tree connector, so the parent→child relationship
+  is visible at a glance and a working sub-session stays attached to the work
+  that started it.
+- **Durable source:** the child's own `sessions.parent_session_id` column
+  (migration `0179`) — the id of the origin that spawned it, stamped in the
+  **same INSERT that creates the child** (from the `X-Tank-Origin-Session-Id`
+  header). This is deliberately the *child→parent* edge, not the parent's
+  `spawned_sessions` array (which stays the chip's *parent→children* source).
+  Reading the child's own pointer is what makes a child **born nested**: the
+  pointer lands with the child row, so the first snapshot/row-update that
+  carries the child already nests it — no appear-at-top-then-snap reflow.
+  Inferring nesting from the parent's separate, later `spawned_sessions` append
+  was the original implementation and *did* reflow; that inference has been
+  removed (no dual path). `parent_session_id` is write-once: set on create,
+  absent from the registry `Upsert` `ON CONFLICT` update set, so lifecycle
+  re-upserts preserve it. Still pure presentation — no expand/collapse or
+  ordering state.
+- **Arrangement:** `frontend/src/sessionTree.ts` → `arrangeSessionTree()`
+  builds the child→parent map from each row's `parent_session_id` (only when the
+  origin is present in the same scoped list) and re-orders the
+  already-`sidebar_position`-sorted list so each child follows its origin,
+  annotating `{depth (0|1), parentId, isLastChild}`. Root order and within-group
+  order are preserved from the durable sort (it layers nesting on top of the
+  drag order without owning it). Every input session is emitted exactly once,
+  including under malformed self-referential or cyclic lineage (a safety pass
+  emits any cycle-trapped row as a root).
+- **One tier only:** depth is clamped to 1 by design. If a sub-session itself
+  spawns sessions, those grandchildren are grouped under the same top-level
+  ancestor at the same single indented tier — the sidebar never indents twice.
+  `parentId` still records the *direct* spawner for diagnostics.
+- **Cross-scope exclusion:** test-slot children live in a different
+  `session_scope` and never appear in this `(email, scope)`-scoped list. Even
+  though such a child may carry a cross-scope `parent_session_id` (the prod
+  origin id), `arrangeSessionTree` only nests when the referenced origin is
+  present in the same list, so a test slot spawned from prod never nests — no
+  phantom row, no need to gate the write on scope.
+- **Rendering:** the nested `<li>` carries `is-nested` (+ `is-nested-last` for
+  the elbow) and a `.session-nest-connector` gutter element
+  (`frontend/src/App.tsx`, styled in `index.css`). The tab keeps its right edge
+  pinned and steps its left edge in via `margin-left`, and reads slightly
+  smaller (compact height + smaller avatar/name) so it is visibly subordinate.
+  The collapsed icon-rail sidebar drops the indent and connector. The connector
+  is an opaque, single-paint spine: each nested row's `::before` spans its own
+  height plus the one row gap *above* it (`top: -var(--nest-row-gap); height:
+  100% + var(--nest-row-gap)`), so the per-row segments butt-join into a
+  continuous vertical without overshooting onto the tab above or double-painting
+  the seam. `--nest-row-gap` is bound to the `.sessions` flex `gap` (it *is* that
+  gap); the two must not drift, or the butt-join misses. (The original bridge was
+  a fixed `4px` against a real `2px` gap — the 2px overshoot is what made the
+  guide clip into the tabs and the translucent segments brighten where they
+  overlapped.)
+- **Observability:** the session-list debug projection
+  (`sessionListDebugRow`/`SessionListDebugRow`) carries `parent_session_id` and
+  `nest_depth` so a "my sub-session didn't nest" report is diagnosable from the
+  capture without re-deriving lineage; each rendered row also exposes
+  `data-depth`. No new metric: `parent_session_id` is written inside the child's
+  create `Upsert`, so a failed write fails the create itself (surfaced like any
+  create error) rather than silently dropping a best-effort edge — unlike the
+  parent-side chip append, which stays best-effort and counted by
+  `tank_session_spawn_link_total{result}`.
+- **Non-goal (for this spawn-driven capability):** no second indent level, no
+  subtree collapse/expand (it would hide the very sub-sessions this surfaces),
+  no parent backlink rendered on the child beyond the visual grouping. The
+  create-time stamp itself is pure presentation over lineage and writes no
+  ordering. User-initiated nesting and reordering by drag *are* deliberately
+  durable and live in their own capability (see **session-drag-reorder-and-nesting**),
+  which reuses this module's `arrangeSessionTree` renderer. Nesting a cross-scope
+  test-slot child under a prod origin remains out of scope (they are different
+  scopes and never share a list).
+
+## session-drag-reorder-and-nesting
+
+- **Status:** shipped
+- **Intent:** The sidebar session list is both user-orderable and user-nestable
+  by direct drag. One zone-based gesture covers both: dropping a row onto the
+  **top/bottom edge band** of a target reorders it before/after that row at the
+  target's level; dropping onto the **middle band** nests it under the target.
+  This is the manual counterpart to spawn-driven nesting — organization the user
+  controls, not lineage.
+- **Gesture / zones:** `frontend/src/dragNest.ts` is the DOM-free decision layer
+  (`dropIntentForRow`, `placeSessionRelative`). The drag *orchestration* — state +
+  per-row DOM handlers + the `planSessionDrop` decision — lives in
+  `frontend/src/sessionDrag.ts` (`useSessionDrag`), extracted from App so the
+  event→decision→persist flow is tested (`sessionDrag.test.tsx` fires real
+  `dragstart/dragover/drop`), not buried untested inline. `dropIntentForRow` maps
+  the pointer to `reorder-before | reorder-after | nest` (top/bottom
+  `NEST_EDGE_FRACTION`=0.25 reorder, middle nests), recomputed from the drop
+  position (not stale hover state). Rows render the live affordance via
+  `is-drag-nest` (row glows) or `is-drag-reorder-before/after` (edge insertion
+  line) in `index.css`.
+- **Drag gate — pointer capability, not viewport width.** Rows are `draggable`
+  only when `canDragSessions` = `useFinePointer()` (`(any-pointer: fine)`), i.e.
+  the device has a mouse-like pointer — true on any desktop/laptop including a
+  *narrow window, a side-docked DevTools, or a zoomed page*, false only on
+  coarse-pointer-only touch devices. This replaced the prior `!isCompact`
+  (≤768px width) gate, which conflated "narrow viewport" with "touch device" and
+  silently killed mouse-drag whenever the window dropped below 768px (e.g. with
+  DevTools docked) — a real "the click-and-drag is broken" report. The
+  "no dead gesture on touch" boundary is preserved (touch = coarse pointer = no
+  drag) and pinned by `mobileShell.test.ts`. `isCompact` still drives the shell
+  layout; only the drag gate moved to the pointer primitive.
+- **Durable model — two single-purpose writes, orchestrated per drop:**
+  - **Reorder** persists the complete visible permutation to
+    `sessions.sidebar_position` via `PUT /api/sessions/order`
+    (`Store.Reorder`). The order endpoint owns ordering only.
+    - *Regression guard:* `Store.Reorder`'s UPDATE binds
+      `unnest($3::text[], $4::bigint[])`; it once read `$4/$5`, leaving `$3`
+      bound-but-unreferenced — Postgres `42P18` "could not determine data type
+      of parameter $3" — a **500 on every drag** that no test caught because the
+      hermetic suites stub `Reorder`. The DSN-gated
+      `TestReorderPersistsSidebarOrder` / `TestReorderRejectsIncompletePermutation`
+      now exercise the real query.
+  - **Nesting** sets/clears the child's `sessions.parent_session_id` via
+    `PUT /api/sessions/{id}/parent` → `Manager.SetParentSession` →
+    `Store.SetParentSession` (`NULLIF($4,'')` clears). Distinct from the
+    write-once create stamp: this is the explicit user mutation. A drop issues a
+    parent write only when the nesting level changed, plus the order write.
+- **Guards (durable tree stays acyclic, one tier):** `Manager.SetParentSession`
+  rejects self-parent, a target whose ancestor chain contains the moved row
+  (cycle), and a missing/cross-scope/owned-by-another target — all
+  `ErrInvalidParent` → HTTP 400; an unknown/own-not-visible child → 404. Depth is
+  **not** clamped on write: the stored edge is the literal direct parent, and
+  `arrangeSessionTree` clamps deeper lineage to a single tier on render, exactly
+  as it does for an agent sub-session that spawns its own children. `publishRow`
+  re-emits the row so every open list converges over the row-update stream
+  without a refresh.
+- **Un-nest:** the row's "…" menu carries an **Un-nest** item (shown when
+  `depth > 0`) that clears the pointer; dragging a child onto a *root* row's edge
+  band also un-nests as a natural consequence of zone reorder (the target's level
+  is the top level → parent becomes null).
+- **`spawned_sessions` untouched:** manual nesting writes only the child's
+  `parent_session_id`; the parent-side `spawned_sessions` chip JSONB keeps its
+  agent-spawn semantics. The two relationships stay independent.
+- **Observability:** `tank_session_reorder_total{result=ok|conflict|error}` and
+  `tank_session_nest_update_total{action=nest|unnest,result=ok|rejected|error}`.
+  `conflict` is the benign stale-permutation rejection the SPA reconciles;
+  `rejected` is a guard refusal; `error` is a durable-write failure — the
+  user-trust signals that the original 500 lacked (it was only visible via the
+  generic 5xx log).
+- **Optimism + recovery:** the SPA applies the new order (`applyLocalOrder`) and
+  parent locally, then persists; on any non-409 failure it surfaces a friendly
+  message and `refresh()`-reconciles from the authoritative snapshot. A 409 stale
+  reorder reconciles silently.
+- **Tests:** `dragNest.test.ts` (zone math + relative placement), DSN-gated
+  `Store.Reorder` / `Store.SetParentSession` round-trips, hermetic
+  `handleSetSessionParent` guard matrix (nest/un-nest/self/cycle/missing/404).
+- **Non-goal:** no second indent tier (durable lineage may go deeper but renders
+  clamped), no fine within-group ordering beyond `sidebar_position`, no
+  cross-scope nesting.

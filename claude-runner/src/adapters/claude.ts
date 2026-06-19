@@ -80,7 +80,8 @@ export function canonicalEventsForClaudeMessage(
     const events: TankConversationEvent[] = [];
     const finalAnswerTimelineIDs: string[] = [];
     const finalAnswerProviderItemIDs: string[] = [];
-    let hasToolUse = false;
+    let hasNonPausingToolUse = false;
+    let hasPausingToolUse = false;
     for (const [index, block] of claudeMessageContent(message).entries()) {
       if (!block || typeof block !== "object") continue;
       const item = block as Record<string, unknown>;
@@ -111,7 +112,6 @@ export function canonicalEventsForClaudeMessage(
           finalAnswerProviderItemIDs.push(providerItemID);
         }
       } else if (item.type === "tool_use") {
-        hasToolUse = true;
         const providerItemID =
           typeof item.id === "string" && item.id
             ? item.id
@@ -124,12 +124,18 @@ export function canonicalEventsForClaudeMessage(
                 block: item,
               });
         const name = typeof item.name === "string" ? item.name : "tool";
+        const isPausingTool = isTankPausingToolName(name);
+        if (isPausingTool) {
+          hasPausingToolUse = true;
+        } else {
+          hasNonPausingToolUse = true;
+        }
         // AskUserQuestion produces no ordinary item.started event. The runner's
         // Tank MCP tool publishes durable turn.awaiting_input carrying the
         // Tank-canonical questions (claudeQuestionsToTankShape); the transcript
         // renders the question card in Turn activity, so there is no dangling
         // "started" tool item.
-        if (!isTankAskUserQuestionToolName(name)) {
+        if (!isPausingTool) {
           events.push(
             itemEvent({
               sessionID: cfg.sessionId,
@@ -150,9 +156,9 @@ export function canonicalEventsForClaudeMessage(
         }
       }
     }
-    if (hasToolUse) {
+    if (hasNonPausingToolUse) {
       turn.finalAnswer = undefined;
-    } else if (finalAnswerTimelineIDs.length > 0) {
+    } else if (finalAnswerTimelineIDs.length > 0 && (!hasPausingToolUse || !turn.finalAnswer)) {
       turn.finalAnswer = {
         timelineIDs: finalAnswerTimelineIDs,
         providerItemIDs: finalAnswerProviderItemIDs,
@@ -264,6 +270,20 @@ export function canonicalEventsForClaudeMessage(
 
 function isTankAskUserQuestionToolName(name: string): boolean {
   return name === "AskUserQuestion" || name === "mcp__tank__AskUserQuestion";
+}
+
+// isTankPausingToolName covers the tools the runner intercepts via a Tank MCP
+// tool to pause the turn for human input: AskUserQuestion and ExitPlanMode
+// (plan approval). Both publish a durable turn.awaiting_input handoff instead
+// of an ordinary item.started, so the adapter must not also emit a tool item
+// — otherwise a dangling "started" tool chip would sit next to the question /
+// plan page.
+function isTankPausingToolName(name: string): boolean {
+  return (
+    isTankAskUserQuestionToolName(name) ||
+    name === "ExitPlanMode" ||
+    name === "mcp__tank__ExitPlanMode"
+  );
 }
 
 function isTankAskUserQuestionToolResult(
@@ -459,8 +479,14 @@ function nonEmptyString(value: unknown): string | null {
 // so a malformed provider payload still produces a renderable Tank event
 // instead of a turn-failing crash.
 export function claudeQuestionsToTankShape(input: unknown): TankAskUserQuestion[] {
-  const questions = (input as { questions?: unknown })?.questions;
-  if (!Array.isArray(questions)) return [];
+  const inputRecord =
+    input && typeof input === "object" ? (input as Record<string, unknown>) : null;
+  const rawQuestions = inputRecord?.questions;
+  const questions = Array.isArray(rawQuestions)
+    ? rawQuestions
+    : typeof inputRecord?.question === "string"
+      ? [inputRecord]
+      : [];
   return questions.flatMap((q): TankAskUserQuestion[] => {
     if (!q || typeof q !== "object") return [];
     const record = q as Record<string, unknown>;

@@ -1,32 +1,31 @@
 ---
 name: rollout
-description: Land a change through PR merge, follow resulting builds, and watch ArgoCD until the new image is deployed
+description: Land a change by handing CI off to Tank, fixing what it reports, and letting the human merge
 ---
 
-# /rollout — Land and Watch a Change
+# /rollout — Land a Change (hand off, don't babysit)
 
-When the user invokes `/rollout`, carry the current change all the way through deployment.
+When the user invokes `/rollout`, carry the current change to a clean, merge-ready PR. You do **not** watch CI yourself and you do **not** merge — Tank watches CI for you and wakes you if something needs fixing; the human merges. See `docs/event-driven-rollout.md`.
 
 ## Workflow
 
-1. **Finish the code change.** Make the requested code edits, keep the diff focused, and run the relevant local checks.
-2. **Open a PR.** Commit the change on a branch and create a pull request with a concise summary and the tests or checks you ran.
-3. **Merge the PR.** Once the PR is ready and checks allow it, merge it. Prefer the repo's normal merge strategy and do not bypass required checks.
-4. **Follow the builds.** Watch the GitHub Actions workflows or other build jobs triggered by the merge. Identify the image tag or artifact produced by the build.
-5. **Watch ArgoCD.** Argo usually syncs within seconds after the build is produced. Use the ArgoCD MCP/tools available in the session and poll about every 5 seconds until the new image lands in the target application.
-6. **Notify the user.** Message the user when the image is deployed. Include the PR, merge commit, image tag, and Argo application or workload that received it. Include the URL of the site relevant to the project being worked on, and anything else relevant.
+1. **Finish the code change.** Make the requested edits, keep the diff focused, and run the relevant local checks.
+2. **Publish.** Commit on the session branch — the post-commit hook auto-publishes through `publish_current_head`, which records the commit and starts Tank's CI/mergeability watch. Once the PR exists, call `set_pull_request_link` with the session id and PR URL so the Tank UI can show its status.
+3. **Register PR readiness with Tank.** Call the `watch_current_session_pr` tool. It registers the current PR head with Tank's shared readiness process — resolving GitHub's *asynchronous* `mergeable_state`, which is the exact thing agents get wrong — and returns one of:
+   - **`conflict`** — rebase the session branch onto its base, resolve, re-publish, then call `watch_current_session_pr` again.
+   - **`failed`** — a required check is already red; fix the cause, re-publish, then call `watch_current_session_pr` again.
+   - **`ready`** — green and mergeable; tell the user it is ready for them to merge in Tank.
+   - **`watching`** — CI is in flight. **You are done.** End your turn with a one-line status (e.g. "pushed, CI watching"). Do **not** set a timer, estimate a duration, poll CI, or pick up other work. Tank will wake you if CI fails or the PR conflicts. It will not wake you on success — the human merges.
+
+4. **If Tank wakes you** (a `ci-failure` or `ci-conflict` turn), it hands you the specific check and what to do. Fix the cause, re-publish, and call `watch_current_session_pr` again to resume the watch. If the failure was unrelated or flaky and the PR is actually fine, just call `watch_current_session_pr` to re-verify and resume waiting.
 
 ## Guardrails
 
-- Do not merge unrelated local changes.
-- Do not force-push or rewrite shared history unless the user explicitly asks.
-- If checks fail, stop and fix the failure before merging when it is in scope. If the failure is unrelated or external, explain the blocker clearly.
-- If ArgoCD does not sync within a reasonable window, keep polling while giving periodic status updates that include the current observed revision/image and health/sync state.
+- **Do not merge.** Merging is the human's decision, made through Tank. Do not call merge tools and do not merge on GitHub.
+- **Do not poll** CI (or ArgoCD) on a timer or busy-loop. Watching is Tank's job now; your responsibility ends at the hand-off in step 3.
+- A `conflict` or `failed` result is unfinished work — fix it before handing back, or, if it is genuinely external/unrelated, explain the blocker clearly.
+- Do not merge unrelated local changes; do not force-push or rewrite shared history unless the user explicitly asks.
 
 ## Lease/Glimmung
 
-- Starting rollout means the test workflow is over. If you had the /test skill called previously, or if you took a lease using the glimmung mcp tool to utilize a test slot, return the lease and allow glimmung to handle the test environment cleanup.
-
-## Github status button
-
-- Once you have the pull request open, if not already done, call the Tank MCP set_pull_request_link tool with the current session id and PR URL so the Tank UI can link to it from the test workflow controls.
+- Starting rollout means the test workflow is over. If you held a Glimmung test slot lease via the /test skill, return the lease so Glimmung can clean up the test environment.

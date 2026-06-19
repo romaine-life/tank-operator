@@ -5,7 +5,6 @@ slot_name="${1:-tank-operator-slot-2}"
 prod_claude_proxy="claude-api-proxy.tank-operator.svc.cluster.local"
 prod_claude_secondary_proxy="claude-secondary-api-proxy.tank-operator.svc.cluster.local"
 prod_codex_proxy="codex-api-proxy.tank-operator.svc.cluster.local"
-prod_antigravity_proxy="antigravity-api-proxy.tank-operator.svc.cluster.local"
 prod_oauth_gateway="claude-oauth-gateway.tank-operator.svc.cluster.local"
 
 hot_rendered="$(helm template "${slot_name}" k8s \
@@ -27,22 +26,27 @@ if grep -Eq 'name: ANTHROPIC_API_KEY|key: anthropic-api-key|github-app-creds' <<
   exit 1
 fi
 
-if grep -Eq 'app.kubernetes.io/name: (claude-api-proxy|claude-secondary-api-proxy|codex-api-proxy|antigravity-api-proxy)|name: (claude-api-proxy|claude-secondary-api-proxy|codex-api-proxy|antigravity-api-proxy)$|name: tank-api-proxy$' <<<"${combined_rendered}"; then
+if grep -Eq 'app.kubernetes.io/name: (claude-api-proxy|claude-secondary-api-proxy|codex-api-proxy)|name: (claude-api-proxy|claude-secondary-api-proxy|codex-api-proxy)$|name: tank-api-proxy$' <<<"${combined_rendered}"; then
   echo "slot render still contains a slot-local provider api-proxy surface" >&2
   exit 1
 fi
 
-if grep -Eq "name: ${slot_name}-(claude-code-credentials|claude-secondary-code-credentials|codex-credentials|antigravity-credentials)|key: ${slot_name}-(claude-code-credentials|claude-secondary-code-credentials|codex-credentials|antigravity-credentials)" <<<"${warm_rendered}"; then
+if grep -Eq '^kind: ClusterRole(Binding)?$' <<<"${warm_rendered}"; then
+  echo "warm slot render still contains cluster-scoped RBAC" >&2
+  exit 1
+fi
+
+if grep -Eq "name: ${slot_name}-(claude-code-credentials|claude-secondary-code-credentials|codex-credentials)|key: ${slot_name}-(claude-code-credentials|claude-secondary-code-credentials|codex-credentials)" <<<"${warm_rendered}"; then
   echo "warm slot render still declares slot-owned provider credential ExternalSecrets" >&2
   exit 1
 fi
 
-if grep -Eq 'name: (CLAUDE_CREDENTIALS_KV_KEY|CLAUDE_SECONDARY_CREDENTIALS_KV_KEY|CODEX_CREDENTIALS_KV_KEY|ANTIGRAVITY_CREDENTIALS_KV_KEY|CLAUDE_CREDENTIALS_FILE)' <<<"${hot_rendered}"; then
+if grep -Eq 'name: (CLAUDE_CREDENTIALS_KV_KEY|CLAUDE_SECONDARY_CREDENTIALS_KV_KEY|CODEX_CREDENTIALS_KV_KEY|CLAUDE_CREDENTIALS_FILE)' <<<"${hot_rendered}"; then
   echo "hot slot render exposes provider credential write/read env vars" >&2
   exit 1
 fi
 
-if grep -Eq 'secretName: (claude-code-credentials|claude-secondary-code-credentials|codex-credentials|antigravity-credentials|.*-claude-code-credentials|.*-claude-secondary-code-credentials|.*-codex-credentials|.*-antigravity-credentials)' <<<"${hot_rendered}"; then
+if grep -Eq 'secretName: (claude-code-credentials|claude-secondary-code-credentials|codex-credentials|.*-claude-code-credentials|.*-claude-secondary-code-credentials|.*-codex-credentials)' <<<"${hot_rendered}"; then
   echo "hot slot render still mounts provider credential Secrets" >&2
   exit 1
 fi
@@ -64,11 +68,6 @@ fi
 
 if ! grep -Fq "value: \"${prod_codex_proxy}\"" <<<"${hot_rendered}"; then
   echo "hot slot render did not route CODEX_API_PROXY_HOST to ${prod_codex_proxy}" >&2
-  exit 1
-fi
-
-if ! grep -Fq "value: \"${prod_antigravity_proxy}\"" <<<"${hot_rendered}"; then
-  echo "hot slot render did not route ANTIGRAVITY_API_PROXY_HOST to ${prod_antigravity_proxy}" >&2
   exit 1
 fi
 

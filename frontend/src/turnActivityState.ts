@@ -110,6 +110,41 @@ export function turnActivityShouldStartLoad<Entry, PageInfo, Collapse = unknown>
   return true;
 }
 
+// The per-turn load lifecycle discriminant.
+export type TurnActivityLoadStatus = TurnActivityLoadState<
+  unknown,
+  unknown,
+  unknown
+>["status"];
+
+// How long the activity body may show "Loading activity..." before the watchdog
+// treats it as stuck and reports it. Kept under TURN_ACTIVITY_LOAD_TIMEOUT_MS
+// (App.tsx) so an `unloaded` strand (no load running) is reported well before a
+// genuinely in-flight `loading` load would itself time out.
+export const TURN_ACTIVITY_STUCK_THRESHOLD_MS = 8_000;
+
+// turnActivityStuckEvent maps a non-terminal load status to the telemetry event
+// that reports the stuck "Loading activity..." spinner. This is pure
+// observation — it changes no behavior. The existing turn_activity_load_* events
+// only fire when a load actually runs, so a load that never started (the
+// selected turn left `unloaded` with nothing re-triggering it) emits nothing;
+// this watchdog signal fills that observability gap. The two outcomes separate
+// the diagnostic cases so prod data can tell them apart:
+//   - `unloaded` / absent: NO load ever started for the selected turn — the
+//     strand class (spinner up, nothing in flight) → turn_activity_stuck_unloaded
+//   - `loading`: a load is in the loading state past the threshold (slow / hung)
+//     → turn_activity_stuck_loading
+// Terminal states (`loaded` / `error`) are not stuck — returns null (no emit).
+export function turnActivityStuckEvent(
+  status: TurnActivityLoadStatus | undefined,
+): "turn_activity_stuck_unloaded" | "turn_activity_stuck_loading" | null {
+  if (status == null || status === "unloaded") {
+    return "turn_activity_stuck_unloaded";
+  }
+  if (status === "loading") return "turn_activity_stuck_loading";
+  return null;
+}
+
 export function turnActivityLoadVisibleSnapshot<Entry, PageInfo, Collapse = unknown>(
   state: TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined,
 ): TurnActivityLoadSnapshot<Entry, PageInfo, Collapse> | undefined {

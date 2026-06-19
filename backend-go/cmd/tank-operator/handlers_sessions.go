@@ -43,7 +43,26 @@ func validateCreateSessionCapabilities(mode string, raw []string) ([]string, int
 	if err != nil {
 		return nil, http.StatusBadRequest, err.Error()
 	}
+	if sessionmodel.HasSessionCapability(capabilities, sessionmodel.SessionCapabilityRestrictedGit) && !sessionModeSupportsRepos(mode) {
+		return nil, http.StatusBadRequest, sessionmodel.SessionCapabilityRestrictedGit + " capability requires a repo-capable session mode"
+	}
 	return capabilities, 0, ""
+}
+
+func validateServiceCreateSessionCapabilities(mode string, raw []string) ([]string, int, string) {
+	raw = serviceCreateSessionCapabilities(mode, raw)
+	return validateCreateSessionCapabilities(mode, raw)
+}
+
+func serviceCreateSessionCapabilities(mode string, raw []string) []string {
+	if !sessionModeSupportsRepos(mode) ||
+		sessionmodel.HasSessionCapability(raw, sessionmodel.SessionCapabilityRestrictedGit) {
+		return raw
+	}
+	out := make([]string, 0, len(raw)+1)
+	out = append(out, raw...)
+	out = append(out, sessionmodel.SessionCapabilityRestrictedGit)
+	return out
 }
 
 func validateCreateSessionMode(raw string) (string, int, string) {
@@ -727,13 +746,68 @@ func (s *appServer) handleReorderSessions(w http.ResponseWriter, r *http.Request
 	owner := user.OwnerEmail()
 	if err := s.mgr.ReorderSessions(r.Context(), owner, body.SessionIDs); err != nil {
 		if errors.Is(err, sessionmodel.ErrSessionOrderConflict) {
+			recordSessionReorder("conflict")
 			writeError(w, http.StatusConflict, "session order is stale; refresh and retry")
 			return
 		}
+		recordSessionReorder("error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	recordSessionReorder("ok")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleSetSessionParent sets or clears a session's parent_session_id — the
+// durable child→parent edge the sidebar nests on. Body:
+// {"parent_session_id": "<id>"} to nest, or null/"" to un-nest. This is the
+// explicit write behind drag-to-nest and the row "Un-nest" action; the
+// create-time stamp for agent-spawned children is unchanged. Self/cycle/missing
+// or cross-scope targets are rejected (ErrInvalidParent → 400) so the durable
+// tree stays acyclic. Returns the updated row so the SPA reconciles immediately.
+func (s *appServer) handleSetSessionParent(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	var body struct {
+		ParentSessionID *string `json:"parent_session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	parentID := ""
+	if body.ParentSessionID != nil {
+		parentID = strings.TrimSpace(*body.ParentSessionID)
+	}
+	action := "nest"
+	if parentID == "" {
+		action = "unnest"
+	}
+	owner := user.OwnerEmail()
+	info, err := s.mgr.SetParentSession(r.Context(), owner, sessionID, parentID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+			recordSessionNestUpdate(action, "rejected")
+			writeError(w, http.StatusNotFound, "session not found")
+		case errors.Is(err, sessions.ErrInvalidParent):
+			recordSessionNestUpdate(action, "rejected")
+			writeError(w, http.StatusBadRequest, "invalid parent session")
+		default:
+			recordSessionNestUpdate(action, "error")
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	recordSessionNestUpdate(action, "ok")
+	writeJSON(w, http.StatusOK, info)
 }
 
 // handleDeleteSession deletes a session.
@@ -803,6 +877,99 @@ func (s *appServer) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, info)
+	case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+		writeError(w, http.StatusNotFound, "session not found")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+// handleSetSessionRunConfig changes the user-chosen model/effort of a running
+// SDK chat session (the mid-session model switch). It writes the durable
+// desired model/effort columns; the next submit_turn carries them (the turn
+// handler overrides from the registered config) and the runner re-pins on the
+// next turn at an idle boundary. Validation reuses the exact create/turn
+// choke-point helpers. Antigravity is excluded — its model is an agy
+// process-start arg, so it cannot change without a restart. Registry-only
+// state, no pod annotation patch (mirrors handleSetOpenTarget).
+func (s *appServer) handleSetSessionRunConfig(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	var body struct {
+		Model  *string `json:"model"`
+		Effort *string `json:"effort"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetRegisteredByOwner(r.Context(), owner, sessionID)
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotFound) || errors.Is(err, sessions.ErrNotOwned) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok {
+		recordSessionRunConfigRejected("run_config_update", "unknown", "invalid_mode")
+		writeError(w, http.StatusBadRequest, "session mode does not support SDK run config")
+		return
+	}
+	if provider == "antigravity" {
+		recordSessionRunConfigRejected("run_config_update", provider, "unsupported_provider")
+		writeError(w, http.StatusBadRequest, "mid-session model change is not supported for Antigravity")
+		return
+	}
+	// Omitted fields default to the current desired value, so a model-only
+	// change preserves effort (and vice versa).
+	model := strings.TrimSpace(info.Model)
+	if body.Model != nil {
+		model = strings.TrimSpace(*body.Model)
+	}
+	effort := strings.TrimSpace(info.Effort)
+	if body.Effort != nil {
+		effort = strings.TrimSpace(*body.Effort)
+	}
+	// Same validation choke point as the create/turn paths (handlers_turns.go).
+	if isDefaultModelAlias(model) {
+		recordSessionRunConfigRejected("run_config_update", provider, "default_model")
+		writeError(w, http.StatusBadRequest, "model must be explicit; default is not accepted")
+		return
+	}
+	if providerRequiresExplicitModel(provider) && model == "" {
+		recordSessionRunConfigRejected("run_config_update", provider, "missing_model")
+		writeError(w, http.StatusBadRequest, explicitModelRequiredMessage(provider, "sessions"))
+		return
+	}
+	if model != "" && validateModelArg(provider, model) == "" {
+		recordSessionRunConfigRejected("run_config_update", provider, "unsupported_model")
+		writeError(w, http.StatusBadRequest, modelUnsupportedMessage(provider))
+		return
+	}
+	if effort != "" && validateEffort(provider, effort) == "" {
+		recordSessionRunConfigRejected("run_config_update", provider, "unsupported_effort")
+		if provider == "codex" {
+			writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max")
+		return
+	}
+	updated, err := s.mgr.SetRunConfig(r.Context(), owner, sessionID, model, effort)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, updated)
 	case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
 		writeError(w, http.StatusNotFound, "session not found")
 	default:
@@ -1053,7 +1220,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
-	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
+	capabilities, status, detail := validateServiceCreateSessionCapabilities(mode, body.Capabilities)
 	if status != 0 {
 		writeError(w, status, detail)
 		return

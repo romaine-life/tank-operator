@@ -11,6 +11,13 @@ test("main.tsx does not allowlist retired local repo pins", () => {
   expect(mainSource).not.toMatch(/"tank\.homePinnedRepos"/);
 });
 
+test("main.tsx reaps retired durable splash default keys", () => {
+  expect(mainSource).not.toMatch(/"tank\.defaultSessionMode"/);
+  expect(mainSource).not.toMatch(/"tank\.defaultInteraction"/);
+  expect(mainSource).not.toMatch(/RESTRICTED_GIT_PREF_KEY/);
+  expect(mainSource).not.toMatch(/"tank\.homeRestrictedGit/);
+});
+
 test("main.tsx no longer allowlists retired local tank auth token", () => {
   expect(mainSource).not.toMatch(new RegExp('"tank-operator' + '-jwt"'));
 });

@@ -138,33 +138,44 @@ type rowWireShape struct {
 	ActivitySummary map[string]any `json:"activity_summary,omitempty"`
 	TestState       map[string]any `json:"test_state,omitempty"`
 	RolloutState    map[string]any `json:"rollout_state,omitempty"`
+	SpokeConfig     map[string]any `json:"spoke_config,omitempty"`
+	// SpawnedSessions: omit-when-empty parent→child lineage for the
+	// session-bar "spawned sessions" chip. Mirrors the snapshot Info field.
+	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
+	// ParentSessionID: omit-when-empty child→parent (origin) pointer that drives
+	// sidebar nesting. On the create row-update this lands with the child, so
+	// the SPA nests it on arrival without waiting for the parent's
+	// spawned_sessions append. Mirrors the snapshot Info field.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 	// Repos and CloneState: always-emit / omit-when-nil to mirror
 	// the snapshot Info struct field-for-field (see
 	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
 	// the SPA never has to special-case "absent vs. empty"; clone
 	// state is omitted until the repo-cloner init container writes back.
-	Repos                          []string                        `json:"repos"`
-	CloneState                     map[string]any                  `json:"clone_state,omitempty"`
-	Capabilities                   []string                        `json:"capabilities"`
-	BugLabel                       *sessionmodel.SessionBugLabel   `json:"bug_label,omitempty"`
-	BugLabels                      []*sessionmodel.SessionBugLabel `json:"bug_labels,omitempty"`
-	Model                          string                          `json:"model,omitempty"`
-	Effort                         string                          `json:"effort,omitempty"`
-	RuntimeModel                   string                          `json:"runtime_model,omitempty"`
-	RuntimeEffort                  string                          `json:"runtime_effort,omitempty"`
-	RuntimeConfiguredAt            string                          `json:"runtime_configured_at,omitempty"`
-	RuntimeContextWindowTokens     int64                           `json:"runtime_context_window_tokens,omitempty"`
-	RuntimeContextWindowSource     string                          `json:"runtime_context_window_source,omitempty"`
-	RuntimeContextWindowObservedAt string                          `json:"runtime_context_window_observed_at,omitempty"`
-	ProviderRateLimitInfo          map[string]any                  `json:"provider_rate_limit_info,omitempty"`
-	ProviderRateLimitObservedAt    string                          `json:"provider_rate_limit_observed_at,omitempty"`
-	CompactionCount                int64                           `json:"compaction_count,omitempty"`
-	UserMessageCount               int64                           `json:"user_message_count,omitempty"`
-	OpenTarget                     string                          `json:"open_target,omitempty"`
-	AgentAvatarID                  string                          `json:"agent_avatar_id,omitempty"`
-	SystemAvatarID                 string                          `json:"system_avatar_id,omitempty"`
-	SidebarPosition                int64                           `json:"sidebar_position"`
-	RowVersion                     int64                           `json:"row_version"`
+	Repos                            []string                        `json:"repos"`
+	CloneState                       map[string]any                  `json:"clone_state,omitempty"`
+	Capabilities                     []string                        `json:"capabilities"`
+	BugLabel                         *sessionmodel.SessionBugLabel   `json:"bug_label,omitempty"`
+	BugLabels                        []*sessionmodel.SessionBugLabel `json:"bug_labels,omitempty"`
+	Model                            string                          `json:"model,omitempty"`
+	Effort                           string                          `json:"effort,omitempty"`
+	RuntimeModel                     string                          `json:"runtime_model,omitempty"`
+	RuntimeEffort                    string                          `json:"runtime_effort,omitempty"`
+	RuntimeConfiguredAt              string                          `json:"runtime_configured_at,omitempty"`
+	RuntimeContextWindowTokens       int64                           `json:"runtime_context_window_tokens,omitempty"`
+	RuntimeContextWindowSource       string                          `json:"runtime_context_window_source,omitempty"`
+	RuntimeContextWindowObservedAt   string                          `json:"runtime_context_window_observed_at,omitempty"`
+	RuntimeProviderSessionID         string                          `json:"runtime_provider_session_id,omitempty"`
+	RuntimeProviderSessionObservedAt string                          `json:"runtime_provider_session_observed_at,omitempty"`
+	ProviderRateLimitInfo            map[string]any                  `json:"provider_rate_limit_info,omitempty"`
+	ProviderRateLimitObservedAt      string                          `json:"provider_rate_limit_observed_at,omitempty"`
+	CompactionCount                  int64                           `json:"compaction_count,omitempty"`
+	UserMessageCount                 int64                           `json:"user_message_count,omitempty"`
+	OpenTarget                       string                          `json:"open_target,omitempty"`
+	AgentAvatarID                    string                          `json:"agent_avatar_id,omitempty"`
+	SystemAvatarID                   string                          `json:"system_avatar_id,omitempty"`
+	SidebarPosition                  int64                           `json:"sidebar_position"`
+	RowVersion                       int64                           `json:"row_version"`
 }
 
 // MarshalRowUpdate produces the JSON wire payload for a single row.
@@ -187,46 +198,51 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 	}
 	wire := RowUpdatePayload{
 		Row: rowWireShape{
-			ID:                             record.ID,
-			Owner:                          record.Email,
-			Mode:                           record.Mode,
-			Scope:                          record.Scope,
-			PodName:                        record.PodName,
-			SessionImage:                   record.SessionImage,
-			SessionImageMetadata:           record.SessionImageMetadata.Clone(),
-			Name:                           record.Name,
-			Visible:                        record.Visible,
-			Status:                         record.Status,
-			RequestedAt:                    record.RequestedAt,
-			CreatedAt:                      record.CreatedAt,
-			UpdatedAt:                      record.UpdatedAt,
-			ReadyAt:                        record.ReadyAt,
-			TerminatingAt:                  record.TerminatingAt,
-			ActivitySummary:                activity,
-			TestState:                      record.TestState,
-			RolloutState:                   record.RolloutState,
-			Repos:                          repos,
-			CloneState:                     record.CloneState,
-			Capabilities:                   capabilities,
-			BugLabel:                       record.BugLabel,
-			BugLabels:                      record.BugLabels,
-			Model:                          record.Model,
-			Effort:                         record.Effort,
-			RuntimeModel:                   record.RuntimeModel,
-			RuntimeEffort:                  record.RuntimeEffort,
-			RuntimeConfiguredAt:            record.RuntimeConfiguredAt,
-			RuntimeContextWindowTokens:     record.RuntimeContextWindowTokens,
-			RuntimeContextWindowSource:     record.RuntimeContextWindowSource,
-			RuntimeContextWindowObservedAt: record.RuntimeContextWindowObservedAt,
-			ProviderRateLimitInfo:          record.ProviderRateLimitInfo,
-			ProviderRateLimitObservedAt:    record.ProviderRateLimitObservedAt,
-			CompactionCount:                record.CompactionCount,
-			UserMessageCount:               record.UserMessageCount,
-			OpenTarget:                     record.OpenTarget,
-			AgentAvatarID:                  record.AgentAvatarID,
-			SystemAvatarID:                 record.SystemAvatarID,
-			SidebarPosition:                record.SidebarPosition,
-			RowVersion:                     record.RowVersion,
+			ID:                               record.ID,
+			Owner:                            record.Email,
+			Mode:                             record.Mode,
+			Scope:                            record.Scope,
+			PodName:                          record.PodName,
+			SessionImage:                     record.SessionImage,
+			SessionImageMetadata:             record.SessionImageMetadata.Clone(),
+			Name:                             record.Name,
+			Visible:                          record.Visible,
+			Status:                           record.Status,
+			RequestedAt:                      record.RequestedAt,
+			CreatedAt:                        record.CreatedAt,
+			UpdatedAt:                        record.UpdatedAt,
+			ReadyAt:                          record.ReadyAt,
+			TerminatingAt:                    record.TerminatingAt,
+			ActivitySummary:                  activity,
+			TestState:                        record.TestState,
+			RolloutState:                     record.RolloutState,
+			SpokeConfig:                      record.SpokeConfig,
+			SpawnedSessions:                  record.SpawnedSessions,
+			ParentSessionID:                  record.ParentSessionID,
+			Repos:                            repos,
+			CloneState:                       record.CloneState,
+			Capabilities:                     capabilities,
+			BugLabel:                         record.BugLabel,
+			BugLabels:                        record.BugLabels,
+			Model:                            record.Model,
+			Effort:                           record.Effort,
+			RuntimeModel:                     record.RuntimeModel,
+			RuntimeEffort:                    record.RuntimeEffort,
+			RuntimeConfiguredAt:              record.RuntimeConfiguredAt,
+			RuntimeContextWindowTokens:       record.RuntimeContextWindowTokens,
+			RuntimeContextWindowSource:       record.RuntimeContextWindowSource,
+			RuntimeContextWindowObservedAt:   record.RuntimeContextWindowObservedAt,
+			RuntimeProviderSessionID:         record.RuntimeProviderSessionID,
+			RuntimeProviderSessionObservedAt: record.RuntimeProviderSessionObservedAt,
+			ProviderRateLimitInfo:            record.ProviderRateLimitInfo,
+			ProviderRateLimitObservedAt:      record.ProviderRateLimitObservedAt,
+			CompactionCount:                  record.CompactionCount,
+			UserMessageCount:                 record.UserMessageCount,
+			OpenTarget:                       record.OpenTarget,
+			AgentAvatarID:                    record.AgentAvatarID,
+			SystemAvatarID:                   record.SystemAvatarID,
+			SidebarPosition:                  record.SidebarPosition,
+			RowVersion:                       record.RowVersion,
 		},
 		Cursor: fmt.Sprintf("%d", record.RowVersion),
 	}

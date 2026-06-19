@@ -150,3 +150,25 @@ test("treats an empty cached activity body as loaded", () => {
 
   expect(Array.from(requests.entries())).toEqual([["turn-1", "010"]]);
 });
+
+test("refreshes cached question turn activity when awaiting-input answered state streams", () => {
+  const requests = cachedTurnActivityRefreshRequests(
+    { "turn-question": [row({ id: "question-card", kind: "meta", turnId: "turn-question" })] },
+    [
+      row({
+        id: "turn-1:item:toolu_ask:awaiting_input",
+        kind: "meta",
+        metaKind: "awaiting_input",
+        turnId: "turn-question",
+        orderKey: "004~awaiting_input",
+        awaitingInput: {
+          questionTurnId: "turn-question",
+          answered: true,
+        },
+        contentOrderKey: "010",
+      }),
+    ],
+  );
+
+  expect(Array.from(requests.entries())).toEqual([["turn-question", "010"]]);
+});

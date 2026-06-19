@@ -42,6 +42,20 @@ export interface InputReplyAnnotation {
   notes?: string;
 }
 
+// CommandAttachment carries one file a user attached to an AskUserQuestion
+// answer (the screenshot-in-answer path). Mirrors backend-go's
+// sessionbus.CommandAttachment — snake_case `abs_path` matches the Go json tag.
+// Only path metadata rides the bus; the bytes stay pod-local in the shared
+// /workspace, and the runner reads them when resolving the tool result.
+export interface CommandAttachment {
+  label?: string;
+  name?: string;
+  kind?: "image" | "file" | string;
+  path?: string;
+  abs_path?: string;
+  size?: number;
+}
+
 export interface SessionCommand {
   id: string;
   command_id: string;
@@ -63,8 +77,12 @@ export interface SessionCommand {
   // SDK boundary.
   answers?: Record<string, string[]>;
   annotations?: Record<string, InputReplyAnnotation>;
+  // attachments carries files the user attached to an AskUserQuestion answer.
+  // Present only on input_reply commands that carried an attachment.
+  attachments?: CommandAttachment[];
   prompt?: string;
   model?: string;
+  provider_session_id?: string;
   /**
    * Reasoning effort level. Claude accepts "low" | "medium" | "high" |
    * "xhigh" | "max"; Codex accepts "low" | "medium" | "high" | "xhigh".
@@ -83,6 +101,11 @@ export interface SessionCommand {
   created_at?: string;
   available_at?: string | null;
   message?: unknown;
+  // mcp_activate_name / mcp_activate_url ride a break-glass approval submit_turn
+  // so the runner auto-surfaces the named MCP server at the next idle boundary
+  // (the activation half of break-glass). Empty on ordinary turns.
+  mcp_activate_name?: string;
+  mcp_activate_url?: string;
   [key: string]: unknown;
 }
 
@@ -102,14 +125,18 @@ export class SessionCommandRecord implements SessionCommand {
   target_provider_item_id?: string;
   answers?: Record<string, string[]>;
   annotations?: Record<string, InputReplyAnnotation>;
+  attachments?: CommandAttachment[];
   prompt?: string;
   model?: string;
+  provider_session_id?: string;
   effort?: string;
   permission_mode?: string;
   skill_name?: string;
   follow_up?: boolean;
   status?: string;
   attempt_count?: number;
+  mcp_activate_name?: string;
+  mcp_activate_url?: string;
   [key: string]: unknown;
   ack(): void;
   nak(delayMs?: number): void;

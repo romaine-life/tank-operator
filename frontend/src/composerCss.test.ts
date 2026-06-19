@@ -19,6 +19,19 @@ function cssRule(selector: string): string {
   return match[1];
 }
 
+function cssRuleFlexible(selector: string): string {
+  const selectorPattern = selector
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  const match = indexCssSource.match(
+    new RegExp(`^\\s*${selectorPattern}\\s*\\{([\\s\\S]*?)\\}`, "m"),
+  );
+  expect(match, `${selector} rule should exist`).toBeTruthy();
+  return match[1];
+}
+
 test("chat composer textarea does not expose a native resize handle", () => {
   expect(cssRule(".run-composer-textarea")).toMatch(/resize:\s*none\s*!important;/);
   expect(cssRule(".run-composer textarea")).toMatch(/resize:\s*none;/);
@@ -145,7 +158,7 @@ test("run pane keeps the composer inside the viewport at high browser zoom", () 
   expect(appSource).toMatch(/composerWrapClassName=\{\[\s*"run-composer-wrap-runpane",[\s\S]*?dragActive \? "run-composer-wrap-drag" : "",[\s\S]*?\]\.filter\(Boolean\)\.join\(" "\)\}/);
   expect(appSource).not.toMatch(/composerWrapStyle=\{chatFontScaleStyle\}/);
   expect(portfolioTranscriptSource).toMatch(/composerWrapClassName="run-composer-wrap-runpane"/);
-  expect(indexCssSource).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-wrap-runpane\s*\{[\s\S]*?padding-left:\s*var\(--space-3\);/);
+  expect(indexCssSource).toMatch(/@media \(max-width:\s*768px\)\s*\{[\s\S]*?\.run-composer-wrap-runpane\s*\{[\s\S]*?padding-left:\s*var\(--space-3\);/);
 });
 
 test("session font scaling does not leak into the shared composer", () => {
@@ -185,8 +198,8 @@ test("composer footer reflows controls instead of clipping them under zoom", () 
   expect(indexCssSource).toMatch(/@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate-label\s*\{[\s\S]*?display:\s*none;/);
   expect(indexCssSource).toMatch(/@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-model-chip\s*\{[\s\S]*?max-width:\s*min\(11rem,\s*100%\);/);
 
-  expect(indexCssSource).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-hint\s*\{[\s\S]*?flex-basis:\s*100%;/);
-  expect(indexCssSource).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-submit-btn\s*\{[\s\S]*?margin-left:\s*auto;/);
+  expect(indexCssSource).toMatch(/@media \(max-width:\s*768px\)\s*\{[\s\S]*?\.run-composer-hint\s*\{[\s\S]*?flex-basis:\s*100%;/);
+  expect(indexCssSource).toMatch(/@media \(max-width:\s*768px\)\s*\{[\s\S]*?\.run-submit-btn\s*\{[\s\S]*?margin-left:\s*auto;/);
 });
 
 test("turn view transcript rows share the same avatar gutter", () => {
@@ -218,4 +231,208 @@ test("turn view transcript rows share the same avatar gutter", () => {
   expect(inlineActivityContentRule).toMatch(/grid-column:\s*2;/);
   expect(inlineActivityContentRule).toMatch(/min-width:\s*0;/);
   expect(inlineActivityContentRule).toMatch(/max-width:\s*100%;/);
+});
+
+test("expanded turn prompt context scrolls before hiding section controls", () => {
+  const promptContextRule = cssRule(
+    '.run-turn-view-context[data-collapsed="false"][data-context-loaded="true"]',
+  );
+  expect(promptContextRule).toMatch(/max-height:\s*min\(22rem,\s*34dvh\);/);
+  expect(promptContextRule).toMatch(/overflow-y:\s*auto;/);
+  expect(promptContextRule).toMatch(/overscroll-behavior:\s*contain;/);
+  expect(promptContextRule).toMatch(/scrollbar-gutter:\s*stable;/);
+
+  const promptSectionRule = cssRule(".run-turn-view-prompt-section");
+  expect(promptSectionRule).toMatch(/flex:\s*0\s+0\s+auto;/);
+  expect(promptSectionRule).toMatch(/min-width:\s*0;/);
+});
+
+test("standalone transcript artifacts align to the message content column", () => {
+  const transcriptRule = cssRule(".run-transcript");
+  expect(transcriptRule).toMatch(
+    /--run-transcript-avatar-column-left:\s*calc\(2\.625rem\s*\+\s*0\.55rem\);/,
+  );
+  expect(transcriptRule).toMatch(
+    /--run-transcript-content-column-left:\s*calc\(var\(--run-transcript-message-inset-left\)\s*\+\s*var\(--run-transcript-avatar-column-left\)\);/,
+  );
+
+  expect(indexCssSource).toMatch(
+    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-background-task,[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-reasoning,[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s*>\s*\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-content-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-content-column-left\)\);/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-turn-view-body\s*>\s*\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-turn-view-body\s*>\s*\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-turn-view-body\s*>\s*\.run-background-task,[\s\S]*?\.run-turn-view-body\s*>\s*\.run-reasoning,[\s\S]*?\.run-turn-view-body\s*>\s*\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*var\(--run-transcript-avatar-column-left\);[\s\S]*?max-width:\s*calc\(100%\s*-\s*var\(--run-transcript-avatar-column-left\)\);/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tool-single\[data-slot="tool-group-single"\],[\s\S]*?\.run-transcript:not\(\.run-turn-view-body\)\s+\.run-turn-activity-body\s+\.run-transcript-tools\[data-slot="tool-group"\],[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-background-task,[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-reasoning,[\s\S]*?\.run-transcript\s+\.run-turn-activity-body\s+\.run-tool-ask\s*\{[\s\S]*?margin-left:\s*0;[\s\S]*?max-width:\s*100%;/,
+  );
+});
+
+test("background task cards render as a compact content row", () => {
+  expect(appSource).toMatch(
+    /function backgroundTaskTitle[\s\S]*?\.find\(\(value\) => typeof value === "string" && value\.trim\(\)\.length > 0\)/,
+  );
+  expect(appSource).toMatch(/return title\?\.trim\(\) \?\? "Shell task";/);
+
+  const cardRule = cssRule(".run-background-task");
+  expect(cardRule).toMatch(/grid-template-columns:\s*1\.55rem\s+minmax\(0,\s*1fr\);/);
+  expect(cardRule).toMatch(/align-items:\s*center;/);
+
+  const bodyRule = cssRule(".run-background-task-body");
+  expect(bodyRule).toMatch(/display:\s*flex;/);
+  expect(bodyRule).toMatch(/flex-wrap:\s*wrap;/);
+  expect(bodyRule).toMatch(/align-items:\s*center;/);
+
+  const titleRule = cssRule(".run-background-task-title");
+  expect(titleRule).toMatch(/flex:\s*0 1 auto;/);
+  expect(titleRule).not.toMatch(/flex:\s*1 1 auto;/);
+});
+
+test("question page answer card aligns with assistant bubble content gutter", () => {
+  const questionCardRule = cssRule('.run-turn-view-body[data-page-kind="question"] .run-tool-ask');
+  expect(questionCardRule).toMatch(
+    /width:\s*calc\(100%\s*-\s*\(2\.625rem\s*\+\s*0\.55rem\)\);/,
+  );
+  expect(questionCardRule).toMatch(
+    /margin-left:\s*calc\(2\.625rem\s*\+\s*0\.55rem\);/,
+  );
+
+  expect(indexCssSource).toMatch(
+    /@media \(max-width:\s*640px\)\s*\{[\s\S]*?\.run-turn-view-body\[data-page-kind="question"\]\s+\.run-tool-ask\s*\{[\s\S]*?width:\s*100%;[\s\S]*?margin-left:\s*0;/,
+  );
+});
+
+test("non-compact user message footer floats into the final prose line", () => {
+  expect(appSource).toMatch(
+    /const inlineFooter =\s*variant === "user" && !isSkillAction && visibleAttachments\.length === 0;/,
+  );
+  expect(appSource).toMatch(/data-inline-footer=\{inlineFooter \? "true" : undefined\}/);
+  // The prompt text and its inline footer render once, in a stable position
+  // inside the message text, for both collapsed and expanded states — so the
+  // collapse toggle is a pure CSS restyle and never remounts them.
+  expect(appSource).toMatch(/<RunPlainText>\{visibleText\}<\/RunPlainText>/);
+  expect(appSource).toMatch(/\{inlineFooter && messageFooter\}/);
+  expect(portfolioTranscriptSource).toMatch(/data-inline-footer=\{inlineFooter \? "true" : undefined\}/);
+
+  const inlineContentRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-transcript-message-content',
+  );
+  expect(inlineContentRule).toMatch(/display:\s*block;/);
+
+  const inlineTextRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-plain-message-text',
+  );
+  expect(inlineTextRule).toMatch(/display:\s*inline;/);
+
+  const footerRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-msg-footer',
+  );
+  expect(footerRule).toMatch(/float:\s*right;/);
+  expect(footerRule).toMatch(/margin-left:\s*0\.65rem;/);
+
+  const clearfixRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-transcript-message-text::after',
+  );
+  expect(clearfixRule).toMatch(/clear:\s*both;/);
+});
+
+test("compact user message preview keeps controls on the same row", () => {
+  // Collapse is a CSS restyle of the SAME nodes the expanded prompt renders:
+  // the message text becomes a single flex row holding the prompt text and the
+  // footer, so toggling never swaps elements (no remount, no flicker). The old
+  // dedicated .run-msg-compact-text preview element is deleted end to end.
+  expect(appSource.includes("run-msg-compact-text")).toBe(false);
+  expect(indexCssSource.includes("run-msg-compact-text")).toBe(false);
+
+  const compactTextRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-transcript-message-text',
+  );
+  expect(compactTextRule).toMatch(/display:\s*flex;/);
+  expect(compactTextRule).toMatch(/align-items:\s*flex-end;/);
+  expect(compactTextRule).toMatch(/min-width:\s*0;/);
+
+  // The prompt text element itself (not a separate preview) truncates to one
+  // line; nowrap collapses newlines so no flattened string is rendered.
+  const compactPromptRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-plain-message-text',
+  );
+  expect(compactPromptRule).toMatch(/flex:\s*1\s+1\s+0;/);
+  expect(compactPromptRule).toMatch(/white-space:\s*nowrap;/);
+  expect(compactPromptRule).toMatch(/text-overflow:\s*ellipsis;/);
+
+  const compactFooterRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-msg-footer',
+  );
+  expect(compactFooterRule).toMatch(/flex:\s*0\s+0\s+auto;/);
+  expect(compactFooterRule).not.toMatch(/margin-left:\s*auto;/);
+});
+
+test("collapsed prompt footer anchors like the expanded inline footer so a one-line toggle does not jolt", () => {
+  // A one-line user prompt looks identical collapsed vs expanded, so toggling
+  // it must not nudge the arrow/copy/timestamp cluster. The expanded inline
+  // footer floats with a small top nudge; the collapsed (compact) footer has
+  // to top-align (it is shorter than the text line) and use the same nudge
+  // instead of the flex container's flex-end baseline.
+  const inlineFooterRule = cssRuleFlexible(
+    '.run-transcript-message[data-inline-footer="true"]:not([data-compact="true"]) .run-msg-footer',
+  );
+  expect(inlineFooterRule).toMatch(/margin-top:\s*0\.08rem;/);
+
+  const compactFooterRule = cssRule(
+    '.run-transcript-message[data-compact="true"] .run-msg-footer',
+  );
+  expect(compactFooterRule).toMatch(/align-self:\s*flex-start;/);
+  expect(compactFooterRule).toMatch(/margin-top:\s*0\.08rem;/);
+});
+
+test("inlined user-message footer links keep the action palette, not markdown-link blue", () => {
+  // When a user message footer is inlined (expanded one-line prompts, and every
+  // non-attachment user message in the transcript) it lives inside
+  // .run-transcript-message-text, where `.run-transcript-message-text a` paints
+  // anchors blue + underlined. Footer affordance links must opt out: the
+  // "open in transcript" arrow stays muted, the turn arrow keeps its own blue,
+  // the link button stays cyan, and none of them gain an underline.
+  const proseLinkRule = cssRuleFlexible(".run-transcript-message-text a");
+  expect(proseLinkRule).toMatch(/color:\s*#93c5fd;/);
+  expect(proseLinkRule).toMatch(/text-decoration:\s*underline;/);
+
+  const footerLinkRule = cssRuleFlexible(
+    ".run-transcript-message-text .run-msg-footer a",
+  );
+  expect(footerLinkRule).toMatch(/color:\s*var\(--text-muted\);/);
+  expect(footerLinkRule).toMatch(/text-decoration:\s*none;/);
+
+  const footerTurnRule = cssRuleFlexible(
+    ".run-transcript-message-text .run-msg-footer a.run-msg-turn",
+  );
+  expect(footerTurnRule).toMatch(/color:\s*#93c5fd;/);
+
+  const footerLinkButtonRule = cssRuleFlexible(
+    ".run-transcript-message-text .run-msg-footer a.run-msg-link",
+  );
+  expect(footerLinkButtonRule).toMatch(/color:\s*var\(--cyan\);/);
+});
+
+test("question page card stays scrollable when taller than the Turn view", () => {
+  // Regression guard: the Turn-view outer scroller is intentionally
+  // overflow-y:hidden because the inner body owns scrolling. If the question
+  // page body is overflow:visible, a tall AskUserQuestion card has NO scroll
+  // container anywhere — it is clipped by .run-main and its lower options and
+  // the set-level Submit button drop below an unreachable fold. The question
+  // body must therefore be its own scroll region, like the activity page kind.
+  const turnViewMainRule = cssRule('.run-main[aria-label="Turn view"]');
+  expect(turnViewMainRule).toMatch(/overflow-y:\s*hidden;/);
+
+  const questionBodyRule = cssRule('.run-turn-view-body[data-page-kind="question"]');
+  expect(questionBodyRule).toMatch(/overflow-y:\s*auto;/);
+  expect(questionBodyRule).not.toMatch(/overflow:\s*visible;/);
+
+  // The base body rule supplies min-height:0 so the shrink-to-fit flex child
+  // can shrink below content height and actually engage overflow-y:auto.
+  expect(cssRule(".run-turn-view-body")).toMatch(/min-height:\s*0;/);
+
+  // The "Question N of M" heading is no longer a pinned orphan banner: it
+  // renders as an in-flow system-user message (data-kind="question-heading")
+  // that scrolls with the question body, so the old pinned-head rule is retired
+  // and must stay retired.
+  expect(indexCssSource.includes(".run-turn-question-page-head")).toBe(false);
 });

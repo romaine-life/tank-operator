@@ -34,11 +34,10 @@ type ActivitySummary struct {
 type ActivityFoldStats struct {
 	LateInterruptIgnoredStatuses []string
 	// BackgroundWorkPending is true when the final lifecycle terminal in this fold
-	// is a turn.completed carrying payload.background_work_pending=true — a
-	// self-managing agent (antigravity) reporting it still has a background task in
-	// flight. The emitter folds a would-be-"ready" terminal into the non-summoning
-	// "scheduled" status when set, the same projection the Tank wake tables drive for
-	// Claude/Codex. See docs/scheduled-turn-continuity.md.
+	// is a turn.completed carrying payload.background_work_pending=true. The
+	// emitter folds a would-be-"ready" terminal into the non-summoning
+	// "scheduled" status when set, the same projection the Tank wake tables drive.
+	// See docs/scheduled-turn-continuity.md.
 	BackgroundWorkPending bool
 }
 
@@ -328,7 +327,7 @@ const (
 	AwayErrorReasonScheduledWakeup    = "schedule_wakeup_fire_failed"
 	AwayErrorReasonBackgroundTaskWake = "background_task_wake_fire_failed"
 	// AwayErrorReasonStrandedContinuation marks a continuation turn (a
-	// background-task wake, scheduled wakeup, or agent-continuation) whose
+	// background-task wake or scheduled wakeup) whose
 	// submit_turn command was durably recorded but lost before any runner
 	// progress — swept to a terminal by the stranded-turn sweep. Same
 	// user-trust shape as the fire-failed reasons above: the agent promised
@@ -355,9 +354,8 @@ func terminalReason(event map[string]any) string {
 }
 
 // backgroundWorkPendingField reads payload.background_work_pending from a
-// turn.completed envelope. A self-managing agent (antigravity) sets it true while a
-// background task it owns is still in flight at the SDK terminal, so the projection
-// keeps the user-facing turn open (non-summoning) rather than summoning mid-wait.
+// turn.completed envelope. When set, the projection keeps the user-facing turn
+// open (non-summoning) rather than summoning mid-wait.
 func backgroundWorkPendingField(event map[string]any) bool {
 	payload, _ := event["payload"].(map[string]any)
 	if payload == nil {

@@ -19,6 +19,8 @@ import { StyleguideNewSessionRow } from "./styleguide/new-session-row";
 import { StyleguidePortfolioOnboarding } from "./styleguide/portfolio-onboarding";
 import { StyleguidePortfolioTranscript } from "./styleguide/portfolio-transcript";
 import { StyleguidePortfolioWorkspace } from "./styleguide/portfolio-workspace";
+import { StyleguidePromptCollapseParity } from "./styleguide/prompt-collapse-parity";
+import { StyleguideQuestionHeading } from "./styleguide/question-heading";
 import { StyleguideRunHeaderTabs } from "./styleguide/run-header-tabs";
 import { StyleguideMobileShell } from "./styleguide/mobile-shell";
 import { StyleguideSessionRow } from "./styleguide/session-row";
@@ -51,8 +53,6 @@ if (typeof document !== "undefined") {
 // Non-tank keys are left alone — other libs/sites share this origin.
 const TANK_KEY_ALLOWLIST = [
   "tank-run-pref-",         // run-pane prefs (App.tsx)
-  "tank.defaultSessionMode",
-  "tank.defaultInteraction",
   "tank.homeSelectedRepos",
   "tank.sessionInteraction:",
 ];
@@ -102,6 +102,8 @@ const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
   "/_styleguide/portfolio-onboarding": () => <StyleguidePortfolioOnboarding />,
   "/_styleguide/portfolio-transcript": () => <StyleguidePortfolioTranscript />,
   "/_styleguide/collapsed-turn-activity": () => <StyleguideCollapsedTurnActivity />,
+  "/_styleguide/prompt-collapse-parity": () => <StyleguidePromptCollapseParity />,
+  "/_styleguide/question-heading": () => <StyleguideQuestionHeading />,
   "/_styleguide/boot-state": () => <StyleguideBootState />,
   "/_styleguide/avatars": () => <StyleguideAvatars />,
 };

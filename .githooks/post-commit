@@ -1,21 +1,17 @@
 #!/bin/sh
 
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || printf '%s\n' "")
 if [ -f /opt/tank/session-config/agent-post-commit-hook.sh ]; then
   exec sh /opt/tank/session-config/agent-post-commit-hook.sh "$@"
+fi
+if [ -f "$repo_root/k8s/session-config/agent-post-commit-hook.sh" ]; then
+  exec sh "$repo_root/k8s/session-config/agent-post-commit-hook.sh" "$@"
 fi
 
 cat <<'EOF'
 
-[tank-agent-reminder] Local commit created.
-Before handoff:
-- Push the branch and inspect the open PR's current HEAD CI checks.
-- Treat CI as part of the contract/test surface, not as optional bookkeeping.
-- Resolve merge conflicts against the base branch.
-- Re-run or update hot-swap/test-slot evidence after follow-up changes.
-- Do not hand off broken or intentionally failing CI unless that is explicitly stated.
-
-Useful checks:
-  gh pr view --json url,headRefOid,mergeStateStatus,statusCheckRollup
-  gh pr checks --watch
+[tank-agent] Local commit created, but the Tank auto-publish hook script was
+not available. In a Tank session, every commit must be published through the
+Tank MCP publish_current_head tool and watched until CI is green and mergeable.
 
 EOF

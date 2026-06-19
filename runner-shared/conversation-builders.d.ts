@@ -24,7 +24,7 @@ export interface UserSubmissionArgs {
   text: string;
   message: unknown;
   attachments?: UserMessageAttachmentDisplay[];
-  runtime: "claude" | "codex" | "antigravity";
+  runtime: "claude" | "codex";
   skillName?: string;
   now?: string;
 }
@@ -43,7 +43,7 @@ export interface TurnEventArgs {
   sessionID: string;
   turnID: string;
   clientNonce?: string;
-  source: "claude" | "codex" | "antigravity";
+  source: "claude" | "codex";
   type:
     | "turn.started"
     | "turn.claimed"
@@ -76,15 +76,22 @@ export interface AskUserQuestionHandoffEventArgs {
   sessionID: string;
   askingTurnID: string;
   askingClientNonce: string;
-  source: "claude" | "codex" | "antigravity";
+  source: "claude" | "codex";
   providerItemID: string;
   providerTimelineID: string;
   questions: unknown[];
+  // ExitPlanMode plan-approval pauses pass the plan markdown so the Turns
+  // question page renders it above the Approve/Request-changes question.
+  plan?: string;
+  finalAnswer?: TankFinalAnswer;
 }
 
 export interface AskUserQuestionHandoffEvents {
   questionClientNonce: string;
   questionTurnID: string;
+  // Stable target for the user-facing synthetic question turn. The invocation
+  // event carries this before the synthetic turn's numbered page is materialized
+  // so UIs can open the target by turn id and later upgrade to a numbered href.
   questionTimelineID: string;
   questionMessage: TankConversationEvent;
   invocation: TankConversationEvent;
@@ -99,7 +106,7 @@ export function askUserQuestionHandoffEvents(
 export interface ItemEventArgs {
   sessionID: string;
   turnID: string;
-  source: "claude" | "codex" | "antigravity";
+  source: "claude" | "codex";
   type: "item.started" | "item.completed" | "item.failed";
   providerItemID: string;
   parentID?: string;
@@ -113,7 +120,7 @@ export function itemEvent(args: ItemEventArgs): TankConversationEvent;
 export interface ShellTaskEventArgs {
   sessionID: string;
   turnID: string;
-  source: "claude" | "codex" | "antigravity";
+  source: "claude" | "codex";
   type: "shell_task.started" | "shell_task.updated" | "shell_task.exited";
   taskID: string;
   status: string;
@@ -128,7 +135,7 @@ export function shellTaskEvent(args: ShellTaskEventArgs): TankConversationEvent;
 export interface ContextCompactedEventArgs {
   sessionID: string;
   turnID: string;
-  source: "claude" | "codex" | "antigravity";
+  source: "claude" | "codex";
   trigger: "auto" | "manual";
   preTokens?: number;
   providerEventID?: string;

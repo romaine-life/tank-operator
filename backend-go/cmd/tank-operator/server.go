@@ -52,7 +52,10 @@ type appServer struct {
 	avatarUploads       avataruploads.Store
 	transcripts         transcriptstore.Store
 	pgPool              *pgxpool.Pool
-	sessionBus          sessionCommandBus
+	// dataBrowser backs the admin-only read-only DB browser. nil in stub mode
+	// (no pgPool); handlers return 503 rather than pretend to browse.
+	dataBrowser dataBrowserReader
+	sessionBus  sessionCommandBus
 	// rowWriter is the shared session-row transition writer (same instance
 	// the K8s watch and chat-activity emitter use). The internal
 	// provider-fatal endpoint routes runner-reported agent-process death
@@ -105,6 +108,13 @@ type appServer struct {
 	// then 503s loudly rather than mis-routing the request.
 	mcpGitHub AppServerMCPGitHub
 
+	// azurePersonal fires mcp-azure-personal's /internal/grant-activated when an
+	// azure break-glass grant goes active, so its tools surface live
+	// (tools/list_changed) rather than relying on the SDK reconnect (which does
+	// not re-register tools). nil when the auth.romaine.life-audience projected
+	// SA token isn't mounted — the trigger then no-ops.
+	azurePersonal AzurePersonalNotifier
+
 	// glimmung returns checked-out test-slot leases from the Session Data page.
 	// nil when the auth.romaine.life-audience projected SA token is unavailable.
 	glimmung AppServerGlimmung
@@ -122,6 +132,64 @@ type appServer struct {
 	// orchestrator claims due rows and feeds them through the normal SDK
 	// turn boundary instead of holding process-local timers in a session pod.
 	scheduledWakeups scheduledWakeupStore
+
+	// ciWatches is the durable backend-owned store of per-session GitHub PR
+	// CI/mergeability watches (docs/event-driven-rollout.md): the watch tool
+	// registers a row at agent hand-off, the webhook receiver transitions it and
+	// wakes the agent on red/conflict, the idle reaper keeps a 'watching' session
+	// alive, and the human merge surface renders it.
+	ciWatches ciWatchStore
+
+	// ciWatchMergeabilityRetries is the narrow non-event-driven escape hatch:
+	// GitHub's PR mergeability can be null/unknown while it computes a trial
+	// merge asynchronously, so a watching PR/head can schedule one deduped
+	// delayed reconcile. The retry re-enters the same reducer as webhooks.
+	ciWatchMergeabilityRetryMu     sync.Mutex
+	ciWatchMergeabilityRetries     map[string]*time.Timer
+	ciWatchMergeabilityRetryDelays []time.Duration
+
+	// githubWebhookSecret verifies X-Hub-Signature-256 on the public
+	// POST /webhooks/github route. Empty -> the receiver fails closed.
+	githubWebhookSecret string
+
+	// provisionSettleInterval / provisionSettleTimeout tune the deterministic
+	// test-slot provisioning gate's settle-wait (provision_test_slot.go): how
+	// often it re-polls a still-'watching' PR and the hard cap before it
+	// refuses. Zero -> defaults. provisionNow / provisionSleepFunc are the
+	// injectable clock + sleep so tests advance without real sleeps.
+	provisionSettleInterval time.Duration
+	provisionSettleTimeout  time.Duration
+	provisionNow            func() time.Time
+	provisionSleepFunc      func(ctx context.Context, d time.Duration) error
+
+	// interactiveTestWorkflowLaunch starts the deterministic interactive
+	// test-workflow gate (handlers_test_workflow.go). Production wiring spawns
+	// runInteractiveTestWorkflow on a fresh budgeted background goroutine so the
+	// HTTP handler returns 202 immediately; tests inject a synchronous capture to
+	// assert the resolved coordinates deterministically. nil -> the goroutine
+	// launcher.
+	interactiveTestWorkflowLaunch func(provisionTestSlotRequest)
+
+	// testDriveWakeSubmit, when non-nil, replaces the real backend-owned wake
+	// turn the interactive "drive" variant submits after a ready provision
+	// (handlers_test_workflow.go → enqueueTestDriveWakeTurn). Production leaves it
+	// nil so the wake reuses enqueueSDKTurn (the ScheduleWakeup path); tests
+	// inject a capture to assert a wake was (or was not) submitted without the
+	// full sessionBus/pod machinery enqueueSDKTurn requires.
+	testDriveWakeSubmit func(ctx context.Context, req provisionTestSlotRequest, url string) (map[string]any, int, string)
+
+	// orchestrations is the deterministic multi-phase advance engine
+	// (docs/event-driven-rollout.md sibling): the merged-PR webhook calls
+	// advanceOnMerge to walk the DAG and dispatch the next ready phase's spoke,
+	// the CI-watch register handler calls linkPhasePR to join a spoke's PR back
+	// to its phase, and a background loop calls reconcileAllActive as the
+	// dropped-webhook backstop. nil in stub mode / when pgPool is unset.
+	orchestrations *orchestrationEngine
+
+	// orchestrationRuns is the launch/review handler's store surface. The
+	// engine above owns DAG advancement; this handle owns run creation and
+	// approval before reconcileRun starts dispatching phases.
+	orchestrationRuns orchestrationRunStore
 
 	// backgroundTaskWakes is the durable backend-owned store for "a Claude
 	// background task finished while the session was idle" wakes. The runner
@@ -142,6 +210,15 @@ type appServer struct {
 	// publishes submit_turn — so the launch survives a browser that goes away
 	// after create. nil in stub mode / when pgPool is unset.
 	pendingLaunch pendingLaunchStore
+
+	// pendingTestProvisions is the durable backstop store for in-flight
+	// deterministic test-slot provisions (provision_test_slot.go's two
+	// background entry points). A row is written 'pending' at kickoff and
+	// terminalized at finish; the reconcile loop re-drives any record stranded
+	// in 'pending' by an orchestrator restart mid-settle-wait, and the
+	// interactive endpoint's double-trigger guard rides Register's atomic
+	// conflict. nil in stub mode / when pgPool is unset.
+	pendingTestProvisions pendingTestProvisionStore
 
 	// imageOverrides backs the test-slot session-image repoint flow
 	// (docs/testing.md): the internal /session-scopes/{scope}/image-override
@@ -219,6 +296,23 @@ type scheduledWakeupStore interface {
 	CancelPendingForSession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
 }
 
+// ciWatchStore is the durable per-session GitHub PR CI/mergeability watch store
+// (docs/event-driven-rollout.md). Register lands a watch at agent hand-off;
+// UpdateStatus transitions it from the webhook receiver and the human merge
+// surface; HasActiveForSession is the idle-reaper gate that keeps a 'watching'
+// session alive so a red/conflict wake can land.
+type ciWatchStore interface {
+	Register(context.Context, pgstore.RegisterCIWatchRequest) (pgstore.CIWatch, error)
+	UpdateStatus(context.Context, string, pgstore.CIWatchStatus, string) (pgstore.CIWatch, error)
+	UpdateObservation(context.Context, pgstore.UpdateCIWatchObservationRequest) (pgstore.CIWatch, error)
+	Get(context.Context, string) (pgstore.CIWatch, error)
+	GetByPR(context.Context, string, string, int) (pgstore.CIWatch, error)
+	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)
+	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
+	HasActiveForSession(context.Context, string, string) (bool, error)
+	ListStaleWatching(context.Context, time.Duration, int) ([]pgstore.CIWatch, error)
+}
+
 type pendingLaunchStore interface {
 	Register(context.Context, pgstore.RegisterPendingLaunchRequest) (pgstore.PendingLaunchTurn, error)
 	StageAttachment(context.Context, string, string, pgstore.LaunchAttachmentBlob) (pgstore.PendingLaunchStatus, error)
@@ -228,6 +322,22 @@ type pendingLaunchStore interface {
 	MarkDispatched(context.Context, string, string, string) error
 	MarkFailed(context.Context, string, string, string) error
 	Get(context.Context, string, string) (pgstore.PendingLaunchTurn, error)
+}
+
+// pendingTestProvisionStore is the durable in-flight test-slot provision
+// backstop (pending_test_provisions). Register is the atomic double-trigger
+// guard (created=false means a provision is already in flight for the target);
+// MarkTerminal closes a record at finish; ListStale + ClaimForRedrive drive the
+// idempotent restart-recovery reconcile; OldestPendingAgeSeconds backs the
+// stuck-provision alert gauge. Satisfied by *pgstore.PendingTestProvisionStore;
+// an interface so handler/loop tests can fake it without Postgres.
+type pendingTestProvisionStore interface {
+	Register(context.Context, pgstore.RegisterPendingTestProvisionRequest) (pgstore.PendingTestProvision, bool, error)
+	MarkTerminal(context.Context, string, pgstore.PendingTestProvisionStatus, string, string) (pgstore.PendingTestProvision, error)
+	ClaimForRedrive(context.Context, string, int) (pgstore.PendingTestProvision, error)
+	ListStale(context.Context, time.Duration, int) ([]pgstore.PendingTestProvision, error)
+	OldestPendingAgeSeconds(context.Context) (float64, error)
+	Get(context.Context, string) (pgstore.PendingTestProvision, error)
 }
 
 type backgroundTaskWakeStore interface {
@@ -254,6 +364,10 @@ type backgroundTaskWakeStore interface {
 type controlActionStore interface {
 	Append(context.Context, pgstore.ControlActionEvent) (pgstore.ControlActionEvent, error)
 	ListBySession(context.Context, string, string, string, int) ([]pgstore.ControlActionEvent, error)
+	ListBreakGlassRequests(context.Context, string, int) ([]pgstore.ControlActionEvent, error)
+	GetBySessionEvent(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
+	BreakGlassDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
+	TestSlotModelDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 }
 
 // sessionImageOverrideStore is the durable per-scope session-image override
@@ -313,8 +427,17 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/app-version", s.handleAdminAppVersion)
 	mux.HandleFunc("GET /api/admin/test-slot-session-defaults", s.handleAdminGetTestSlotSessionDefaults)
 	mux.HandleFunc("PUT /api/admin/test-slot-session-defaults", s.handleAdminSetTestSlotSessionDefaults)
+	mux.HandleFunc("POST /api/admin/sessions/{session_id}/git-break-glass/grants", s.handleAdminGrantGitBreakGlass)
+	mux.HandleFunc("POST /api/admin/sessions/{session_id}/azure-break-glass/grants", s.handleAdminGrantAzureBreakGlass)
+	mux.HandleFunc("POST /api/admin/sessions/{session_id}/test-slot-model-approvals/grants", s.handleAdminGrantTestSlotModelApproval)
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
+	mux.HandleFunc("GET /api/admin/break-glass-requests", s.handleAdminBreakGlassRequests)
+	// Admin-only, read-only database browser: a table directory plus keyset
+	// pages of one table's rows. No caller SQL; redaction + bounds live in
+	// internal/pgstore.DataBrowser.
+	mux.HandleFunc("GET /api/admin/data/tables", s.handleAdminDataTables)
+	mux.HandleFunc("GET /api/admin/data/tables/{table}/rows", s.handleAdminDataTableRows)
 	// Admin-only durable support surface for avatar upload failures. The
 	// form error returns attempt_id; this endpoint turns that reference into
 	// a curl-able diagnosis without browser devtools.
@@ -341,6 +464,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// exchange so the orchestrator can mint a service JWT acting for the
 	// SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
+	mux.HandleFunc("GET /api/orchestrations", s.handleListOrchestrations)
+	mux.HandleFunc("POST /api/orchestrations", s.handleCreateOrchestration)
+	mux.HandleFunc("GET /api/orchestrations/{orchestration_id}", s.handleGetOrchestration)
+	mux.HandleFunc("GET /api/orchestrations/{orchestration_id}/events", s.handleOrchestrationEventStream)
+	mux.HandleFunc("POST /api/orchestrations/{orchestration_id}/review/approve", s.handleApproveOrchestrationReview)
 	mux.HandleFunc("GET /api/bug-labels", s.handleListBugLabels)
 	mux.HandleFunc("GET /api/session-run-options", s.handleSessionRunOptions)
 
@@ -380,6 +508,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// tombstones; this raw-ledger surface is for audit/debug detail
 	// when the projection is not enough.
 	mux.HandleFunc("GET /api/debug/session-event-ledger", s.handleDebugSessionEventLedger)
+	// Admin-only picker surface for soft-deleted/hidden session transcripts.
+	mux.HandleFunc("GET /api/admin/hidden-sessions", s.handleAdminHiddenSessions)
+	mux.HandleFunc("GET /api/admin/hidden-sessions/{session_id}/timeline", s.handleAdminHiddenSessionTimeline)
+	mux.HandleFunc("GET /api/admin/hidden-sessions/{session_id}/turns/directory", s.handleAdminHiddenSessionTurnDirectory)
 	// Admin-only debug surface for the durable conversation_read_state
 	// cursor + sessions.activity_summary view. Pairs with the
 	// TankChatScrollUserAtBottomLatched alert: when the alert fires,
@@ -403,11 +535,17 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}", s.handlePatchSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/resurrect", s.handleResurrectSession)
+	mux.HandleFunc("PUT /api/sessions/{session_id}/parent", s.handleSetSessionParent)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/open-target", s.handleSetOpenTarget)
+	mux.HandleFunc("PUT /api/sessions/{session_id}/run-config", s.handleSetSessionRunConfig)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-state", s.handleSetTestState)
+	mux.HandleFunc("POST /api/sessions/{session_id}/test-workflow/start", s.handleStartTestWorkflow)
+	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot", s.handleGetTestSlotStatus)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/return", s.handleReturnTestSlot)
 	mux.HandleFunc("POST /api/sessions/{session_id}/rollout-state", s.handleSetRolloutState)
+	mux.HandleFunc("POST /api/sessions/{session_id}/orchestrate", s.handleOrchestrateLaunch)
+	mux.HandleFunc("POST /api/sessions/{session_id}/merge-pr", s.handleMergeSessionPR)
 	mux.HandleFunc("POST /api/sessions/{session_id}/save-credentials", s.handleSaveCredentials)
 	mux.HandleFunc("POST /api/sessions/{session_id}/paste-image", s.handlePasteImage)
 	mux.HandleFunc("POST /api/sessions/{session_id}/messages", s.handleSendMessage)
@@ -444,7 +582,21 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
 	mux.HandleFunc("POST /api/sessions/{session_id}/scheduled-wakeups/cancel", s.handleCancelScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
+	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests/{request_event_id}", s.handleGetBreakGlassRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/batch/approve", s.handleApproveBreakGlassRequestsBatch)
+	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/approve", s.handleApproveBreakGlassRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/deny", s.handleDenyBreakGlassRequest)
+	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}", s.handleGetTestSlotModelApprovalRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}/approve", s.handleApproveTestSlotModelApprovalRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/approve", s.handleApprovePRLaneRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
+	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
+	// Durable turn directory: the COMPLETE submission-ordered turn set so the
+	// Turns selector lists every turn independent of the bounded /timeline
+	// window. The literal "directory" segment is strictly more specific than
+	// /turns/{number}, so the mux routes it here, not to the number resolver.
+	mux.HandleFunc("GET /api/sessions/{session_id}/turns/directory", s.handleSessionTurnDirectory)
 	// Durable resolver for the public per-session turn number: the canonical
 	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor
 	// server-side so a cold deep link resolves from session_turns, not from the
@@ -460,6 +612,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/image", s.handlePublicMessageLinkAvatarImage)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/backing", s.handlePublicMessageLinkAvatarBacking)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/timeline", s.handlePublicMessageLinkTimeline)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/turns/directory", s.handlePublicMessageLinkTurnDirectory)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/turns/{turn_id}/activity", s.handlePublicMessageLinkTurnActivity)
 	mux.HandleFunc("GET /api/public/session-report-shares/{share_token}", s.handleGetPublicSessionReportShare)
 
@@ -479,18 +632,33 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
+	// Pod-authenticated (SA-token) endpoint: mints a kubectl credential for the
+	// trusted cluster-admin SA, for non-restricted sessions only.
+	mux.HandleFunc("POST /api/internal/session-cluster-credential", s.handleInternalClusterCredential)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/timeline", s.handleInternalSessionTimeline)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/transcript-snapshot", s.handleInternalSessionTranscriptSnapshot)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/resume-transcript", s.handleInternalSessionResumeTranscript)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pr-readiness", s.handleInternalRegisterPRReadiness)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/ci-watches", s.handleInternalRegisterCIWatch)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/orchestration/blocked", s.handleInternalOrchestrationBlocked)
+	// Public inbound GitHub webhook; authenticated by HMAC inside the handler.
+	mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes/cancel", s.handleInternalCancelBackgroundTaskWake)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/background-tasks/unresolved", s.handleInternalUnresolvedBackgroundTasks)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
-	mux.HandleFunc("POST /api/internal/sessions/{session_id}/agent-continuation", s.handleInternalAgentContinuation)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/governed-merge/verify", s.handleInternalVerifyGovernedMerge)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-auto-approval", s.handleInternalGetPRLaneAutoApproval)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/azure-break-glass/grant", s.handleInternalGetAzureBreakGlassGrant)
+	// Read-only SQL for non-restricted sessions (backs the query_tank_db MCP tool).
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/db-read-query", s.handleInternalSessionDBReadQuery)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-slot-model-approvals/grants", s.handleInternalGrantTestSlotModelApproval)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

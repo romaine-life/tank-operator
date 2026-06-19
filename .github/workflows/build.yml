@@ -81,12 +81,8 @@ jobs:
           file: Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.fingerprint.outputs.proof_tag }}
-          cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE }}-build-cache:app
-            type=gha,scope=app
-          cache-to: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE }}-build-cache:app,mode=max
-            type=gha,mode=max,scope=app
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE }}-build-cache:app
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE }}-build-cache:app,mode=max
 
       - name: Bump chart image tag
         if: github.ref == 'refs/heads/main'

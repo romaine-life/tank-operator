@@ -126,6 +126,18 @@ func TestClaimIdleForReap(t *testing.T) {
 	`, owner); err != nil {
 		t.Fatalf("insert pending launch: %v", err)
 	}
+	// ciwatch1: stale + settled, but a CI watch is still 'watching' — the
+	// session must stay alive so a red/conflict wake can land.
+	insertSession("ciwatch1", "ready", stale)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO session_ci_watches (
+			watch_id, session_scope, session_id, tank_session_id, owner_email,
+			pr_owner, pr_name, pr_number, status, registered_at
+		) VALUES ('cw1', 'default', 'ciwatch1', 'default/ciwatch1', $1,
+			'romaine-life', 'tank-operator', 7, 'watching', $2)
+	`, owner, now); err != nil {
+		t.Fatalf("insert ci watch: %v", err)
+	}
 	// nostatus1: stale with NULL activity_summary (pre-activity sessions) —
 	// reapable: no summary means nothing ever ran.
 	insertSession("nostatus1", "", stale)
@@ -171,7 +183,7 @@ func TestClaimIdleForReap(t *testing.T) {
 	if visible {
 		t.Fatalf("claimed session still visible")
 	}
-	for _, untouched := range []string{"fresh1", "working1", "waked1", "bg1", "launch1"} {
+	for _, untouched := range []string{"fresh1", "working1", "waked1", "bg1", "launch1", "ciwatch1"} {
 		if err := pool.QueryRow(ctx,
 			`SELECT visible FROM sessions WHERE email=$1 AND session_scope='default' AND session_id=$2`,
 			owner, untouched).Scan(&visible); err != nil {

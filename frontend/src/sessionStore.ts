@@ -42,6 +42,10 @@ import {
   type SessionListDebugEvent,
 } from "./sessionListDebug";
 import { normalizeBugLabelDisplayName } from "./bugLabels";
+import {
+  normalizeSpawnedSessions,
+  type SpawnedSessionRef,
+} from "./spawnedSessions";
 
 export interface SessionBugLabel {
   id?: number;
@@ -78,6 +82,20 @@ export interface SessionRow {
   activity_summary?: Record<string, unknown>;
   test_state?: Record<string, unknown>;
   rollout_state?: Record<string, unknown>;
+  // spoke_config is present when this session is acting as a hub in an
+  // orchestration — it carries the config used to launch the spoke session.
+  // Absent/undefined when not a hub.
+  spoke_config?: Record<string, unknown>;
+  // spawned_sessions is the durable parent→child lineage the session-bar
+  // "spawned sessions" chip lists. Omitted/empty when this session spawned
+  // nothing. Normalized to clean refs at the store boundary.
+  spawned_sessions?: SpawnedSessionRef[];
+  // parent_session_id is the child→parent (origin) pointer that drives sidebar
+  // nesting: the id of the session that spawned this one, stamped on the child
+  // row at create. Omitted/empty when this session was not spawned. Because it
+  // lands with the child row itself, the sidebar nests the child on arrival
+  // without waiting for the parent's spawned_sessions append.
+  parent_session_id?: string;
   // repos is the durable owner/name slug list the user picked at
   // session creation. Always present on the wire (empty array when
   // none picked); the splash chips and the per-session detail view
@@ -103,6 +121,8 @@ export interface SessionRow {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string;
+  runtime_provider_session_id?: string;
+  runtime_provider_session_observed_at?: string;
   provider_rate_limit_info?: Record<string, unknown>;
   provider_rate_limit_observed_at?: string;
   // Durable per-session count of context.compacted events, projected onto the
@@ -534,6 +554,15 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       rollout_state: isRecord(rowRaw.rollout_state)
         ? (rowRaw.rollout_state as Record<string, unknown>)
         : undefined,
+      spoke_config: isRecord(rowRaw.spoke_config)
+        ? (rowRaw.spoke_config as Record<string, unknown>)
+        : undefined,
+      spawned_sessions: normalizeSpawnedSessions(rowRaw.spawned_sessions),
+      parent_session_id:
+        typeof rowRaw.parent_session_id === "string" &&
+        rowRaw.parent_session_id !== ""
+          ? rowRaw.parent_session_id
+          : undefined,
       repos: Array.isArray(rowRaw.repos)
         ? (rowRaw.repos as unknown[]).filter(
             (entry): entry is string => typeof entry === "string",
@@ -562,6 +591,10 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
         stringField(rowRaw, "runtime_context_window_source") ?? undefined,
       runtime_context_window_observed_at:
         stringField(rowRaw, "runtime_context_window_observed_at") ?? undefined,
+      runtime_provider_session_id:
+        stringField(rowRaw, "runtime_provider_session_id") ?? undefined,
+      runtime_provider_session_observed_at:
+        stringField(rowRaw, "runtime_provider_session_observed_at") ?? undefined,
       provider_rate_limit_info: isRecord(rowRaw.provider_rate_limit_info)
         ? (rowRaw.provider_rate_limit_info as Record<string, unknown>)
         : undefined,

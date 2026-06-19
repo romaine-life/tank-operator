@@ -43,6 +43,17 @@ the rest of the product reconstruct what happened.
   pre-provider progress (`turn.submitted` projection and runner-owned
   `turn.claimed` when the runner accepts the command), runner progress, and
   exactly one terminal turn outcome.
+- Model and effort are sealed within a turn but re-pinnable between turns: a
+  user may change the session's model/effort mid-session (the durable
+  `model`/`effort` columns, set via `PUT /api/sessions/{id}/run-config`). The
+  change applies to the next turn, never mid-turn — the runner re-pins at an
+  idle turn boundary by tearing down the current provider query/thread and
+  rebuilding it with provider-session resume + the new options, preserving the
+  conversation. Antigravity is excluded (its model is an `agy` process-start
+  argument). The runner must not silently ignore a changed model/effort. The
+  per-turn run config is durable: the resolved model/effort is recorded on each
+  turn's submission events so the transcript shows which model answered each
+  turn, independent of the session's current (next-turn) selection.
 - Stop/interrupt remains pending until a durable interrupted, completed,
   failed, or already-terminal event resolves it.
 - Stop/interrupt against a turn that is already terminal must not create a new
@@ -59,13 +70,27 @@ the rest of the product reconstruct what happened.
   inside a subagent.
 - Claude AskUserQuestion is a Tank-owned SDK MCP tool
   (`mcp__tank__AskUserQuestion`) that parks a durable `turn.awaiting_input`.
+  Its tool input uses the same question-set shape as the durable protocol:
+  `questions` is a non-empty array, including the one-question case.
   It must not depend on Claude's permission callback path; permission mode and
   human-question handoff are separate runner concerns.
+- A file the user attaches to an AskUserQuestion answer must reach the model,
+  not be silently dropped. The attachment rides the same upload +
+  `display_attachments` plumbing as a normal turn: the bytes stay pod-local in
+  the shared `/workspace`, and only path metadata travels the `input_reply`
+  command (`attachments`) and the durable `turn.input_answered` record. At
+  delivery the Claude runner reads the bytes from `/workspace` and returns an
+  image as an inline image content block in the resolved AskUserQuestion tool
+  result (the pixels in context — on an answer the screenshot is often the
+  answer), a non-image as a path line, and a missing/oversize/unreadable image
+  as a visible note. Never a silent drop. (Codex GUI records the attachment on
+  the transcript turn but does not yet inline it to the model — a named gap in
+  the capability ledger, since the Codex app-server answer is a structured
+  response with no inline-image channel.)
 - Runner events must wake transcript and session-list followers after
   persistence.
 - A runner must not require an open browser to continue work.
 - Provider self-scheduled wakeup state is durable in Postgres. Claude
-  `ScheduleWakeup` and Antigravity `schedule` tool calls are registered by the
   runner with the backend; the orchestrator later submits the wakeup through
   the same backend-owned turn boundary as a user turn.
   Registration, cancellation, fire, and failure also write
@@ -108,6 +133,34 @@ the rest of the product reconstruct what happened.
   provider item IDs.
 - Provider failures must become durable failure events instead of silent
   strandings.
+- A runner-process restart that cannot recover the provider session is terminal
+  for the session, not a transient query death. When the SDK cannot resume the
+  conversation because its on-disk transcript was wiped by the container restart
+  ("No conversation found with session ID"), the runner resolves the active turn
+  with `turn.failed{reason:"provider_session_lost"}`, reports
+  `session.provider_fatal{reason:"provider_session_lost"}` (the durable
+  session-level Failed banner), and exits terminally — never the exit(1)-restart
+  loop, which would resume the same gone transcript and crash-loop. The
+  orchestrator reaps the pod on the report so the kubelet stops restarting it.
+  Degrading into a silent CrashLoopBackOff is the session-979 regression
+  (2026-06-16) this closes.
+- No session-pod runner container crash-loops unbounded. The orchestrator K8s
+  watch reaps a pod whose agent-runner container stays in CrashLoopBackOff past
+  the restart budget (`CrashloopRestartBudget`, default 5), marking the session
+  `session.provider_fatal{reason:"runner_crashloop"}`. This backstops loops the
+  runner never classified (boot crashes, an SDK shape its own terminal path
+  missed).
+- A terminal session failure is sticky. Once `session.provider_fatal` or
+  pod-terminating marks the row Failed (stamping `terminating_at`), a later
+  pod-ready observation must not flip it back to Active — otherwise a
+  doomed-but-briefly-ready container makes a dead session read Active (the 979
+  status flapping). A transient `pod_failed` (a CrashLoopBackOff that may still
+  recover) is deliberately NOT sticky.
+- A mid-session model/effort re-pin that fails provider resume (for example a
+  cross-model thinking-block rejection) must resolve the turn with a durable
+  `turn.failed`, never a silent stranding; the failure class stays visible in
+  `tank_runner_provider_failure_signature_total` so a cross-model resume
+  regression is observable.
 - Provider rate-limit stream frames must be classified by the provider's
   primary quota status before they affect durable turn state. A primary
   rejected/exhausted quota resolves the active turn with
@@ -139,6 +192,13 @@ the rest of the product reconstruct what happened.
   labels, free-form-only notes, and selected-labels-plus-notes so a durable
   `turn.input_answered` row with annotations can be compared against what the
   runner actually normalized for provider delivery.
+- Files attached to an AskUserQuestion answer are counted at the same boundary:
+  `tank_runner_input_reply_attachment_total{kind,result}` records each
+  attachment by `kind` (`image` | `file`) and `result`
+  (`delivered` | `read_failed` | `missing`). A `missing` or `read_failed` image
+  is the silent-screenshot-loss regression signature — the durable
+  `turn.input_answered.attachments` shows the user attached a screenshot while
+  the runner failed to put it in front of the model.
 - Claude tool permission denials are counted at the runner/provider boundary:
   `tank_runner_tool_permission_denied_total{agent_kind,tool_family,server,decision}`
   distinguishes parent versus subagent origin, MCP versus local tools, the MCP
@@ -152,6 +212,15 @@ the rest of the product reconstruct what happened.
   (plus the `tank_background_task_wakes_due` gauge). A task-lifecycle terminal
   that the runner logs as `sdk_task_lifecycle_unbound` while wake registrations
   stay flat is the detection-regressed signature.
+- The unrecoverable-resume terminal is counted on both sides so the crash-loop
+  cannot silently return: the runner's
+  `tank_runner_unrecoverable_exit_total{reason}` (`provider_session_lost`,
+  `report_failed`) and the orchestrator's `tank_session_pod_reaped_total{reason}`
+  (`provider_fatal`, `runner_crashloop`). A `reason="error"` container crash loop
+  is alerted (`TankSessionContainerCrashLooping`) and the provider-fatal terminal
+  is alerted (`TankSessionProviderFatal`); a crash-loop rate with no matching
+  pod-reaped increment is the regression signature (the loop is no longer being
+  converted to a terminal Failed).
 
 ## Acceptance Checks
 
@@ -163,3 +232,6 @@ the rest of the product reconstruct what happened.
   depends on it.
 - Runner work continues across browser disconnect and remains reconstructable
   from durable events.
+- A screenshot attached to an AskUserQuestion answer reaches the model: on
+  Claude, the agent's continuation describes the image's content, proving the
+  inline image block was delivered — not just that the attachment was recorded.

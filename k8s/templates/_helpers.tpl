@@ -29,14 +29,6 @@ codex-credentials
 {{- end -}}
 {{- end -}}
 
-{{- define "tank-operator.antigravityCredentialsKvKey" -}}
-{{- if or (eq .Values.namespaces.orchestrator "tank-operator") (eq (include "tank-operator.isTestEnv" .) "true") -}}
-antigravity-credentials
-{{- else -}}
-{{ printf "%s-antigravity-credentials" .Values.namespaces.orchestrator }}
-{{- end -}}
-{{- end -}}
-
 {{- define "tank-operator.renderMode" -}}
 {{- $mode := .Values.renderMode | default "normal" -}}
 {{- if not (has $mode (list "normal" "warm" "hot")) -}}
@@ -74,6 +66,10 @@ antigravity-credentials
 
 {{- define "tank-operator.ingressHostname" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s.%s" (include "tank-operator.slotName" .) .Values.testEnv.recordBase }}{{- else -}}{{ .Values.ingress.hostname }}{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.publicUIHost" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "https://%s" (include "tank-operator.ingressHostname" .) }}{{- else -}}{{ .Values.internalApi.tankUiHost }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.ingressTlsSecret" -}}
@@ -134,10 +130,6 @@ antigravity-credentials
 
 {{- define "tank-operator.codexApiProxyHost" -}}
 {{- .Values.codexApiProxy.serviceHost -}}
-{{- end -}}
-
-{{- define "tank-operator.antigravityApiProxyHost" -}}
-{{- .Values.antigravityApiProxy.serviceHost -}}
 {{- end -}}
 
 {{- define "tank-operator.codexCredentialsSecret" -}}

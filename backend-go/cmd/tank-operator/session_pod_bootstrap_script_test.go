@@ -1,6 +1,9 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +31,7 @@ func TestInstallTankDocsScriptRunsUnderSh(t *testing.T) {
 	}
 
 	cmd := exec.Command("sh", scriptPath)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(isolatedScriptEnv(t.TempDir()),
 		"INSTALL_TANK_DOCS_CONFIG_DIR="+configDir,
 		"INSTALL_TANK_DOCS_DEST_ROOT="+destRoot,
 	)
@@ -58,13 +61,9 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "skills__common__rollout__agents__openai.yaml"), []byte("agent"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "skills__antigravity__antigravity-only__SKILL.md"), []byte("agy"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	cmd := exec.Command("sh", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
+	cmd.Env = append(isolatedScriptEnv(home),
 		"INSTALL_TANK_SKILLS_CONFIG_DIR="+configDir,
 	)
 	out, err := cmd.CombinedOutput()
@@ -74,12 +73,6 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 
 	assertFileContains(t, filepath.Join(home, ".claude", "skills", "north-star", "SKILL.md"), "north")
 	assertFileContains(t, filepath.Join(home, ".codex", "skills", "north-star", "SKILL.md"), "north")
-	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "north-star", "SKILL.md"), "north")
-	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "rollout", "agents", "openai.yaml"), "agent")
-	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "antigravity-only", "SKILL.md"), "agy")
-	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "antigravity-only", "SKILL.md")); !os.IsNotExist(err) {
-		t.Fatalf("antigravity-scoped skill should not install into claude, stat err: %v", err)
-	}
 }
 
 func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
@@ -95,6 +88,10 @@ func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	sourcePrePushHook, err := filepath.Abs("../../../.githooks/pre-push")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
 
 	repoDir := t.TempDir()
 	home := t.TempDir()
@@ -103,9 +100,11 @@ func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
 	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
 	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
 	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	copyFile(t, sourcePrePushHook, filepath.Join(repoDir, ".githooks", "pre-push"), 0o755)
 
 	mustRunEnv(t, repoDir, env, "sh", "scripts/install-agent-post-commit-reminder.sh")
-	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "[tank-agent] Local commit created")
+	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "pre-push"), "[tank-agent] Direct git push is disabled")
 }
 
 func TestInstallAgentPostCommitReminderReplacesManagedTemplateHook(t *testing.T) {
@@ -121,6 +120,10 @@ func TestInstallAgentPostCommitReminderReplacesManagedTemplateHook(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	sourcePrePushHook, err := filepath.Abs("../../../.githooks/pre-push")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
 
 	repoDir := t.TempDir()
 	home := t.TempDir()
@@ -129,8 +132,9 @@ func TestInstallAgentPostCommitReminderReplacesManagedTemplateHook(t *testing.T)
 	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
 	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
 	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	copyFile(t, sourcePrePushHook, filepath.Join(repoDir, ".githooks", "pre-push"), 0o755)
 	writeExecutable(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), `#!/bin/sh
-echo '[tank-agent-reminder] Local commit created.'
+echo '[tank-agent] Local commit created.'
 `)
 
 	mustRunEnv(t, repoDir, env, "sh", "scripts/install-agent-post-commit-reminder.sh")
@@ -150,6 +154,10 @@ func TestInstallAgentPostCommitReminderRefusesUnmanagedHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	sourcePrePushHook, err := filepath.Abs("../../../.githooks/pre-push")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
 
 	repoDir := t.TempDir()
 	home := t.TempDir()
@@ -158,6 +166,7 @@ func TestInstallAgentPostCommitReminderRefusesUnmanagedHook(t *testing.T) {
 	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
 	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
 	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	copyFile(t, sourcePrePushHook, filepath.Join(repoDir, ".githooks", "pre-push"), 0o755)
 	writeExecutable(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), `#!/bin/sh
 echo custom
 `)
@@ -188,24 +197,564 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	prePushHookPath, err := filepath.Abs("../../../k8s/session-config/agent-pre-push-hook.sh")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
+	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve credential helper path: %v", err)
+	}
+
+	pluginSrc, err := filepath.Abs("../../../k8s/session-config/kubectl-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve kubectl credential plugin path: %v", err)
+	}
 
 	home := t.TempDir()
 	templateDir := filepath.Join(t.TempDir(), "template")
+	helperDst := filepath.Join(t.TempDir(), "bin", "git-credential-tank")
+	kubeconfigPath := filepath.Join(t.TempDir(), "kube", "config")
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caPath, []byte("fake-ca"), 0o600); err != nil {
+		t.Fatalf("write fake CA: %v", err)
+	}
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Env = append(isolatedGitEnv(home),
+		"TANK_RESTRICTED_GIT=true",
 		"AGENT_POST_COMMIT_HOOK="+hookPath,
+		"AGENT_PRE_PUSH_HOOK="+prePushHookPath,
 		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
+		// Restricted mode now ALSO installs the (mode-aware, read-only) credential
+		// helper, so reads work via git; provide its inputs and assert it lands.
+		"AGENT_GIT_CREDENTIAL_HELPER_SRC="+helperSrc,
+		"AGENT_GIT_CREDENTIAL_HELPER_DST="+helperDst,
+		// Provide the trusted-kubectl inputs too: restricted mode must still NOT
+		// write a kubeconfig — the elevated kubectl path stays non-restricted-only.
+		"AGENT_KUBECTL_CREDENTIAL_PLUGIN_SRC="+pluginSrc,
+		"AGENT_KUBECONFIG_PATH="+kubeconfigPath,
+		"AGENT_KUBE_CA_PATH="+caPath,
+		"KUBERNETES_SERVICE_HOST=10.0.0.1",
+		"KUBERNETES_SERVICE_PORT=443",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
 	}
 
-	assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+	assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent] Local commit created")
+	assertFileContains(t, filepath.Join(templateDir, "hooks", "pre-push"), "[tank-agent] Direct git push is disabled")
 	configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
 	if configured != templateDir {
 		t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
 	}
+	// Restricted sessions ALSO get the credential helper (read-only minting), so
+	// git reads work. The pre-push hook still blocks pushes; the helper's token
+	// cannot push anyway.
+	helper := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "credential.helper")))
+	if helper != helperDst {
+		t.Fatalf("credential.helper = %q, want %q", helper, helperDst)
+	}
+	useHTTPPath := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "credential.useHttpPath")))
+	if useHTTPPath != "true" {
+		t.Fatalf("credential.useHttpPath = %q, want \"true\"", useHTTPPath)
+	}
+	if info, err := os.Stat(helperDst); err != nil {
+		t.Fatalf("credential helper not installed at %s: %v", helperDst, err)
+	} else if info.Mode()&0o111 == 0 {
+		t.Fatalf("credential helper %s is not executable (mode %v)", helperDst, info.Mode())
+	}
+	// Restricted sessions must NOT get the trusted-SA kubeconfig.
+	if _, err := os.Stat(kubeconfigPath); !os.IsNotExist(err) {
+		t.Fatalf("kubeconfig written in restricted mode, stat err: %v", err)
+	}
+}
+
+// Outside restricted git, the script must NOT install governed hooks; instead
+// it wires the auto-minting credential helper so non-restricted sessions get
+// full, automatic git access.
+func TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("git template install script test runs on POSIX only")
+	}
+
+	scriptPath, err := filepath.Abs("../../../k8s/session-config/install-agent-git-template.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	hookPath, err := filepath.Abs("../../../k8s/session-config/agent-post-commit-hook.sh")
+	if err != nil {
+		t.Fatalf("resolve hook path: %v", err)
+	}
+	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve credential helper path: %v", err)
+	}
+	pluginSrc, err := filepath.Abs("../../../k8s/session-config/kubectl-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve kubectl credential plugin path: %v", err)
+	}
+
+	home := t.TempDir()
+	templateDir := filepath.Join(t.TempDir(), "template")
+	helperDst := filepath.Join(t.TempDir(), "bin", "git-credential-tank")
+	pluginDst := filepath.Join(t.TempDir(), "bin", "kubectl-credential-tank")
+	kubeconfigPath := filepath.Join(t.TempDir(), "kube", "config")
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caPath, []byte("fake-ca"), 0o600); err != nil {
+		t.Fatalf("write fake CA: %v", err)
+	}
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(isolatedGitEnv(home),
+		"AGENT_POST_COMMIT_HOOK="+hookPath,
+		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
+		"AGENT_GIT_CREDENTIAL_HELPER_SRC="+helperSrc,
+		"AGENT_GIT_CREDENTIAL_HELPER_DST="+helperDst,
+		"AGENT_KUBECTL_CREDENTIAL_PLUGIN_SRC="+pluginSrc,
+		"AGENT_KUBECTL_CREDENTIAL_PLUGIN_DST="+pluginDst,
+		"AGENT_KUBECONFIG_PATH="+kubeconfigPath,
+		"AGENT_KUBE_CA_PATH="+caPath,
+		"KUBERNETES_SERVICE_HOST=10.0.0.1",
+		"KUBERNETES_SERVICE_PORT=443",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
+	}
+
+	helper := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "credential.helper")))
+	if helper != helperDst {
+		t.Fatalf("credential.helper = %q, want %q", helper, helperDst)
+	}
+	useHTTPPath := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "credential.useHttpPath")))
+	if useHTTPPath != "true" {
+		t.Fatalf("credential.useHttpPath = %q, want \"true\"", useHTTPPath)
+	}
+	info, err := os.Stat(helperDst)
+	if err != nil {
+		t.Fatalf("credential helper not installed at %s: %v", helperDst, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("credential helper %s is not executable (mode %v)", helperDst, info.Mode())
+	}
+
+	// Governed hook templates are restricted-mode only.
+	if _, err := os.Stat(filepath.Join(templateDir, "hooks", "post-commit")); !os.IsNotExist(err) {
+		t.Fatalf("post-commit hook installed without restricted git opt-in, stat err: %v", err)
+	}
+
+	// Non-restricted sessions also get a kubeconfig whose credential is the
+	// trusted-SA exec plugin, giving kubectl cluster write.
+	assertFileContains(t, kubeconfigPath, "command: "+pluginDst)
+	assertFileContains(t, kubeconfigPath, "server: https://10.0.0.1:443")
+	pinfo, err := os.Stat(pluginDst)
+	if err != nil {
+		t.Fatalf("kubectl credential plugin not installed at %s: %v", pluginDst, err)
+	}
+	if pinfo.Mode()&0o111 == 0 {
+		t.Fatalf("kubectl credential plugin %s is not executable (mode %v)", pluginDst, pinfo.Mode())
+	}
+}
+
+// The credential helper mints a repo-scoped token through the in-pod MCP and
+// hands git the x-access-token credential. It must scope to the requested repo,
+// parse the SSE-framed MCP reply, bail on non-github hosts, and request a
+// mode-aware scope: the App's full/write set in non-restricted mode, and a
+// read-only token (write:false, no full) in restricted mode.
+func TestGitCredentialTankHelperMintsToken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("credential helper script test runs on POSIX only")
+	}
+
+	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve credential helper path: %v", err)
+	}
+
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		// MCP streamable-HTTP frames the JSON-RPC result as an SSE event.
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_testtoken\",\"expires_at\":\"2099-01-01T00:00:00Z\"}}}\n\n"))
+	}))
+	defer srv.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	run := func(reqPath, host string, restricted bool) string {
+		cmd := exec.Command("sh", helperSrc, "get")
+		cmd.Env = []string{
+			"TANK_GIT_CRED_MCP_URL=" + srv.URL,
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"PATH=" + os.Getenv("PATH"),
+		}
+		if restricted {
+			cmd.Env = append(cmd.Env, "TANK_RESTRICTED_GIT=true")
+		}
+		cmd.Stdin = strings.NewReader("protocol=https\nhost=" + host + "\npath=" + reqPath + "\n\n")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("helper failed: %v\noutput:\n%s", err, string(out))
+		}
+		return string(out)
+	}
+
+	// Non-restricted: the helper mints the App's full/write scope.
+	out := run("romaine-life/tank-operator.git", "github.com", false)
+	if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_testtoken") {
+		t.Fatalf("helper output missing credential, got:\n%s", out)
+	}
+	if !strings.Contains(gotBody, "\"mint_clone_token\"") ||
+		!strings.Contains(gotBody, "romaine-life/tank-operator") ||
+		!strings.Contains(gotBody, "\"full\":true") {
+		t.Fatalf("non-restricted mint request body unexpected: %s", gotBody)
+	}
+
+	// Restricted: the helper mints a read-only token (write:false, no full) so
+	// reads work without a push-capable credential in the shell.
+	out = run("romaine-life/tank-operator.git", "github.com", true)
+	if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_testtoken") {
+		t.Fatalf("restricted helper output missing credential, got:\n%s", out)
+	}
+	if !strings.Contains(gotBody, "\"mint_clone_token\"") ||
+		!strings.Contains(gotBody, "romaine-life/tank-operator") ||
+		!strings.Contains(gotBody, "\"write\":false") ||
+		strings.Contains(gotBody, "\"full\":true") {
+		t.Fatalf("restricted mint request body should be read-only, got: %s", gotBody)
+	}
+
+	// Non-github host: the helper must produce no credential (either mode).
+	if out := run("romaine-life/tank-operator.git", "example.com", false); strings.TrimSpace(out) != "" {
+		t.Fatalf("helper emitted credential for non-github host: %q", out)
+	}
+}
+
+// The gh wrapper (/usr/local/bin/gh) mints a fresh token via the in-pod MCP and
+// execs the real gh with it. Scope is mode-aware: full/write when non-restricted,
+// read-only (write:false, no full) when restricted — so `gh` reads work in
+// restricted mode without handing the shell a push-capable credential.
+func TestGhTankWrapperMintsModeAwareToken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("gh wrapper script test runs on POSIX only")
+	}
+
+	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
+	if err != nil {
+		t.Fatalf("resolve gh wrapper path: %v", err)
+	}
+
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_testtoken\",\"expires_at\":\"2099-01-01T00:00:00Z\"}}}\n\n"))
+	}))
+	defer srv.Close()
+
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	// Fake real gh: echo the GH_TOKEN the wrapper exported so we can assert it.
+	fakeGh := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'GH_TOKEN=%s\\n' \"$GH_TOKEN\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	// Empty workspace so repo scope comes only from the explicit --repo arg,
+	// making the test independent of the ambient /workspace.
+	emptyWorkspace := t.TempDir()
+
+	run := func(restricted bool) (string, string) {
+		gotBody = ""
+		env := []string{
+			"TANK_REAL_GH=" + fakeGh,
+			"TANK_GIT_CRED_MCP_URL=" + srv.URL,
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"TANK_WORKSPACE_DIR=" + emptyWorkspace,
+			"PATH=" + os.Getenv("PATH"),
+		}
+		if restricted {
+			env = append(env, "TANK_RESTRICTED_GIT=true")
+		}
+		cmd := exec.Command("sh", wrapperSrc, "pr", "view", "--repo", "romaine-life/tank-operator")
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("wrapper failed (restricted=%v): %v\noutput:\n%s", restricted, err, string(out))
+		}
+		return string(out), gotBody
+	}
+
+	// Non-restricted: full/write scope, token handed to gh.
+	out, body := run(false)
+	if !strings.Contains(out, "GH_TOKEN=ghs_testtoken") {
+		t.Fatalf("non-restricted wrapper did not export minted token to gh: %s", out)
+	}
+	if !strings.Contains(body, "\"mint_clone_token\"") ||
+		!strings.Contains(body, "romaine-life/tank-operator") ||
+		!strings.Contains(body, "\"full\":true") {
+		t.Fatalf("non-restricted gh mint request unexpected: %s", body)
+	}
+
+	// Restricted: read-only scope, but gh is still authenticated for reads.
+	out, body = run(true)
+	if !strings.Contains(out, "GH_TOKEN=ghs_testtoken") {
+		t.Fatalf("restricted wrapper did not export minted token to gh: %s", out)
+	}
+	if !strings.Contains(body, "\"mint_clone_token\"") ||
+		!strings.Contains(body, "romaine-life/tank-operator") ||
+		!strings.Contains(body, "\"write\":false") ||
+		strings.Contains(body, "\"full\":true") {
+		t.Fatalf("restricted gh mint should be read-only, got: %s", body)
+	}
+}
+
+// In restricted mode, the git credential helper first consults the in-pod
+// break-glass server (the grant source of truth). An active unlimited grant
+// yields a FULL token automatically (no read-only fallback); no grant falls
+// back to the read-only mint exactly as before.
+func TestGitCredentialTankHelperBreakGlassElevation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("credential helper script test runs on POSIX only")
+	}
+	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
+	if err != nil {
+		t.Fatalf("resolve credential helper path: %v", err)
+	}
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	run := func(breakGlassURL, readOnlyURL string) string {
+		cmd := exec.Command("sh", helperSrc, "get")
+		cmd.Env = []string{
+			"TANK_RESTRICTED_GIT=true",
+			"TANK_BREAK_GLASS_MINT_URL=" + breakGlassURL,
+			"TANK_GIT_CRED_MCP_URL=" + readOnlyURL,
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"PATH=" + os.Getenv("PATH"),
+		}
+		cmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\npath=romaine-life/tank-operator.git\n\n")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("helper failed: %v\noutput:\n%s", err, string(out))
+		}
+		return string(out)
+	}
+
+	t.Run("active grant mints full token without read-only fallback", func(t *testing.T) {
+		var bgBody string
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			bgBody = string(body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":true,"token":"ghs_fulltoken","full_github_api":true}`))
+		}))
+		defer bg.Close()
+		readOnlyHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			readOnlyHit = true
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_fulltoken") {
+			t.Fatalf("expected full break-glass token, got:\n%s", out)
+		}
+		if readOnlyHit {
+			t.Fatalf("read-only mint must not be hit when a grant is active")
+		}
+		if !strings.Contains(bgBody, "romaine-life/tank-operator") {
+			t.Fatalf("break-glass request missing repo: %s", bgBody)
+		}
+	})
+
+	t.Run("no grant falls back to read-only mint", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":false}`))
+		}))
+		defer bg.Close()
+		var roBody string
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			roBody = string(body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "password=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token, got:\n%s", out)
+		}
+		if !strings.Contains(roBody, "\"write\":false") || strings.Contains(roBody, "\"full\":true") {
+			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
+		}
+	})
+
+	// FAIL LOUD, never silent. When the break-glass mint returns an
+	// unrecognized/error shape — e.g. the JSON-RPC `invalid MCP request` (HTTP
+	// 200) the :9999 MCP catch-all emits when the mcp-auth-proxy sidecar predates
+	// the /mint-git-token route (image/version skew) — the helper must NOT
+	// silently collapse to read-only. It surfaces a diagnostic to stderr AND
+	// still mints the read-only token so reads keep working. The silent collapse
+	// is the bug that made the live regression undiagnosable.
+	t.Run("error mint response fails loud and falls back to read-only", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid MCP request"}}`))
+		}))
+		defer bg.Close()
+		roHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			roHit = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !roHit {
+			t.Fatalf("read-only mint must be hit as fallback when the break-glass mint errors")
+		}
+		if !strings.Contains(out, "password=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token after error mint response, got:\n%s", out)
+		}
+		if !strings.Contains(out, "break-glass elevation FAILED") {
+			t.Fatalf("expected a loud diagnostic on an error mint response, got:\n%s", out)
+		}
+	})
+}
+
+// The gh wrapper mirrors the credential helper: an active unlimited grant makes
+// the in-pod break-glass server hand `gh` a FULL token; no grant falls back to
+// the read-only mint.
+func TestGhTankWrapperBreakGlassElevation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("gh wrapper script test runs on POSIX only")
+	}
+	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
+	if err != nil {
+		t.Fatalf("resolve gh wrapper path: %v", err)
+	}
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	fakeGh := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'GH_TOKEN=%s\\n' \"$GH_TOKEN\"\n"), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	emptyWorkspace := t.TempDir()
+
+	run := func(breakGlassURL, readOnlyURL string) string {
+		cmd := exec.Command("sh", wrapperSrc, "pr", "view", "--repo", "romaine-life/tank-operator")
+		cmd.Env = []string{
+			"TANK_RESTRICTED_GIT=true",
+			"TANK_REAL_GH=" + fakeGh,
+			"TANK_BREAK_GLASS_MINT_URL=" + breakGlassURL,
+			"TANK_GIT_CRED_MCP_URL=" + readOnlyURL,
+			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
+			"TANK_WORKSPACE_DIR=" + emptyWorkspace,
+			"PATH=" + os.Getenv("PATH"),
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("wrapper failed: %v\noutput:\n%s", err, string(out))
+		}
+		return string(out)
+	}
+
+	t.Run("active grant exports full token without read-only fallback", func(t *testing.T) {
+		var bgBody string
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			bgBody = string(body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":true,"token":"ghs_fulltoken"}`))
+		}))
+		defer bg.Close()
+		readOnlyHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			readOnlyHit = true
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "GH_TOKEN=ghs_fulltoken") {
+			t.Fatalf("expected gh to receive full break-glass token, got:\n%s", out)
+		}
+		if readOnlyHit {
+			t.Fatalf("read-only mint must not be hit when a grant is active")
+		}
+		if !strings.Contains(bgBody, "romaine-life/tank-operator") {
+			t.Fatalf("break-glass request missing repo: %s", bgBody)
+		}
+	})
+
+	t.Run("no grant falls back to read-only mint", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"active":false}`))
+		}))
+		defer bg.Close()
+		var roBody string
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			roBody = string(body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !strings.Contains(out, "GH_TOKEN=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token, got:\n%s", out)
+		}
+		if !strings.Contains(roBody, "\"write\":false") || strings.Contains(roBody, "\"full\":true") {
+			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
+		}
+	})
+
+	// FAIL LOUD, never silent — mirror of the credential-helper guard. A
+	// JSON-RPC error (HTTP 200) from the :9999 MCP catch-all (sidecar predating
+	// the /mint-git-token route) must produce a stderr diagnostic, not a silent
+	// downgrade, while gh still gets a read-only token for reads.
+	t.Run("error mint response fails loud and falls back to read-only", func(t *testing.T) {
+		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid MCP request"}}`))
+		}))
+		defer bg.Close()
+		roHit := false
+		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			roHit = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
+		}))
+		defer ro.Close()
+
+		out := run(bg.URL, ro.URL)
+		if !roHit {
+			t.Fatalf("read-only mint must be hit as fallback when the break-glass mint errors")
+		}
+		if !strings.Contains(out, "GH_TOKEN=ghs_readonly") {
+			t.Fatalf("expected read-only fallback token after error mint response, got:\n%s", out)
+		}
+		if !strings.Contains(out, "break-glass elevation FAILED") {
+			t.Fatalf("expected a loud diagnostic on an error mint response, got:\n%s", out)
+		}
+	})
 }
 
 // TestSessionPodBootstrapScript_PerMode executes the in-pod bootstrap script
@@ -250,7 +799,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 		{
 			mode: "config",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"theme":"dark"`,
+				".claude/settings.json": `"theme": "dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
 			},
 		},
@@ -286,6 +835,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 			cmd := exec.Command("bash", scriptPath)
 			cmd.Env = append(isolatedGitEnv(home),
 				"TANK_SESSION_MODE="+tc.mode,
+				"TANK_RESTRICTED_GIT=true",
 				"INSTALL_AGENT_GIT_TEMPLATE_SCRIPT="+gitTemplateScript,
 				"AGENT_POST_COMMIT_HOOK="+hookPath,
 				"AGENT_GIT_TEMPLATE_DIR="+templateDir,
@@ -295,7 +845,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				t.Fatalf("script failed: %v\noutput:\n%s", err, string(out))
 			}
 
-			assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+			assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent] Local commit created")
 			configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
 			if configured != templateDir {
 				t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
@@ -330,131 +880,6 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestAntigravityRunnerLaunchSeedsNativeMCPConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("antigravity launch script test runs on POSIX only")
-	}
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("antigravity launch script requires jq")
-	}
-
-	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
-	if err != nil {
-		t.Fatalf("resolve script path: %v", err)
-	}
-	home := t.TempDir()
-	configDir := t.TempDir()
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatalf("mkdir fake bin: %v", err)
-	}
-	nodeLog := filepath.Join(t.TempDir(), "node.log")
-
-	if err := os.WriteFile(filepath.Join(configDir, "mcp.json"), []byte(`{
-  "mcpServers": {
-    "glimmung": {"type": "http", "url": "http://127.0.0.1:9995/"},
-    "github": {"type": "http", "url": "http://127.0.0.1:9992/"}
-  }
-}`), 0o644); err != nil {
-		t.Fatalf("write mcp config: %v", err)
-	}
-	writeExecutable(t, filepath.Join(fakeBin, "runner"), `#!/bin/sh
-printf 'runner executed\n' > "$FAKE_NODE_LOG"
-exit 0
-`)
-
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"TANK_SESSION_CONFIG_DIR="+configDir,
-		"FAKE_NODE_LOG="+nodeLog,
-		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("script failed: %v\noutput:\n%s", err, string(out))
-	}
-
-	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"glimmung"`)
-	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"http://127.0.0.1:9995/"`)
-	assertFileContains(t, filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), `"access_token":"managed-by-tank-operator"`)
-	assertFileContains(t, nodeLog, "runner executed")
-}
-
-func TestAntigravityRunnerLaunchFailsWithoutMCPConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("antigravity launch script test runs on POSIX only")
-	}
-
-	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
-	if err != nil {
-		t.Fatalf("resolve script path: %v", err)
-	}
-	home := t.TempDir()
-	configDir := t.TempDir()
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatalf("mkdir fake bin: %v", err)
-	}
-	nodeLog := filepath.Join(t.TempDir(), "node.log")
-	writeExecutable(t, filepath.Join(fakeBin, "runner"), `#!/bin/sh
-printf 'runner executed\n' > "$FAKE_NODE_LOG"
-exit 0
-`)
-
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"TANK_SESSION_CONFIG_DIR="+configDir,
-		"FAKE_NODE_LOG="+nodeLog,
-		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
-	)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("script unexpectedly succeeded without mcp.json\noutput:\n%s", string(out))
-	}
-	if !strings.Contains(string(out), "required MCP config missing or empty") {
-		t.Fatalf("script output missing MCP failure reason:\n%s", string(out))
-	}
-	if _, err := os.Stat(nodeLog); !os.IsNotExist(err) {
-		t.Fatalf("runner should not run when MCP config is missing, stat err: %v", err)
-	}
-}
-
-func TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("antigravity launch script test runs on POSIX only")
-	}
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("antigravity launch script requires jq")
-	}
-
-	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
-	if err != nil {
-		t.Fatalf("resolve script path: %v", err)
-	}
-	home := t.TempDir()
-	configDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(configDir, "mcp.json"), []byte(`{"notMcpServers":{}}`), 0o644); err != nil {
-		t.Fatalf("write malformed mcp config: %v", err)
-	}
-
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"TANK_SESSION_CONFIG_DIR="+configDir,
-	)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("script unexpectedly succeeded with malformed mcp.json\noutput:\n%s", string(out))
-	}
-	if !strings.Contains(string(out), "is not a valid mcpServers document") {
-		t.Fatalf("script output missing malformed MCP reason:\n%s", string(out))
 	}
 }
 
@@ -563,9 +988,7 @@ exit 0
 `)
 
 	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	cmd.Env = append(isolatedScriptEnvWithPath(home, fakeBin+string(os.PathListSeparator)+os.Getenv("PATH")),
 		"TANK_SESSION_MODE=claude_gui",
 		"SPIRELENS_MCP_ENABLED=true",
 		"AUTH_ROMAINE_TOKEN_PATH="+tokenPath,
@@ -679,6 +1102,27 @@ func isolatedGitEnv(home string) []string {
 	}
 	if path := os.Getenv("PATH"); path != "" {
 		env = append(env, "PATH="+path)
+	}
+	return env
+}
+
+func isolatedScriptEnv(home string) []string {
+	return isolatedScriptEnvWithPath(home, os.Getenv("PATH"))
+}
+
+func isolatedScriptEnvWithPath(home, path string) []string {
+	env := []string{
+		"HOME=" + home,
+		"TMPDIR=" + os.TempDir(),
+	}
+	if path != "" {
+		env = append(env, "PATH="+path)
+	}
+	if user := os.Getenv("USER"); user != "" {
+		env = append(env, "USER="+user)
+	}
+	if shell := os.Getenv("SHELL"); shell != "" {
+		env = append(env, "SHELL="+shell)
 	}
 	return env
 }

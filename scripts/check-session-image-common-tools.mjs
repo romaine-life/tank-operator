@@ -6,7 +6,6 @@ const files = {
   alpine: "session-images/install-common-alpine.sh",
   debian: "session-images/install-common-debian.sh",
   claudeDockerfile: "claude-container/Dockerfile",
-  antigravityDockerfile: "antigravity-container/Dockerfile",
   sessionImagesWorkflow: ".github/workflows/session-images-build.yml",
 };
 
@@ -20,7 +19,6 @@ const versions = read(files.versions);
 const alpine = read(files.alpine);
 const debian = read(files.debian);
 const claudeDockerfile = read(files.claudeDockerfile);
-const antigravityDockerfile = read(files.antigravityDockerfile);
 const sessionImagesWorkflow = read(files.sessionImagesWorkflow);
 
 const versionVars = [
@@ -99,7 +97,6 @@ if (!debian.includes("apt-get install -y --no-install-recommends gh")) {
 
 const dockerfileChecks = [
   [files.claudeDockerfile, claudeDockerfile, "install-common-alpine.sh"],
-  [files.antigravityDockerfile, antigravityDockerfile, "install-common-debian.sh"],
 ];
 for (const [path, body, installer] of dockerfileChecks) {
   if (!body.includes("COPY session-images /opt/tank/session-images")) {
@@ -114,16 +111,13 @@ for (const staleArg of versionVars.filter((name) => name !== "SANDBOX_AGENT_VERS
   if (new RegExp(`ARG ${staleArg}\\b`).test(claudeDockerfile)) {
     fail(`${files.claudeDockerfile} should not define ${staleArg}; use ${files.versions}`);
   }
-  if (new RegExp(`ARG ${staleArg}\\b`).test(antigravityDockerfile)) {
-    fail(`${files.antigravityDockerfile} should not define ${staleArg}; use ${files.versions}`);
-  }
 }
 
 const fingerprintRows = sessionImagesWorkflow
   .split("\n")
   .filter((line) => line.includes("fingerprint_paths:"));
-if (fingerprintRows.length !== 3) {
-  fail(`${files.sessionImagesWorkflow} should define three session image fingerprint rows`);
+if (fingerprintRows.length !== 2) {
+  fail(`${files.sessionImagesWorkflow} should define two session image fingerprint rows`);
 }
 for (const line of fingerprintRows) {
   if (!line.includes("session-images")) {

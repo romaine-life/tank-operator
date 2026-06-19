@@ -10,7 +10,6 @@ const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 test("model and effort option lists come from Tank run options, not local arrays", () => {
   expect(appSource).not.toMatch(/const CLAUDE_MODELS:/);
   expect(appSource).not.toMatch(/const CODEX_MODELS:/);
-  expect(appSource).not.toMatch(/const ANTIGRAVITY_MODELS:/);
   expect(appSource).not.toMatch(/const CLAUDE_EFFORTS:/);
   expect(appSource).not.toMatch(/const CODEX_EFFORTS:/);
   expect(appSource).toMatch(
@@ -41,11 +40,6 @@ test("Codex model labels do not advertise the unsupported bare GPT-5.3 model", (
   expect(appSource).toContain('"gpt-5.3-codex-spark"');
 });
 
-test("Antigravity model labels include Gemini 3.1 Pro", () => {
-  expect(appSource).toContain('"Gemini 3.1 Pro"');
-  expect(appSource).toContain("Antigravity · Gemini 3.1 Pro");
-});
-
 test("Codex run mode helper follows the session mode contract", () => {
   expect(appSource).toMatch(
     /function isCodexRunMode\(mode: SessionMode\): boolean \{[\s\S]{0,120}MODE_PROVIDERS\[mode\] === "codex" && SDK_CHAT_MODES\.has\(mode\);[\s\S]{0,20}\}/,
@@ -55,18 +49,27 @@ test("Codex run mode helper follows the session mode contract", () => {
   );
 });
 
-test("RunPrefs persists provider model and effort across page reloads", () => {
+test("splash launch model and effort defaults are tab-scoped, not durable profile prefs", () => {
   expect(appSource).toMatch(/claudeModelId:\s*string;/);
   expect(appSource).toMatch(/claudeEffort:\s*string;/);
   expect(appSource).toMatch(/codexModelId:\s*string;/);
   expect(appSource).toMatch(/codexEffort:\s*string;/);
-  expect(appSource).toMatch(/antigravityModelId:\s*string;/);
+  expect(appSource).toMatch(/const DEFAULT_CLAUDE_MODEL_ID = "";/);
+  expect(appSource).toMatch(/const DEFAULT_CLAUDE_EFFORT_ID = "max";/);
+  expect(appSource).toMatch(/const DEFAULT_CODEX_MODEL_ID = "";/);
+  expect(appSource).toMatch(/const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
   expect(appSource).toMatch(/claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
   expect(appSource).toMatch(/claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
   expect(appSource).toMatch(/codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
   expect(appSource).toMatch(/codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
   expect(appSource).toMatch(
-    /antigravityModelId:\s*DEFAULT_ANTIGRAVITY_MODEL_ID/,
+    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\[[\s\S]{0,180}"claudeModelId"[\s\S]{0,180}"claudeEffort"[\s\S]{0,180}"codexModelId"[\s\S]{0,180}"codexEffort"/,
+  );
+  expect(appSource).toMatch(
+    /const HOME_DRAFT_RUN_PREF_PREFIX = "tank\.homeDraftRunPref\.v1:";/,
+  );
+  expect(appSource).toMatch(
+    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,520}localStorage\.getItem\(RUN_PREF_PREFIX \+ key\)[\s\S]{0,520}sessionStorage\.getItem\(HOME_DRAFT_RUN_PREF_PREFIX \+ key\)/,
   );
 });
 
@@ -92,19 +95,19 @@ test("Claude secondary uses the shared Claude run options and prefs", () => {
   );
 });
 
-test("initialMessageMode is an ephemeral run preference that resets to direct on fresh loads", () => {
+test("initialMessageMode is an ephemeral run preference that resets to direct after create", () => {
   expect(appSource).toMatch(/initialMessageMode:\s*InitialMessageMode;/);
   expect(appSource).toMatch(
     /initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/,
   );
   expect(appSource).toMatch(
-    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\["initialMessageMode"\]\);/,
+    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\([\s\S]{0,220}"initialMessageMode"/,
   );
   expect(appSource).toMatch(
     /function durableRunPrefs\(prefs: RunPrefs\): Record<string, unknown> \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;/,
   );
   expect(appSource).toMatch(
-    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}localStorage\.getItem/,
+    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,620}if \(!isEphemeralRunPref\(key\)\) continue;[\s\S]{0,140}sessionStorage\.getItem/,
   );
   expect(appSource).toMatch(
     /function mergeServerRunPrefs\([\s\S]{0,220}prev: RunPrefs,[\s\S]{0,220}server: Record<string, unknown>,[\s\S]{0,420}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,180}const raw = server\[key\];/,
@@ -113,7 +116,13 @@ test("initialMessageMode is an ephemeral run preference that resets to direct on
     /JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/,
   );
   expect(appSource).toMatch(
-    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,120}persistRunPrefsLocally\(next\);[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}/,
+    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,120}persistRunPrefsLocally\(next\);[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\} else \{[\s\S]{0,80}writeEphemeralRunPrefForSession\(key, value\);/,
+  );
+  expect(appSource).toMatch(
+    /function resetHomeLaunchDefaults\(\) \{[\s\S]{0,520}initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,[\s\S]{0,460}clearHomeRestrictedGitPreference\(\);/,
+  );
+  expect(appSource).toMatch(
+    /writeSessionInteraction\(created\.id, defaultInteraction\);[\s\S]{0,80}resetHomeLaunchDefaults\(\);/,
   );
   expect(appSource).not.toMatch(/pickInitialMessageMode\(raw/);
 });
@@ -136,9 +145,6 @@ test("server and browser run prefs are reconciled through Tank run options", () 
   );
   expect(appSource).toMatch(
     /codexModelId: pickAllowedPrefId\([\s\S]{0,160}modelOptionsForProvider\("codex", runOptions\),[\s\S]{0,120}defaultModelForProvider\("codex", runOptions\)/,
-  );
-  expect(appSource).toMatch(
-    /antigravityModelId: pickAllowedPrefId\([\s\S]{0,160}modelOptionsForProvider\("antigravity", runOptions\),[\s\S]{0,120}defaultModelForProvider\("antigravity", runOptions\)/,
   );
 });
 
@@ -198,5 +204,62 @@ test("forkSessionFromMessage forwards model and effort on create, not the first 
   );
   expect(appSource).not.toMatch(
     /client_nonce: newForkTurnId\(\)[\s\S]{0,160}model: request\.model/,
+  );
+});
+
+test("mid-session run-config: the composer model chip is a Claude/Codex-gated dropdown", () => {
+  // selectedModelId/effort are now mutable — the dropdown updates them
+  // optimistically. The old single-binding "sealed" useState is gone.
+  expect(appSource).toMatch(
+    /const \[selectedModelId, setSelectedModelId\] = useState<string>/,
+  );
+  expect(appSource).toMatch(
+    /const \[selectedEffortId, setSelectedEffortId\] =\s*useState<string>/,
+  );
+  // The in-session dropdown is gated to Claude/Codex; Antigravity keeps the
+  // read-only chip (its model is a process-start arg, not switchable).
+  expect(appSource).toMatch(
+    /isClaude \|\| isCodex \? \([\s\S]{0,160}data-menu="run-model"/,
+  );
+});
+
+test("mid-session run-config: a pick PUTs /run-config and only toggles the menu (option a)", () => {
+  // applyRunConfig PUTs the durable run config; the turn handler forwards it
+  // and the runner re-pins on the next turn (no interrupt of the running one).
+  expect(appSource).toMatch(
+    /applyRunConfig = useCallback\([\s\S]{0,600}run-config[\s\S]{0,80}method: "PUT"/,
+  );
+  // The trigger only toggles the dropdown — it never submits or interrupts.
+  expect(appSource).toMatch(
+    /run-model-trigger[\s\S]{0,400}onClick=\{\(\) => setRunModelMenuOpen\(\(v\) => !v\)\}/,
+  );
+});
+
+test("per-turn model is captured and shown on the composer chip when paging back", () => {
+  // Capture: the TurnViewItem builder harvests the model/effort the backend
+  // stamps on each turn's user-message entry into a per-turn map — historical,
+  // distinct from the session-level next-turn selection (selectedModelId).
+  expect(appSource).toMatch(/const runConfigByTurn = new Map</);
+  expect(appSource).toMatch(
+    /isUserMessageEntry\(entry\) && !runConfigByTurn\.has\(turnId\)[\s\S]{0,160}entry\.model/,
+  );
+  // TurnViewItem reads the per-turn model from the shell's activity summary
+  // (the carrier the turn-summary normalizer preserves), then the shell
+  // top-level, then the user-message capture.
+  expect(appSource).toMatch(
+    /shellSummary\?\.model[\s\S]{0,220}runConfigByTurn\.get\(turnId\)\?\.model/,
+  );
+  // The summary normalizer must carry model so it survives the row-merge path.
+  expect(appSource).toMatch(/model: stringRecordValue\(record, "model"\)/);
+  // Reuse the composer chip: a "previous turn" is a non-latest viewed turn in
+  // the Turns view.
+  expect(appSource).toMatch(
+    /const viewingPreviousTurn =[\s\S]{0,300}effectiveSelectedTurnId !== latestTurnId/,
+  );
+  // On a previous turn the chip is a read-only (unselectable) chip showing the
+  // viewed turn's model — it must NOT fall through to the interactive
+  // run-model-trigger dropdown.
+  expect(appSource).toMatch(
+    /viewingPreviousTurn \? \([\s\S]{0,260}run-model-chip-historical[\s\S]{0,260}viewedTurnModelLabel/,
   );
 });

@@ -308,7 +308,8 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 		"model":"gpt-5.5",
 		"effort":"xhigh",
 		"context_window_tokens":258400,
-		"context_window_source":"codex_app_server_token_usage"
+		"context_window_source":"codex_app_server_token_usage",
+		"provider_session_id":"db0a8b4b-64cd-4a9a-a592-ad5622075dc8"
 	}`))
 	req.SetPathValue("session_id", "12")
 	req.Header.Set("Authorization", "Bearer session-token")
@@ -332,6 +333,9 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 	if body.RuntimeContextWindowTokens != 258400 || body.RuntimeContextWindowSource != "codex_app_server_token_usage" || body.RuntimeContextWindowObservedAt == nil || *body.RuntimeContextWindowObservedAt == "" {
 		t.Fatalf("runtime context window response = %#v", body)
 	}
+	if body.RuntimeProviderSessionID != "db0a8b4b-64cd-4a9a-a592-ad5622075dc8" || body.RuntimeProviderSessionObservedAt == nil || *body.RuntimeProviderSessionObservedAt == "" {
+		t.Fatalf("runtime provider session response = %#v", body)
+	}
 	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
@@ -342,36 +346,8 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 	if record.RuntimeContextWindowTokens != 258400 || record.RuntimeContextWindowSource != "codex_app_server_token_usage" || record.RuntimeContextWindowObservedAt == "" {
 		t.Fatalf("registry runtime context window = %#v", record)
 	}
-}
-
-func TestHandleInternalSessionRuntimeConfigAcceptsAntigravity(t *testing.T) {
-	server := internalSessionRuntimeServer(t, "12")
-	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
-		ID:      "12",
-		Email:   "owner@example.test",
-		Mode:    sessionmodel.AntigravityGUIMode,
-		Visible: true,
-		Status:  "Active",
-	})
-	server.mgr = sessions.NewManager(server.k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
-	req := httptest.NewRequest(http.MethodPut, "/api/internal/sessions/12/runtime-config", strings.NewReader(`{
-		"model":"Gemini 3.5 Flash (Medium)"
-	}`))
-	req.SetPathValue("session_id", "12")
-	req.Header.Set("Authorization", "Bearer session-token")
-	rec := httptest.NewRecorder()
-
-	server.handleInternalSessionRuntimeConfig(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
-	if err != nil || !ok {
-		t.Fatalf("registry Get ok=%v err=%v", ok, err)
-	}
-	if record.RuntimeModel != "Gemini 3.5 Flash (Medium)" || record.RuntimeConfiguredAt == "" {
-		t.Fatalf("registry runtime config = %#v", record)
+	if record.RuntimeProviderSessionID != "db0a8b4b-64cd-4a9a-a592-ad5622075dc8" || record.RuntimeProviderSessionObservedAt == "" {
+		t.Fatalf("registry runtime provider session = %#v", record)
 	}
 }
 
@@ -566,6 +542,8 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 		namespace:             "tank-operator-sessions",
 		sessionScope:          "default",
 		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
 	}
 	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
 
@@ -581,7 +559,11 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
-		strings.NewReader(`{"mode":"claude_gui","name":"My Recovery Session"}`))
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"My Recovery Session",
+			"initial_turn":{"client_nonce":"turn-name-test","prompt":"start the recovery"}
+		}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()
 
@@ -600,12 +582,283 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	if info.RequestedAt != nil && *info.RequestedAt == "My Recovery Session" {
 		t.Fatalf("RequestedAt = %q; inline name must never leak into requested_at", *info.RequestedAt)
 	}
+	if !sessionmodel.HasSessionCapability(info.Capabilities, sessionmodel.SessionCapabilityRestrictedGit) {
+		t.Fatalf("Info.Capabilities = %#v, want internal service create to default restricted git", info.Capabilities)
+	}
 	rec2, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
 	}
 	if rec2.Name != "My Recovery Session" {
 		t.Fatalf("registry record Name = %q, want \"My Recovery Session\"", rec2.Name)
+	}
+	if !sessionmodel.HasSessionCapability(rec2.Capabilities, sessionmodel.SessionCapabilityRestrictedGit) {
+		t.Fatalf("registry Capabilities = %#v, want internal service create to default restricted git", rec2.Capabilities)
+	}
+	if !rec2.Visible {
+		t.Fatalf("registry record Visible = false, want true")
+	}
+	if info.PodName == nil || *info.PodName == "" {
+		t.Fatalf("created session missing pod name: %#v", info)
+	}
+	pod, err := k8s.CoreV1().Pods(server.namespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pod.Annotations["tank-operator/capabilities"], `["restricted_git"]`; got != want {
+		t.Fatalf("pod capabilities annotation = %q, want %q", got, want)
+	}
+	if got := len(server.sessionEvents.(*recordingSessionEventStore).upserts); got != 2 {
+		t.Fatalf("session-event upserts = %d, want 2", got)
+	}
+	if got := len(server.sessionBus.(*recordingSessionBus).commands); got != 1 {
+		t.Fatalf("published commands = %d, want 1", got)
+	}
+}
+
+// newSpawnTestServer builds the minimal appServer wiring shared by the
+// spawned-session-edge tests: a prod-scope service-create surface backed by
+// a recording registry/event/bus, plus a service-principal token.
+func newSpawnTestServer(t *testing.T) (*appServer, *testSessionRegistry, string) {
+	t.Helper()
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "default",
+		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:parent-42",
+		"email":       "pod-parent-42@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, registry, tok
+}
+
+// A spawn carrying the X-Tank-Origin-Session-Id header records a parent→child
+// edge on the ORIGIN session's row so its session-bar chip can link to the
+// new session. The recorded ref must match the created session field-for-field.
+func TestHandleInternalCreateSessionRecordsSpawnedSessionOnOrigin(t *testing.T) {
+	server, registry, tok := newSpawnTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"Child Work",
+			"initial_turn":{"client_nonce":"turn-spawn","prompt":"go do the thing"}
+		}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "parent-42")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.spawnedAppends) != 1 {
+		t.Fatalf("spawned appends = %d, want 1", len(registry.spawnedAppends))
+	}
+	got := registry.spawnedAppends[0]
+	if got.ParentSessionID != "parent-42" {
+		t.Fatalf("append parent = %q, want origin header %q", got.ParentSessionID, "parent-42")
+	}
+	if got.Email != "owner@example.test" {
+		t.Fatalf("append email = %q, want actor_email", got.Email)
+	}
+	wantURL := "https://tank.romaine.life/?session=" + info.ID
+	if got.Ref.ID != info.ID || got.Ref.Name != info.Name || got.Ref.Mode != info.Mode || got.Ref.URL != wantURL {
+		t.Fatalf("ref = %#v, want id=%q name=%q mode=%q url=%q", got.Ref, info.ID, info.Name, info.Mode, wantURL)
+	}
+	if got.Ref.Name != "Child Work" {
+		t.Fatalf("ref name = %q, want the spawned session's display name", got.Ref.Name)
+	}
+}
+
+// The CHILD row is stamped with parent_session_id = the origin in the same
+// create write, so the sidebar nests it under its origin from the first
+// snapshot/row-update with no reflow. This is the child-side nesting edge,
+// distinct from the parent-side spawned_sessions chip lineage above.
+func TestHandleInternalCreateSessionStampsParentSessionIDOnChild(t *testing.T) {
+	server, registry, tok := newSpawnTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"Child Work",
+			"initial_turn":{"client_nonce":"turn-parent-ptr","prompt":"go do the thing"}
+		}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "parent-42")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.ParentSessionID != "parent-42" {
+		t.Fatalf("info.parent_session_id = %q, want origin %q", info.ParentSessionID, "parent-42")
+	}
+	record, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("get child record: ok=%v err=%v", ok, err)
+	}
+	if record.ParentSessionID != "parent-42" {
+		t.Fatalf("child row parent_session_id = %q, want %q (born nested)", record.ParentSessionID, "parent-42")
+	}
+}
+
+// A spawn WITHOUT an origin header (a human/splash-page create) records no
+// edge — the chip is for agent-spawned lineage only.
+func TestHandleInternalCreateSessionWithoutOriginRecordsNoSpawnedSession(t *testing.T) {
+	server, registry, tok := newSpawnTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"Top Level",
+			"initial_turn":{"client_nonce":"turn-noorigin","prompt":"start fresh"}
+		}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(registry.spawnedAppends) != 0 {
+		t.Fatalf("spawned appends = %d, want 0 (no origin header)", len(registry.spawnedAppends))
+	}
+	// No origin → no parent pointer either: the child is a root, not nested.
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.ParentSessionID != "" {
+		t.Fatalf("info.parent_session_id = %q, want empty (no origin)", info.ParentSessionID)
+	}
+	record, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("get child record: ok=%v err=%v", ok, err)
+	}
+	if record.ParentSessionID != "" {
+		t.Fatalf("child row parent_session_id = %q, want empty (no origin)", record.ParentSessionID)
+	}
+}
+
+func TestHandleInternalCreateSessionRejectsPromptlessGUI(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "default",
+		sessionServiceAccount: "claude-session",
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{"mode":"claude_gui","name":"Empty GUI"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "initial_turn.prompt is required") {
+		t.Fatalf("body = %s, want initial_turn prompt error", rec.Body.String())
+	}
+	if records, err := registry.List(context.Background(), "owner@example.test"); err != nil || len(records) != 0 {
+		t.Fatalf("registry rows = %d err=%v, want none", len(records), err)
+	}
+}
+
+func TestHandleInternalCreateSessionAllowsPromptlessCLI(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "default",
+		sessionServiceAccount: "claude-session",
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{"mode":"claude_cli","name":"CLI workspace"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode != sessionmodel.ClaudeCLIMode {
+		t.Fatalf("mode = %q, want claude_cli", info.Mode)
 	}
 }
 
@@ -622,10 +875,12 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 		namespace:             "tank-operator-slot-2-sessions",
 		sessionScope:          "tank-operator-slot-2",
 		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
 		platformSettings: &fakePlatformSettingsStore{
 			defaults: pgstore.TestSlotSessionDefaults{
 				Mode:   sessionmodel.CodexGUIMode,
-				Model:  "gpt-5.4-mini",
+				Model:  "gpt-5.3-codex-spark",
 				Effort: "low",
 			},
 		},
@@ -644,7 +899,10 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
-		strings.NewReader(`{"name":"slot validation"}`))
+		strings.NewReader(`{
+			"name":"slot validation",
+			"initial_turn":{"client_nonce":"turn-slot-default","prompt":"validate the slot"}
+		}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()
 
@@ -657,15 +915,167 @@ func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testi
 	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode != sessionmodel.CodexGUIMode || info.Model != "gpt-5.4-mini" || info.Effort != "low" {
+	if info.Mode != sessionmodel.CodexGUIMode || info.Model != "gpt-5.3-codex-spark" || info.Effort != "low" {
 		t.Fatalf("created info = mode %q model %q effort %q", info.Mode, info.Model, info.Effort)
 	}
 	rec2, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
 	}
-	if rec2.Mode != sessionmodel.CodexGUIMode || rec2.Model != "gpt-5.4-mini" || rec2.Effort != "low" {
+	if rec2.Mode != sessionmodel.CodexGUIMode || rec2.Model != "gpt-5.3-codex-spark" || rec2.Effort != "low" {
 		t.Fatalf("registry record = mode %q model %q effort %q", rec2.Mode, rec2.Model, rec2.Effort)
+	}
+	if got := len(server.sessionEvents.(*recordingSessionEventStore).upserts); got != 2 {
+		t.Fatalf("session-event upserts = %d, want 2", got)
+	}
+	if got := len(server.sessionBus.(*recordingSessionBus).commands); got != 1 {
+		t.Fatalf("published commands = %d, want 1", got)
+	}
+}
+
+func TestHandleInternalCreateSessionInTestSlotBlocksExpensiveModelWithApprovalURL(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeControlActionStore{}
+	server := &appServer{
+		verifier:       auth.NewVerifier(jwtKey),
+		sessionScope:   "tank-operator-slot-2",
+		controlActions: store,
+	}
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:origin-77",
+		"email":       "pod-origin-77@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"model":"claude-opus-4-8",
+		"effort":"high",
+		"initial_turn":{"client_nonce":"turn-expensive","prompt":"validate the slot"}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "origin-77")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "approval_required" {
+		t.Fatalf("body = %#v", body)
+	}
+	approvalURL, _ := body["approval_url"].(string)
+	if !strings.HasPrefix(approvalURL, "https://tank-operator-slot-2.tank.dev.romaine.life/sessions/origin-77/test-slot-model/tank-test-slot-model-request-origin-77-") ||
+		strings.Contains(approvalURL, "auth.romaine.life") ||
+		strings.Contains(approvalURL, "model=claude-opus-4-8") {
+		t.Fatalf("approval_url = %q", approvalURL)
+	}
+	if body["low_model"] != "claude-haiku-4-5" || body["low_effort"] != "low" {
+		t.Fatalf("low guidance = model %v effort %v", body["low_model"], body["low_effort"])
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != testSlotModelRequestAction || got.SessionID != "origin-77" || got.OwnerEmail != "owner@example.test" {
+		t.Fatalf("recorded request = %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["approval_url"] != approvalURL {
+		t.Fatalf("payload approval_url = %v, want %q", payload["approval_url"], approvalURL)
+	}
+}
+
+func TestHandleInternalCreateSessionInTestSlotAllowsExpensiveModelAfterApproval(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	grantPayload, _ := json.Marshal(map[string]any{
+		"mode":       sessionmodel.ClaudeGUIMode,
+		"provider":   "claude",
+		"model":      "claude-opus-4-8",
+		"effort":     "high",
+		"expires_at": "2999-01-01T00:00:00Z",
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:      "grant-1",
+			OwnerEmail:   "owner@example.test",
+			SessionScope: "tank-operator-slot-2",
+			SessionID:    "origin-77",
+			Action:       testSlotModelGrantAction,
+			Status:       "succeeded",
+			Payload:      grantPayload,
+		}},
+	}
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-slot-2-sessions",
+		sessionScope:          "tank-operator-slot-2",
+		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
+		controlActions:        store,
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:origin-77",
+		"email":       "pod-origin-77@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"model":"claude-opus-4-8",
+		"effort":"high",
+		"initial_turn":{"client_nonce":"turn-approved","prompt":"validate the slot"}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "origin-77")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Model != "claude-opus-4-8" || info.Effort != "high" {
+		t.Fatalf("created info model=%q effort=%q", info.Model, info.Effort)
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want no new approval request", len(store.appendCalls))
+	}
+	if got := len(server.sessionBus.(*recordingSessionBus).commands); got != 1 {
+		t.Fatalf("published commands = %d, want 1", got)
 	}
 }
 

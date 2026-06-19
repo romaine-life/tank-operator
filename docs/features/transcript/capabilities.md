@@ -121,7 +121,11 @@ Contract impact:
   compact mode, keeping the final answer and server-owned wake/context rows
   visible. Failed, interrupted, and no-final completed turns do not expose a
   compacted final-answer projection because there is no durable assistant result
-  to show.
+  to show — the lone exception is an AskUserQuestion / ExitPlanMode hand-off
+  turn, whose final answer is its hand-off (the agent's preamble plus the
+  question card, the card's question widget rendering inline in the main
+  transcript) rather than a
+  `turn.completed.final_answer` (see "AskUserQuestion Question Page").
 - The settled main-transcript answer remains canonical for message links,
   unread counts, latest-message state, and fork-from-message actions.
 
@@ -160,10 +164,13 @@ Contract impact:
   another. Page boundaries are durable `order_key` ranges, so a selected page is
   stable across reload and deep links.
 - The same endpoint returns `turn_context`, a server-projected copy of the
-  initiating durable user message when the turn has one. The dedicated Turns
-  view renders that context above the paged body so a numbered turn route stays
-  oriented on every page; the prompt is not duplicated into `entries`, and
-  canonical message actions remain owned by the main transcript row.
+  initiating instruction. Human turns source it from the durable
+  `user_message.created` row; backend-owned background-task wake turns source
+  it from `turn.submitted.payload.prompt` and mark it system-authored. The
+  dedicated Turns view renders that context above the paged body so a numbered
+  turn route stays oriented on every page; the prompt is not duplicated into
+  `entries`, and canonical message actions remain owned by the main transcript
+  row when one exists.
 - The page navigator is an always-present affordance, not a threshold-gated
   control. It lives in the dedicated Turns view (`RunTurnActivityScreen`, the
   surface users open to inspect a turn) as a **Page dropdown** beside the turn
@@ -337,7 +344,6 @@ Contract impact:
 - The background wake boundary projects as a `meta` chip
   (`metaKind: background_task_wake`) inside Turn activity — "Background task
   finished — agent re-invoked" (or "Agent continued on its own" for the
-  antigravity self-continuation relay) — never as a user-side message bubble.
   The `turn.submitted.payload.prompt` text is AGENT-DIRECTED harness
   instruction; rendering it raw in the user's chat voice was the "wake-notice
   prose rendered raw" defect. The full prompt stays on the chip's
@@ -716,13 +722,21 @@ one semantic `question_set` page per question in the set. Those adjacent pages c
 letting the Turns UI label the set and provide previous/next question shortcuts
 without creating a third navigation system. If the agent asks immediately, that
 first activity page is marker-only by design: it preserves the ledger handoff
-without squeezing the question UI into activity history. The main transcript
-renders the derived assistant question message so the user sees the agent's
-question at the same conversation level as a normal final answer. That message
-links to the question set in Turns. The
-interactive answer form is owned by the Turns question page, which reflects
-durable state rather than local React optimism, so a fresh tab renders the same
-question set and defaults to it while the turn is still waiting for input.
+without squeezing the question UI into activity history. On the asking turn, the
+pending question's interactive widget renders **inline in the main transcript**,
+in place of the derived "summary" question message and beneath the agent's
+preamble (RunInlineAskUserQuestion), with the run composer as the answer input.
+The synthetic question turn is not shown as its own block in chat. The
+single-question case is fully inline. For a multi-question set, only Q1 is inline
+and Q2+ stay on their dedicated question pages; advancing past Q1 leaves the
+inline surface for the Turns view rather than flipping the inline card in
+place. The card reflects durable state rather than local React optimism, so a
+fresh tab renders the same question set and defaults to it while the turn is
+still waiting for input. There is no navigate-to-the-question-turn shortcut
+(neither the assistant-message button nor the tool-row "Open question page").
+Each Q2+ page carries the asking turn's triggering prompt as `turnContextContinued`
+turn context under a "Question prompt continued from previous turn" header so the
+question stays fused to what produced it.
 
 Answering resumes the provider callback and starts the next visible turn:
 - The user's selection posts to `POST /turns/{questionTurnId}/answer`, which
@@ -732,10 +746,13 @@ Answering resumes the provider callback and starts the next visible turn:
   callback may still be parked under the asking turn inside the runner harness.
 
 Each question page has two states:
-- waiting — unanswered. The page surfaces one question from the set, with its
-  options (single/multi-select), the free-form textarea when `allowFreeForm` is
-  set, and one set-level Submit button that only enables after every question
-  page in the set has a response.
+- waiting — unanswered. The page surfaces one question from the set with its
+  options (single/multi-select), including the always-present "Something else"
+  default. The free-form answer is the run composer bound as the question's
+  single answer input: always available and valid with any selection. Submit is
+  always live — the default selection means there is no nothing-selected state —
+  and an empty pass is acceptable. See "AskUserQuestion Answer Input (no dead
+  ends)".
 - answered — a later `turn.input_answered` event references the question set
   (`awaitingInput.answered` is true), or the user just submitted (a local
   snapshot locks the page for the round-trip). The page renders locked with the
@@ -747,22 +764,54 @@ Affected contracts:
 
 Contract impact:
 - The question page is a Turn activity projection of durable
-  `turn.awaiting_input`; it is not a second ledger. The main transcript uses
-  the derived `assistant_message.created` question message as the assistant
-  handoff and navigation target to the question set, never a standalone
-  question-button row.
+  `turn.awaiting_input`; it is not a second ledger. On the asking turn the main
+  transcript renders the derived `assistant_message.created` question message AS
+  the interactive widget inline (RunInlineAskUserQuestion replaces the summary
+  message body with the card), answered through the composer — never a standalone
+  navigate-to-Turns question-button row, and the synthetic question turn is not
+  shown as its own block in chat. For a multi-question set, Q1 is inline and Q2+
+  stay on their dedicated pages.
 - The preceding activity page receives a compact `AskUserQuestion` tool marker
   derived from the same durable `turn.awaiting_input` event. It is an audit
   marker for the invocation, not the answer surface and not a dependency on
   provider-specific raw tool rows.
+- The asking turn never reaches `turn.completed` — its answer rotates execution
+  onto a separate continuation turn — so its Turns-detail
+  `/turns/{id}/activity` `final_answer.entries` is projected from the hand-off
+  instead of a `turn.completed.final_answer` marker: the agent's preamble (the
+  `asking_turn_final_answer` prose the runner snapshotted) followed by the
+  AskUserQuestion card. The card's question widget renders inline in the main
+  transcript; there is no navigate-to-the-question-turn shortcut. This promotes
+  the asking turn from "No turn activity" to a turn
+  collapsible to its preamble + question card. It reuses the same
+  `asking_turn_final_answer` snapshot the question page shows as page context,
+  but only the asking turn turns it into a final answer — the synthetic question
+  turn's copy stays a page-context copy and never becomes that turn's final
+  answer.
 - Turn activity pagination is semantic as well as size-bounded: each
   `turn.awaiting_input` event starts one `question_set` page per question while
   preserving one durable answer set. The pages expose shared set identity and
   per-question position so the page selector and question card can show
   "question 1 of N" and move to the adjacent question page. Answered/history
   state remains visible when revisiting any question page.
+- The question page heading ("Question N of M") renders as a system-narrated
+  message — the session's system identity in the avatar gutter, label + position
+  counter in the message column — occupying the Turns prompt slot as the question
+  turn's turn-starter, not a full-width banner pinned above the column with no
+  author. The question TEXT is the agent; the "Question N of M" frame is system
+  narration. It shares the
+  `data-variant="system"` message frame (`RunQuestionHeadingMessage`) used by
+  session.status banners, RunMetaBlock status lines, and the background-wake
+  prompt, satisfying the transcript contract's rule that headless status lines
+  speak through the system identity instead of floating in the column unauthored.
 - A pending `needs_input` turn defaults to the first unanswered `question_set`
   page; normal turns still default to the latest activity page.
+- A stopped or dismissed question turn folds its terminal sequence — the Stop
+  `turn.interrupt_requested` plus the dismissing `turn.interrupted`, or any other
+  non-answer terminal — onto its question page(s) rather than a trailing
+  `activity` page. Without this the Stop pre-terminal marker spilled a spurious
+  `activity` page that a dismissed turn (defaulting to its last page) opened on,
+  stranding the Turns prompt slot on "Prompt context unavailable" (#1312).
 - `answered` is derived from a durable fact (a later `turn.input_answered` event
   whose `payload.question_timeline_id` matches), never a local "I submitted"
   flag, so historical replay matches live.
@@ -773,12 +822,40 @@ Evidence:
 - Backend: `backend-go/cmd/tank-operator/turn_pages_test.go` proves
   `turn.awaiting_input` creates the compact invocation marker page, starts a
   `question_set` page for each question, keeps a shared durable answer set, and
-  seals an answered set before resumed activity.
+  seals an answered set before resumed activity. The
+  `TestProjectTurnPagesAskingTurnHandoffFinalAnswer*` cases prove the asking
+  turn's `final_answer.entries` is the preamble plus the question card, that the
+  turn becomes collapsible (`reason=final_answer`), and that page bodies / event
+  counts stay unchanged — including the no-preamble (card-only) and ExitPlanMode
+  plan-card variants.
+  `TestProjectTurnPagesQuestionOnlyTurnStopFoldsIntoSingleQuestionPage` proves a
+  Stopped question turn (`turn.interrupt_requested` → `turn.interrupted`) folds
+  onto a single question page with no spurious trailing activity page, so the
+  dismissed turn still defaults to its question page.
+  `TestProjectTurnPagesQuestionOnlyTurnSurfacesAskingPromptAsContinuedContext`
+  proves the asking turn's triggering prompt is projected as the question turn's
+  `turnContextContinued` context without adding a page or changing event counts.
+- Frontend: `frontend/src/migrationPolicy.test.ts` proves the pending question's
+  widget renders inline on the asking turn (`isPendingInlineQuestionEntry` +
+  `RunInlineAskUserQuestion`, the card shown `firstQuestionOnly`), that the
+  synthetic needs_input turn is not pushed as its own chat block
+  (`groups.push(group)` absent), that the retired navigate-to-Turns shortcuts are
+  gone (the assistant-message answer button, the tool-row "Open question page"
+  button, and their helpers), and that Q2+ pages carry the "Question prompt
+  continued from previous turn" header. The migration guard
+  `scripts/check-askuserquestion-migration.mjs` forbids the retired shortcuts and
+  requires the inline-on-asking-turn + continued-prompt path. It also pins the
+  question heading as a `data-variant="system"` `RunQuestionHeadingMessage` frame
+  while retiring the orphaned `run-turn-question-page-head` banner.
+  `frontend/src/composerCss.test.ts` keeps the retired pinned-head CSS rule from
+  reappearing. Visual: `frontend/src/styleguide/question-heading.tsx`
+  (`/_styleguide/question-heading`) renders the inline question surface and the
+  continued-prompt header.
 - Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   proves an unanswered `needs_input` turn defaults to the question page.
-- Frontend: `frontend/src/migrationPolicy.test.ts` proves the main transcript
-  uses the assistant question message affordance while `RunAwaitingInputCard`
-  is owned by Turns.
+- Frontend visual: `frontend/src/styleguide/question-heading.tsx`
+  (`/_styleguide/question-heading`) renders the system-user question heading
+  next to the assistant question message and the answer card for review.
 - Migration guard: `scripts/check-askuserquestion-migration.mjs` requires the
   semantic page path and same-turn `/answer` path.
 
@@ -926,3 +1003,111 @@ stages (#1051 B2-B5) change its cost profile, never its ownership.
   incremental flow) deliberately do not bump: their row sets are stable
   within a projection version, and bumping would resnapshot every viewer on
   every batch.
+
+## Queued follow-up block reason (why is my message queued?)
+
+Status: active
+
+Intent:
+While a turn is active, a message the user types is queued instead of sent and
+auto-sends when the run goes idle. Previously the queued panel showed only the
+message text, so a user who typed while the agent "looked done" had no way to
+tell *why* their message was held. This surfaces the single, live reason —
+distinguishing the agent actively working from other holds (a stop in progress,
+the agent waiting on a question, the agent self-parked on a timer, and the
+client-only latch-lag "looks done but won't send" case where the durable ledger
+is idle but the browser's optimistic run latch has not reconciled its terminal).
+
+Affected contracts:
+- Transcript
+
+Contract impact:
+- The queue gate is unchanged and stays session-level: the drain effect submits
+  the queue head precisely when `!running`. This is a read-only diagnostic; it
+  does NOT change *when* a message queues. `decideFollowupSubmit` remains the
+  sole gate and both queue entry points (`handleSubmit`, `submitSkillInvocation`)
+  are untouched.
+- The reason taxonomy is owned by the pure `describeRunBlock` helper in
+  `frontend/src/submitLatch.ts`, which maps the live latch signals to
+  `{ kind, dotStatus, label, detail }`. Dot/label vocabulary is reused from
+  `frontend/src/sessionActivity.ts` (no bespoke status colors); the only signal
+  that survives the `runStatus === "running"` collapse is the retained
+  `latestDurableActivityStatusRef` (set at the top of
+  `applySdkActivitySummaryToUi` before any branch).
+- The queued-follow-up panel gains a compact dot + label + a "Why queued?" link
+  to a focused `queue-status` session route (`/sessions/{id}/queue-status`),
+  rendered by `QueueBlockScreen` as a `RunTab` inside `ChatPane` so it can read
+  the client-only run latch the server cannot see. The page and the gate share
+  the same latch inputs, so they agree by construction.
+
+Evidence:
+- Frontend unit: `frontend/src/submitLatch.test.ts` covers every `RunBlockKind`
+  (stopping wins; needs_input vs working; scheduled; submitted/claimed/streaming
+  → working; idle+latch+no-terminal → settling; idle+terminal → reconciling;
+  null → settling) and guards that every emitted `dotStatus` stays within the
+  reused `sessionActivity` dot vocabulary (so the indicator can never render
+  colorless).
+- Frontend route: `frontend/src/appRoutes.test.ts` proves the
+  `/sessions/{id}/queue-status` parse + build round-trip and rejects a trailing
+  subsegment, matching the `session-data` tab contract.
+
+## AskUserQuestion Answer Input (no dead ends)
+
+Status: active
+
+Intent:
+A pending AskUserQuestion must be a conversation the user steers, not a form that
+traps them. This entry names the answer-input behavior surfaced after a user hit
+a question they could not escape: the visible Stop control was structurally
+swapped out for Submit while a question was pending, so the only way out was to
+guess that Esc worked; there was no "I don't want to answer this"; and typed text
+was silently discarded unless the agent had set `allowFreeForm` — leaving the
+user at the mercy of the agent enumerating exactly the option they needed, which
+it cannot do. The fix inverts the model: declining is the frictionless default
+and answering is the deliberate act.
+
+Affected contracts:
+- Transcript (owns the answer card + composer answer input)
+
+Contract impact:
+- Every question carries a synthetic "Something else" choice, selected by
+  default. There is no nothing-selected state:
+  `effectiveAskUserQuestionSelection` resolves an empty stored selection to
+  "Something else", so Submit is always live and Enter always advances/submits.
+  An agent's options are shortcuts, never a fence.
+- Companion free-form text works with ANY selection and is never gated on
+  `allowFreeForm` and never silently dropped. It rides as `annotations.notes` on
+  a real option, or becomes the whole answer under "Something else". An
+  options-only question still accepts a typed answer.
+- An empty pass is acceptable: nothing picked + nothing typed submits "Something
+  else" with no elaboration (an honest "not answering this"), which satisfies the
+  backend >=1-non-empty-label gate by construction — the backend does not
+  validate answer labels against the offered options, so the synthetic default
+  needs no backend change.
+- The Stop control (also bound to Esc, advertised in the answer placeholder)
+  renders ALONGSIDE the answer Submit while a question is pending. Stopping is
+  the durable dismiss path (card `dismissed`) — the emergency hatch, not the
+  primary flow. The win is that the user rarely needs it because they can always
+  keep talking.
+- Multi-question sets: Enter advances mid-set and submits on the last page;
+  per-question typed text is persisted on page change and restored on return, so
+  advancing never discards an answer. The prior composer-clear that raced the
+  page-change effect and ate text on advance is removed (the app, not the
+  composer, owns answer-text lifecycle during a question).
+
+Evidence:
+- Pure gate (unit tested): `frontend/src/askUserQuestionSelection.ts` +
+  `frontend/src/askUserQuestionSelection.test.ts` prove the never-empty default,
+  the "Something else" sentinel's mutual exclusion with real picks, and
+  `buildAskUserQuestionAnswerPayload`'s empty-pass + companion-text-on-any-
+  selection invariants.
+- Wiring: `frontend/src/App.tsx` injects the default option
+  (`appendSomethingElseOption`), reads selections through
+  `effectiveAskUserQuestionSelection`, always carries composer text into the
+  answer, and gates Submit/advance on paging only; `frontend/src/ChatComposer.tsx`
+  renders the Stop control alongside the answer Submit and no longer clears
+  app-owned composer text on advance.
+- Required before this capability's browser evidence is complete: test-slot
+  proof that a pending question shows a visible cancel, that an empty pass
+  submits `["Something else"]`, and that an options-only question accepts typed
+  text without dropping it.

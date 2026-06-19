@@ -3,15 +3,25 @@ export type AdminView =
   | "controls"
   | "avatars"
   | "report"
+  | "break-glass"
+  | "orchestrations"
+  | "hidden-transcripts"
   | "observability"
+  | "data"
   | "version";
 export type SessionRouteTab =
   | "turns"
   | "chat"
   | "static"
   | "session-data"
+  | "queue-status"
+  | "pull-requests"
+  | "break-glass"
+  | "test-slot-model"
+  | "test-slot"
   | "files"
-  | "background";
+  | "background"
+  | "orchestrate";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help" | "cluster";
 
@@ -45,6 +55,12 @@ export type SessionRoute = SettingsRoute & {
   // tab === "files" and the route includes a file target.
   filePath: string | null;
   fileLine: number | null;
+  // Control-action event id selected in the break-glass approval view.
+  // Non-null only when tab === "break-glass".
+  breakGlassRequestId: string | null;
+  // Control-action event id selected in the test-slot model approval view.
+  // Non-null only when tab === "test-slot-model".
+  testSlotModelRequestId: string | null;
 };
 
 export type HomeRoute = SettingsRoute & {
@@ -90,8 +106,12 @@ function parseAdminView(value: string | undefined): AdminView {
     case "controls":
       return "controls";
     case "avatars":
+    case "break-glass":
+    case "orchestrations":
     case "report":
+    case "hidden-transcripts":
     case "observability":
+    case "data":
     case "version":
       return value;
     default:
@@ -150,6 +170,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -164,6 +186,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -190,6 +214,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -209,6 +235,8 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: rel,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -223,12 +251,78 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "queue-status" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "queue-status",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
   // The file-browser pane is routed at the surface level, and may include a
   // workspace-relative file path so transcript file links can open the same
   // preview in a new tab.
+  if (parts[2] === "pull-requests" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "pull-requests",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "break-glass" && parts.length === 4 && parts[3].trim()) {
+    return {
+      sessionId: parts[1],
+      tab: "break-glass",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: parts[3],
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "test-slot-model" && parts.length === 4 && parts[3].trim()) {
+    return {
+      sessionId: parts[1],
+      tab: "test-slot-model",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: parts[3],
+      ...defaultSettingsRoute,
+    };
+  }
   if (parts[2] === "files" && parts.length >= 3) {
     const target = parts.length > 3 ? parts.slice(3).join("/") : "";
     if (target && !validWorkspaceRoutePath(target)) return null;
@@ -243,6 +337,24 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: fileTarget?.path ?? null,
       fileLine: fileTarget?.line ?? null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "test-slot" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "test-slot",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -257,6 +369,24 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       staticPath: null,
       filePath: null,
       fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "orchestrate" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "orchestrate",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -297,6 +427,8 @@ export function buildSessionRouteUrl(
   pageNumber?: number | null,
   filePath?: string | null,
   fileLine?: number | null,
+  breakGlassRequestId?: string | null,
+  testSlotModelRequestId?: string | null,
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
@@ -314,6 +446,14 @@ export function buildSessionRouteUrl(
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {
     suffix = "/session-data";
+  } else if (tab === "queue-status") {
+    suffix = "/queue-status";
+  } else if (tab === "pull-requests") {
+    suffix = "/pull-requests";
+  } else if (tab === "break-glass" && breakGlassRequestId) {
+    suffix = `/break-glass/${encodeURIComponent(breakGlassRequestId)}`;
+  } else if (tab === "test-slot-model" && testSlotModelRequestId) {
+    suffix = `/test-slot-model/${encodeURIComponent(testSlotModelRequestId)}`;
   } else if (tab === "files") {
     const routedFilePath = filePath
       ? filePath.split("/").map(encodeURIComponent).join("/")
@@ -323,8 +463,12 @@ export function buildSessionRouteUrl(
         ? `/${routedFilePath}${fileLine != null ? `:${fileLine}` : ""}`
         : ""
     }`;
+  } else if (tab === "test-slot") {
+    suffix = "/test-slot";
   } else if (tab === "background") {
     suffix = "/background";
+  } else if (tab === "orchestrate") {
+    suffix = "/orchestrate";
   }
   url.pathname = `/sessions/${encodedId}${suffix}`;
   url.search = "";

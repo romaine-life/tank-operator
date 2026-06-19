@@ -21,6 +21,8 @@ var glimmungSlotNamePattern = regexp.MustCompile(`^(.+)-slot-(\d+)$`)
 
 type AppServerGlimmung interface {
 	State(ctx context.Context, actorEmail string) (glimmung.StateSnapshot, error)
+	CheckoutTestSlot(ctx context.Context, actorEmail string, body glimmung.CheckoutTestSlotRequest) (glimmung.CheckoutTestSlotResult, error)
+	DeployImageToTestSlot(ctx context.Context, actorEmail string, body glimmung.DeployImageToTestSlotRequest) (glimmung.DeployImageToTestSlotResult, error)
 	ReturnTestSlot(ctx context.Context, actorEmail string, body glimmung.ReturnTestSlotRequest) (glimmung.ReturnTestSlotResult, error)
 }
 
@@ -139,10 +141,10 @@ func matchingTestSlotLease(leases []glimmung.Lease, project string, slotIndex in
 		if state := strings.TrimSpace(lease.State); state != "claimed" && state != "pending" {
 			continue
 		}
-		if idx, ok := intFromMap(lease.Metadata, "native_slot_index"); ok && idx == slotIndex {
+		if idx, ok := intFromMap(lease.Metadata, "runner_slot_index"); ok && idx == slotIndex {
 			return lease, true
 		}
-		if slotName != "" && strings.EqualFold(strings.TrimSpace(stringFromMapValue(lease.Metadata, "native_slot_name")), slotName) {
+		if slotName != "" && strings.EqualFold(strings.TrimSpace(stringFromMapValue(lease.Metadata, "runner_slot_name")), slotName) {
 			return lease, true
 		}
 	}

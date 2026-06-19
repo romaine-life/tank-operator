@@ -11,6 +11,7 @@ Counter/Histogram declarations in:
 
   - backend-go/cmd/tank-operator/observability.go
   - backend-go/cmd/tank-operator/middleware_http.go
+  - backend-go/cmd/nats-auth-callout/main.go
   - backend-go/internal/pgstore/tracer.go
   - claude-runner/src/metrics.ts
   - codex-runner/src/metrics.ts
@@ -39,11 +40,10 @@ spec:
       scrapeTimeout: 10s
 ---
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
-# ServiceMonitor: api-proxy deployments (Claude + Codex + Antigravity). All
+# ServiceMonitor: api-proxy deployments. All
 # Services expose the metrics sidecar port; the `provider` label on each metric
 # distinguishes them at query time. The provider-generic TankApiProxy* alerts
-# below fire per-provider via {{`{{ $labels.provider }}`}}, so antigravity is
-# covered for refresh-storm / refresh-failure / rate-limit the moment it scrapes.
+# below fire per-provider via {{`{{ $labels.provider }}`}}.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -56,7 +56,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [claude-api-proxy, claude-secondary-api-proxy, codex-api-proxy, antigravity-api-proxy]
+        values: [claude-api-proxy, claude-secondary-api-proxy, codex-api-proxy]
   endpoints:
     - port: metrics
       path: /metrics
@@ -65,7 +65,7 @@ spec:
 ---
 {{- end }}
 # PodMonitor: session pods. The PodMonitor scrapes the mcp-auth-proxy
-# sidecar and (for claude_gui / codex_gui / antigravity_gui sessions)
+# sidecar and (for claude_gui / codex_gui sessions)
 # the runner sidecar. Session pods are ephemeral — scrape interval 15s
 # gives the operator a realistic chance of catching at least one sample
 # from a short-lived session before the pod terminates and its series
@@ -120,6 +120,34 @@ spec:
       metricRelabelings:
         - action: labeldrop
           regex: ^(instance|container|endpoint|service|job)$
+{{- if and .Values.natsCallout.enabled (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
+---
+# PodMonitor: nats-auth-callout (the per-session NATS credential issuer,
+# #1128). It exposes tank_nats_auth_callout_total on :9100 but has no
+# Service — it speaks NATS ($SYS.REQ.USER.AUTH), not HTTP, so there is
+# nothing for a ServiceMonitor to select; scrape the pods directly.
+# Without this, every new-pod auth FAILURE (result=denied_*/error — the
+# #1148 "Authorization Violation" class that wedges submitted turns) is
+# invisible to Prometheus. Gated to non-test envs because test slots run
+# tokenless single-tenant NATS and never render the callout. Two replicas;
+# the counter is per-pod, so the alerts below sum() across pods.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: tank-nats-auth-callout
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: nats-auth-callout
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats-auth-callout
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
+      scrapeTimeout: 10s
+{{- end }}
 ---
 # PrometheusRule: user-trust failure alerts. Each alert names exactly the
 # class of failure it surfaces; no "high-level" health alerts that fire
@@ -133,6 +161,24 @@ metadata:
     app.kubernetes.io/name: tank-operator
 spec:
   groups:
+    - name: tank-operator.ci-watch
+      rules:
+        - alert: TankCIWatchStalled
+          expr: tank_ci_watch_oldest_stale_age_seconds > 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a governed-PR CI watch has been 'watching' with no event for over an hour"
+            runbook: "A CI watch is stuck: the deciding webhook was likely dropped and the durable backstop's live re-drive did not resolve it (CI genuinely hung, or mergeability never resolved). The owning session stays reaper-protected and asleep by design. Check the PR's real check/mergeable state on GitHub and the tank_ci_webhooks_total{result} breakdown, then resolve or close the PR. The agent is intentionally NOT woken for this infra non-event."
+        - alert: TankTestSlotProvisionStuck
+          expr: tank_test_slot_pending_provision_oldest_age_seconds > 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a deterministic test-slot provision has been pending for over an hour"
+            runbook: "A test-slot provision (interactive or orchestration-review) has sat in 'pending' for over an hour — far past the settle cap + deploy grace (~23m). The fire-and-forget gate goroutine was likely lost to an orchestrator restart mid-settle-wait, and the durable reconcile backstop's re-drive has not terminalized it. The backstop re-drives stale records every 5m and increments tank_test_slot_provision_redrive_total{kind} when it does; if that counter is flat while this gauge climbs, the reconcile loop is not running (check the orchestrator started runPendingTestProvisionReconcileLoop) or every re-drive is failing to reach a verdict. Inspect pending_test_provisions for the stuck row's session/repo/branch and the PR's real CI state; the owning session is not blocked by this (the slot just never came up)."
     - name: tank-operator.http
       rules:
         - alert: TankOperatorHTTP5xxRate
@@ -299,6 +345,15 @@ spec:
             summary: "session-events persister terminated an event for schema reasons"
             runbook: "A producer is emitting non-Tank events to the bus. Steady-state expectation is zero. Inspect persister logs for `session bus event terminated: schema rejected`."
 
+        - alert: TankControlActionAuthorizationDenied
+          expr: increase(tank_control_action_events_total{result="forbidden"}[15m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "control-action ledger writes are being authorization-denied"
+            runbook: "A session-pod service principal is being rejected by the per-session authorization gate, so governed-git evidence (publish/CI/mergeability), break-glass requests, and PR control-actions stop landing in control_action_events — silently, because the sidecar swallows the 4xx. Steady-state is zero. A nonzero rate means either a forged-identity attempt or an authorization regression like the 2026-06-16 #1207 incident (writes gated on a caller-asserted header instead of the verified svc:tank:<id> subject). Inspect handleInternalAppendControlAction / serviceSubjectMatchesSession and confirm the exchanged subject matches the target session and scope."
+
         - alert: TankSessionEventWakePublishFailures
           expr: rate(tank_session_event_wake_publish_failure_total[10m]) > 0
             or on() rate(tank_session_list_event_publish_failure_total[10m]) > 0
@@ -437,6 +492,155 @@ spec:
               activity_summary rows and terminal correlation telemetry
               to decide whether the cause was a stale server activity
               projection or a missed local-run finalization.
+
+        - alert: TankTurnDirectoryNewTurnLoop
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-directory-new-turn-loop",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Turns directory new-turn refresh loop on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser repeatedly reloaded /turns/directory with
+              source=new-turn because the live transcript window contained
+              at least one turn_activity shell whose turn_id was still
+              absent from the durable directory after repeated reads.
+              This is the upstream spinner/bootstrap class: the Turns
+              surface is trying to make the selector complete before the
+              selected activity body can load.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-directory-new-turn-loop"
+
+              The log carries session_id, page_path, source, key (the
+              first missing turn_id), event_count (number of missing live
+              shells), canonical_event_count (known directory turn count),
+              entries, and turn_activity_shells.
+
+        - alert: TankTurnDirectoryRouteSessionMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-directory-route-session-mismatch",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Turns directory loaded from a pane whose session does not match the URL on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser was about to load /turns/directory for one
+              mounted Run pane while window.location pointed at a different
+              /sessions/{id} route. That is the route/session desync seen
+              when switching sessions leaves an old pane doing work under
+              the new URL.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-directory-route-session-mismatch"
+
+              The log carries session_id (the pane), key (the route
+              session id), page_path, source, and event_count (directory
+              turn count known before the request).
+
+        - alert: TankTurnActivitySelectedRouteSessionMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-route-session-mismatch",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "selected activity pane belongs to a different session than the route on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              A selected Turns activity body reached the stuck loading
+              watchdog while the mounted pane session id disagreed with
+              the current /sessions/{id} route. This is the explicit
+              selected-activity form of the stale-pane/session ownership
+              bug: an old session component is still participating under
+              a new session URL.
+
+              Inspect structured orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-activity-selected-route-session-mismatch"
+
+              The log carries session_id (the mounted pane),
+              route_session_id (the URL session), selected_turn_id,
+              page_path, source, reason, status, entries, groups,
+              turn_activity_shells, durable_active_turn_activity_shells,
+              and activity_entries. Compare it with the adjacent
+              event="turn-activity-selected-loading-stranded" log for the
+              same timestamp to tell whether the wrong pane is also the
+              one rendering the visible spinner or only a hidden stale
+              participant.
+
+        - alert: TankTurnActivitySelectedLoadingStranded
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-stranded",surface="session"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "selected Turns pane stayed on Loading activity with no active load state on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser rendered the selected turn's "Loading
+              activity..." body for longer than the stuck threshold
+              while its selected-turn load state was absent or
+              unloaded. That is the hidden strand class: the UI is
+              visibly waiting, but the load lifecycle telemetry has no
+              corresponding in-flight request to observe.
+
+              This alert is intentionally render-side. It fires from
+              the actual condition that puts the spinner on screen, not
+              from an inferred request lifecycle. Inspect structured
+              orchestrator logs:
+
+                msg="browser chat scroll event"
+                event="turn-activity-selected-loading-stranded"
+
+              The log carries session_id, previous_session_id, source
+              (session-switch vs turns-selected), key (selected
+              turn_id), reason (absent/unloaded), status code,
+              turn_activity_shells, durable_active_turn_activity_shells,
+              and activity_entries (the projected shell child count).
+              If source=session-switch, start with the in-place
+              session-change path: tail-bootstrap-reset, turn-directory
+              reload, selected latest turn, then activity detail load.
+              If activity_entries is nonzero, durable projection exists
+              but the selected detail body is disconnected from it. If
+              turn_activity_shells is zero, inspect the turn
+              directory/timeline bootstrap path before the activity
+              endpoint.
+
+        - alert: TankTurnActivitySelectedLoadingSlow
+          expr: |
+            sum by (session_mode) (
+              increase(tank_chat_scroll_client_events_total{event="turn-activity-selected-loading-slow",surface="session"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: info
+          annotations:
+            summary: "selected Turns pane stayed on Loading activity with an in-flight load on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser rendered the selected turn's "Loading
+              activity..." body for longer than the stuck threshold
+              while a selected-turn activity request was still marked
+              loading. This is not the no-load strand; compare with
+              turn_activity_load_timed_out / turn_activity_load_failed
+              session-event telemetry and the /activity handler logs.
+              Structured chat-scroll logs for
+              event="turn-activity-selected-loading-slow" carry the
+              session_id and selected turn_id.
 
         - alert: TankBrowserTerminalLocalRunMismatch
           expr: |
@@ -814,10 +1018,7 @@ spec:
 
               phase=streaming: a turn made provider progress, then the
               session's ledger went fully silent for >20m with no
-              terminal — the wedged-boundary class (sessions 828/829,
-              tank-operator#1085: the antigravity turn-settle window was
-              cancelled by a transcript-rewrite replay and never
-              re-armed). A streaming hit is suspicion, not a verdict — a
+              terminal — the wedged-boundary class. A streaming hit is suspicion, not a verdict — a
               single long quiet tool call can legitimately exceed the
               threshold; one that persists well past it is almost
               certainly real. The stranded-turn sweep still owns the
@@ -827,9 +1028,7 @@ spec:
               Localize with GET /api/debug/stuck-turns (lists session_ids
               + phase + stuck_seconds + last_event_at +
               provider_rate_limit_status), then read that session's
-              runner logs and session_events tail; for antigravity also
-              check tank_antigravity_runner_turn_settle_total (a healthy
-              boundary shows a quiet outcome after the last extended).
+              runner logs and session_events tail.
 
               Distinguishes from TankTurnSilentStranding (aggregate
               submitted-vs-terminal rate) by being per-session and
@@ -1118,6 +1317,60 @@ spec:
               activity row, durable turn lifecycle, and scheduled wakeup rows;
               inspect orchestrator logs for `session container terminated`.
 
+        # Crash-loop guard. tank_session_container_terminations_total already
+        # counts every container exit by reason; only oom_killed had an alert.
+        # An exit-1 "error" crash loop (the session 979 class: a runner resuming
+        # a gone provider-session transcript) was counted but un-alerted, so it
+        # looped silently. This pairs with the runner's provider-fatal terminal
+        # and the orchestrator restart-budget backstop.
+        - alert: TankSessionContainerCrashLooping
+          expr: |
+            sum by (container) (
+              increase(tank_session_container_terminations_total{reason="error"}[15m])
+            ) > 3
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "session container {{`{{ $labels.container }}`}} is crash-looping (reason=error)"
+            runbook: |
+              A session-pod container is exiting non-zero and being restarted by
+              the kubelet (reason="error", distinct from oom_killed which has its
+              own alert). The common cause is an agent-runner that cannot make
+              progress on restart — e.g. a provider-session resume whose on-disk
+              transcript was wiped by the restart ("No conversation found with
+              session ID", the session 979 failure). The runner now reports
+              session.provider_fatal{reason:provider_session_lost} and the K8s
+              watch's restart-budget backstop reaps a pod still looping past the
+              budget (tank_session_pod_reaped_total{reason="runner_crashloop"}).
+              A sustained nonzero rate here WITHOUT a matching
+              tank_session_pod_reaped_total increment means the backstop or the
+              runner terminal path regressed — the loop is no longer being
+              converted to a terminal Failed. Inspect runner logs
+              (`claude_sdk_stderr`, "SDK query exited with error") and
+              tank_runner_unrecoverable_exit_total.
+
+        # Provider-fatal terminal. The loud, durable session-level failure that
+        # replaced the silent crash-loop: a runner declared a session
+        # unrecoverable, or the backstop reaped a crash-looping pod.
+        - alert: TankSessionProviderFatal
+          expr: increase(tank_session_provider_fatal_total{result="ok"}[15m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a session was marked Failed by a runner provider-fatal report"
+            runbook: |
+              A pod-side runner reported an unrecoverable, session-terminal
+              condition (POST /api/internal/sessions/{id}/provider-fatal); the
+              session moved to Failed and its pod was reaped so the crash-loop
+              stops. reason="provider_session_lost" is the
+              conversation-transcript-gone-after-restart case (session 979). This
+              is the terminal signal that replaced the silent loop — an expected,
+              low rate. A spike means runners are dying unrecoverably; correlate
+              with tank_runner_unrecoverable_exit_total and
+              tank_session_pod_reaped_total{reason}.
+
         # Cross-scope event leak guard. The per-(owner, scope) NATS
         # subject prevents cross-scope delivery in steady state; if a
         # publisher ever lands a wrong-scope payload (regression of the
@@ -1321,6 +1574,51 @@ spec:
               (control plane); see
               backend-go/internal/sessionbus/sweep.go for the parser.
 
+    - name: tank-operator.nats-auth-callout
+      rules:
+        # Per-session NATS credential issuer (#1128). Session pods present
+        # their projected SA token to the auth-callout and receive a NATS
+        # user JWT scoped to their own session; a rejection here means the
+        # pod's runner cannot connect to the session bus and its submitted
+        # turns stay stuck with no terminal — the #1148 "Authorization
+        # Violation" failure class. denied_no_credentials is excluded: a
+        # correctly-provisioned session pod always presents its token as the
+        # password, so a no-credentials connect is a stray probe, not a
+        # stranded session.
+        - alert: TankNatsAuthCalloutDenials
+          expr: sum by (result) (rate(tank_nats_auth_callout_total{result=~"denied_token_invalid|denied_auth_exchange|denied_auth_jwt_invalid|denied_subject_untrusted|denied_identity_mismatch|error"}[10m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "nats-auth-callout is rejecting session-pod NATS auth (result={{`{{ $labels.result }}`}})"
+            runbook: |
+              A session pod presented its auth.romaine.life-audience pod
+              token to the NATS auth-callout and was rejected, or the callout
+              errored issuing the user JWT. The pod's runner cannot connect to
+              the session bus, so its submitted turns stay stuck with no
+              terminal — the #1148 failure class.
+
+              Inspect the callout logs (deployment nats-auth-callout,
+              container `callout`, namespace tank-operator) for the matching
+              slog.Warn line and value of {{`{{ $labels.result }}`}}:
+                denied_token_invalid      — the auth exchange response could
+                    not be decoded or did not include a token.
+                denied_auth_exchange      — auth.romaine.life rejected the
+                    projected token or could not resolve pod lineage.
+                denied_auth_jwt_invalid   — auth.romaine.life returned a token
+                    the local JWKS verifier rejected.
+                denied_subject_untrusted  — the ServiceAccount is not the
+                    tank per-session service principal shape
+                    (svc:tank:<id> or svc:tank:slot-N-session-<id>).
+                denied_identity_mismatch  — the client's claimed NATS_USER
+                    does not match the auth.romaine.life service identity.
+                error                     — JWT issuance failed inside the
+                    callout (issuer seed / nkey problem).
+              Confirm tank_nats_auth_callout_total{result="session"} is
+              still incrementing (healthy pods) and grep the affected
+              session pod's runner logs for NATS "Authorization Violation".
+
     - name: tank-operator.api-proxy
       rules:
         - alert: TankApiProxyRefreshStorm
@@ -1369,7 +1667,7 @@ spec:
         # → chain death → wizard recovery. The keeper (run_refresh_keeper) writes
         # back on boot + before expiry, so steady-state is zero; a non-zero rate
         # over 15m means the write path itself is broken (UAMI/KV RBAC, KV
-        # outage). Provider-generic — covers claude, codex, and antigravity.
+        # outage). Provider-generic — covers managed provider proxies.
         - alert: TankApiProxyKvPersistFailing
           expr: increase(tank_api_proxy_kv_persist_total{result="failure"}[15m]) > 0
           for: 15m
@@ -1377,7 +1675,7 @@ spec:
             severity: warning
           annotations:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot persist rotated tokens to KV"
-            runbook: "Rotations are succeeding in memory but not writing back to KV — the restart-bomb precursor. Grep ext-proc logs for `KV write failed`; check the api-proxy UAMI's Key Vault Secrets Officer role and KV reachability (az keyvault secret show --vault-name romaine-kv --name <provider>-credentials --query attributes.updated). Until fixed, do NOT restart the proxy pod: the next boot will re-read a stale Secret. For claude/codex this surfaces as refresh_token_reused after restart (run the credential wizard to recover); antigravity self-heals on boot because the keeper re-refreshes, but the stale KV blob should still be repaired."
+            runbook: "Rotations are succeeding in memory but not writing back to KV — the restart-bomb precursor. Grep ext-proc logs for `KV write failed`; check the api-proxy UAMI's Key Vault Secrets Officer role and KV reachability (az keyvault secret show --vault-name romaine-kv --name <provider>-credentials --query attributes.updated). Until fixed, do NOT restart the proxy pod: the next boot will re-read a stale Secret. Run the credential wizard to recover if the provider reports refresh_token_reused after restart."
 
         - alert: TankApiProxyEnvoySdsKeyRotationFailed
           expr: max_over_time(tank_api_proxy_envoy_sds_key_rotation_failed[15m]) > 0
@@ -1461,65 +1759,6 @@ spec:
           annotations:
             summary: "pod-side runner ({{`{{ $labels.mode }}`}}) provider errors > 0.1/s for 5m"
             runbook: "Inspect the affected session pod's claude-runner / codex-runner logs."
-
-        - alert: TankAntigravityRunnerProviderErrorRate
-          expr: rate(tank_antigravity_runner_provider_error_total[5m]) > 0.1
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Antigravity runner provider errors > 0.1/s for 5m"
-            runbook: |
-              Inspect the affected session pod's antigravity-runner logs and
-              agy CLI logs under /home/node/.gemini/antigravity-cli/log.
-              Auxiliary userinfo/Clearcut 401s are counted separately as
-              tank_antigravity_runner_agy_diagnostic_total and are not provider
-              auth failures; real Code Assist auth failures surface through
-              tank_api_proxy_upstream_401_total{provider="antigravity"} or
-              provider_error reasons such as provider_auth_failed /
-              skill_missing. provider_executor_error names agy terminal
-              executor errors such as UNKNOWN (code 500) /
-              PlannerResponse without ModifiedResponse; provider_no_final_answer
-              names a normal-looking agy exit that produced tool activity but
-              no assistant final answer, and should be investigated as a
-              provider/runner terminal-classification incident rather than a UI
-              projection issue. transcript_event_source_unavailable /
-              transcript_event_source_error mean the local file-backed JSONL
-              event source failed; inspect
-              tank_antigravity_runner_transcript_event_source_total and the
-              antigravity-runner logs before blaming the frontend projection.
-
-        - alert: TankAntigravityTranscriptEventSourceFailure
-          expr: increase(tank_antigravity_runner_transcript_event_source_total{result=~"unavailable|error"}[15m]) > 0
-          for: 2m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Antigravity transcript event source failed"
-            runbook: |
-              The antigravity-runner could not watch agy's JSONL transcript
-              source, or the watcher errored while a turn was running. The
-              runner should fail the affected turn with provider_error reason
-              transcript_event_source_unavailable or
-              transcript_event_source_error instead of silently degrading live
-              updates. Inspect the session pod filesystem under
-              /home/node/.gemini/antigravity-cli/brain and the runner logs for
-              "antigravity transcript watcher".
-
-        - alert: TankAntigravitySkillMissing
-          expr: increase(tank_antigravity_runner_provider_error_total{reason="skill_missing"}[15m]) > 0
-          for: 2m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Antigravity received a skill turn but could not load the requested SKILL.md"
-            runbook: |
-              The session should mount tank-session-config at
-              /opt/tank/session-config and run install-tank-skills.sh before
-              antigravity-runner starts. Check the pod manifest volumeMounts,
-              /home/node/.gemini/skills/<skill>/SKILL.md, and the
-              tank-session-config ConfigMap's skills__common /
-              skills__antigravity entries.
 
         - alert: TankScheduledWakeupsOverdue
           expr: max_over_time(tank_scheduled_wakeups_due[15m]) > 0

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
@@ -80,7 +82,9 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 		Effort                string         `json:"effort"`
 		ContextWindowTokens   int64          `json:"context_window_tokens"`
 		ContextWindowSource   string         `json:"context_window_source"`
+		ProviderSessionID     string         `json:"provider_session_id"`
 		ProviderRateLimitInfo map[string]any `json:"provider_rate_limit_info"`
+		ProviderUsageSnapshot map[string]any `json:"provider_usage_snapshot"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
@@ -117,10 +121,6 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 	if effortInput != "" && effort == "" {
 		recordSessionRuntimeConfigUpdate(provider, "bad_request")
 		recordSessionRunConfigRejected("runtime_config", provider, "unsupported_effort")
-		if provider == "antigravity" {
-			writeError(w, http.StatusBadRequest, effortUnsupportedMessage(provider, "sessions"))
-			return
-		}
 		if provider == "codex" {
 			writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh")
 			return
@@ -169,6 +169,23 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 	} else {
 		recordSessionContextWindowReport(provider, body.ContextWindowSource, "ignored")
 	}
+	if providerSessionID := sanitizeProviderSessionID(body.ProviderSessionID); providerSessionID != "" {
+		updated, err = s.mgr.SetRuntimeProviderSessionID(r.Context(), caller.Email, sessionID, providerSessionID)
+		if err != nil {
+			if errors.Is(err, sessions.ErrNotFound) {
+				recordSessionRuntimeConfigUpdate(provider, "not_found")
+				writeError(w, http.StatusNotFound, "session not found")
+				return
+			}
+			recordSessionRuntimeConfigUpdate(provider, "update_failed")
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	} else if strings.TrimSpace(body.ProviderSessionID) != "" {
+		recordSessionRuntimeConfigUpdate(provider, "bad_request")
+		writeError(w, http.StatusBadRequest, "provider_session_id is invalid")
+		return
+	}
 	if rateLimitInfo := sanitizeProviderRateLimitInfo(body.ProviderRateLimitInfo); len(rateLimitInfo) > 0 {
 		updated, err = s.mgr.SetProviderRateLimitInfo(r.Context(), caller.Email, sessionID, rateLimitInfo)
 		if err != nil {
@@ -182,8 +199,43 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 			return
 		}
 	}
+	if len(body.ProviderUsageSnapshot) > 0 {
+		quotaProvider := providerQuotaProviderForMode(info.Mode)
+		rows := providerUsageEvidence(quotaProvider, timeNowRFC3339(), body.ProviderUsageSnapshot)
+		if len(rows) > 0 {
+			if err := s.upsertProviderQuotaSnapshots(r.Context(), s.providerQuotaScope(), rows, "claude_sdk_usage"); err != nil {
+				recordSessionRuntimeConfigUpdate(provider, "update_failed")
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
 	recordSessionRuntimeConfigUpdate(provider, "ok")
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func timeNowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func providerQuotaProviderForMode(mode string) string {
+	normalized := sessionmodel.NormalizeSessionMode(mode)
+	switch normalized {
+	case sessionmodel.ClaudeSecondaryCLIMode, sessionmodel.ClaudeSecondaryGUIMode, sessionmodel.ClaudeSecondaryConfigMode:
+		return "anthropic_secondary"
+	case sessionmodel.CodexCLIMode, sessionmodel.CodexGUIMode, sessionmodel.CodexExecGUIMode, sessionmodel.CodexAppServerMode, sessionmodel.CodexConfigMode:
+		return "codex"
+	default:
+		return "anthropic"
+	}
+}
+
+func sanitizeProviderSessionID(input string) string {
+	value := strings.TrimSpace(input)
+	if value == "" || !providerSessionIDPattern.MatchString(value) {
+		return ""
+	}
+	return value
 }
 
 func sanitizeProviderRateLimitInfo(input map[string]any) map[string]any {

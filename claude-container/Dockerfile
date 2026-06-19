@@ -51,9 +51,7 @@ FROM node:20-alpine
 ARG TARGETARCH=amd64
 ARG TANK_AGENT=claude
 
-# Baseline interactive-session tool surface shared by Claude, Codex, and
-# Antigravity. The install script stays distro-specific so this Alpine image
-# can share policy with Antigravity's Debian/glibc image without sharing a base.
+# Baseline interactive-session tool surface shared by Claude and Codex.
 COPY session-images /opt/tank/session-images
 RUN TARGETARCH="${TARGETARCH}" sh /opt/tank/session-images/install-common-alpine.sh
 ENV PATH="/usr/local/go/bin:${PATH}"

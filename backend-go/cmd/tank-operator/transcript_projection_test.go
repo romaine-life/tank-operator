@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -140,6 +141,51 @@ func TestProjectTranscriptEventsClaimedTurnAdvancesActiveShell(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsPreservesSubmittedSourceOnTurnShell(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "Break-glass approval granted.",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{
+			"status": "submitted",
+			"source": string(conversation.TurnSubmittedSourceBreakGlassApproval),
+		}),
+		projectionTestEvent("tool-start", "003", "item.started", "tool", "codex", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind":    "command_execution",
+			"command": "request_git_break_glass",
+		}),
+		projectionTestEvent("tool-done", "004", "item.completed", "tool", "codex", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind":   "command_execution",
+			"output": "activated",
+		}),
+		projectionTestEvent("final", "005", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:final", map[string]any{
+			"kind": "message",
+			"text": "Break-glass tools are active.",
+		}),
+		projectionTestEvent("terminal", "006", "turn.completed", "runner", "codex", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:final")),
+	}
+
+	projection := projectTranscriptEvents(events)
+	var shell map[string]any
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "turn_activity" {
+			shell = entry
+			break
+		}
+	}
+	if shell == nil {
+		t.Fatalf("no turn_activity shell projected: %#v", projection.Entries)
+	}
+	if got, want := shell["submittedSource"], string(conversation.TurnSubmittedSourceBreakGlassApproval); got != want {
+		t.Fatalf("shell submittedSource = %v, want %q: %#v", got, want, shell)
+	}
+	activity, _ := shell["activity"].(map[string]any)
+	if got, want := activity["submittedSource"], string(conversation.TurnSubmittedSourceBreakGlassApproval); got != want {
+		t.Fatalf("activity submittedSource = %v, want %q: %#v", got, want, activity)
+	}
+}
+
 func TestProjectTranscriptEventsRecordsContextCompactedAsTurnActivity(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -254,6 +300,88 @@ func TestProjectTranscriptEventsCarriesUserAttachments(t *testing.T) {
 	}
 	if got := attachments[0]["absPath"]; got != "/workspace/screenshots/1.png" {
 		t.Fatalf("attachment absPath = %#v", got)
+	}
+}
+
+func TestProjectTranscriptEventsSurfacesPerTurnModel(t *testing.T) {
+	// The per-turn run config stamped on user_message.created (the model/effort
+	// the turn ran on) survives the projection onto the user-message entry, so
+	// the Turns surface can show which model answered each turn even after a
+	// mid-session re-pin — the composer chip only reflects the next turn.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do work",
+			"display": map[string]any{"kind": "plain"},
+			"model":   "claude-opus-4-8",
+			"effort":  "high",
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 1; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	msg := projection.Entries[0]
+	if msg["kind"] != "message" || msg["role"] != "user" {
+		t.Fatalf("entry[0] = %#v, want user message", msg)
+	}
+	if got, _ := msg["model"].(string); got != "claude-opus-4-8" {
+		t.Fatalf("user message model = %q, want claude-opus-4-8", got)
+	}
+	if got, _ := msg["effort"].(string); got != "high" {
+		t.Fatalf("user message effort = %q, want high", got)
+	}
+}
+
+func TestTurnActivityShellCarriesPerTurnModel(t *testing.T) {
+	// The per-turn model/effort is also copied onto the turn-activity shell —
+	// the reliable per-turn carrier the frontend reads when a turn-page
+	// deep-link loads the shell but not the full transcript.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do work",
+			"display": map[string]any{"kind": "plain"},
+			"model":   "claude-opus-4-8",
+			"effort":  "high",
+		}),
+		projectionTestEvent("tool-start", "002", "item.started", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":    "command_execution",
+			"command": "go test ./...",
+		}),
+		projectionTestEvent("tool-done", "003", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":   "command_execution",
+			"output": "ok",
+		}),
+		projectionTestEvent("final", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:msg-1", map[string]any{
+			"kind": "message",
+			"text": "done",
+		}),
+		projectionTestEvent("terminal", "005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:msg-1")),
+	}
+	projection := projectTranscriptEvents(events)
+	var shell map[string]any
+	for _, e := range projection.Entries {
+		if e["kind"] == "turn_activity" {
+			shell = e
+			break
+		}
+	}
+	if shell == nil {
+		t.Fatalf("no turn_activity shell projected: %#v", projection.Entries)
+	}
+	if got, _ := shell["model"].(string); got != "claude-opus-4-8" {
+		t.Fatalf("shell model = %q, want claude-opus-4-8", got)
+	}
+	if got, _ := shell["effort"].(string); got != "high" {
+		t.Fatalf("shell effort = %q, want high", got)
+	}
+	// The model also rides the activity summary — the carrier the frontend
+	// turn-summary normalizer preserves through the row-merge path.
+	activity, _ := shell["activity"].(map[string]any)
+	if activity == nil {
+		t.Fatalf("shell missing activity summary: %#v", shell)
+	}
+	if got, _ := activity["model"].(string); got != "claude-opus-4-8" {
+		t.Fatalf("shell activity model = %q, want claude-opus-4-8", got)
 	}
 }
 
@@ -513,6 +641,47 @@ func TestProjectTranscriptEventsKeepsSnapshotAndTerminalUsageDistinct(t *testing
 	}
 }
 
+func TestAnnotateProjectionTerminalScopesUsageToFinalAnswer(t *testing.T) {
+	usage := map[string]any{"input_tokens": float64(120), "output_tokens": float64(30)}
+	observation := map[string]any{"usage_source": "thread.tokenUsage.updated"}
+	terminal := turnTerminalProjection{
+		TurnID:           "turn-1",
+		Status:           "completed",
+		Usage:            usage,
+		UsageObservation: observation,
+		FinalAnswerIDs:   map[string]bool{"turn-1:item:answer": true},
+	}
+	progress := annotateProjectionTerminal(map[string]any{
+		"id":     "turn-1:item:progress",
+		"kind":   "message",
+		"role":   "assistant",
+		"turnId": "turn-1",
+	}, map[string]turnTerminalProjection{"turn-1": terminal})
+	if progress["turnUsage"] != nil {
+		t.Fatalf("progress row inherited terminal usage: %#v", progress)
+	}
+	tool := annotateProjectionTerminal(map[string]any{
+		"id":     "turn-1:item:tool",
+		"kind":   "tool",
+		"turnId": "turn-1",
+	}, map[string]turnTerminalProjection{"turn-1": terminal})
+	if tool["turnUsage"] != nil {
+		t.Fatalf("tool row inherited terminal usage: %#v", tool)
+	}
+	answer := annotateProjectionTerminal(map[string]any{
+		"id":     "turn-1:item:answer",
+		"kind":   "message",
+		"role":   "assistant",
+		"turnId": "turn-1",
+	}, map[string]turnTerminalProjection{"turn-1": terminal})
+	if got := answer["turnUsage"]; !reflect.DeepEqual(got, usage) {
+		t.Fatalf("final answer turnUsage = %#v, want %#v in %#v", got, usage, answer)
+	}
+	if got := answer["usageObservation"]; !reflect.DeepEqual(got, observation) {
+		t.Fatalf("final answer usageObservation = %#v, want %#v in %#v", got, observation, answer)
+	}
+}
+
 func TestProjectTranscriptEventsKeepsInterruptedTurnActivityOutOfMainTranscript(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -617,8 +786,11 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 		}),
 		projectionTestEvent("submitted", "001a", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
 		projectionTestEvent("invoke", "002", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
-			"provider_item_id": "toolu_ask",
-			"timeline_id":      "turn-1:item:tool-ask",
+			"provider_item_id":     "toolu_ask",
+			"timeline_id":          "turn-1:item:tool-ask",
+			"question_turn_id":     "turn-2",
+			"question_timeline_id": "turn-2:item:tool-ask",
+			"question_page":        1,
 			"questions": []any{
 				map[string]any{
 					"question":      "Which auth method?",
@@ -675,6 +847,34 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	}
 	if card == nil {
 		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
+	}
+	var invocation map[string]any
+	for _, body := range projection.ActivityBodies {
+		if body.TurnID != "turn-1" {
+			continue
+		}
+		for _, entry := range body.Entries {
+			if entry["toolName"] == "AskUserQuestion" {
+				invocation = entry
+				break
+			}
+		}
+	}
+	if invocation == nil {
+		t.Fatalf("expected AskUserQuestion invocation marker in asking turn body, got bodies: %#v", projection.ActivityBodies)
+	}
+	target, _ := invocation["questionTarget"].(map[string]any)
+	if target == nil {
+		t.Fatalf("invocation questionTarget missing: %#v", invocation)
+	}
+	if target["turnId"] != "turn-2" {
+		t.Errorf("questionTarget.turnId = %v, want turn-2", target["turnId"])
+	}
+	if target["timelineId"] != "turn-2:item:tool-ask" {
+		t.Errorf("questionTarget.timelineId = %v, want turn-2:item:tool-ask", target["timelineId"])
+	}
+	if target["page"] != 1 {
+		t.Errorf("questionTarget.page = %v, want 1", target["page"])
 	}
 	if got, want := len(projection.Entries), 4; got != want {
 		t.Fatalf("projected entries = %d, want user + asking turn shell + assistant question + question turn shell: %#v", got, projection.Entries)
@@ -1711,6 +1911,50 @@ func TestProjectTranscriptEventsHidesFailedBackgroundWakeContinuationFromMainTra
 	}
 }
 
+// TestProjectTranscriptEventsRendersTestProvisionThread proves the
+// test_provision.updated records project to top-level role:system messages with
+// distinct timeline_ids (so they append + group under one system avatar) and
+// that the terminal ready record carries a click-through action to the
+// test-environment URL.
+func TestProjectTranscriptEventsRendersTestProvisionThread(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("p1", "001", "test_provision.updated", "system", "tank", "", "test-provision:run-1:creating", map[string]any{
+			"kind": "test_provision", "run_id": "run-1", "phase": "creating", "severity": "info", "text": "Creating test slot.",
+		}),
+		projectionTestEvent("p2", "002", "test_provision.updated", "system", "tank", "", "test-provision:run-1:validating", map[string]any{
+			"kind": "test_provision", "run_id": "run-1", "phase": "validating", "severity": "info", "text": "Validating PR readiness…",
+		}),
+		projectionTestEvent("p3", "003", "test_provision.updated", "system", "tank", "", "test-provision:run-1:ready", map[string]any{
+			"kind": "test_provision", "run_id": "run-1", "phase": "ready", "severity": "info",
+			"text": "Test environment ready at https://slot-1.example/", "url": "https://slot-1.example/",
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	var msgs []map[string]any
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "message" && entry["role"] == "system" {
+			msgs = append(msgs, entry)
+		}
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("projected system messages = %d, want 3: %#v", len(msgs), projection.Entries)
+	}
+	wantIDs := []string{"test-provision:run-1:creating", "test-provision:run-1:validating", "test-provision:run-1:ready"}
+	for i, want := range wantIDs {
+		if got, _ := msgs[i]["id"].(string); got != want {
+			t.Fatalf("message[%d] id=%q, want %q", i, got, want)
+		}
+	}
+	action, ok := msgs[2]["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("ready message should carry an action: %#v", msgs[2])
+	}
+	if href, _ := action["href"].(string); href != "https://slot-1.example/" {
+		t.Fatalf("ready action href=%q, want the test-environment URL", href)
+	}
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,
@@ -1745,66 +1989,6 @@ func projectionFinalAnswerPayload(timelineIDs ...string) map[string]any {
 	}
 }
 
-// TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn pins
-// the antigravity self-continuation fold (tank-operator#1035, session 790's
-// exact shape): agy set a timer, the turn parked, agy self-continued, and the
-// backend authored a turn_bgtask-<task> relay turn with
-// source=agent-continuation and NO user message. Pre-#1035 the relay rendered
-// as a standalone turn because (a) the antigravity runner never published the
-// durable shell_task parent edge and (b) isBackgroundTaskWakeTurnEvent only
-// recognized source=background-task.
-func TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn(t *testing.T) {
-	taskID := "1f207f17-task-3"
-	wakeTurnID := "turn_bgtask-" + taskID
-	events := []map[string]any{
-		projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
-			"text": "set a 5 second timer and wait for it",
-		}),
-		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
-		projectionTestEvent("task-started", "003", "shell_task.started", "tool", "antigravity", "turn-1", "turn-1:shell_task:"+taskID, map[string]any{
-			"kind": "shell_task", "task_id": taskID, "status": "running", "summary": "5 second timer", "last_tool_name": "agy",
-		}),
-		projectionTestEvent("parked-final", "004", "item.completed", "assistant", "antigravity", "turn-1", "turn-1:item:waiting", map[string]any{
-			"kind": "message", "text": "I have set a 5-second timer.",
-		}),
-		projectionTestEvent("turn-terminal", "005", "turn.completed", "runner", "antigravity", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:waiting")),
-		projectionTestEvent("task-exited", "006", "shell_task.exited", "tool", "antigravity", "turn-1", "turn-1:shell_task:"+taskID, map[string]any{
-			"kind": "shell_task", "task_id": taskID, "status": "completed", "summary": "timer fired", "last_tool_name": "agy",
-		}),
-		projectionTestEvent("relay-submitted", "007", "turn.submitted", "runner", "tank", wakeTurnID, "", map[string]any{
-			"status": "submitted", "source": "agent-continuation", "task_id": taskID,
-		}),
-		projectionTestEvent("relay-final", "008", "item.completed", "assistant", "antigravity", wakeTurnID, wakeTurnID+":item:final", map[string]any{
-			"kind": "message", "text": "The 5-second timer has finished.",
-		}),
-		projectionTestEvent("relay-terminal", "009", "turn.completed", "runner", "antigravity", wakeTurnID, "", projectionFinalAnswerPayload(wakeTurnID+":item:final")),
-	}
-
-	projection := projectTranscriptEvents(events)
-	// user message, parked origin shell, folded relay final answer.
-	if got, want := len(projection.Entries), 3; got != want {
-		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
-	}
-	if got := transcriptMapString(projection.Entries[1], "kind"); got != "turn_activity" {
-		t.Fatalf("second entry kind = %q, want parked origin shell: %#v", got, projection.Entries[1])
-	}
-	if got, want := transcriptMapString(projection.Entries[2], "turnId"), "turn-1"; got != want {
-		t.Fatalf("relay final projected turnId = %q, want originating %q: %#v", got, want, projection.Entries[2])
-	}
-	if got, want := transcriptMapString(projection.Entries[2], "backendTurnId"), wakeTurnID; got != want {
-		t.Fatalf("relay final backendTurnId = %q, want relay turn %q: %#v", got, want, projection.Entries[2])
-	}
-	if _, ok := projection.ActivityBodies[wakeTurnID]; ok {
-		t.Fatalf("agent-continuation relay must not surface as a standalone turn: %#v", projection.ActivityBodies)
-	}
-	if _, ok := projection.ActivityBodies["turn-1"]; !ok {
-		t.Fatalf("originating turn body missing after fold: %#v", projection.ActivityBodies)
-	}
-}
-
-// isBackgroundWakeChip matches the wake/continuation boundary META chip: the
-// agent-directed prompt lives on payload.prompt (audit detail), never as
-// user-bubble text.
 func isBackgroundWakeChip(entry map[string]any, wantPrompt string) bool {
 	if transcriptMapString(entry, "metaKind") != "background_task_wake" {
 		return false

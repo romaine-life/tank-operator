@@ -24,8 +24,7 @@
 // terminal would have resolved never appears here. A streaming row is
 // suspicion, not a verdict — a single long quiet tool call can
 // legitimately exceed the threshold; inspect the listed session_id's
-// runner logs, its session_events tail, and (for antigravity) the
-// runner's turn-settle metrics to localize the cause.
+// runner logs and its session_events tail to localize the cause.
 //
 // Auth: Tank admin power required. Emits a structured slog audit line
 // per call.
@@ -215,9 +214,8 @@ This pairs with the TankSessionStuckInProgress alert. A row here means
 the runner did NOT fail the turn itself — a fully-wedged or crashed
 runner that can emit nothing, a stall class the runner cannot see, or
 a wedged turn boundary. To localize the cause for a listed session_id,
-read that session's runner logs, its session_events tail
-(last_event_at is the staleness anchor for streaming rows), and for
-antigravity the runner's turn-settle metrics. Each row carries
+read that session's runner logs and its session_events tail
+(last_event_at is the staleness anchor for streaming rows). Each row carries
 stuck_seconds and the last provider_rate_limit_status the runner
 reported, if any.
 

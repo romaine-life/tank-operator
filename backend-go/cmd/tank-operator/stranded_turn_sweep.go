@@ -169,16 +169,15 @@ func (s *appServer) processStrandedTurns(ctx context.Context, now time.Time) err
 }
 
 // strandedTurnReason picks the terminal reason: continuation turns
-// (background-task wakes, scheduled wakeups, agent continuations) get the
-// away-error reason so the sidebar rings the summon bell — the agent promised
-// to resume while the user was away and the resume silently died — while
-// ordinary user turns fail plainly.
+// (background-task wakes, scheduled wakeups) get the away-error reason so the
+// sidebar rings the summon bell — the agent promised to resume while the user
+// was away and the resume silently died — while ordinary user turns fail
+// plainly.
 func strandedTurnReason(row store.StrandedTurn) string {
 	source := strings.TrimSpace(row.Source)
 	if isBackgroundWakeTurnID(strings.TrimSpace(row.TurnID)) ||
 		source == string(conversation.TurnSubmittedSourceBackgroundTask) ||
-		source == string(conversation.TurnSubmittedSourceScheduleWakeup) ||
-		source == string(conversation.TurnSubmittedSourceAgentContinuation) {
+		source == string(conversation.TurnSubmittedSourceScheduleWakeup) {
 		return sessionactivity.AwayErrorReasonStrandedContinuation
 	}
 	if row.Progressed {

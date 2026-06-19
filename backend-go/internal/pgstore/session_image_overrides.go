@@ -16,22 +16,21 @@ import (
 // It exists so a Glimmung test slot can be pointed at a branch-built session
 // image without a full chart rollout: the slot's orchestrator reads the row
 // for its own scope at session-create time and stamps the override instead of
-// the chart-pinned SESSION_IMAGE / CODEX_SESSION_IMAGE /
-// ANTIGRAVITY_SESSION_IMAGE. Production (the "default" scope) is never
+// the chart-pinned SESSION_IMAGE / CODEX_SESSION_IMAGE. Production (the
+// "default" scope) is never
 // overridden — the write path refuses it and the
 // resolver is only wired in test-env orchestrators.
 //
-// Empty ClaudeImage / CodexImage / AntigravityImage mean "no override for that
-// runner family — fall back to the orchestrator's configured image for that
-// family." A repoint may set one or more.
+// Empty ClaudeImage / CodexImage mean "no override for that runner family —
+// fall back to the orchestrator's configured image for that family." A repoint
+// may set one or both.
 type SessionImageOverride struct {
-	SessionScope     string
-	ClaudeImage      string
-	CodexImage       string
-	AntigravityImage string
-	GitRef           string
-	SetBy            string
-	SetAt            time.Time
+	SessionScope string
+	ClaudeImage  string
+	CodexImage   string
+	GitRef       string
+	SetBy        string
+	SetAt        time.Time
 }
 
 // ErrSessionImageOverrideNotFound is returned by Get when no row exists for the
@@ -57,7 +56,6 @@ func (s *SessionImageOverrideStore) Get(ctx context.Context, scope string) (Sess
 		SELECT session_scope,
 			COALESCE(claude_image, ''),
 			COALESCE(codex_image, ''),
-			COALESCE(antigravity_image, ''),
 			COALESCE(git_ref, ''),
 			COALESCE(set_by, ''),
 			set_at
@@ -69,7 +67,6 @@ func (s *SessionImageOverrideStore) Get(ctx context.Context, scope string) (Sess
 		&o.SessionScope,
 		&o.ClaudeImage,
 		&o.CodexImage,
-		&o.AntigravityImage,
 		&o.GitRef,
 		&o.SetBy,
 		&o.SetAt,
@@ -89,13 +86,12 @@ func (s *SessionImageOverrideStore) Get(ctx context.Context, scope string) (Sess
 func (s *SessionImageOverrideStore) Upsert(ctx context.Context, o SessionImageOverride) error {
 	const q = `
 		INSERT INTO session_image_overrides (
-			session_scope, claude_image, codex_image, antigravity_image, git_ref, set_by, set_at
+			session_scope, claude_image, codex_image, git_ref, set_by, set_at
 		)
-		VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''), now())
+		VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), NULLIF($5, ''), now())
 		ON CONFLICT (session_scope) DO UPDATE SET
 			claude_image      = EXCLUDED.claude_image,
 			codex_image       = EXCLUDED.codex_image,
-			antigravity_image = EXCLUDED.antigravity_image,
 			git_ref           = EXCLUDED.git_ref,
 			set_by            = EXCLUDED.set_by,
 			set_at            = now()
@@ -106,7 +102,6 @@ func (s *SessionImageOverrideStore) Upsert(ctx context.Context, o SessionImageOv
 		strings.TrimSpace(o.SessionScope),
 		strings.TrimSpace(o.ClaudeImage),
 		strings.TrimSpace(o.CodexImage),
-		strings.TrimSpace(o.AntigravityImage),
 		strings.TrimSpace(o.GitRef),
 		strings.TrimSpace(o.SetBy),
 	)

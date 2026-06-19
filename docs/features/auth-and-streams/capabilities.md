@@ -52,7 +52,6 @@ Affected contracts:
 - Observability
 
 Contract impact:
-- `claude-api-proxy`, `codex-api-proxy`, and `antigravity-api-proxy` Envoy
   downstream listeners consume their cert-manager leaf Secrets through
   file-based SDS.
 - The mounted TLS Secret directory is watched at `/etc/envoy/tls`, matching

@@ -87,9 +87,8 @@ func TestDebugStuckTurnsJSONShape(t *testing.T) {
 				"provider_rate_limit_observed_at": "2026-06-06T19:01:41Z",
 			},
 			{
-				// Session 828's incident shape (tank-operator#1085).
 				"session_id":                      "828",
-				"mode":                            "antigravity_gui",
+				"mode":                            "codex_gui",
 				"phase":                           "streaming",
 				"activity_status":                 "streaming",
 				"active_turn_id":                  "turn_7fcfb58b",

@@ -48,6 +48,52 @@ Evidence:
   `scripts/check-removed-chat-runtime.mjs` guards against the retired
   `turn_<uuid>` route and the array-position label.
 
+## Durable turn directory
+
+Status: shipped
+
+Intent:
+The Turns selector lists every turn in a session — Turn 1..N — regardless of how
+far back the chat transcript window has paged. Before this, the selector was
+built from the bounded `/timeline` tail (~24 rows), so a session longer than the
+window showed a truncated turn list starting mid-session and the earliest turns
+were unreachable from the Turns view (the user could only reach them by paging
+the Chat tab back). The selectable turn set is now owned by the durable ledger,
+not by whatever transcript window the browser happens to have loaded.
+
+Affected contracts:
+- Transcript Navigation (primary — the selectable turn set)
+- Transcript (the directory returns `turn_activity` shells, the same projection
+  rows `/timeline` windows over)
+- Observability (directory list/size counters)
+
+Contract impact:
+- `GET /api/sessions/{id}/turns/directory` (and the public-share / admin-hidden
+  mirrors) returns the COMPLETE, submission-ordered set of `turn_activity`
+  shells, each stamped with its `session_turns.turn_number`. The browser builds
+  the Turns selector from this directory, never from `renderedEntries`; the live
+  window only overlays fresh status onto turns the directory already lists.
+- A turn is listable iff the directory lists it. A failed directory load shows a
+  retryable Turns error, never a silent fall-back to the loaded window.
+- Background-wake turns (`turn_bgtask-*`) carry no number and no own shell, so
+  the directory excludes them by construction (matching the projection's fold).
+- The directory is bounded by `TurnDirectoryMaxRows`; overflow keeps the newest
+  turns and sets `truncated`, surfaced in the UI and counted — never a silent cap.
+
+Evidence:
+- Backend: migration `0164` (partial index `session_transcript_rows_turn_directory`),
+  `SessionTranscriptRowStore.ListTurnDirectory`, `GET /turns/directory` on owner
+  / public-share / admin-hidden surfaces, `tank_turn_directory_list_total` +
+  `tank_turn_directory_size`, store integration tests (ordering, bgtask/non-shell
+  exclusion, cap-keeps-newest) and handler tests (complete set, empty,
+  truncation, auth, route precedence over `/turns/{number}`).
+- Frontend: `turnDirectoryEntries` load via `turnDirectoryRequestPathForPane`,
+  `turnViewItems` sourced from `mergeTurnDirectoryWithLiveShells(directory,
+  window)` instead of the window-derived builder call, new-turn refetch, Turns
+  loading/error/truncation states, `turn-directory-*` client telemetry,
+  `turnDirectory.test.ts`, and the `scripts/check-removed-chat-runtime.mjs` guard
+  blocking the window-derived selector.
+
 ## Deep-linkable turn activity pages
 
 Status: active
@@ -118,3 +164,78 @@ Evidence:
   new sessions; `SessionDataScreen` exposes the transcript action.
 - Tests: `appRoutes.test.ts`, `sessionSidebarNavigation.test.ts`,
   `sessionDataStatus.test.ts`, and `migrationPolicy.test.ts`.
+
+## Compact transcript pager
+
+Status: active
+
+Intent:
+On a phone-width viewport the desktop turn/page navigation (the 7-control stepper
+plus the combined turn/page `Select`) is too dense, so it collapses into a single
+always-present position button showing "Turn N · Page P". Tapping it opens the
+identical controls in a bottom sheet, so a reader on a compact screen keeps the
+same turn and page navigation a desktop reader has.
+
+Affected contracts:
+- Transcript Navigation (primary — the never-hidden page/turn affordance)
+- App Chrome (the run-pane chrome reflows on the compact shell)
+
+Contract impact:
+- This is the sanctioned compact form of the never-hidden Page/turn affordance:
+  on `useViewport().isCompact` (<= BP_COMPACT) `App.tsx` `RunTurnViewControls`
+  renders one `.run-turn-pager-compact-trigger` button that opens a bottom `Sheet`
+  (`side="bottom"`, `components/ui/sheet.tsx`) carrying the same controls fragment
+  and reusing `selectTurnAndPage`. The button is never omitted while a turn is
+  selected and renders disabled ("No turns") when there is none; navigating closes
+  the sheet. Desktop rendering is unchanged.
+
+Evidence:
+- `frontend/src/mobileShell.test.ts` pins the compact pager branch ("turn/page
+  pager collapses to a single sheet-backed button on compact"), the bottom-anchored
+  `Sheet` variant ("sheet primitive supports a bottom-anchored variant"), and the
+  disabled empty state ("compact pager stays present with no turns instead of
+  vanishing").
+
+## Strand-proof selected-turn activity load
+
+Status: active
+
+Intent:
+The Turns view's per-turn activity body ("Loading activity…") always resolves —
+it can never strand on a permanent spinner with no load in flight (the
+long-standing "dead refresh"). The body and the loader resolve the displayed
+turn through one shared function, and a level-triggered reconcile keeps a load
+running for whatever turn is on screen.
+
+Affected contracts:
+- Transcript Navigation (primary)
+- Observability (the stranded-vs-slow distinction and visible-pane gating)
+
+Contract impact:
+- The activity body renders the displayed turn — the routed/selected turn, or
+  the latest turn when the selected id is not in the loaded (windowed) directory.
+  The selected id legitimately diverges from the directory during deep-link /
+  refresh / route-number resolution, when `effectiveSelectedTurnId` holds the
+  unresolved id to keep the URL stable. Keying the load off that id (as the prior
+  fixes did) loaded an off-screen turn while the body showed the latest turn, so
+  the shown turn never loaded — the strand. The load now reconciles the displayed
+  turn, so it cannot diverge from what the body shows.
+- The reconcile is level-triggered: a Turns pane with a displayed, non-terminal,
+  not-loading turn always has a load running, closing the strand for every
+  selection path (gestures, live-run follow, deep-link match, route resolver,
+  default-latest) rather than wiring a load into each path. Terminal states
+  (loaded / error) stay terminal — no auto-retry hot loop.
+- The stranded / route-session-mismatch client telemetry is gated to the visible
+  routed pane, so hidden tabs-view panes stop inflating the alerts with
+  mismatches no user saw.
+
+Evidence:
+- `frontend/src/turnActivityLoadReconcile.ts` — the pure, truth-table-tested
+  `resolveDisplayedActivityTurn` (single source of truth for the displayed turn)
+  and `evaluateTurnActivityReconcile` (the level-triggered load/idle gate);
+  `turnActivityLoadReconcile.test.ts` pins the divergence case (an off-directory
+  selected id → the displayed latest turn is what reconciles a load) and the
+  strand-without-recovery regression guard.
+- `App.tsx` — `RunTurnActivityScreen` renders `resolveDisplayedActivityTurn`;
+  `ChatPane` reconciles the displayed turn's load, aligns the stuck watchdog and
+  keyboard refresh to it, and gates the stranded/mismatch telemetry on `visible`.

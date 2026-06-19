@@ -162,6 +162,8 @@ type fakeSessionTranscriptRowStore struct {
 	needsCalls      int
 	replaceSessions []string
 	maxEndOrderKey  string
+	directory       store.TurnDirectoryPage
+	directoryMax    int
 }
 
 func (s *fakeSessionTranscriptRowStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
@@ -200,6 +202,11 @@ func (s *fakeSessionTranscriptRowStore) ListLatest(_ context.Context, _ string, 
 func (s *fakeSessionTranscriptRowStore) ListOldest(_ context.Context, _ string, rows int) (store.TranscriptRowPage, error) {
 	s.oldestRows = rows
 	return s.pages["oldest"], nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ListTurnDirectory(_ context.Context, _ string, maxRows int) (store.TurnDirectoryPage, error) {
+	s.directoryMax = maxRows
+	return s.directory, nil
 }
 
 func (s *fakeSessionTranscriptRowStore) ListBefore(_ context.Context, _ string, beforeCursor string, rows int) (store.TranscriptRowPage, error) {
@@ -377,6 +384,77 @@ func TestHandleSessionTurnActivityResolvesTurnNumberSelector(t *testing.T) {
 	}
 }
 
+func TestHandleSessionTurnActivityStampsAskUserQuestionTargetTurnNumber(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+	app.turns = fakeSessionTurnStore{byTurnID: map[string]int64{
+		"turn-1": 1,
+		"turn-2": 2,
+	}}
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: []map[string]any{
+			projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+				"text": "go", "display": map[string]any{"kind": "plain"},
+			}),
+			projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+			projectionTestEvent("invoke", "00000003", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+				"provider_item_id": "toolu_ask",
+				"timeline_id":      "turn-1:item:ask",
+				"questions": []any{
+					map[string]any{"question": "Which path?"},
+				},
+			}),
+			projectionTestEvent("msg", "00000004", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+				"text":    "1. Which path?",
+				"display": map[string]any{"kind": "ask_user_question"},
+				"awaiting_input": map[string]any{
+					"asking_turn_id":       "turn-1",
+					"question_turn_id":     "turn-2",
+					"provider_item_id":     "toolu_ask",
+					"timeline_id":          "turn-2:item:ask",
+					"provider_timeline_id": "turn-1:item:ask",
+					"questions": []any{
+						map[string]any{"question": "Which path?"},
+					},
+				},
+			}),
+		}, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/turn-1/activity?page=1", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	entries, _ := body["entries"].([]any)
+	if len(entries) < 1 {
+		t.Fatalf("entries empty: %#v", body["entries"])
+	}
+	tool, _ := entries[0].(map[string]any)
+	if tool["toolName"] != "AskUserQuestion" {
+		t.Fatalf("first entry = %#v, want AskUserQuestion marker", tool)
+	}
+	target, _ := tool["questionTarget"].(map[string]any)
+	if target == nil {
+		t.Fatalf("questionTarget missing: %#v", tool)
+	}
+	if target["turnNumber"] != float64(2) {
+		t.Fatalf("questionTarget.turnNumber = %#v, want 2", target["turnNumber"])
+	}
+	if target["turnId"] != "turn-2" || target["timelineId"] != "turn-2:item:ask" || target["page"] != float64(1) {
+		t.Fatalf("questionTarget = %#v, want turn-2 page 1", target)
+	}
+}
+
 func TestHandleListSessionBackgroundTasksProjectsShellTaskLedger(t *testing.T) {
 	app := adminTestServer(t)
 	app.sessionScope = "default"
@@ -521,6 +599,67 @@ func TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation(t *testing.
 	}
 	if !foundWakeFinal {
 		t.Fatalf("activity entries missing wake final message: %#v", entries)
+	}
+}
+
+func TestHandleSessionTurnActivityProjectsBackgroundWakePromptContext(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+
+	const wakePrompt = "A background task you started earlier has finished while this session was idle.\n\nTask id: task-ci\nFinal status: completed\n\nReview the task output and continue."
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "00000001", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{
+			"status":  "submitted",
+			"source":  "background-task",
+			"task_id": "task-ci",
+			"prompt":  wakePrompt,
+		}),
+		projectionTestEvent("wake-final", "00000002", "item.completed", "assistant", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:final", map[string]any{
+			"kind": "message",
+			"text": "CI passed. The branch is ready.",
+		}),
+		projectionTestEvent("wake-terminal", "00000003", "turn.completed", "runner", "claude", "turn_bgtask-task-ci", "", projectionFinalAnswerPayload("turn_bgtask-task-ci:item:final")),
+	}
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: events, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/turn_bgtask-task-ci/activity", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn_bgtask-task-ci")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	contextEntry, _ := body["turn_context"].(map[string]any)
+	if contextEntry == nil {
+		t.Fatalf("turn_context missing from response: %s", res.Body.String())
+	}
+	if got := contextEntry["text"]; got != wakePrompt {
+		t.Fatalf("turn_context.text = %#v, want wake prompt: %#v", got, contextEntry)
+	}
+	if got := contextEntry["role"]; got != "user" {
+		t.Fatalf("turn_context.role = %#v, want user: %#v", got, contextEntry)
+	}
+	if got := contextEntry["authorKind"]; got != "system" {
+		t.Fatalf("turn_context.authorKind = %#v, want system: %#v", got, contextEntry)
+	}
+	if got := contextEntry["turnContextSource"]; got != "background-task" {
+		t.Fatalf("turn_context.turnContextSource = %#v, want background-task: %#v", got, contextEntry)
+	}
+	entries, _ := body["entries"].([]any)
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		if entry["kind"] == "message" && entry["role"] == "user" && entry["text"] == wakePrompt {
+			t.Fatalf("wake prompt duplicated into activity entries: %#v", entries)
+		}
 	}
 }
 

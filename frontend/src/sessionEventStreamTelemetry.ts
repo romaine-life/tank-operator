@@ -34,9 +34,19 @@ export type SessionEventStreamMetricName =
   | "turn_activity_load_failed"
   | "turn_activity_load_timed_out"
   | "turn_activity_load_stale"
+  // Behavior-free watchdog: the activity body stayed on "Loading activity..."
+  // past the stuck threshold. `_unloaded` = no load ever started (the strand);
+  // `_loading` = a load was in the loading state past the threshold (slow/hung).
+  | "turn_activity_stuck_unloaded"
+  | "turn_activity_stuck_loading"
   | "turn_activity_refresh_failed"
   | "turn_activity_refresh_gave_up"
   | "turn_activity_refresh_recovered"
+  // The pending needs_input turn's activity loaded but surfaced no answerable
+  // question — the inline question widget would render nothing, so the user
+  // cannot see or answer the question. A user-trust failure the inline-question
+  // surface introduces (the question used to be reachable only from Turns).
+  | "turn_activity_needs_input_no_inline_card"
   | "turn_activity_collapse_applied"
   | "turn_activity_collapse_projection_mismatch"
   | "turn_number_unavailable_target"

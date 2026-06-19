@@ -273,6 +273,15 @@ var (
 		Help:    "Number of pages a turn-activity projection split into (sealed at turnPageEventLimit events).",
 		Buckets: []float64{1, 2, 3, 5, 10, 25, 50},
 	})
+	turnDirectoryListTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_turn_directory_list_total",
+		Help: "Durable turn-directory (GET /turns/directory) responses, labeled by bounded result (ok / truncated / error). The directory is what lets the Turns selector list every turn independent of the /timeline window; truncated means a session exceeded TurnDirectoryMaxRows and the oldest shells were elided.",
+	}, []string{"result"})
+	turnDirectorySize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_turn_directory_size",
+		Help:    "Number of turns returned in one durable turn-directory response. Observes the live per-session turn-count distribution so the TurnDirectoryMaxRows cap can be revisited (with cursor paging) before it bites.",
+		Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000},
+	})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -515,6 +524,21 @@ func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
 }
 
+// azureGrantActivatedTotal counts the orchestrator's POSTs to mcp-azure-personal
+// /internal/grant-activated on azure break-glass grant activation (the live
+// tools/list_changed surfacing trigger). result: ok | error.
+var azureGrantActivatedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_azure_grant_activated_total",
+		Help: "Outcomes of the orchestrator POST to mcp-azure-personal /internal/grant-activated on azure break-glass grant activation.",
+	},
+	[]string{"result"},
+)
+
+func recordAzureGrantActivated(result string) {
+	azureGrantActivatedTotal.WithLabelValues(result).Inc()
+}
+
 // sessionImageOverrideAppliedTotal counts NEW session pods stamped with a
 // test-slot session-image override instead of the chart-pinned image, by scope
 // and runner family. This is the user-trust signal for the "did new sessions
@@ -567,6 +591,107 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	},
 	[]string{"count_bucket"},
 )
+
+// spawnedSessionLinkTotal counts attempts to record a parent→child edge on
+// the origin session's row when an agent spawns a session, so the
+// session-bar "spawned sessions" chip can link to it. result=ok|error.
+// Bounded (2 series). The notice is best-effort and never fails the spawn;
+// a rising error rate means parents are silently losing child links (the
+// append write is failing) — a user-trust regression worth alerting on,
+// per docs/observability.md.
+var spawnedSessionLinkTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_spawn_link_total",
+		Help: "Parent→child spawned-session edge writes onto the origin session row, by result.",
+	},
+	[]string{"result"},
+)
+
+// sessionReorderTotal counts PUT /api/sessions/order outcomes. result=ok|conflict|error.
+// Bounded (3 series). conflict is the benign stale-tab permutation rejection
+// (the SPA refreshes and retries); a nonzero error rate means the durable
+// reorder write is failing — exactly the class of silent breakage that shipped
+// the 42P18 500 on every drag, invisible until pulled from the generic 5xx log.
+var sessionReorderTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_reorder_total",
+		Help: "Sidebar reorder (PUT /api/sessions/order) outcomes, by bounded result.",
+	},
+	[]string{"result"},
+)
+
+func recordSessionReorder(result string) {
+	switch result {
+	case "ok", "conflict", "error":
+	default:
+		result = "error"
+	}
+	sessionReorderTotal.WithLabelValues(result).Inc()
+}
+
+// sessionNestUpdateTotal counts manual drag-to-nest / un-nest writes to a
+// session's parent_session_id (PUT /api/sessions/{id}/parent). action=nest|unnest,
+// result=ok|rejected|error. Bounded (6 series). rejected is a guard refusal
+// (self-parent, cycle, or missing/cross-scope target — the durable tree stays
+// acyclic and one tier); error means the durable write or row republish failed.
+var sessionNestUpdateTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_nest_update_total",
+		Help: "Manual session nest/un-nest writes to parent_session_id, by action and bounded result.",
+	},
+	[]string{"action", "result"},
+)
+
+func recordSessionNestUpdate(action, result string) {
+	switch action {
+	case "nest", "unnest":
+	default:
+		action = "nest"
+	}
+	switch result {
+	case "ok", "rejected", "error":
+	default:
+		result = "error"
+	}
+	sessionNestUpdateTotal.WithLabelValues(action, result).Inc()
+}
+
+// orchestrateLaunchTotal counts attempts to turn a GUI chat session into a
+// spoke-fleet hub via POST /api/sessions/{id}/orchestrate, by bounded result.
+// "ok" is a launched hub; the rejection labels make the human-owner gate,
+// SDK-chat-hub gate, and spoke-config validation contract visible, and
+// "grant_error"/"kickoff_error"/"store_error"/"store_unavailable" surface the
+// partial-failure modes of the persist→self-grant→kickoff sequence.
+var orchestrateLaunchTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_orchestrate_launch_total",
+		Help: "Orchestrate hub launch attempts, labeled by bounded result.",
+	},
+	[]string{"result"},
+)
+
+func recordOrchestrateLaunch(result string) {
+	orchestrateLaunchTotal.WithLabelValues(orchestrateLaunchResultLabel(result)).Inc()
+}
+
+// orchestrateLaunchResultLabel bounds the result label cardinality to the known
+// outcomes so an unexpected string can't explode the time series.
+func orchestrateLaunchResultLabel(result string) string {
+	switch result {
+	case "ok",
+		"service_rejected",
+		"not_owner",
+		"not_hub_mode",
+		"invalid_spoke_config",
+		"store_unavailable",
+		"store_error",
+		"grant_error",
+		"kickoff_error":
+		return result
+	default:
+		return "other"
+	}
+}
 
 // pinnedReposUpdateTotal counts authenticated writes to the durable per-user
 // repo pin list. The bounded result label makes user-trust failures visible:
@@ -724,19 +849,6 @@ var backgroundTaskWakeRegisterTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
-// agentContinuationTotal counts the relay endpoint that opens a durable turn
-// boundary for a self-continuing antigravity session (agy fired its own task and
-// emitted the continuation; the runner asks the backend to author the turn it
-// then relays into). This is the antigravity peer of the background-task-wake
-// fire path — observability for "did agy's self-continuation get a durable turn?".
-var agentContinuationTotal = promauto.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "tank_agent_continuation_total",
-		Help: "Self-continuation relay turns opened by the orchestrator for self-managing agents (antigravity), labeled by provider and bounded result.",
-	},
-	[]string{"provider", "result"},
-)
-
 var backgroundTaskWakeFireTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_background_task_wake_fire_total",
@@ -785,6 +897,46 @@ var controlActionEventTotal = promauto.NewCounterVec(
 	[]string{"source_service", "source_tool", "action", "status", "result"},
 )
 
+// controlActionInternalWriteTotal records which authorized writer class reached
+// the internal session-scoped control-action write endpoint and whether it was
+// authorized. The two legitimate writers are a session pod writing its own
+// ledger (svc:tank:<id>) and the orchestrator control plane writing on behalf of
+// a governed merge (svc:tank-operator:<id>; docs/event-driven-rollout.md §E). A
+// rise in control_plane/forbidden is the signature of the governed-merge audit
+// regression this counter exists to surface.
+var controlActionInternalWriteTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_control_action_internal_write_total",
+		Help: "Internal session-scoped control-action ledger writes by authorized writer class and authorization outcome.",
+	},
+	[]string{"writer", "result"},
+)
+
+func recordControlActionInternalWrite(writer, result string) {
+	controlActionInternalWriteTotal.WithLabelValues(
+		controlActionWriterLabel(writer),
+		controlActionInternalWriteResultLabel(result),
+	).Inc()
+}
+
+func controlActionWriterLabel(writer string) string {
+	switch writer {
+	case "session_pod", "control_plane", "other":
+		return writer
+	default:
+		return "other"
+	}
+}
+
+func controlActionInternalWriteResultLabel(result string) string {
+	switch result {
+	case "authorized", "forbidden":
+		return result
+	default:
+		return "other"
+	}
+}
+
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
@@ -825,13 +977,6 @@ func recordBackgroundTaskWakeRegister(provider, result string) {
 	backgroundTaskWakeRegisterTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
 		backgroundTaskWakeRegisterResultLabel(result),
-	).Inc()
-}
-
-func recordAgentContinuation(provider, result string) {
-	agentContinuationTotal.WithLabelValues(
-		sessionRuntimeConfigProviderLabel(provider),
-		agentContinuationResultLabel(result),
 	).Inc()
 }
 
@@ -1145,7 +1290,7 @@ func avatarUploadResultLabel(result string) string {
 
 func sessionRuntimeConfigProviderLabel(provider string) string {
 	switch provider {
-	case "claude", "codex", "antigravity":
+	case "claude", "codex":
 		return provider
 	default:
 		return "unknown"
@@ -1208,7 +1353,6 @@ func scheduledWakeupFireResultLabel(result string) string {
 func backgroundTaskWakeRegisterResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error",
-		"rejected_antigravity",
 		// Register outcomes (pgstore.BackgroundTaskWakeRegisterOutcome): the
 		// generation machinery's decisions are first-class signals —
 		// "rearmed" measures how often a premature fire needed repair, and
@@ -1227,15 +1371,6 @@ func recordBackgroundTaskWakeCancel(result string) {
 func backgroundTaskWakeCancelResultLabel(result string) string {
 	switch result {
 	case "cancelled", "none_pending", "bad_request", "forbidden", "store_unavailable", "store_error":
-		return result
-	default:
-		return "other"
-	}
-}
-
-func agentContinuationResultLabel(result string) string {
-	switch result {
-	case "ok", "already_open", "bad_request", "forbidden", "not_found", "manager_unavailable", "enqueue_failed", "rejected_non_antigravity":
 		return result
 	default:
 		return "other"
@@ -1271,7 +1406,7 @@ func messageLinkShareResultLabel(result string) string {
 
 func controlActionSourceServiceLabel(sourceService string) string {
 	switch sourceService {
-	case "mcp-github", "mcp-tank-operator":
+	case "mcp-github", "mcp-tank-operator", "mcp-azure-personal", "tank-operator", "git":
 		return sourceService
 	default:
 		return "unknown"
@@ -1280,7 +1415,7 @@ func controlActionSourceServiceLabel(sourceService string) string {
 
 func controlActionSourceToolLabel(sourceTool string) string {
 	switch sourceTool {
-	case "merge_pull_request", "mark_pull_request_ready_for_review":
+	case "merge_pull_request", "merge_current_session_pr", "rename_current_session_pr", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_pr_lane", "create_pr_lane", "pr_lane_approval", "request_git_break_glass", "git_break_glass_approval", "break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare", "request_azure_break_glass", "azure_break_glass_approval", "azure_personal_mcp", "create_session", "test_slot_model_approval":
 		return sourceTool
 	default:
 		return "other"
@@ -1289,7 +1424,31 @@ func controlActionSourceToolLabel(sourceTool string) string {
 
 func controlActionActionLabel(action string) string {
 	switch action {
-	case "github.pull_request.merge", "github.pull_request.ready_for_review":
+	case "github.pull_request.merge",
+		"github.pull_request.rename",
+		"github.pull_request.update_body",
+		"github.pull_request.ready_for_review",
+		"github.pull_request.open",
+		"github.pull_request.mergeability",
+		"github.pr_lane.request",
+		"github.pr_lane.approve",
+		"github.pr_lane.deny",
+		"github.pr_lane.auto_approve",
+		"github.pr_lane.create",
+		"github.commit.write",
+		"github.commit.push",
+		"github.commit.ci",
+		"github.break_glass.request",
+		"github.break_glass.grant",
+		"github.break_glass.deny",
+		"github.break_glass.token",
+		"github.break_glass.push",
+		"azure.break_glass.request",
+		"azure.break_glass.grant",
+		"azure.break_glass.deny",
+		"azure.break_glass.use",
+		testSlotModelRequestAction,
+		testSlotModelGrantAction:
 		return action
 	default:
 		return "other"
@@ -1307,7 +1466,7 @@ func controlActionStatusLabel(status string) string {
 
 func controlActionResultLabel(result string) string {
 	switch result {
-	case "ok", "bad_request", "denied", "not_found", "store_unavailable", "store_error":
+	case "ok", "bad_request", "forbidden", "denied", "not_found", "store_unavailable", "store_error":
 		return result
 	default:
 		return "other"
@@ -1349,7 +1508,7 @@ func streamAuthTicketOperationLabel(operation string) string {
 
 func streamAuthTicketStreamLabel(stream string) string {
 	switch stream {
-	case streamKindSessionList, streamKindSessionEvents, streamKindPinnedRepos, streamKindFileRaw:
+	case streamKindSessionList, streamKindSessionEvents, streamKindOrchestration, streamKindPinnedRepos, streamKindFileRaw:
 		return stream
 	default:
 		return "unknown"
@@ -1736,6 +1895,20 @@ var (
 		[]string{"result"},
 	)
 
+	// adminDataBrowserReadsTotal is the volume + outcome signal for the
+	// admin-only read-only database browser (GET /api/admin/data/...).
+	// `surface` is table_list|rows; `result` is a bounded outcome. The
+	// browsed table name is deliberately NOT a label — it already rides the
+	// per-call audit slog line, and keeping it off the metric pins
+	// cardinality at surface×result.
+	adminDataBrowserReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_data_browser_reads_total",
+			Help: "Admin reads of the read-only data browser, labeled by bounded surface and result.",
+		},
+		[]string{"surface", "result"},
+	)
+
 	// conversationReadCursorStagnantTotal is the durable cross-check
 	// for the transcript navigation latch failure mode. Increments
 	// once per sample pass for every (session_mode, scope) tuple where
@@ -1800,6 +1973,31 @@ func recordDebugSessionEventLedgerRead(result string) {
 func debugSessionEventLedgerResultLabel(result string) string {
 	switch result {
 	case "ok", "empty", "bad_request", "forbidden", "store_error", "not_configured":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func recordAdminDataBrowserRead(surface, result string) {
+	adminDataBrowserReadsTotal.WithLabelValues(
+		adminDataBrowserSurfaceLabel(surface),
+		adminDataBrowserResultLabel(result),
+	).Inc()
+}
+
+func adminDataBrowserSurfaceLabel(surface string) string {
+	switch surface {
+	case "table_list", "rows":
+		return surface
+	default:
+		return "other"
+	}
+}
+
+func adminDataBrowserResultLabel(result string) string {
+	switch result {
+	case "ok", "empty", "bad_request", "forbidden", "not_found", "error", "not_configured":
 		return result
 	default:
 		return "other"
@@ -2071,6 +2269,17 @@ var (
 		Name: "tank_session_container_terminations_total",
 		Help: "Session pod container terminations observed by the K8s watch, labeled by bounded container, reason, and exit code.",
 	}, []string{"container", "reason", "exit_code"})
+	// sessionPodReapedTotal counts session pods the orchestrator actively
+	// deleted to STOP them (distinct from user/idle deletes): reason
+	// "provider_fatal" is a runner-reported unrecoverable session;
+	// "runner_crashloop" is the K8s-watch restart-budget backstop killing a
+	// still-looping pod the runner never classified. Each reap converts an
+	// unbounded CrashLoopBackOff into a terminal Failed session. Steady state is
+	// near zero; a sustained rate means runners are dying on boot/resume.
+	sessionPodReapedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_pod_reaped_total",
+		Help: "Session pods the orchestrator deleted to stop them, by reason (provider_fatal | runner_crashloop). Distinct from user/idle deletes; each reap ends a crash-loop with a terminal Failed session.",
+	}, []string{"reason"})
 	// sessionCompactionTotal counts durable context.compaction events recorded
 	// per session, labeled by provider (claude, codex, other) and trigger
 	// (auto, manual, other). It increments once per newly-observed compaction —
@@ -2126,10 +2335,23 @@ func (promK8sWatchMetrics) RecordContainerTermination(container, reason string, 
 	).Inc()
 }
 
+func (promK8sWatchMetrics) RecordPodReaped(reason string) {
+	sessionPodReapedTotal.WithLabelValues(boundedReapReason(reason)).Inc()
+}
+
+func boundedReapReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "provider_fatal":
+		return "provider_fatal"
+	case "runner_crashloop":
+		return "runner_crashloop"
+	default:
+		return "other"
+	}
+}
+
 func boundedSessionContainer(container string) string {
 	switch strings.TrimSpace(container) {
-	case "antigravity-runner":
-		return "antigravity-runner"
 	case "claude-runner":
 		return "claude-runner"
 	case "codex":
@@ -2361,17 +2583,17 @@ func recordSessionEventPersistTransientFailure() {
 
 func recordSessionRunConfigRejected(surface, provider, reason string) {
 	switch surface {
-	case "create", "turn", "runtime_config":
+	case "create", "turn", "runtime_config", "run_config_update", "orchestrate":
 	default:
 		surface = "other"
 	}
 	switch provider {
-	case "claude", "codex", "antigravity", "unknown":
+	case "claude", "codex", "unknown":
 	default:
 		provider = "other"
 	}
 	switch reason {
-	case "invalid_mode", "retired_mode", "unsupported_model", "unsupported_effort", "missing_model", "default_model":
+	case "invalid_mode", "retired_mode", "unsupported_model", "unsupported_effort", "missing_model", "default_model", "unsupported_provider":
 	default:
 		reason = "other"
 	}
@@ -2545,6 +2767,23 @@ func turnNumberResolveResultLabel(raw string) string {
 	default:
 		return "unknown"
 	}
+}
+
+func recordTurnDirectoryList(result string) {
+	turnDirectoryListTotal.WithLabelValues(turnDirectoryListResultLabel(result)).Inc()
+}
+
+func turnDirectoryListResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "truncated", "error":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
+}
+
+func recordTurnDirectorySize(size int) {
+	turnDirectorySize.Observe(float64(size))
 }
 
 func recordSessionBackgroundTasksList(result string) {

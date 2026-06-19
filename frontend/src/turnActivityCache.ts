@@ -11,13 +11,16 @@ function transcriptEntryTurnId(entry: TranscriptEntry): string {
 }
 
 function transcriptEntryRefreshCursor(entry: TranscriptEntry): string {
-  return (
-    entry.activity?.endOrderKey ??
-    entry.turnTerminalOrderKey ??
-    entry.orderKey ??
-    entry.id ??
-    ""
-  );
+  let cursor = "";
+  for (const candidate of [
+    entry.activity?.endOrderKey,
+    entry.turnTerminalOrderKey,
+    entry.contentOrderKey,
+    entry.orderKey,
+  ]) {
+    if (candidate && candidate > cursor) cursor = candidate;
+  }
+  return cursor || entry.id || "";
 }
 
 function isUserMessageEntry(entry: TranscriptEntry): boolean {

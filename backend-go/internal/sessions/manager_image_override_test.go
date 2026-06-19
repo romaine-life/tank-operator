@@ -9,28 +9,25 @@ import (
 )
 
 const (
-	pinnedClaude      = "romainecr.azurecr.io/claude-container:claude-PINNED"
-	pinnedCodex       = "romainecr.azurecr.io/codex-container:codex-PINNED"
-	pinnedAntigravity = "romainecr.azurecr.io/antigravity-container:antigravity-PINNED"
-	branchClaude      = "romainecr.azurecr.io/claude-container:claude-BRANCH"
-	branchCodex       = "romainecr.azurecr.io/codex-container:codex-BRANCH"
-	branchAntigravity = "romainecr.azurecr.io/antigravity-container:antigravity-BRANCH"
+	pinnedClaude = "romainecr.azurecr.io/claude-container:claude-PINNED"
+	pinnedCodex  = "romainecr.azurecr.io/codex-container:codex-PINNED"
+	branchClaude = "romainecr.azurecr.io/claude-container:claude-BRANCH"
+	branchCodex  = "romainecr.azurecr.io/codex-container:codex-BRANCH"
 )
 
 type fakeImageOverrides struct {
-	claude      string
-	codex       string
-	antigravity string
-	ok          bool
-	err         error
-	gotScope    string
-	calls       int
+	claude   string
+	codex    string
+	ok       bool
+	err      error
+	gotScope string
+	calls    int
 }
 
-func (f *fakeImageOverrides) Get(ctx context.Context, scope string) (string, string, string, bool, error) {
+func (f *fakeImageOverrides) Get(ctx context.Context, scope string) (string, string, bool, error) {
 	f.calls++
 	f.gotScope = scope
-	return f.claude, f.codex, f.antigravity, f.ok, f.err
+	return f.claude, f.codex, f.ok, f.err
 }
 
 func newOverrideManager(scope string, ov SessionImageOverrides, hook func(string, string, string)) *Manager {
@@ -39,9 +36,8 @@ func newOverrideManager(scope string, ov SessionImageOverrides, hook func(string
 		imageOverrides:         ov,
 		onImageOverrideApplied: hook,
 		manifestOpts: sessionmodel.ManifestOptions{
-			SessionImage:            pinnedClaude,
-			CodexSessionImage:       pinnedCodex,
-			AntigravitySessionImage: pinnedAntigravity,
+			SessionImage:      pinnedClaude,
+			CodexSessionImage: pinnedCodex,
 		},
 	}
 }
@@ -86,40 +82,18 @@ func TestApplyImageOverride_SlotClaudeMode(t *testing.T) {
 	}
 }
 
-// A slot-scope Antigravity session stamps the Antigravity override; the other
-// image families stay pinned.
-func TestApplyImageOverride_SlotAntigravityMode(t *testing.T) {
-	var applied []string
-	fake := &fakeImageOverrides{claude: branchClaude, codex: branchCodex, antigravity: branchAntigravity, ok: true}
-	m := newOverrideManager("tank-operator-slot-1", fake, func(scope, mode, kind string) {
-		applied = []string{scope, mode, kind}
-	})
-	opts := m.manifestOpts
-	m.applyImageOverride(context.Background(), &opts, sessionmodel.AntigravityGUIMode)
-
-	if opts.AntigravitySessionImage != branchAntigravity {
-		t.Fatalf("AntigravitySessionImage = %q, want %q", opts.AntigravitySessionImage, branchAntigravity)
-	}
-	if opts.SessionImage != pinnedClaude || opts.CodexSessionImage != pinnedCodex {
-		t.Fatalf("other images mutated: claude=%q codex=%q", opts.SessionImage, opts.CodexSessionImage)
-	}
-	if len(applied) != 3 || applied[2] != "antigravity" {
-		t.Fatalf("hook = %v, want [scope mode antigravity]", applied)
-	}
-}
-
 // PROD SAFETY: the production scope is never overridden, even if a row somehow
 // exists. The resolver must not even be consulted.
 func TestApplyImageOverride_ProdScopeNeverOverridden(t *testing.T) {
-	fake := &fakeImageOverrides{claude: branchClaude, codex: branchCodex, antigravity: branchAntigravity, ok: true}
+	fake := &fakeImageOverrides{claude: branchClaude, codex: branchCodex, ok: true}
 	m := newOverrideManager(defaultSessionScope, fake, func(string, string, string) {
 		t.Fatal("hook must not fire for the production scope")
 	})
 	opts := m.manifestOpts
 	m.applyImageOverride(context.Background(), &opts, sessionmodel.CodexGUIMode)
 
-	if opts.CodexSessionImage != pinnedCodex || opts.SessionImage != pinnedClaude || opts.AntigravitySessionImage != pinnedAntigravity {
-		t.Fatalf("prod images mutated: claude=%q codex=%q antigravity=%q", opts.SessionImage, opts.CodexSessionImage, opts.AntigravitySessionImage)
+	if opts.CodexSessionImage != pinnedCodex || opts.SessionImage != pinnedClaude {
+		t.Fatalf("prod images mutated: claude=%q codex=%q", opts.SessionImage, opts.CodexSessionImage)
 	}
 	if fake.calls != 0 {
 		t.Fatalf("resolver consulted %d times for prod scope, want 0", fake.calls)
@@ -132,8 +106,8 @@ func TestApplyImageOverride_NilResolverNoOp(t *testing.T) {
 	m := newOverrideManager("tank-operator-slot-1", nil, nil)
 	opts := m.manifestOpts
 	m.applyImageOverride(context.Background(), &opts, sessionmodel.CodexGUIMode)
-	if opts.CodexSessionImage != pinnedCodex || opts.SessionImage != pinnedClaude || opts.AntigravitySessionImage != pinnedAntigravity {
-		t.Fatalf("images mutated with nil resolver: claude=%q codex=%q antigravity=%q", opts.SessionImage, opts.CodexSessionImage, opts.AntigravitySessionImage)
+	if opts.CodexSessionImage != pinnedCodex || opts.SessionImage != pinnedClaude {
+		t.Fatalf("images mutated with nil resolver: claude=%q codex=%q", opts.SessionImage, opts.CodexSessionImage)
 	}
 }
 

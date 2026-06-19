@@ -2,13 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
@@ -132,13 +135,14 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	}
 
 	var body struct {
-		Mode            string         `json:"mode"`
-		Model           string         `json:"model,omitempty"`
-		Effort          string         `json:"effort,omitempty"`
-		GlimmungContext map[string]any `json:"glimmung_context"`
-		Name            *string        `json:"name,omitempty"`
-		Repos           []string       `json:"repos"`
-		Capabilities    []string       `json:"capabilities"`
+		Mode            string                           `json:"mode"`
+		Model           string                           `json:"model,omitempty"`
+		Effort          string                           `json:"effort,omitempty"`
+		GlimmungContext map[string]any                   `json:"glimmung_context"`
+		Name            *string                          `json:"name,omitempty"`
+		Repos           []string                         `json:"repos"`
+		Capabilities    []string                         `json:"capabilities"`
+		InitialTurn     *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
@@ -174,7 +178,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
-	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
+	capabilities, status, detail := validateServiceCreateSessionCapabilities(mode, body.Capabilities)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
@@ -182,6 +186,53 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	runConfig, status, detail := validateCreateRunConfig(mode, model, effort)
 	if status != 0 {
 		writeError(w, status, detail)
+		return
+	}
+	if approval, status, detail := s.requireTestSlotLowCostRunConfig(r.Context(), r, *user, mode, runConfig); status != 0 {
+		if approval != nil && approval.ApprovalURL != "" {
+			writeJSON(w, status, map[string]any{
+				"detail":        detail,
+				"approval_url":  approval.ApprovalURL,
+				"status":        "approval_required",
+				"session_scope": s.localSessionScope(),
+				"session_id":    approval.SessionID,
+				"mode":          approval.Mode,
+				"provider":      approval.Provider,
+				"model":         approval.Model,
+				"effort":        approval.Effort,
+				"low_model":     approval.LowModel,
+				"low_effort":    approval.LowEffort,
+				"request_id":    approval.EventID,
+			})
+			return
+		}
+		writeError(w, status, detail)
+		return
+	}
+	initialTurn, status, detail := validateCreateSessionInitialTurn(mode, body.InitialTurn)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
+	// Service-created GUI chat sessions are agent work, not empty workspaces:
+	// they must carry the first user turn at create time. There is no
+	// debug/operator exception for promptless GUI sessions; boot-only smoke
+	// tests must use non-GUI modes or a purpose-built fixture outside the
+	// normal transcript/session product.
+	if _, isGUIChatMode := sdkProviderForMode(mode); isGUIChatMode && body.InitialTurn == nil {
+		writeError(w, http.StatusBadRequest, "initial_turn.prompt is required for service-created GUI chat sessions")
+		return
+	}
+	if body.InitialTurn != nil && initialTurn.Deferred {
+		writeError(w, http.StatusBadRequest, "initial_turn.deferred is not supported for service-created sessions")
+		return
+	}
+	if body.InitialTurn != nil && s.sessionEvents == nil {
+		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
+		return
+	}
+	if body.InitialTurn != nil && s.sessionBus == nil {
+		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
 		return
 	}
 
@@ -192,6 +243,20 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	// row and the UI fell back to the short pod id. RequestedAt is left to
 	// default to now for a fresh service-principal-created session (there is
 	// no initial-turn timing to backdate here).
+	launchTurnAt := time.Time{}
+	requestedAt := ""
+	if body.InitialTurn != nil {
+		launchTurnAt = time.Now().UTC()
+		requestedAt = launchTurnAt.Add(2 * time.Millisecond).Format(time.RFC3339Nano)
+	}
+	// originSessionID is the spawning (origin) session from the
+	// X-Tank-Origin-Session-Id header the MCP proxy stamps on spawn_run_session
+	// /spawn_test_slot_session. Resolved BEFORE Create so it is stamped on the
+	// child row in the same create write (ParentSessionID below) — that is what
+	// lets the sidebar nest the child under its origin from the first
+	// snapshot/row-update instead of reflowing once the parent's
+	// spawned_sessions append lands. Empty for human/splash creates (no origin).
+	originSessionID := originSessionIDFromRequest(r, "")
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:           user.ActorEmail,
 		Mode:            mode,
@@ -201,12 +266,80 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		Capabilities:    capabilities,
 		Model:           runConfig.Model,
 		Effort:          runConfig.Effort,
+		RequestedAt:     requestedAt,
+		ParentSessionID: originSessionID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	var turnResp map[string]any
+	if body.InitialTurn != nil {
+		originSessionAvatarID := originSessionAvatarIDFromRequest(r, "")
+		turnResp, status, detail = s.enqueueSDKTurn(r.Context(), user.ActorEmail, info.ID, sdkTurnRequest{
+			ClientNonce:           initialTurn.ClientNonce,
+			RequireNonce:          true,
+			Prompt:                initialTurn.Prompt,
+			DisplayAttachments:    initialTurn.DisplayAttachments,
+			Model:                 runConfig.Model,
+			Effort:                runConfig.Effort,
+			PermissionMode:        initialTurn.PermissionMode,
+			SkillName:             initialTurn.SkillName,
+			FollowUp:              false,
+			AllowBeforeReady:      true,
+			SessionMode:           info.Mode,
+			CreatedAt:             launchTurnAt,
+			OrderBase:             launchTurnAt,
+			OriginSessionID:       originSessionID,
+			OriginSessionAvatarID: originSessionAvatarID,
+			AuthorKind:            authorKindForUser(*user),
+		})
+		if status != 0 {
+			s.rollbackCreatedSession(r.Context(), user.ActorEmail, info.ID, "submit service initial turn", detail)
+			writeError(w, status, detail)
+			return
+		}
+	}
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
+	// Record the parent→child edge on the calling (origin) session's row so
+	// its session-bar "spawned sessions" chip can link here. Best-effort:
+	// the child is already durably created, so a failed edge write must not
+	// fail the spawn. Gated on the origin header, so human/splash-page
+	// creates (no origin) record nothing. Covers spawn_run_session and
+	// spawn_test_slot_session — both land on this canonical create path. This
+	// is the parent-side, names+url chip lineage; the child-side nesting
+	// pointer was already stamped on the child row above (ParentSessionID).
+	if originSessionID != "" {
+		tankUIHost := strings.TrimRight(envDefault("TANK_UI_HOST", "https://tank.romaine.life"), "/")
+		ref := sessionmodel.SpawnedSessionRef{
+			ID:    info.ID,
+			Name:  info.Name,
+			Mode:  info.Mode,
+			Model: info.Model,
+			Repos: info.Repos,
+			URL:   tankUIHost + "/?session=" + info.ID,
+		}
+		if info.CreatedAt != nil {
+			ref.CreatedAt = *info.CreatedAt
+		}
+		if err := s.mgr.AppendSpawnedSession(r.Context(), user.ActorEmail, originSessionID, ref); err != nil {
+			slog.Warn("record spawned-session edge on origin failed",
+				"origin_session_id", originSessionID, "child_session_id", info.ID, "error", err)
+			spawnedSessionLinkTotal.WithLabelValues("error").Inc()
+		} else {
+			spawnedSessionLinkTotal.WithLabelValues("ok").Inc()
+		}
+	}
+	if turnResp != nil {
+		writeJSON(w, http.StatusCreated, struct {
+			sessions.Info
+			InitialTurn map[string]any `json:"initial_turn,omitempty"`
+		}{
+			Info:        info,
+			InitialTurn: turnResp,
+		})
+		return
+	}
 	writeJSON(w, http.StatusCreated, info)
 }
 

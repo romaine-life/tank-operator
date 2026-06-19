@@ -12,12 +12,12 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   AnchorHTMLAttributes,
   ClipboardEvent as ReactClipboardEvent,
   ComponentProps,
   CSSProperties,
-  DragEvent as ReactDragEvent,
   FocusEvent as ReactFocusEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -65,11 +65,16 @@ import {
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
+import { OrchestrationsDashboard } from "./OrchestrationsDashboard";
+import { AdminDataBrowser } from "./AdminDataBrowser";
+import { OrchestratePanel } from "./OrchestratePanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
 import { WorkspaceShell } from "./WorkspaceShell";
-import { useViewport } from "./useViewport";
+import { useFinePointer, useViewport } from "./useViewport";
+import { filesBodyClassName } from "./filesView";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
 import { KEYBOARD_SHORTCUTS } from "./keyboardShortcuts";
@@ -78,7 +83,12 @@ import {
   breadcrumbTrail,
   breadcrumbUpHref,
 } from "./breadcrumb";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
   buildHomeRouteUrl,
@@ -121,7 +131,9 @@ import {
   ChevronsRightIcon,
   ClipboardListIcon,
   Code2Icon,
+  CoinsIcon,
   CopyIcon,
+  DatabaseIcon,
   EllipsisVerticalIcon,
   FileDiffIcon,
   FileIcon,
@@ -135,6 +147,7 @@ import {
   GitPullRequestIcon,
   GlobeIcon,
   ImageIcon,
+  IndentDecreaseIcon,
   InfoIcon,
   LinkIcon,
   ListChecksIcon,
@@ -148,12 +161,14 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SettingsIcon,
+  ShieldAlertIcon,
   SquareTerminalIcon,
   SquareIcon,
   SquarePenIcon,
   TerminalIcon,
   TextQuoteIcon,
   TimerIcon,
+  Wand2Icon,
   WrenchIcon,
   XIcon,
   SaveIcon,
@@ -203,8 +218,19 @@ import {
   formatCompactTokens,
   formatComposerCostUsd,
   formatTurnCostUsd,
+  tokenUsageBreakdown,
   type SessionCostEstimate,
+  type TokenUsageBreakdown,
 } from "./sessionCostEstimate";
+import {
+  buildProviderQuotaSnapshots,
+  formatProviderQuotaTimestamp,
+  providerQuotaEvidenceFromPayload,
+  providerQuotaResetLabel,
+  providerQuotaSummary,
+  type ProviderQuotaEvidence,
+  type ProviderQuotaSnapshot,
+} from "./providerQuota";
 import {
   buildSessionDataStatusRows,
   type StatusTone,
@@ -224,12 +250,21 @@ import {
 import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
+  pendingBreakGlassRequests,
+  pendingPRLaneRequests,
+  type BreakGlassRequest,
   type ControlActionRow,
   type ControlActionStatus,
+  type PRLaneRequest,
 } from "./controlActions";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
 import { McpIcon } from "./McpIcon";
+import {
+  clearHomeRestrictedGitPreference,
+  readHomeRestrictedGitEnabled,
+  writeHomeRestrictedGitEnabled,
+} from "./homePreferences";
 import { RepoPicker } from "./components/RepoPicker";
 import {
   REPO_SUPPORTED_MODES,
@@ -256,14 +291,26 @@ import {
   PROVIDER_CONFIG_MODES,
   PROVIDER_INTERACTION_MODES,
   PROVIDERS,
+  RESTRICTED_GIT_CAPABILITY,
   ROLLOUT_MODES,
   SDK_CHAT_MODES,
+  SESSION_MODE_LABELS,
+  hasRestrictedGit,
+  interactionIconKind,
+  sessionModeLabel,
   isDefaultSessionMode,
   type DefaultSessionMode,
   type Provider,
   type SessionInteraction,
   type SessionMode,
 } from "./sessionModes";
+import {
+  startTestWorkflow,
+  fetchTestSlotStatus,
+  type TestSlotStatus,
+  type TestSlotPreflight,
+  type TestSlotWatch,
+} from "./testWorkflow";
 import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
@@ -279,6 +326,12 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import {
+  SOMETHING_ELSE_LABEL,
+  buildAskUserQuestionAnswerPayload,
+  effectiveAskUserQuestionSelection,
+  nextAskUserQuestionSelections,
+} from "./askUserQuestionSelection";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -287,6 +340,7 @@ import {
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
   shouldRingForActivityTransition,
+  type ConversationActivityStatus,
   type SessionActivitySummary,
 } from "./sessionActivity";
 import {
@@ -295,7 +349,13 @@ import {
   type SessionBugLabel,
   type SessionRow,
 } from "./sessionStore";
-import { decideFollowupSubmit } from "./submitLatch";
+import { arrangeSessionTree } from "./sessionTree";
+import { useSessionDrag, type DropDecision } from "./sessionDrag";
+import {
+  decideFollowupSubmit,
+  describeRunBlock,
+  type RunBlockDescription,
+} from "./submitLatch";
 import {
   insertThinkingGroupByDurableOrder,
   resolveThinkingInsertIndex,
@@ -340,11 +400,17 @@ import {
   turnActivityGroupIsActive,
   turnActivityShouldStartLoad,
   turnActivityShellIsDurablyActive,
+  turnActivityStuckEvent,
+  TURN_ACTIVITY_STUCK_THRESHOLD_MS,
   type TurnActivityLoadProblem,
   type TurnActivityLoadReason,
   type TurnActivityLoadSnapshot as TurnActivityLoadSnapshotModel,
   type TurnActivityLoadState as TurnActivityLoadStateModel,
 } from "./turnActivityState";
+import {
+  evaluateTurnActivityReconcile,
+  resolveDisplayedActivityTurn,
+} from "./turnActivityLoadReconcile";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import {
   AgentAvatarIcon,
@@ -376,6 +442,15 @@ import {
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
+import { isTranscriptMessageAvatarContinuation } from "./transcriptAvatarGrouping";
+import {
+  collectGlimmungRunsFromEntries,
+  type GlimmungRunLink,
+} from "./glimmungRuns";
+import {
+  normalizeSpawnedSessions,
+  type SpawnedSessionRef,
+} from "./spawnedSessions";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -388,6 +463,7 @@ const CliProcessTerminal = lazy(() =>
 const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
 const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
 const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
+const TURN_DIRECTORY_NEW_TURN_LOOP_THRESHOLD = 3;
 // Minimum spacing between resync_required-triggered full snapshot
 // refreshes on the session-list stream. Each full resync is a snapshot
 // GET plus a near-immediate stream reopen (ticket mint + auth), so a
@@ -422,8 +498,14 @@ type TurnActivitySummary = {
   startOrderKey?: string;
   endOrderKey?: string;
   sourceEventId?: string;
+  submittedSource?: string;
   turnUsage?: unknown;
   usageObservation?: unknown;
+  // The model/effort this turn ran on (carried on the shell's activity summary
+  // by the backend projection). Lets the Turns surface show each turn's model
+  // independent of the composer chip's next-turn selection.
+  model?: string;
+  effort?: string;
 };
 type TurnActivityCollapseSummary = {
   collapsible?: boolean;
@@ -441,6 +523,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   transcriptSource?: "server" | "realtime";
   sourceEventId?: string;
   orderKey?: string;
+  contentOrderKey?: string;
   activityEndOrderKey?: string;
   localOnly?: boolean;
   turnId?: string;
@@ -469,12 +552,24 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // session's system identity for these instead of the human owner's
   // Gravatar. originSessionId takes precedence when both are present.
   authorKind?: string;
+  // For user-role message entries: the model/effort this turn was submitted
+  // with (the run config the runner pinned for the turn), stamped by the
+  // backend submission projection. Lets the Turns surface show which model
+  // each turn ran on even after a mid-session model/effort re-pin — the
+  // composer chip only reflects the next turn's selected model.
+  model?: string;
+  effort?: string;
   // Server-projected rows that belong only to the Turns activity surface.
   // Background wake prompts intentionally use role=user + authorKind=system so
   // the renderer shows the existing system-user identity without surfacing the
   // row in the main transcript.
   turnOnly?: boolean;
   wakePrompt?: boolean;
+  // turnContextContinued marks a question turn's prompt context as a copy of the
+  // asking turn's triggering message. The Turns view labels it "Question prompt
+  // continued from previous turn" so the question stays fused to what produced it.
+  turnContextContinued?: boolean;
+  questionFinalAnswerContext?: boolean;
   backendTurnId?: string;
   turnDetailRole?: "final_answer";
   // metaKind specializes a meta-kind row into a distinguishable transcript
@@ -503,6 +598,9 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     timelineId: string;
     providerTimelineId?: string;
     questions: unknown[];
+    // ExitPlanMode plan-approval pauses carry the plan markdown; rendered on
+    // the question page above the Approve/Request-changes question.
+    plan?: string;
     questionCount: number;
     questionIndex?: number;
     questionSet?: number;
@@ -574,6 +672,19 @@ type TranscriptTimelineBody = {
   target_timeline_id?: string;
   target_cursor?: string;
 };
+// The durable turn directory: the COMPLETE, submission-ordered set of
+// turn_activity shells (server_turn_directory_v1). It owns the selectable turn
+// set for the Turns view, independent of the bounded /timeline window the chat
+// surface pages. `turns` are the same shell rows /timeline returns, so the SPA
+// reuses normalizeProjectedTranscriptEntries to build the selector.
+type TurnDirectoryBody = {
+  session_id?: string;
+  turns?: unknown[];
+  count?: number;
+  latest_turn_number?: number;
+  truncated?: boolean;
+};
+type TurnDirectoryStatus = "idle" | "loading" | "ready" | "error";
 type SdkHistoryRefreshSource =
   | "history"
   | "projected-refresh"
@@ -771,6 +882,7 @@ function appendQueryParam(path: string, key: string, value: string): string {
 interface Session {
   id: string;
   session_scope?: string;
+  read_only_hidden?: boolean;
   pod_name: string | null;
   owner: string;
   status: string;
@@ -789,6 +901,18 @@ interface Session {
   name: string;
   test_state?: TestState | null;
   rollout_state?: RolloutState | null;
+  // spoke_config is present when this session acts as an orchestration hub.
+  // Carries the provider/surface/model/effort used to launch the spoke.
+  spoke_config?: Record<string, unknown>;
+  // spawned_sessions is the durable parent→child lineage the session-bar
+  // "spawned sessions" chip lists (sessions this one spawned via
+  // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
+  spawned_sessions?: SpawnedSessionRef[];
+  // parent_session_id is the child→parent (origin) pointer that drives sidebar
+  // nesting: the id of the session that spawned this one, stamped on the child
+  // row at create. Absent when this session was not spawned. arrangeSessionTree
+  // reads this (not the parent's spawned_sessions) so a child is born nested.
+  parent_session_id?: string;
   // Activity is the chat-derived sidebar indicator block. Backend
   // hydrates this from the latest session.activity_changed lifecycle
   // event in GET /api/sessions; the session-list SSE stream then keeps the
@@ -818,6 +942,8 @@ interface Session {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string | null;
+  runtime_provider_session_id?: string;
+  runtime_provider_session_observed_at?: string | null;
   provider_rate_limit_info?: Record<string, unknown> | null;
   provider_rate_limit_observed_at?: string | null;
   // Durable count of context.compacted events for this session, projected from
@@ -848,23 +974,7 @@ interface RolloutState {
   active?: boolean;
 }
 
-const MODE_LABELS: Record<SessionMode, string> = {
-  api_key: "Claude API key",
-  claude_cli: "Claude CLI",
-  claude_gui: "Claude GUI",
-  config: "Claude config",
-  claude_secondary_cli: "Claude secondary CLI",
-  claude_secondary_gui: "Claude secondary GUI",
-  claude_secondary_config: "Claude secondary config",
-  codex_cli: "Codex CLI",
-  codex_gui: "Codex GUI",
-  codex_exec_gui: "Codex Legacy",
-  codex_app_server: "Codex App Server",
-  codex_config: "Codex config",
-  antigravity_config: "Antigravity config",
-  antigravity_cli: "Antigravity Legacy (-p)",
-  antigravity_gui: "Antigravity GUI",
-};
+const MODE_LABELS: Record<SessionMode, string> = SESSION_MODE_LABELS;
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
 // elsewhere.
@@ -881,9 +991,6 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
-  antigravity_config: "agy-cfg",
-  antigravity_cli: "agv-legacy",
-  antigravity_gui: "agy-gui",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -895,7 +1002,6 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
-  antigravity_gui: "antigravity",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = MODE_PROVIDERS;
@@ -911,56 +1017,6 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   anthropic_secondary: "Claude secondary",
   codex: "Codex",
-  antigravity: "Antigravity",
-};
-
-type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly";
-type ProviderQuotaStatus = "ok" | "low" | "exhausted" | "stale" | "unknown";
-
-interface ProviderQuotaWindow {
-  id: ProviderQuotaWindowId;
-  label: string;
-  shortLabel: string;
-  status: ProviderQuotaStatus;
-  percentRemaining: number | null;
-  resetAt: string | null;
-  observedAt: string | null;
-}
-
-interface ProviderQuotaSnapshot {
-  provider: Provider;
-  status: ProviderQuotaStatus;
-  observedAt: string | null;
-  windows: ProviderQuotaWindow[];
-}
-
-interface ProviderQuotaEvidence {
-  provider: Provider;
-  rateLimitType: string;
-  status?: string;
-  utilization?: number;
-  resetsAt?: string | number | null;
-  observedAt?: string | null;
-}
-
-const PROVIDER_QUOTA_WINDOW_DEFS: Record<
-  Provider,
-  Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>
-> = {
-  anthropic: [
-    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
-    { id: "weekly", label: "Weekly", shortLabel: "Week" },
-  ],
-  anthropic_secondary: [
-    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
-    { id: "weekly", label: "Weekly", shortLabel: "Week" },
-  ],
-  codex: [
-    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
-    { id: "weekly", label: "Weekly", shortLabel: "Week" },
-  ],
-  // No quota windows until the antigravity-runner reports usage evidence.
-  antigravity: [],
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -976,9 +1032,6 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_exec_gui: "Retired Codex exec GUI mode",
   codex_app_server: "Retired Codex app-server alias",
   codex_config: "codex login --device-auth · seeds KV for Codex",
-  antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
-  antigravity_cli: "Terminal agy session · Google login from KV",
-  antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1259,8 +1312,10 @@ const DEMO_LANDING_LINES = [
   "Sign in from the lower-left profile area when you want real pods.",
 ];
 
-const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
-const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
+const HOME_DRAFT_SESSION_MODE_KEY = "tank.homeDraftSessionMode.v1";
+const HOME_DRAFT_INTERACTION_KEY = "tank.homeDraftInteraction.v1";
+const DEFAULT_HOME_SESSION_MODE: DefaultSessionMode = "claude_gui";
+const DEFAULT_HOME_INTERACTION: SessionInteraction = "gui";
 const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
 
 function normalizeSessionMode(value: string | null): string | null {
@@ -1270,40 +1325,47 @@ function normalizeSessionMode(value: string | null): string | null {
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(
-      localStorage.getItem(DEFAULT_SESSION_MODE_KEY),
+      sessionStorage.getItem(HOME_DRAFT_SESSION_MODE_KEY),
     );
     if (stored === "codex_app_server" || stored === "codex_exec_gui") {
       return "codex_gui";
     }
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
-    // localStorage can be unavailable in hardened/private browser contexts.
+    // sessionStorage can be unavailable in hardened/private browser contexts.
   }
-  return "claude_gui";
+  return DEFAULT_HOME_SESSION_MODE;
 }
 
 function writeDefaultSessionMode(mode: DefaultSessionMode): void {
   try {
-    localStorage.setItem(DEFAULT_SESSION_MODE_KEY, mode);
+    sessionStorage.setItem(HOME_DRAFT_SESSION_MODE_KEY, mode);
   } catch {
-    // Preference persistence is best-effort; session creation should continue.
+    // Draft persistence is best-effort; session creation should continue.
   }
 }
 
 function readDefaultInteraction(): SessionInteraction {
   try {
-    const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
+    const stored = sessionStorage.getItem(HOME_DRAFT_INTERACTION_KEY);
     if (stored === "gui" || stored === "cli") return stored;
     if (stored === "terminal") return "cli";
   } catch {}
   // Derive from stored session mode when the interaction preference is absent.
   const mode = readDefaultSessionMode();
-  return CHAT_MODES.has(mode) ? "gui" : "cli";
+  return CHAT_MODES.has(mode) ? DEFAULT_HOME_INTERACTION : "cli";
 }
 
 function writeDefaultInteraction(interaction: SessionInteraction): void {
   try {
-    localStorage.setItem(DEFAULT_INTERACTION_KEY, interaction);
+    sessionStorage.setItem(HOME_DRAFT_INTERACTION_KEY, interaction);
+  } catch {}
+}
+
+function clearHomeDraftModePreference(): void {
+  try {
+    sessionStorage.removeItem(HOME_DRAFT_SESSION_MODE_KEY);
+    sessionStorage.removeItem(HOME_DRAFT_INTERACTION_KEY);
   } catch {}
 }
 
@@ -1422,6 +1484,7 @@ function normalizeSession(session: Session): Session {
     : null;
   const next = mode === session.mode ? { ...session } : { ...session, mode };
   next.session_scope = normalizeSessionScopeValue(session.session_scope);
+  next.read_only_hidden = session.read_only_hidden === true;
   next.activity = activity;
   // name is the server-canonical title and is required (non-empty) on the
   // wire. Defend against degraded/hand-rolled Session objects (tests, demo
@@ -1438,6 +1501,15 @@ function normalizeSession(session: Session): Session {
   // array so downstream renderers can `.map` without a guard.
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
+  next.spawned_sessions = Array.isArray(session.spawned_sessions)
+    ? session.spawned_sessions
+    : undefined;
+  next.spoke_config =
+    session.spoke_config != null &&
+    typeof session.spoke_config === "object" &&
+    !Array.isArray(session.spoke_config)
+      ? (session.spoke_config as Record<string, unknown>)
+      : undefined;
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter(
         (entry): entry is string => typeof entry === "string",
@@ -1474,6 +1546,14 @@ function normalizeSession(session: Session): Session {
     typeof session.runtime_context_window_observed_at === "string"
       ? session.runtime_context_window_observed_at
       : null;
+  next.runtime_provider_session_id =
+    typeof session.runtime_provider_session_id === "string"
+      ? session.runtime_provider_session_id
+      : "";
+  next.runtime_provider_session_observed_at =
+    typeof session.runtime_provider_session_observed_at === "string"
+      ? session.runtime_provider_session_observed_at
+      : null;
   next.provider_rate_limit_info = normalizeProviderRateLimitInfo(
     session.provider_rate_limit_info,
   );
@@ -1492,6 +1572,56 @@ function normalizeSession(session: Session): Session {
   return next;
 }
 
+function hiddenReadOnlySessionFromAdmin(
+  session: AdminHiddenSession,
+  sessionScope: string,
+): Session {
+  return normalizeSession({
+    id: session.session_id,
+    session_scope: sessionScope,
+    read_only_hidden: true,
+    pod_name: null,
+    owner: session.owner,
+    status: session.status || "Hidden",
+    mode: (normalizeSessionMode(session.mode) || "claude_gui") as SessionMode,
+    requested_at: null,
+    created_at: session.created_at || null,
+    ready_at: null,
+    name: session.name || session.session_id,
+    repos: [],
+    clone_state: null,
+    capabilities: [],
+    user_message_count: session.transcript_row_count,
+  });
+}
+
+function sessionIdentityKey(session: Pick<Session, "id" | "session_scope">): string {
+  return `${normalizeSessionScopeValue(session.session_scope)}\n${session.id}`;
+}
+
+function mergeHiddenReadOnlySessions(
+  base: Session[],
+  hiddenSessions: Session[],
+): Session[] {
+  if (hiddenSessions.length === 0) return base;
+  const baseKeys = new Set(base.map(sessionIdentityKey));
+  const hiddenOnly = hiddenSessions.filter(
+    (session) => !baseKeys.has(sessionIdentityKey(session)),
+  );
+  return hiddenOnly.length === 0 ? base : [...base, ...hiddenOnly];
+}
+
+function upsertHiddenReadOnlySession(
+  sessions: Session[],
+  hiddenSession: Session,
+): Session[] {
+  const key = sessionIdentityKey(hiddenSession);
+  const withoutExisting = sessions.filter(
+    (session) => sessionIdentityKey(session) !== key,
+  );
+  return [...withoutExisting, hiddenSession];
+}
+
 function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
   if (sessions.length < 2 || order.length === 0) return sessions;
   const rank = new Map(order.map((id, index) => [id, index]));
@@ -1503,21 +1633,6 @@ function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
     if (bRank == null) return -1;
     return aRank - bRank;
   });
-}
-
-function moveSessionId(
-  order: string[],
-  movedId: string,
-  targetId: string,
-): string[] {
-  if (movedId === targetId) return order;
-  const fromIndex = order.indexOf(movedId);
-  const toIndex = order.indexOf(targetId);
-  if (fromIndex < 0 || toIndex < 0) return order;
-  const next = [...order];
-  const [moved] = next.splice(fromIndex, 1);
-  next.splice(toIndex, 0, moved);
-  return next;
 }
 
 const SDK_TIMELINE_TAIL_ROWS = 24;
@@ -1645,10 +1760,54 @@ interface AdminAppVersion {
   app_image: AdminVersionImage;
   session_image: AdminVersionImage;
   codex_session_image: AdminVersionImage;
-  antigravity_session_image: AdminVersionImage;
   session_scope: string;
   pod_name?: string;
   fetched_at: string;
+}
+
+interface AdminHiddenSession {
+  owner: string;
+  session_id: string;
+  name: string;
+  mode: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  transcript_row_count: number;
+}
+
+interface AdminHiddenSessionsBody {
+  scope: string;
+  owner?: string;
+  sessions?: AdminHiddenSession[];
+}
+
+type AdminBreakGlassFilter = "pending" | "recent" | "all";
+
+interface AdminBreakGlassListItem {
+  pending?: boolean;
+  request: ControlActionRow;
+  decision?: ControlActionRow;
+}
+
+interface AdminBreakGlassListBody {
+  session_scope?: string;
+  status?: AdminBreakGlassFilter;
+  requests?: AdminBreakGlassListItem[];
+}
+
+type BreakGlassApprovalMenuKind = "github" | "azure" | "model" | "pr-lane";
+const BREAK_GLASS_BATCH_BUSY_ID = "__break_glass_batch__";
+
+interface BreakGlassApprovalMenuItem {
+  id: string;
+  kind: BreakGlassApprovalMenuKind;
+  href: string;
+  label: string;
+  target: string;
+  reason?: string;
+  createdAt?: string;
+  prLaneRequest?: PRLaneRequest;
 }
 
 interface TestSlotSessionDefaults {
@@ -1688,6 +1847,7 @@ interface AdminSettingsControls {
     defaults: TestSlotSessionDefaults,
   ) => Promise<void>;
   onAvatarCatalogChanged: () => Promise<void>;
+  onOpenHiddenSession: (session: AdminHiddenSession, sessionScope: string) => void;
   onViewingProdSessionsChange: (value: boolean) => void;
 }
 
@@ -1841,6 +2001,8 @@ function sessionRouteUrl(
   pageNumber?: number | null,
   filePath?: string | null,
   fileLine?: number | null,
+  breakGlassRequestId?: string | null,
+  testSlotModelRequestId?: string | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1851,6 +2013,8 @@ function sessionRouteUrl(
     pageNumber,
     filePath,
     fileLine,
+    breakGlassRequestId,
+    testSlotModelRequestId,
   );
 }
 
@@ -2043,6 +2207,71 @@ function sessionUrl(id: string): string {
   return sessionRouteUrl(id);
 }
 
+function breakGlassRequestUrl(sessionId: string, requestEventId: string): string {
+  return sessionRouteUrl(
+    sessionId,
+    "break-glass",
+    null,
+    null,
+    null,
+    null,
+    null,
+    requestEventId,
+  );
+}
+
+function testSlotModelRequestUrl(sessionId: string, requestEventId: string): string {
+  return sessionRouteUrl(
+    sessionId,
+    "test-slot-model",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    requestEventId,
+  );
+}
+
+function readBreakGlassRequestRoute(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.tab === "break-glass" && route.breakGlassRequestId) {
+    return route.breakGlassRequestId;
+  }
+  const params = new URLSearchParams(window.location.search);
+  return params.get("break_glass_request");
+}
+
+function readTestSlotModelRequestRoute(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.tab === "test-slot-model" && route.testSlotModelRequestId) {
+    return route.testSlotModelRequestId;
+  }
+  return null;
+}
+
+type BreakGlassRequestLookupResponse = {
+  request?: ControlActionRow;
+  decision?: ControlActionRow;
+};
+
+type TestSlotModelRequestLookupResponse = BreakGlassRequestLookupResponse;
+
+function approvalNotificationTurnId(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const notification = (body as Record<string, unknown>).agent_notification;
+  if (
+    !notification ||
+    typeof notification !== "object" ||
+    Array.isArray(notification)
+  )
+    return "";
+  const record = notification as Record<string, unknown>;
+  if (record.delivered !== true) return "";
+  return typeof record.turn_id === "string" ? record.turn_id.trim() : "";
+}
+
 // Deep link to a specific message inside a session. Read by
 // readInitialMessageId() on cold start so we can scroll the active
 // session's transcript to the referenced entry. Shape mirrors the
@@ -2107,7 +2336,24 @@ function sessionListDebugRow(session: Session): SessionListDebugRow {
 function sessionListDebugRows(
   sessions: readonly Session[],
 ): SessionListDebugRow[] {
-  return sessions.map(sessionListDebugRow);
+  // Enrich each row with its rendered nesting tier so a "my sub-session didn't
+  // nest" report is diagnosable from the capture. Computed from the same
+  // arrangement the sidebar renders, keyed by id back onto the input order.
+  const lineage = new Map<string, { parentId: string | null; depth: number }>();
+  for (const arranged of arrangeSessionTree(sessions)) {
+    lineage.set(arranged.session.id, {
+      parentId: arranged.parentId,
+      depth: arranged.depth,
+    });
+  }
+  return sessions.map((session) => {
+    const link = lineage.get(session.id);
+    return {
+      ...sessionListDebugRow(session),
+      parent_session_id: link?.parentId ?? null,
+      nest_depth: link?.depth ?? 0,
+    };
+  });
 }
 
 function selectTitleInputText(event: ReactFocusEvent<HTMLInputElement>): void {
@@ -2261,6 +2507,55 @@ function ComposerCostEstimate({
   );
 }
 
+type TokenUsageBadgeTone = "message" | "tool";
+
+export function TokenUsageBadge({
+  usage,
+  tone = "message",
+}: {
+  usage: unknown;
+  tone?: TokenUsageBadgeTone;
+}) {
+  const breakdown = tokenUsageBreakdown(usage);
+  if (!breakdown) return null;
+  const title = tokenUsageBadgeTitle(breakdown, tone);
+  return (
+    <span
+      className="run-token-usage-badge"
+      data-tone={tone}
+      title={title}
+      aria-label={title}
+    >
+      <CoinsIcon size={11} strokeWidth={2.1} aria-hidden="true" />
+      <span className="run-token-usage-total">
+        {formatCompactTokens(breakdown.total)}
+      </span>
+    </span>
+  );
+}
+
+function tokenUsageBadgeTitle(
+  usage: TokenUsageBreakdown,
+  tone: TokenUsageBadgeTone,
+): string {
+  const parts = [
+    `${usage.total.toLocaleString()} total tokens`,
+    `${usage.input.toLocaleString()} input`,
+    `${usage.output.toLocaleString()} output`,
+  ];
+  if (usage.cachedInput > 0) {
+    parts.push(`${usage.cachedInput.toLocaleString()} cached`);
+  }
+  if (usage.reasoningOutput > 0) {
+    parts.push(`${usage.reasoningOutput.toLocaleString()} reasoning`);
+  }
+  const prefix =
+    tone === "tool"
+      ? "Current turn token usage; tools do not directly spend model tokens"
+      : "Turn token usage";
+  return `${prefix}: ${parts.join(" · ")}`;
+}
+
 interface ComposerToolButtonsProps {
   attach: {
     disabled?: boolean;
@@ -2275,16 +2570,48 @@ interface ComposerToolButtonsProps {
     title: string;
     onClick?: () => void;
   };
+  orchestrate?: {
+    visible?: boolean;
+    active?: boolean;
+    disabled?: boolean;
+    title: string;
+    onClick?: () => void;
+  };
   test: {
     active?: boolean;
     disabled?: boolean;
     readyUrl?: string;
     title: string;
-    onClick?: () => void;
-    onReadyClick?: () => void;
+    // The per-session beaker is a navigation entry: it opens the dedicated
+    // test-slot page where the create/open/return controls and PR-readiness
+    // live. onCreateHold is the splash-only fallback (no session/page to route
+    // to yet) that seeds a new session's first turn with the /test skill. The
+    // button prefers onOpenPage; both are optional so the signed-out preview can
+    // render a disabled beaker with neither.
+    onOpenPage?: () => void;
+    onCreateHold?: () => void;
+  };
+  glimmungRuns: {
+    runs: GlimmungRunLink[];
+  };
+  spawnedSessions: {
+    items: SpawnedSessionRef[];
+  };
+  breakGlass: {
+    items: BreakGlassApprovalMenuItem[];
+    approvingId?: string | null;
+    onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
+    onQuickApproveMany?: (items: BreakGlassApprovalMenuItem[]) => void;
+    onApprovePRLane?: (
+      request: PRLaneRequest,
+      override?: "listed" | "count" | "unlimited",
+    ) => void;
+    onDenyPRLane?: (request: PRLaneRequest) => void;
   };
   pullRequest: {
-    url?: string;
+    latestUrl?: string;
+    linkedUrl?: string;
+    sessionId?: string | null;
   };
   slash: {
     disabled?: boolean;
@@ -2302,18 +2629,836 @@ interface ComposerToolButtonsProps {
   modelChip?: ReactNode;
 }
 
+// PullRequestMenuButton turns the composer pull-request icon into a small popup
+// menu instead of a single hard-coded link. It exposes the latest PR the agent
+// opened, the PR explicitly linked to the session (test/rollout), and an
+// in-app "Approve break glass" action. The break-glass entry lights up (amber
+// dot) whenever a `request_git_break_glass` call is awaiting a grant and links
+// to the Tank session deep link for that request. Self-contained
+// open/outside-click/escape handling mirrors BugLabelPicker so it composes
+// cleanly inside the composer toolbar.
+function PullRequestMenuButton({
+  latestUrl,
+  linkedUrl,
+  sessionId,
+}: ComposerToolButtonsProps["pullRequest"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  // The popover is portaled to <body> with fixed positioning so it escapes the
+  // composer input-group's `overflow: hidden` + `z-index` stacking context,
+  // which otherwise clips an in-flow absolutely-positioned popover (it opens in
+  // the DOM but renders behind/clipped by the composer). Anchor is the
+  // trigger's viewport rect, recomputed on open / scroll / resize.
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      )
+        return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const [mergeState, setMergeState] = useState<
+    "idle" | "merging" | "merged" | "error"
+  >("idle");
+  const [mergeError, setMergeError] = useState("");
+  const doMerge = useCallback(async () => {
+    if (!sessionId || mergeState === "merging" || mergeState === "merged") return;
+    setMergeState("merging");
+    setMergeError("");
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/merge-pr`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      );
+      if (!res.ok) {
+        let detail = `merge_failed_${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // keep the status-derived detail when the body is not JSON
+        }
+        setMergeState("error");
+        setMergeError(detail);
+        return;
+      }
+      setMergeState("merged");
+    } catch (err) {
+      setMergeState("error");
+      setMergeError(err instanceof Error ? err.message : "merge failed");
+    }
+  }, [sessionId, mergeState]);
+
+  const latest = latestUrl?.trim() ?? "";
+  const linked = linkedUrl?.trim() ?? "";
+  const showLinkedDistinct = Boolean(linked) && linked !== latest;
+  const hasLinks = Boolean(latest || linked);
+  const title = hasLinks ? "Pull request" : "No pull request linked yet";
+
+  return (
+    <span ref={ref} className="run-pr-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={!hasLinks}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+      </button>
+      {open &&
+        hasLinks &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover"
+            role="menu"
+            aria-label="Pull request actions"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Pull request</div>
+            {latest ? (
+              <a
+                role="menuitem"
+                className="run-pr-menu-item"
+                href={latest}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-pr-menu-name">Latest PR</span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ) : null}
+            {showLinkedDistinct ? (
+              <a
+                role="menuitem"
+                className="run-pr-menu-item"
+                href={linked}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-pr-menu-name">Pull request page</span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ) : null}
+            {!hasLinks && (
+              <div className="run-slash-empty">No pull request linked yet</div>
+            )}
+            {hasLinks && sessionId ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="run-pr-menu-item"
+                disabled={mergeState === "merging" || mergeState === "merged"}
+                onClick={doMerge}
+                title="Merge this PR in Tank (GitHub enforces the green/mergeable gate)"
+              >
+                <span className="run-pr-menu-name">
+                  {mergeState === "merged"
+                    ? "Merged ✓"
+                    : mergeState === "merging"
+                      ? "Merging…"
+                      : "Merge in Tank"}
+                </span>
+                {mergeState === "error" && mergeError ? (
+                  <span className="run-slash-desc">{mergeError}</span>
+                ) : null}
+              </button>
+            ) : null}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
+function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
+  const Icon =
+    kind === "model"
+      ? FlaskConicalIcon
+      : kind === "pr-lane"
+        ? GitBranchIcon
+        : ShieldAlertIcon;
+  return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
+}
+
+function isBatchableBreakGlassMenuItem(item: BreakGlassApprovalMenuItem): boolean {
+  return item.kind === "github" || item.kind === "azure";
+}
+
+function BreakGlassApprovalMenuButton({
+  items,
+  approvingId,
+  onQuickApprove,
+  onQuickApproveMany,
+  onApprovePRLane,
+  onDenyPRLane,
+}: ComposerToolButtonsProps["breakGlass"]) {
+  const [open, setOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+  const pendingCount = items.length;
+  const title =
+    pendingCount > 0
+      ? `Break-glass approvals awaiting review (${pendingCount})`
+      : "No break-glass approvals pending";
+  const settingsHref = appRouteUrl("settings", "admin", "break-glass");
+  const batchableItems = useMemo(
+    () => items.filter(isBatchableBreakGlassMenuItem),
+    [items],
+  );
+  const batchSelectionVisible = batchableItems.length > 1;
+  const selectedBatchItems = useMemo(
+    () => batchableItems.filter((item) => selectedIds.has(item.id)),
+    [batchableItems, selectedIds],
+  );
+  const allBatchSelected =
+    batchableItems.length > 0 && selectedBatchItems.length === batchableItems.length;
+  const batchBusy = approvingId === BREAK_GLASS_BATCH_BUSY_ID;
+
+  useEffect(() => {
+    const validIds = new Set(batchableItems.map((item) => item.id));
+    setSelectedIds((prev) => {
+      const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [batchableItems]);
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      )
+        return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const toggleBatchItem = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAllBatchItems = useCallback(
+    (checked: boolean) => {
+      setSelectedIds(checked ? new Set(batchableItems.map((item) => item.id)) : new Set());
+    },
+    [batchableItems],
+  );
+
+  return (
+    <span ref={ref} className="run-pr-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-break-glass-action-btn${pendingCount > 0 ? " has-alert" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={pendingCount === 0}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <ShieldAlertIcon className="run-composer-icon" aria-hidden="true" />
+        {pendingCount > 0 && (
+          <span className="run-pr-alert-dot" aria-hidden="true" />
+        )}
+      </button>
+      {open &&
+        pendingCount > 0 &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover"
+            role="menu"
+            aria-label="Break-glass approvals"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-pr-menu-header">
+              <div className="run-slash-palette-label">Break glass</div>
+              <a
+                className="run-pr-menu-settings"
+                href={settingsHref}
+                onClick={(event) => {
+                  if (!isPlainLeftClick(event)) {
+                    setOpen(false);
+                    return;
+                  }
+                  event.preventDefault();
+                  setOpen(false);
+                  navigateToSessionRoute(settingsHref);
+                }}
+              >
+                Settings
+              </a>
+            </div>
+            {batchSelectionVisible && (
+              <div className="run-pr-menu-batch">
+                <label className="run-pr-menu-select-all">
+                  <input
+                    type="checkbox"
+                    checked={allBatchSelected}
+                    disabled={batchBusy}
+                    onChange={(event) => toggleAllBatchItems(event.target.checked)}
+                  />
+                  <span>{selectedBatchItems.length} selected</span>
+                </label>
+                <button
+                  type="button"
+                  className="run-pr-menu-action-btn"
+                  disabled={
+                    !onQuickApproveMany ||
+                    selectedBatchItems.length === 0 ||
+                    batchBusy
+                  }
+                  onClick={() => {
+                    onQuickApproveMany?.(selectedBatchItems);
+                    setSelectedIds(new Set());
+                    setOpen(false);
+                  }}
+                >
+                  <CheckIcon aria-hidden="true" />
+                  <span>{batchBusy ? "Approving" : "Approve selected"}</span>
+                </button>
+              </div>
+            )}
+            {items.map((item) => {
+              const prLane = item.prLaneRequest;
+              const isBatchable = isBatchableBreakGlassMenuItem(item);
+              const busy = approvingId === item.id || batchBusy;
+              const selected = selectedIds.has(item.id);
+              return (
+                <div
+                  key={item.id}
+                  role="group"
+                  className="run-pr-menu-item run-pr-menu-breakglass"
+                  title={
+                    item.reason
+                      ? `${item.target} — ${item.reason}`
+                      : item.target
+                  }
+                >
+                  <span className="run-pr-menu-main-row">
+                    {batchSelectionVisible && isBatchable && (
+                      <label className="run-pr-menu-select">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={busy}
+                          aria-label={`Select ${item.label}`}
+                          onChange={(event) =>
+                            toggleBatchItem(item.id, event.target.checked)
+                          }
+                        />
+                      </label>
+                    )}
+                    <span className="run-pr-menu-main">
+                      <span className="run-pr-menu-name">
+                        <BreakGlassMenuIcon kind={item.kind} />
+                        {item.label}
+                      </span>
+                      <span className="run-slash-desc">
+                        {item.target}
+                        {item.reason ? ` — ${item.reason}` : ""}
+                      </span>
+                    </span>
+                  </span>
+                  {item.kind === "pr-lane" && prLane ? (
+                    <span className="run-pr-menu-actions">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="run-pr-menu-action-btn"
+                        disabled={!onApprovePRLane || busy}
+                        onClick={() => onApprovePRLane?.(prLane)}
+                      >
+                        <CheckIcon aria-hidden="true" />
+                        <span>
+                          {busy
+                            ? "Approving"
+                            : prLane.allocationRequest
+                              ? "Approve request"
+                              : "Approve"}
+                        </span>
+                      </button>
+                      {prLane.allocationRequest &&
+                        (prLane.laneNames?.length ||
+                        prLane.proposedBranches?.length ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="run-pr-menu-action-btn"
+                            disabled={!onApprovePRLane || busy}
+                            onClick={() => onApprovePRLane?.(prLane, "listed")}
+                          >
+                            Listed only
+                          </button>
+                        ) : null)}
+                      {prLane.allocationRequest && (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="run-pr-menu-action-btn"
+                            disabled={!onApprovePRLane || busy}
+                            onClick={() => onApprovePRLane?.(prLane, "count")}
+                          >
+                            10
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="run-pr-menu-action-btn"
+                            disabled={!onApprovePRLane || busy}
+                            onClick={() => onApprovePRLane?.(prLane, "unlimited")}
+                          >
+                            Unlimited
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="run-pr-menu-action-btn"
+                        disabled={!onDenyPRLane || busy}
+                        onClick={() => onDenyPRLane?.(prLane)}
+                      >
+                        <XIcon aria-hidden="true" />
+                        <span>Deny</span>
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="run-pr-menu-actions">
+                      <a
+                        role="menuitem"
+                        className="run-pr-menu-action-link"
+                        href={item.href}
+                        onClick={(event) => {
+                          if (!isPlainLeftClick(event)) {
+                            setOpen(false);
+                            return;
+                          }
+                          event.preventDefault();
+                          setOpen(false);
+                          navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                        }}
+                      >
+                        Details
+                      </a>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="run-pr-menu-action-btn"
+                        disabled={!onQuickApprove || busy}
+                        onClick={() => onQuickApprove?.(item)}
+                      >
+                        <CheckIcon aria-hidden="true" />
+                        <span>{busy ? "Approving" : "Quick approve"}</span>
+                      </button>
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
+function GlimmungMark({ className }: { className?: string }) {
+  return (
+    <span className={className} aria-hidden="true">
+      g
+    </span>
+  );
+}
+
+function GlimmungRunMenuButton({
+  runs,
+}: ComposerToolButtonsProps["glimmungRuns"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+  const hasRuns = runs.length > 0;
+  const title = hasRuns
+    ? `Glimmung runs (${runs.length})`
+    : "No Glimmung runs found yet";
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="run-glimmung-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-glimmung-action-btn${hasRuns ? " is-ready" : ""}`}
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        disabled={!hasRuns}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <GlimmungMark className="run-glimmung-mark" />
+        {runs.length > 1 && (
+          <span className="run-command-menu-count">{runs.length}</span>
+        )}
+      </button>
+      {open &&
+        hasRuns &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover run-glimmung-menu-popover"
+            role="menu"
+            aria-label="Glimmung runs"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Glimmung runs</div>
+            {runs.map((run) => (
+              <a
+                key={run.key}
+                role="menuitem"
+                className="run-pr-menu-item run-glimmung-menu-item"
+                href={run.href}
+                target="_blank"
+                rel="noreferrer"
+                title={run.href}
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-glimmung-menu-main">
+                  <span className="run-pr-menu-name run-glimmung-menu-name">
+                    <GlimmungMark className="run-glimmung-menu-glyph" />
+                    {run.label}
+                  </span>
+                  <span className="run-slash-desc">
+                    {[run.state, run.toolName].filter(Boolean).join(" · ")}
+                  </span>
+                </span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
+// SpawnedSessionsMenuButton is the session-bar "tank operator" chip: when
+// this session has spawned child sessions (via spawn_run_session /
+// spawn_test_slot_session) it shows the tank glyph with a count badge and a
+// popover of links to each child. Hidden entirely when nothing was spawned.
+// Cloned from GlimmungRunMenuButton (count + portal popover of links); it
+// wears the tank icon vacated by the rollout chip — the tank belongs to
+// "tank operator", and spawning sessions is the core tank-operator action.
+function SpawnedSessionsMenuButton({
+  items,
+}: ComposerToolButtonsProps["spawnedSessions"]) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
+    null,
+  );
+
+  const computeAnchor = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setAnchor({
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.top + 8),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    computeAnchor();
+    window.addEventListener("resize", computeAnchor);
+    window.addEventListener("scroll", computeAnchor, true);
+    return () => {
+      window.removeEventListener("resize", computeAnchor);
+      window.removeEventListener("scroll", computeAnchor, true);
+    };
+  }, [open, computeAnchor]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (ref.current?.contains(target) || popoverRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  // Hidden until this session has spawned something — the chip is a
+  // presence signal, not a permanently-disabled affordance.
+  if (items.length === 0) return null;
+  const title = `Spawned sessions (${items.length})`;
+
+  return (
+    <span ref={ref} className="run-spawned-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="run-composer-icon-btn run-composer-action-btn run-spawned-action-btn is-ready"
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={title}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <TankIcon className="run-composer-icon" />
+        {items.length > 1 && (
+          <span className="run-command-menu-count">{items.length}</span>
+        )}
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className="run-pr-menu-popover run-spawned-menu-popover"
+            role="menu"
+            aria-label="Spawned sessions"
+            style={
+              anchor
+                ? { right: anchor.right, bottom: anchor.bottom }
+                : { visibility: "hidden" }
+            }
+          >
+            <div className="run-slash-palette-label">Spawned sessions</div>
+            {items.map((spawned) => (
+              <a
+                key={spawned.id}
+                role="menuitem"
+                className="run-pr-menu-item run-spawned-menu-item"
+                href={spawned.url}
+                target="_blank"
+                rel="noreferrer"
+                title={spawned.url}
+                onClick={() => setOpen(false)}
+              >
+                <span className="run-glimmung-menu-main">
+                  <span className="run-pr-menu-name run-spawned-menu-name">
+                    <TankIcon className="run-spawned-menu-glyph" />
+                    {spawned.name}
+                  </span>
+                  <span className="run-slash-desc">
+                    {[spawned.mode, spawned.model, spawned.repos?.join(", ")]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </span>
+                <ExternalLinkIcon
+                  className="run-pr-menu-icon"
+                  aria-hidden="true"
+                />
+              </a>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
 function ComposerToolButtons({
   attach,
   cost,
   rollout,
+  orchestrate,
   test,
+  glimmungRuns,
+  spawnedSessions,
+  breakGlass,
   pullRequest,
   slash,
   mcp,
   bugLabelControl,
   modelChip,
 }: ComposerToolButtonsProps) {
-  const pullRequestURL = pullRequest.url?.trim() || "";
   const testReadyURL = test.readyUrl?.trim() || "";
 
   return (
@@ -2338,69 +3483,41 @@ function ComposerToolButtons({
           aria-label="Start rollout"
           title={rollout.title}
         >
-          <TankIcon className="run-composer-icon" />
+          <WheelsIcon className="run-composer-icon" />
         </button>
       )}
-      {testReadyURL ? (
-        <a
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${test.active ? " is-active" : ""}`}
-          href={testReadyURL}
-          target="_blank"
-          rel="noreferrer"
-          onClick={test.onReadyClick}
-          aria-label="Open test environment in new tab"
-          title="Open test environment in new tab"
+      {orchestrate?.visible && (
+        <button
+          type="button"
+          className={`run-composer-icon-btn run-composer-action-btn run-orchestrate-action-btn${orchestrate.active ? " is-active" : ""}`}
+          onClick={orchestrate.onClick}
+          disabled={orchestrate.disabled}
+          aria-label="Orchestrate"
+          title={orchestrate.title}
         >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+          <Wand2Icon className="run-composer-icon" aria-hidden="true" />
+        </button>
+      )}
+      <button
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
+        onClick={test.onOpenPage ?? test.onCreateHold}
+        disabled={test.disabled}
+        aria-label="Test slot"
+        title={test.title}
+      >
+        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+        {testReadyURL && (
           <ExternalLinkIcon
             className="run-test-ready-icon"
             aria-hidden="true"
           />
-        </a>
-      ) : (
-        <button
-          type="button"
-          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${test.active ? " is-active" : ""}`}
-          onClick={test.onClick}
-          disabled={test.disabled}
-          aria-label="Start test skill"
-          title={test.title}
-        >
-          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-        </button>
-      )}
-      {pullRequestURL ? (
-        <a
-          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
-          href={pullRequestURL}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Open pull request in new tab"
-          title="Open pull request in new tab"
-        >
-          <GitPullRequestIcon
-            className="run-composer-icon"
-            aria-hidden="true"
-          />
-          <ExternalLinkIcon
-            className="run-test-ready-icon"
-            aria-hidden="true"
-          />
-        </a>
-      ) : (
-        <button
-          type="button"
-          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn"
-          disabled
-          aria-label="Pull request link unavailable"
-          title="No pull request linked yet"
-        >
-          <GitPullRequestIcon
-            className="run-composer-icon"
-            aria-hidden="true"
-          />
-        </button>
-      )}
+        )}
+      </button>
+      <GlimmungRunMenuButton {...glimmungRuns} />
+      <SpawnedSessionsMenuButton {...spawnedSessions} />
+      <PullRequestMenuButton {...pullRequest} />
+      <BreakGlassApprovalMenuButton {...breakGlass} />
       {bugLabelControl}
       <button
         type="button"
@@ -3094,27 +4211,50 @@ function sessionInteractionForSession(
     : null;
 }
 
+const INTERACTION_ICONS: Record<
+  ReturnType<typeof interactionIconKind>,
+  LucideIcon
+> = {
+  gui: MonitorIcon,
+  cli: TerminalIcon,
+  // Unrestricted (ungoverned) GUI sessions swap the monitor glyph for a red git
+  // glyph so the session row flags the opt-out; restricted Git is the default.
+  "unrestricted-git": GitBranchIcon,
+};
+
 function InteractionIcon({
   interaction,
+  restrictedGit = false,
   className,
 }: {
   interaction: SessionInteraction;
+  restrictedGit?: boolean;
   className?: string;
 }) {
-  const Icon: LucideIcon = interaction === "gui" ? MonitorIcon : TerminalIcon;
+  const Icon: LucideIcon =
+    INTERACTION_ICONS[interactionIconKind(interaction, restrictedGit)];
   return <Icon className={className} aria-hidden="true" />;
 }
 
 function ModeChip({
   mode,
   interaction,
+  restrictedGit = false,
 }: {
   mode: SessionMode;
   interaction?: SessionInteraction | null;
+  restrictedGit?: boolean;
 }) {
   const icon = MODE_CHIP_ICONS[mode];
   const label = MODE_CHIP_LABELS[mode] ?? mode;
-  const interactionLabel = interaction ? INTERACTION_LABELS[interaction] : null;
+  // Restricted Git is the default; the chip flags the *unrestricted* opt-out.
+  // Gate on `gui` so a non-gui row can never pick up the git affordance.
+  const showUnrestrictedGit = !restrictedGit && interaction === "gui";
+  const interactionLabel = showUnrestrictedGit
+    ? "unrestricted git"
+    : interaction
+      ? INTERACTION_LABELS[interaction]
+      : null;
 
   if (icon) {
     return (
@@ -3129,12 +4269,15 @@ function ModeChip({
         </span>
         {interaction && (
           <span
-            className="mode mode-icon-only mode-interaction-chip"
+            className={`mode mode-icon-only mode-interaction-chip${
+              showUnrestrictedGit ? " is-unrestricted-git" : ""
+            }`}
             title={interactionLabel ?? undefined}
             aria-label={interactionLabel ?? undefined}
           >
             <InteractionIcon
               interaction={interaction}
+              restrictedGit={restrictedGit}
               className="mode-interaction-icon"
             />
           </span>
@@ -3182,6 +4325,48 @@ function TankIcon({
       <circle cx="40" cy="46" r="5" />
       <line x1="48" y1="32" x2="58" y2="32" />
       <rect x="22" y="20" width="14" height="8" rx="1.5" />
+    </svg>
+  );
+}
+
+// WheelsIcon is the rollout chip's glyph: two spoked wheels mid-roll with
+// motion streaks — "rolling out". It took over from TankIcon when the tank
+// glyph moved to the spawned-sessions chip (the tank icon belongs to "tank
+// operator"). Same viewBox/stroke conventions as TankIcon so the two read
+// as a matched pair in the composer toolbar.
+function WheelsIcon({
+  className,
+  size,
+  strokeWidth,
+}: {
+  className?: string;
+  size?: number;
+  strokeWidth?: number;
+}) {
+  return (
+    <svg
+      className={className}
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth ?? 2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <circle cx="21" cy="40" r="11" />
+      <circle cx="21" cy="40" r="2.5" />
+      <line x1="21" y1="29" x2="21" y2="51" />
+      <line x1="10" y1="40" x2="32" y2="40" />
+      <circle cx="46" cy="42" r="9" />
+      <circle cx="46" cy="42" r="2" />
+      <line x1="46" y1="33" x2="46" y2="51" />
+      <line x1="37" y1="42" x2="55" y2="42" />
+      <line x1="6" y1="18" x2="22" y2="18" />
+      <line x1="12" y1="24" x2="30" y2="24" />
     </svg>
   );
 }
@@ -3779,6 +4964,7 @@ function DemoLanding() {
                     <ModeChip
                       mode={s.mode}
                       interaction={sessionInteractionForSession(s)}
+                      restrictedGit={hasRestrictedGit(s.capabilities)}
                     />
                     <SessionStats session={s} />
                     {s.mode === "claude_cli" && (
@@ -4001,10 +5187,18 @@ function DemoLanding() {
                         disabled: true,
                         title: "Sign in to use /rollout",
                       }}
+                      orchestrate={{
+                        visible: GUI_ROLLOUT_MODES.has(selectedMode),
+                        disabled: true,
+                        title: "Sign in to orchestrate",
+                      }}
                       test={{
                         disabled: true,
                         title: "Sign in to start a session",
                       }}
+                      glimmungRuns={{ runs: [] }}
+                      spawnedSessions={{ items: [] }}
+                      breakGlass={{ items: [] }}
                       pullRequest={{}}
                       slash={{
                         disabled: true,
@@ -4277,22 +5471,15 @@ function isCodexRunMode(mode: SessionMode): boolean {
   return MODE_PROVIDERS[mode] === "codex" && SDK_CHAT_MODES.has(mode);
 }
 
-function isAntigravityRunMode(mode: SessionMode): boolean {
-  return mode === "antigravity_gui";
-}
-
 function sessionModeUsesModel(mode: SessionMode): boolean {
-  return (
-    isClaudeRunMode(mode) || isCodexRunMode(mode) || isAntigravityRunMode(mode)
-  );
+  return isClaudeRunMode(mode) || isCodexRunMode(mode);
 }
 
 function providerUsesModel(provider: Provider): boolean {
   return (
     provider === "anthropic" ||
     provider === "anthropic_secondary" ||
-    provider === "codex" ||
-    provider === "antigravity"
+    provider === "codex"
   );
 }
 
@@ -4551,6 +5738,12 @@ type RunTab =
   | "background"
   | "files"
   | "session-data"
+  | "queue-status"
+  | "pull-requests"
+  | "break-glass"
+  | "test-slot-model"
+  | "test-slot"
+  | "orchestrate"
   | "settings"
   | "help"
   | "cluster"
@@ -4561,6 +5754,7 @@ type TurnViewScrollAnchor = "bottom" | "top";
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
   resetPage?: boolean;
+  page?: number;
 };
 
 type TurnViewScrollRequest = {
@@ -4808,8 +6002,6 @@ const MODEL_LABELS: Record<string, string> = {
   "gpt-5.4": "Codex · GPT-5.4",
   "gpt-5.4-mini": "Codex · GPT-5.4 Mini",
   "gpt-5.3-codex-spark": "Codex · GPT-5.3 Codex Spark",
-  "Gemini 3.1 Pro": "Antigravity · Gemini 3.1 Pro",
-  "Gemini 3.5 Flash (Medium)": "Antigravity · Gemini 3.5 Flash Medium",
 };
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
@@ -4831,10 +6023,9 @@ const EFFORT_LABELS: Record<string, Omit<EffortOption, "id">> = {
   max: { label: "Max", hint: "Largest Claude reasoning budget" },
 };
 const DEFAULT_CLAUDE_MODEL_ID = "";
-const DEFAULT_CLAUDE_EFFORT_ID = "";
+const DEFAULT_CLAUDE_EFFORT_ID = "max";
 const DEFAULT_CODEX_MODEL_ID = "";
-const DEFAULT_CODEX_EFFORT_ID = "";
-const DEFAULT_ANTIGRAVITY_MODEL_ID = "";
+const DEFAULT_CODEX_EFFORT_ID = "xhigh";
 
 interface SessionRunOptionMode {
   mode: string;
@@ -4862,7 +6053,6 @@ function providerForRunMode(mode: SessionMode): Provider | null {
   ) {
     return "codex";
   }
-  if (mode === "antigravity_gui") return "antigravity";
   return null;
 }
 
@@ -4969,11 +6159,6 @@ function reconcileRunPrefsWithRunOptions(
       effortOptionsForProvider("codex", runOptions),
       defaultEffortForProvider("codex", runOptions),
     ),
-    antigravityModelId: pickAllowedPrefId(
-      prefs.antigravityModelId,
-      modelOptionsForProvider("antigravity", runOptions),
-      defaultModelForProvider("antigravity", runOptions),
-    ),
   };
 }
 
@@ -5014,7 +6199,6 @@ function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
     "anthropic",
     "anthropic_secondary",
     "codex",
-    "antigravity",
   ];
   const normalizeProvider = (provider: unknown): Provider | null => {
     if (provider === "claude" || provider === "anthropic") return "anthropic";
@@ -5025,7 +6209,6 @@ function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
       return "anthropic_secondary";
     }
     if (provider === "codex") return "codex";
-    if (provider === "antigravity") return "antigravity";
     return null;
   };
   const stringArray = (v: unknown): string[] =>
@@ -5158,18 +6341,14 @@ interface RunPrefs {
   // chat-app convention. See docs/product-inspirations.md analysis.
   turnCompleteSoundOnVisible: boolean;
   chatFontScale: number;
-  // Provider model + effort prefs persist the user's last picks across
-  // sessions so a fresh session opens with them pre-selected. They drive
-  // initial selectedModelId / selectedEffort state in RunPane and are
-  // also written back on every change. Once a turn is submitted the
-  // model + effort are sealed for that session pod's lifetime (see
-  // claude-runner/src/runner.ts and codex-runner/src/runner.ts), so these
-  // prefs only affect the *next* session created in this browser.
+  // Provider model + effort are splash launch-draft prefs. They survive
+  // leaving and returning to the splash in the same tab, but a successful
+  // session create resets them to the product defaults instead of turning
+  // the last launch into the next launch's default.
   claudeModelId: string;
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
-  antigravityModelId: string;
   initialMessageMode: InitialMessageMode;
 }
 
@@ -5188,14 +6367,24 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
-  antigravityModelId: DEFAULT_ANTIGRAVITY_MODEL_ID,
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
-const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>(["initialMessageMode"]);
+const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>([
+  "claudeModelId",
+  "claudeEffort",
+  "codexModelId",
+  "codexEffort",
+  "initialMessageMode",
+]);
+const HOME_DRAFT_RUN_PREF_PREFIX = "tank.homeDraftRunPref.v1:";
 
 function isDurableRunPref(key: keyof RunPrefs): boolean {
   return !EPHEMERAL_RUN_PREF_KEYS.has(key);
+}
+
+function isEphemeralRunPref(key: keyof RunPrefs): boolean {
+  return EPHEMERAL_RUN_PREF_KEYS.has(key);
 }
 
 function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
@@ -5210,8 +6399,65 @@ function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
 function persistRunPrefsLocally(prefs: RunPrefs) {
   try {
     for (const key of Object.keys(prefs) as (keyof RunPrefs)[]) {
-      if (!isDurableRunPref(key)) continue;
+      if (!isDurableRunPref(key)) {
+        localStorage.removeItem(RUN_PREF_PREFIX + String(key));
+        continue;
+      }
       localStorage.setItem(RUN_PREF_PREFIX + String(key), String(prefs[key]));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function applySerializedRunPref(
+  out: RunPrefs,
+  key: keyof RunPrefs,
+  raw: string | null,
+) {
+  if (raw == null) return;
+  if (key === "chatFontScale") {
+    out[key] = clampChatFontScale(Number(raw));
+  } else if (key === "turnCompleteSoundVolume") {
+    out[key] = clampTurnCompleteSoundVolume(Number(raw));
+  } else if (key === "claudeModelId") {
+    out[key] = raw.trim();
+  } else if (key === "claudeEffort") {
+    out[key] = raw.trim();
+  } else if (key === "codexModelId") {
+    out[key] = raw.trim();
+  } else if (key === "codexEffort") {
+    out[key] = raw.trim();
+  } else if (key === "initialMessageMode") {
+    if (
+      INITIAL_MESSAGE_MODE_OPTIONS.some((option) => option.id === raw.trim())
+    ) {
+      out[key] = raw.trim() as InitialMessageMode;
+    }
+  } else if (raw === "true" || raw === "false") {
+    (out as unknown as Record<string, unknown>)[key] = raw === "true";
+  }
+}
+
+function writeEphemeralRunPrefForSession<K extends keyof RunPrefs>(
+  key: K,
+  value: RunPrefs[K],
+) {
+  if (!isEphemeralRunPref(key)) return;
+  try {
+    sessionStorage.setItem(
+      HOME_DRAFT_RUN_PREF_PREFIX + String(key),
+      String(value),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearEphemeralRunPrefsForSession() {
+  try {
+    for (const key of EPHEMERAL_RUN_PREF_KEYS) {
+      sessionStorage.removeItem(HOME_DRAFT_RUN_PREF_PREFIX + String(key));
     }
   } catch {
     /* ignore */
@@ -5311,23 +6557,16 @@ function loadRunPrefs(): RunPrefs {
     for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
       if (!isDurableRunPref(key)) continue;
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
-      if (key === "chatFontScale") {
-        if (raw != null) out[key] = clampChatFontScale(Number(raw));
-      } else if (key === "turnCompleteSoundVolume") {
-        if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
-      } else if (key === "claudeModelId") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "claudeEffort") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "codexModelId") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "codexEffort") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (key === "antigravityModelId") {
-        if (raw != null) out[key] = raw.trim();
-      } else if (raw === "true" || raw === "false") {
-        (out as unknown as Record<string, unknown>)[key] = raw === "true";
-      }
+      applySerializedRunPref(out, key, raw);
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
+      if (!isEphemeralRunPref(key)) continue;
+      const raw = sessionStorage.getItem(HOME_DRAFT_RUN_PREF_PREFIX + key);
+      applySerializedRunPref(out, key, raw);
     }
   } catch {
     /* ignore */
@@ -5350,11 +6589,6 @@ function selectedModelIdForProvider(
   }
   if (provider === "codex") {
     return prefs.codexModelId || defaultModelForProvider(provider, runOptions);
-  }
-  if (provider === "antigravity") {
-    return (
-      prefs.antigravityModelId || defaultModelForProvider(provider, runOptions)
-    );
   }
   return "";
 }
@@ -5382,8 +6616,6 @@ function setModelPrefForProvider(
     setRunPref("claudeModelId", modelId);
   } else if (provider === "codex") {
     setRunPref("codexModelId", modelId);
-  } else if (provider === "antigravity") {
-    setRunPref("antigravityModelId", modelId);
   }
 }
 
@@ -5429,10 +6661,6 @@ function mergeServerRunPrefs(
         out[key] = raw.trim();
       }
     } else if (key === "codexEffort") {
-      if (typeof raw === "string") {
-        out[key] = raw.trim();
-      }
-    } else if (key === "antigravityModelId") {
       if (typeof raw === "string") {
         out[key] = raw.trim();
       }
@@ -5652,8 +6880,11 @@ function normalizeTurnActivitySummary(
     startOrderKey: stringRecordValue(record, "startOrderKey"),
     endOrderKey: stringRecordValue(record, "endOrderKey"),
     sourceEventId: stringRecordValue(record, "sourceEventId"),
+    submittedSource: stringRecordValue(record, "submittedSource") || undefined,
     turnUsage: record.turnUsage,
     usageObservation: record.usageObservation,
+    model: stringRecordValue(record, "model") || undefined,
+    effort: stringRecordValue(record, "effort") || undefined,
   };
 }
 
@@ -5784,13 +7015,6 @@ function entryGroupKey(g: EntryGroup): string {
   return g.entry.id;
 }
 
-function messageEntryForAvatarGrouping(
-  group: EntryGroup | FlatEntryGroup | null | undefined,
-): TranscriptEntry | null {
-  if (!group) return null;
-  return group.kind === "message" ? group.entry : null;
-}
-
 function flatEntryGroupEntries(group: FlatEntryGroup): TranscriptEntry[] {
   if (group.kind === "tools" || group.kind === "message_group")
     return group.entries;
@@ -5802,9 +7026,7 @@ function isMessageAvatarContinuation(
   groups: readonly (EntryGroup | FlatEntryGroup)[],
   index: number,
 ): boolean {
-  const current = messageEntryForAvatarGrouping(groups[index]!);
-  const previous = messageEntryForAvatarGrouping(groups[index - 1]!);
-  return shouldGroupTranscriptMessageWithPrevious(previous, current);
+  return isTranscriptMessageAvatarContinuation(groups, index);
 }
 
 function isAbsorbableSystemMessage(entry: TranscriptEntry): boolean {
@@ -5959,15 +7181,6 @@ function turnActivityGroupNeedsInput(
   group: Extract<EntryGroup, { kind: "activity" }>,
 ): boolean {
   return group.shell?.activity?.status === "needs_input";
-}
-
-function turnActivityGroupIsNeedsInputTarget(
-  group: Extract<EntryGroup, { kind: "activity" }>,
-  activeTurnId: string | null,
-): boolean {
-  if (!turnActivityGroupNeedsInput(group)) return false;
-  const active = activeTurnId?.trim() ?? "";
-  return active !== "" && group.turnId === active;
 }
 
 function flushTranscriptToolBucket(
@@ -6133,21 +7346,16 @@ function groupTranscriptEntries(
           for (const id of group.compactedEntryIds)
             activityHiddenEntryIds.add(id);
           const needsInput = turnActivityGroupNeedsInput(group);
-          if (
+          if (needsInput) {
+            // The pending question renders inline on the ASKING turn's question
+            // message (see RunInlineAskUserQuestion in RunMessages), so the
+            // synthetic question turn is not shown as its own block in chat — it
+            // remains only the home for Q2+ pages in the Turns view.
+          } else if (
             group.active &&
-            !needsInput &&
             !insertedThinkingTurnIds.has(group.turnId)
           ) {
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
-            pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
-            insertedThinkingTurnIds.add(group.turnId);
-          } else if (
-            turnActivityGroupIsNeedsInputTarget(group, activeTurnId) &&
-            !insertedThinkingTurnIds.has(group.turnId)
-          ) {
-            pendingThinkingGroups.push(
-              turnThinkingGroup(group.turnId, entry, "needs_input"),
-            );
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
           }
@@ -6872,27 +8080,54 @@ function isPlainLeftClick(
   );
 }
 
+function sameOriginAppRouteHref(href: string | undefined): string | null {
+  if (!href) return null;
+  let url: URL;
+  try {
+    url = new URL(href, window.location.href);
+  } catch {
+    return null;
+  }
+  if (url.origin !== window.location.origin) return null;
+  const isAppRoute = Boolean(
+    readSessionRouteFromPathname(url.pathname) ||
+      readAppRouteFromPathname(url.pathname) ||
+      readHomeRouteFromPathname(url.pathname),
+  );
+  return isAppRoute ? url.href : null;
+}
+
 export function RunMarkdownLink(
   props: AnchorHTMLAttributes<HTMLAnchorElement>,
 ) {
   const { openWorkspacePath, workspacePathHref } = useContext(RunContext);
   const workspaceTarget =
     typeof props.href === "string" ? workspacePathFromHref(props.href) : null;
+  const appRouteHref = workspaceTarget
+    ? null
+    : sameOriginAppRouteHref(props.href);
   const href = workspaceTarget
     ? (workspacePathHref(workspaceTarget) ?? props.href)
-    : props.href;
+    : (appRouteHref ?? props.href);
   return (
     <a
       {...props}
       href={href}
-      rel={workspaceTarget ? undefined : "noreferrer"}
-      target={workspaceTarget ? undefined : "_blank"}
+      rel={workspaceTarget || appRouteHref ? undefined : "noreferrer"}
+      target={workspaceTarget || appRouteHref ? undefined : "_blank"}
       onClick={(e) => {
         props.onClick?.(e);
-        if (e.defaultPrevented || !workspaceTarget) return;
+        if (e.defaultPrevented) return;
         if (!isPlainLeftClick(e)) return;
-        e.preventDefault();
-        openWorkspacePath(workspaceTarget);
+        if (workspaceTarget) {
+          e.preventDefault();
+          openWorkspacePath(workspaceTarget);
+          return;
+        }
+        if (appRouteHref) {
+          e.preventDefault();
+          navigateToSessionRoute(appRouteHref);
+        }
       }}
     />
   );
@@ -7275,6 +8510,10 @@ interface AnswerPayload {
   timelineId: string;
   answers: Record<string, string[]>;
   annotations?: Record<string, { preview?: string; notes?: string }>;
+  // displayAttachments carries files the user attached to the answer (the
+  // screenshot-in-answer path). Posted as display_attachments on /answer, the
+  // same shape and upload plumbing the normal turn path uses.
+  displayAttachments?: MessageAttachmentDisplay[];
 }
 
 interface AskUserQuestionSubmittedSnapshot {
@@ -7300,7 +8539,10 @@ interface QuestionPageNavigation {
 export const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   workspacePathHref: (target: WorkspacePathTarget | string) => string | undefined;
-  submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
+  submitAnswer: (
+    askingTurnId: string,
+    payload: AnswerPayload,
+  ) => Promise<{ answerTurnId: string | null }>;
   askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
   setAskUserQuestionDraft: (
     key: string,
@@ -7313,7 +8555,7 @@ export const RunContext = createContext<{
 }>({
   openWorkspacePath: () => {},
   workspacePathHref: () => undefined,
-  submitAnswer: async () => {},
+  submitAnswer: async () => ({ answerTurnId: null }),
   askUserQuestionDrafts: {},
   setAskUserQuestionDraft: () => {},
   createMessageLink: async (sessionId, entryId) =>
@@ -7363,9 +8605,10 @@ function RunMessageBubble({
   // Minimal one-line variant: keep the avatar at full size and collapse the
   // body to a single ellipsis-truncated line. Used by the Turns view when the
   // prompt context is collapsed so the entry stays recognizable (avatar +
-  // first line) instead of disappearing entirely. Compact mode only changes
-  // text rendering; attachments, inline actions, and footer controls keep
-  // their normal layout.
+  // first line) instead of disappearing entirely. Collapse is a pure CSS
+  // restyle of the SAME DOM the expanded prompt renders (keyed on
+  // data-compact): the prompt text and its inline footer are never remounted,
+  // so toggling collapsed/expanded never flickers.
   compact?: boolean;
 }) {
   const variant =
@@ -7417,11 +8660,13 @@ function RunMessageBubble({
       ? ((entry as Record<string, unknown>).skillSupplementalText as string)
       : (durableSkillDisplay?.supplemental_text ?? "");
   const skillActionIcon =
-    skillName === "test"
+    skillName === "test" || skillName === "test-drive"
       ? FlaskConicalIcon
       : skillName === "rollout"
         ? TankIcon
-        : ListChecksIcon;
+        : skillName === "orchestrate"
+          ? Wand2Icon
+          : ListChecksIcon;
   const SkillActionIcon = skillActionIcon;
   const explicitAttachments = entry.attachments ?? [];
   const legacyAttachmentParts =
@@ -7429,12 +8674,6 @@ function RunMessageBubble({
       ? splitLegacyAttachmentDisplayText(text)
       : null;
   const visibleText = legacyAttachmentParts?.text ?? text;
-  const awaitingInput = entry.awaitingInput;
-  const questionTurnId = awaitingInput?.questionTurnId || "";
-  const openQuestionTurn = (): void => {
-    if (!questionTurnId) return;
-    onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true });
-  };
   const visibleAttachments =
     explicitAttachments.length > 0
       ? explicitAttachments
@@ -7443,16 +8682,89 @@ function RunMessageBubble({
   const durationMs = (entry as Record<string, unknown>).durationMs as
     | number
     | undefined;
-  const alwaysVisible = showTimestamps || showDuration;
-  // One-line preview for compact mode: flatten whitespace/newlines so the
-  // multi-paragraph prompt collapses into a single line the CSS can truncate
-  // with an ellipsis. Falls back to the skill-action text when there is no
-  // message body.
-  const compactPreviewText = (
+  const hasAssistantTokenUsage =
+    variant === "assistant" && tokenUsageBreakdown(entry.turnUsage) !== null;
+  const alwaysVisible = showTimestamps || showDuration || hasAssistantTokenUsage;
+  // Collapsed-prompt tooltip. Under data-compact the CSS truncates the prompt
+  // to one line (white-space:nowrap collapses newlines), so there is no
+  // separate preview element to render — we only keep the flattened full text
+  // as a title so the whole prompt is still reachable on hover. Falls back to
+  // the skill-action text when there is no message body.
+  const collapsedTitle = (
     (visibleText && visibleText.trim().length > 0 ? visibleText : text) ?? ""
   )
     .replace(/\s+/g, " ")
     .trim();
+  // A no-attachment user prompt renders its footer INSIDE the message text in
+  // both collapsed and expanded states, so collapsing is a CSS-only restyle
+  // that never remounts the footer. Skill-action chips stay footerless in both
+  // states; everything else renders the footer as a content sibling.
+  const inlineFooter =
+    variant === "user" && !isSkillAction && visibleAttachments.length === 0;
+  const showFooter = !isSkillAction;
+  const messageFooter = (
+    <div
+      className="run-msg-footer"
+      data-always-visible={alwaysVisible ? "" : undefined}
+    >
+      {variant === "assistant" && (
+        <TokenUsageBadge usage={entry.turnUsage} tone="message" />
+      )}
+      {canonicalMessage &&
+        (variant === "assistant" || variant === "user") &&
+        entry.turnId &&
+        onOpenTurn && (
+          <TurnViewButton
+            turnId={entry.turnId}
+            href={turnHref}
+            onOpenTurn={onOpenTurn}
+          />
+        )}
+      {!canonicalMessage && onOpenTranscriptMessage && (
+        <TranscriptViewButton
+          entryId={entry.id}
+          href={transcriptHref}
+          onOpenTranscriptMessage={onOpenTranscriptMessage}
+        />
+      )}
+      {canonicalMessage && variant === "assistant" && onFork && (
+        <ForkButton entry={entry} onFork={onFork} />
+      )}
+      {variant !== "system" && (
+        <>
+          {onQuote && (
+            <>
+              <QuoteButton
+                text={visibleText}
+                style="fence"
+                onQuote={onQuote}
+              />
+              <QuoteButton
+                text={visibleText}
+                style="blockquote"
+                onQuote={onQuote}
+              />
+            </>
+          )}
+          <CopyButton text={visibleText} />
+          {canonicalMessage && !entry.localOnly && (
+            <LinkButton sessionId={sessionId} entryId={entry.id} />
+          )}
+        </>
+      )}
+      <div className="run-msg-timings">
+        {showDuration && durationMs != null && (
+          <span className="run-msg-timing-row">
+            {formatTurnDuration(durationMs)}
+            <TimerIcon size={9} aria-hidden="true" />
+          </span>
+        )}
+        {showTimestamps && time && (
+          <span className="run-msg-timing-row">{time}</span>
+        )}
+      </div>
+    </div>
+  );
   return (
     <div
       className="run-transcript-message"
@@ -7470,6 +8782,7 @@ function RunMessageBubble({
       data-owner={ownedByTurnActivity ? "activity" : undefined}
       data-continuation={isAvatarContinuation ? "true" : undefined}
       data-highlight={highlighted ? "true" : undefined}
+      data-inline-footer={inlineFooter ? "true" : undefined}
     >
       {variant === "assistant" &&
         showAssistantAvatar &&
@@ -7497,12 +8810,12 @@ function RunMessageBubble({
         className="run-transcript-message-content"
         data-slot="message-content"
       >
-        <div className="run-transcript-message-text" data-slot="message-text">
-          {compact ? (
-            <span className="run-msg-compact-text" title={compactPreviewText}>
-              {compactPreviewText}
-            </span>
-          ) : isSkillAction ? (
+        <div
+          className="run-transcript-message-text"
+          data-slot="message-text"
+          title={compact ? collapsedTitle : undefined}
+        >
+          {isSkillAction ? (
             <span className="run-skill-action">
               <span className="run-skill-action-text">
                 <SkillActionIcon
@@ -7523,6 +8836,7 @@ function RunMessageBubble({
           ) : (
             <RunMarkdown>{visibleText}</RunMarkdown>
           )}
+          {inlineFooter && messageFooter}
           {variant === "system" &&
             messageActionLabel &&
             messageActionHref && (
@@ -7535,20 +8849,6 @@ function RunMessageBubble({
                 {messageActionLabel}
               </a>
             )}
-          {variant === "assistant" &&
-            awaitingInput &&
-            questionTurnId &&
-            onOpenTurn && (
-              <button
-                type="button"
-                className="run-msg-question-action"
-                onClick={openQuestionTurn}
-              >
-                {awaitingInput.answered || awaitingInput.dismissed
-                  ? "View questions"
-                  : "Answer in Turns"}
-              </button>
-            )}
         </div>
         {variant === "user" && visibleAttachments.length > 0 && (
           <RunMessageAttachments
@@ -7556,64 +8856,7 @@ function RunMessageBubble({
             sessionId={sessionId}
           />
         )}
-        <div
-          className="run-msg-footer"
-          data-always-visible={alwaysVisible ? "" : undefined}
-        >
-          {canonicalMessage &&
-            (variant === "assistant" || variant === "user") &&
-            entry.turnId &&
-            onOpenTurn && (
-              <TurnViewButton
-                turnId={entry.turnId}
-                href={turnHref}
-                onOpenTurn={onOpenTurn}
-              />
-            )}
-          {!canonicalMessage && onOpenTranscriptMessage && (
-            <TranscriptViewButton
-              entryId={entry.id}
-              href={transcriptHref}
-              onOpenTranscriptMessage={onOpenTranscriptMessage}
-            />
-          )}
-          {canonicalMessage && variant === "assistant" && onFork && (
-            <ForkButton entry={entry} onFork={onFork} />
-          )}
-          {variant !== "system" && (
-            <>
-              {onQuote && (
-                <>
-                  <QuoteButton
-                    text={visibleText}
-                    style="fence"
-                    onQuote={onQuote}
-                  />
-                  <QuoteButton
-                    text={visibleText}
-                    style="blockquote"
-                    onQuote={onQuote}
-                  />
-                </>
-              )}
-              <CopyButton text={visibleText} />
-              {canonicalMessage && !entry.localOnly && (
-                <LinkButton sessionId={sessionId} entryId={entry.id} />
-              )}
-            </>
-          )}
-          <div className="run-msg-timings">
-            {showDuration && durationMs != null && (
-              <span className="run-msg-timing-row">
-                {formatTurnDuration(durationMs)}
-                <TimerIcon size={9} aria-hidden="true" />
-              </span>
-            )}
-            {showTimestamps && time && (
-              <span className="run-msg-timing-row">{time}</span>
-            )}
-          </div>
-        </div>
+        {!inlineFooter && showFooter && messageFooter}
       </div>
       {variant === "user" &&
         !isAvatarContinuation &&
@@ -7842,6 +9085,71 @@ function RunMetaBlock({
   );
 }
 
+// RunQuestionHeadingMessage renders the Turns-view question page's
+// "Question N of M" heading as a system-narrated message rather than an
+// orphaned banner pinned above the column. The heading is Tank's framing around
+// the agent's question — the question TEXT is the agent, but the "Question N of M"
+// frame is system narration — so, like session.status banners, RunMetaBlock
+// status lines, and the background-wake prompt, it speaks through the shared
+// system identity (system avatar, data-variant="system"). As the question turn's
+// turn-starter it occupies the prompt slot a user message normally would. See
+// docs/features/transcript/contract.md.
+function RunQuestionHeadingMessage({
+  systemAvatar,
+  answered,
+  planApproval = false,
+  questionIndex,
+  questionCount,
+}: {
+  systemAvatar: AgentAvatar | null;
+  answered: boolean;
+  planApproval?: boolean;
+  questionIndex?: number;
+  questionCount?: number;
+}) {
+  const hasPosition =
+    typeof questionIndex === "number" && typeof questionCount === "number";
+  const label =
+    !hasPosition && (questionCount ?? 0) > 1 ? "Questions" : "Question";
+  const counter = hasPosition ? `${questionIndex} of ${questionCount}` : null;
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="system"
+      data-role="system"
+      data-kind="question-heading"
+      data-answered={answered ? "true" : "false"}
+    >
+      <span
+        className="run-msg-system-avatar"
+        aria-hidden={systemAvatar ? undefined : "true"}
+      >
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+        ) : (
+          <BotIcon size={16} strokeWidth={2.1} />
+        )}
+      </span>
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <div className="run-transcript-message-text" data-slot="message-text">
+          <span className="run-question-heading">
+            <span className="run-question-heading-label">
+              {planApproval ? "The agent has proposed a plan." : label}
+            </span>
+            {!planApproval && counter && (
+              <span className="run-question-heading-count">{counter}</span>
+            )}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function isBackgroundTaskRunning(entry: TranscriptEntry): boolean {
   return entry.taskStatus === "running" || entry.taskStatus === "unknown";
 }
@@ -7856,6 +9164,123 @@ function isScheduledWakeupEntry(entry: TranscriptEntry): boolean {
 
 function isControlActionEntry(entry: TranscriptEntry): boolean {
   return isBackgroundTaskEntry(entry) && entry.taskKind === "control_action";
+}
+
+type AgentGitActivityItem = {
+  id: string;
+  href: string;
+  repo?: string;
+  label: string;
+  detail: string;
+  action?: string;
+  createdAt?: string;
+};
+
+function payloadField(payload: unknown, key: string): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function summarizeGitAction(action: string | undefined): string {
+  switch (action) {
+    case "github.pull_request.open":
+      return "opened";
+    case "github.pull_request.ready_for_review":
+      return "ready";
+    case "github.pull_request.merge":
+      return "merged";
+    case "github.pull_request.mergeability":
+      return "mergeability";
+    case "github.commit.push":
+      return "pushed";
+    case "github.commit.write":
+      return "committed";
+    case "github.commit.ci":
+      return "CI";
+    case "github.break_glass.request":
+      return "break-glass";
+    default:
+      return "touched";
+  }
+}
+
+function buildAgentGitActivity(entries: TranscriptEntry[]): {
+  pullRequests: AgentGitActivityItem[];
+  commits: AgentGitActivityItem[];
+} {
+  const pullRequestsByKey = new Map<string, AgentGitActivityItem>();
+  const commits: AgentGitActivityItem[] = [];
+  for (const entry of entries) {
+    if (!isControlActionEntry(entry)) continue;
+    const row = entry.taskRawItem as ControlActionRow | undefined;
+    const action = entry.controlActionAction ?? row?.action;
+    const href = entry.controlActionTarget ?? row?.target_ref ?? "";
+    const repo = entry.controlActionRepo;
+    const createdAt = entry.startedAt ?? entry.time;
+    if (
+      action?.startsWith("github.pull_request.") &&
+      href.includes("github.com/") &&
+      href.includes("/pull/")
+    ) {
+      const number =
+        entry.controlActionPrNumber ??
+        (typeof row?.pr_number === "number" ? row.pr_number : undefined);
+      const key = repo && number ? `${repo}#${number}` : href;
+      const state =
+        typeof row?.status === "string" && row.status !== "succeeded"
+          ? row.status
+          : payloadField(row?.payload, "mergeable_state");
+      const item: AgentGitActivityItem = {
+        id: `pr-${key}`,
+        href,
+        repo,
+        label: number ? `PR #${number}` : "Pull request",
+        detail: [repo, summarizeGitAction(action), state, formatToolFullTime(createdAt)]
+          .filter(Boolean)
+          .join(" / "),
+        action,
+        createdAt,
+      };
+      const existing = pullRequestsByKey.get(key);
+      if (!existing || (createdAt ?? "") > (existing.createdAt ?? "")) {
+        pullRequestsByKey.set(key, item);
+      }
+      continue;
+    }
+    if (
+      action === "github.commit.push" ||
+      action === "github.commit.write" ||
+      action === "github.commit.ci"
+    ) {
+      const sha = entry.controlActionSha ?? row?.result_sha ?? "";
+      const short = sha ? sha.slice(0, 7) : "commit";
+      const subject =
+        payloadField(row?.payload, "subject") ??
+        payloadField(row?.payload, "message");
+      const state =
+        action === "github.commit.ci" && typeof row?.status === "string"
+          ? row.status
+          : undefined;
+      commits.push({
+        id: `commit-${entry.id}`,
+        href,
+        repo,
+        label: short,
+        detail: [repo, summarizeGitAction(action), state, subject, formatToolFullTime(createdAt)]
+          .filter(Boolean)
+          .join(" / "),
+        action,
+        createdAt,
+      });
+    }
+  }
+  const byNewest = (a: AgentGitActivityItem, b: AgentGitActivityItem) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
+  return {
+    pullRequests: Array.from(pullRequestsByKey.values()).sort(byNewest),
+    commits: commits.sort(byNewest),
+  };
 }
 
 function isShellToolEntry(entry: TranscriptEntry): boolean {
@@ -7895,13 +9320,13 @@ function backgroundTaskStatusLabel(
 }
 
 function backgroundTaskTitle(entry: TranscriptEntry): string {
-  return (
-    entry.taskCommand ??
-    entry.taskSummary ??
-    entry.taskDescription ??
-    entry.lastToolName ??
-    "Shell task"
-  );
+  const title = [
+    entry.taskCommand,
+    entry.taskSummary,
+    entry.taskDescription,
+    entry.lastToolName,
+  ].find((value) => typeof value === "string" && value.trim().length > 0);
+  return title?.trim() ?? "Shell task";
 }
 
 function backgroundTaskSubtitle(entry: TranscriptEntry): string {
@@ -8094,10 +9519,13 @@ function RunBackgroundTaskBlock({
   const running = isBackgroundTaskRunning(entry);
   const label = backgroundTaskStatusLabel(entry.taskStatus);
   const summary = backgroundTaskTitle(entry);
+  const description = entry.taskDescription?.trim() ?? "";
   const detail =
-    entry.taskDescription && entry.taskDescription !== summary
-      ? entry.taskDescription
-      : "";
+    description && description !== summary ? description : "";
+  const taskProcessId = String(entry.taskProcessId ?? "").trim();
+  const taskId = entry.taskId?.trim() ?? "";
+  const processLabel =
+    taskProcessId ? `process ${taskProcessId}` : taskId ? `task ${taskId}` : "";
   const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
   return (
     <button
@@ -8127,16 +9555,10 @@ function RunBackgroundTaskBlock({
             />
           )}
         </div>
-        {(detail || entry.taskId || errorText) && (
+        {(detail || processLabel || errorText) && (
           <div className="run-background-task-detail">
             {detail && <span>{detail}</span>}
-            {(entry.taskProcessId ?? entry.taskId) && (
-              <span>
-                {entry.taskProcessId
-                  ? `process ${entry.taskProcessId}`
-                  : `task ${entry.taskId}`}
-              </span>
-            )}
+            {processLabel && <span>{processLabel}</span>}
             {errorText && (
               <span className="run-background-task-error">{errorText}</span>
             )}
@@ -8212,6 +9634,7 @@ function RunHeaderOverflowMenu({
   background,
   files,
   sessionData,
+  pullRequests,
   settingsActive,
   helpActive,
   clusterActive,
@@ -8224,6 +9647,7 @@ function RunHeaderOverflowMenu({
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
   sessionData: RunHeaderMenuTabState;
+  pullRequests: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
   clusterActive: boolean;
@@ -8297,6 +9721,25 @@ function RunHeaderOverflowMenu({
           />
           <span>Session data</span>
         </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${pullRequests.active ? " is-active" : ""}`}
+          disabled={pullRequests.disabled}
+          onSelect={pullRequests.onOpen}
+          title={pullRequests.title}
+        >
+          <GitPullRequestIcon
+            className="run-tab-more-item-icon"
+            aria-hidden="true"
+          />
+          <span>PRs</span>
+          <span
+            className="run-shell-tasks-count run-tab-more-item-count"
+            data-active={(pullRequests.count ?? 0) > 0 ? "true" : undefined}
+            aria-label={`${pullRequests.count ?? 0} pull requests`}
+          >
+            {pullRequests.count ?? 0}
+          </span>
+        </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
           className={`run-tab-more-item${clusterActive ? " is-active" : ""}`}
@@ -8334,16 +9777,20 @@ function SessionTabMenu({
   session,
   isClosing,
   readOnly,
+  nested,
   onClose,
   onResurrect,
+  onUnnest,
   onSaveCredentials,
   saveDisabled,
 }: {
   session: Session;
   isClosing: boolean;
   readOnly: boolean;
+  nested?: boolean;
   onClose: () => void;
   onResurrect?: () => void;
+  onUnnest?: () => void;
   onSaveCredentials?: () => void;
   saveDisabled?: boolean;
 }) {
@@ -8391,9 +9838,7 @@ function SessionTabMenu({
             title={
               session.mode === "codex_config"
                 ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                : session.mode === "antigravity_config"
-                  ? "capture the agy OAuth token from this pod and write it to KV"
-                  : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+                : "capture ~/.claude/.credentials.json from this pod and write it to KV"
             }
           >
             <SaveIcon className="run-tab-more-item-icon" />
@@ -8407,6 +9852,16 @@ function SessionTabMenu({
             title="create a new session that resumes this conversation on a fresh pod"
           >
             <span>Resurrect session</span>
+          </DropdownMenuItem>
+        )}
+        {nested && onUnnest && (
+          <DropdownMenuItem
+            className="run-tab-more-item"
+            onSelect={onUnnest}
+            title="move this session out of its group"
+          >
+            <IndentDecreaseIcon className="run-tab-more-item-icon" />
+            <span>Un-nest</span>
           </DropdownMenuItem>
         )}
         <DropdownMenuItem
@@ -8424,6 +9879,8 @@ function SessionTabMenu({
 
 function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
   switch (id) {
+    case "configuration":
+      return <SettingsIcon />;
     case "transcript":
       return <MessageSquareIcon />;
     case "test":
@@ -8438,6 +9895,8 @@ function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
       return <BugIcon />;
     case "linked_repo":
       return <GitBranchIcon />;
+    case "session_image":
+      return <ImageIcon />;
   }
 }
 
@@ -8672,6 +10131,15 @@ function SessionDataCardDetails({
   readOnly?: boolean;
 }) {
   switch (row.id) {
+    case "configuration":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Selected option", sessionModeLabel(session.mode)],
+            ["Mode key", session.mode || "Not reported"],
+          ]}
+        />
+      );
     case "transcript":
       return (
         <div className="run-session-data-actions">
@@ -8858,6 +10326,727 @@ function SessionDataTestSlotDetails({
   );
 }
 
+// testSlotVerdictTone maps a readiness verdict / watch status to the shared card
+// tone classes the session-data cards use, so the test-slot page reads native.
+function testSlotVerdictTone(
+  verdict: string,
+): "good" | "warning" | "danger" | "info" | "merged" {
+  switch (verdict) {
+    case "ready":
+      return "good";
+    case "merged":
+      return "merged";
+    case "failed":
+    case "error":
+      return "danger";
+    case "conflict":
+    case "watching":
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
+function testSlotVerdictLabel(verdict: string): string {
+  switch (verdict) {
+    case "ready":
+      return "Green & mergeable";
+    case "failed":
+      return "CI failing";
+    case "conflict":
+      return "Needs rebase";
+    case "merged":
+      return "Merged";
+    case "watching":
+      return "Checks running";
+    case "no_pr":
+      return "No open PR";
+    case "error":
+      return "Unavailable";
+    default:
+      return verdict || "Unknown";
+  }
+}
+
+// testSlotReadiness collapses a status snapshot into the readiness view the page
+// renders. It PREFERS the live preflight: the durable watch row can be stale —
+// it freezes at its first terminal verdict, so a 'ready' watch never flips to
+// 'merged' (the merge webhook skips non-'watching' rows). A present preflight is
+// therefore the authoritative current state; the durable watch is the instant
+// paint + the fallback when no live read is available yet. Null when neither
+// source is known.
+function testSlotReadiness(status: TestSlotStatus | null): {
+  verdict: string;
+  hasOpenPR: boolean;
+  detail: string;
+  prUrl: string;
+  prNumber: number;
+  mergeableState: string;
+  checkState: string;
+  headSha: string;
+  asOf: string | null;
+  live: boolean;
+} | null {
+  if (!status) return null;
+  const w: TestSlotWatch | null = status.watch;
+  const p: TestSlotPreflight | null = status.preflight;
+  if (!w && !p) return null;
+  if (p) {
+    return {
+      verdict: p.verdict,
+      hasOpenPR: p.has_open_pr,
+      detail: p.detail || w?.detail || "",
+      prUrl: p.pr_url || w?.pr_url || "",
+      prNumber: p.pr_number || w?.pr_number || 0,
+      mergeableState: p.mergeable_state || w?.mergeable_state || "",
+      checkState: p.check_state || w?.check_state || "",
+      headSha: p.head_sha || w?.head_sha || "",
+      asOf: null,
+      live: true,
+    };
+  }
+  return {
+    verdict: w!.status,
+    hasOpenPR: w!.has_open_pr,
+    detail: w!.detail || "",
+    prUrl: w!.pr_url || "",
+    prNumber: w!.pr_number || 0,
+    mergeableState: w!.mergeable_state || "",
+    checkState: w!.check_state || "",
+    headSha: w!.head_sha || "",
+    asOf: w!.last_event_at ?? null,
+    live: false,
+  };
+}
+
+// humanizeMergeableState turns GitHub's mergeable_state jargon into plain English
+// for the readiness card.
+function humanizeMergeableState(state: string): string {
+  switch ((state || "").trim().toLowerCase()) {
+    case "clean":
+      return "No conflicts";
+    case "dirty":
+      return "Has conflicts with main";
+    case "behind":
+      return "Behind main";
+    case "blocked":
+      return "Blocked by branch protection";
+    case "unstable":
+      return "Mergeable (checks pending)";
+    case "draft":
+      return "Draft PR";
+    case "has_hooks":
+      return "Mergeable";
+    case "":
+    case "unknown":
+      return "Unknown";
+    default:
+      return state;
+  }
+}
+
+function testSlotShortSha(sha: string | null | undefined): string {
+  const s = (sha || "").trim();
+  return s ? s.slice(0, 7) : "";
+}
+
+function githubRepoUrl(slug: string): string {
+  return slug ? `https://github.com/${slug}` : "";
+}
+
+function githubBranchUrl(slug: string, branch: string): string {
+  if (!slug || !branch) return "";
+  const encoded = branch.split("/").map(encodeURIComponent).join("/");
+  return `https://github.com/${slug}/tree/${encoded}`;
+}
+
+// testSlotSlotLabel names the obtained slot: prefer its numeric index, else the
+// slot hostname parsed from the URL (e.g. "tank-operator-slot-1").
+function testSlotSlotLabel(testState: TestState | null): string {
+  if (!testState) return "";
+  const url = testState.url?.trim();
+  if (url) {
+    try {
+      const host = new URL(url).hostname.split(".")[0];
+      if (host) return host;
+    } catch {
+      // fall through to the index
+    }
+  }
+  if (testState.slot_index != null) return `Slot ${testState.slot_index}`;
+  return "";
+}
+
+function formatTestSlotAsOf(iso: string | null): string {
+  if (!iso) return "";
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return "";
+  return t.toLocaleString();
+}
+
+// TestSlotScreen is the dedicated per-session test-slot page the beaker routes
+// to. It is the primary surface for the create/open/return controls and shows
+// last-known PR readiness from the durable snapshot (with an on-demand live
+// refresh). The "Create test slot" action runs the same deterministic,
+// server-side gate as before — this page only frames it and sets expectations.
+function TestSlotScreen({
+  sessionId,
+  testState,
+  authedFetch,
+  disabled,
+  readOnly,
+  onCreateHold,
+  onCreateDrive,
+  onReturnTestSlot,
+  onOpenReady,
+  onOpenTranscript,
+}: {
+  sessionId: string;
+  testState: TestState | null;
+  authedFetch: (input: string, init?: RequestInit) => Promise<Response>;
+  disabled?: boolean;
+  readOnly?: boolean;
+  onCreateHold: () => void;
+  onCreateDrive: () => void;
+  onReturnTestSlot?: () => Promise<void>;
+  onOpenReady: () => void;
+  onOpenTranscript: () => void;
+}) {
+  const [status, setStatus] = useState<TestSlotStatus | null>(null);
+  // Failing/pending check NAMES from the last LIVE read (mount enrich + manual
+  // Refresh). Kept separate from `status` so a cheap durable poll — which carries
+  // no preflight — does not wipe them; they are shown only while they describe
+  // the current head SHA.
+  const [liveChecks, setLiveChecks] = useState<{
+    failing: string[];
+    pending: string[];
+    headSha: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [returning, setReturning] = useState(false);
+  // Keep the latest authedFetch without making it an effect dependency (it may
+  // be re-created each render; depending on it would re-fire the load loop).
+  const fetchRef = useRef(authedFetch);
+  fetchRef.current = authedFetch;
+
+  const load = useCallback(
+    async (refresh: boolean, silent: boolean) => {
+      if (!silent) {
+        if (refresh) setRefreshing(true);
+        else setLoading(true);
+        setError(null);
+      }
+      try {
+        const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
+          refresh,
+        });
+        // A durable (non-refresh) read carries no preflight; preserve the last
+        // live one so the authoritative verdict doesn't flicker back to the
+        // (possibly stale) durable watch between live reads.
+        setStatus((prev) =>
+          refresh
+            ? next
+            : { ...next, preflight: prev?.preflight ?? next.preflight ?? null },
+        );
+        if (refresh && next.preflight) {
+          setLiveChecks({
+            failing: next.preflight.failing_checks ?? [],
+            pending: next.preflight.pending_checks ?? [],
+            headSha: next.preflight.head_sha ?? "",
+          });
+        }
+      } catch (err) {
+        if (!silent) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!silent) {
+          if (refresh) setRefreshing(false);
+          else setLoading(false);
+        }
+      }
+    },
+    [sessionId],
+  );
+
+  // Mount: instant durable paint, then a silent live read to enrich (authoritative
+  // verdict + failing-check names).
+  useEffect(() => {
+    void load(false, false);
+    void load(true, true);
+  }, [load]);
+
+  // The slot pill (testState) converges via the session SSE; re-pull durable when
+  // it flips so a provisioning → ready/url transition reflects without a refresh.
+  useEffect(() => {
+    void load(false, true);
+  }, [load, testState?.active, testState?.url]);
+
+  // Background convergence: a live poll (the durable watch row freezes at its
+  // first terminal verdict, so only a live read catches a mergeable → merged
+  // transition that happens while the page is open). Paused when the tab is
+  // hidden to bound GitHub reads to active viewing.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load(true, true);
+    }, 20000);
+    return () => window.clearInterval(id);
+  }, [load]);
+
+  const readiness = testSlotReadiness(status);
+  const readyUrl = testState?.url?.trim() || "";
+  // A real running environment requires BOTH the active flag AND a URL. An
+  // `active:true` with no URL is an optimistic/stale flag (e.g. set at "test"
+  // session-create before any slot existed) — it is NOT a running environment.
+  const slotActive = Boolean(testState?.active) && Boolean(readyUrl);
+  const repoSlug = status?.repo?.slug || "";
+  const branch = status?.repo?.branch || "";
+  const repoBlocked = Boolean(status) && !status?.repo;
+  const hasOpenPR = readiness ? readiness.hasOpenPR : true;
+  const canCreate =
+    !disabled && !readOnly && !slotActive && !repoBlocked && hasOpenPR;
+
+  const verdict = readiness?.verdict ?? "";
+  const tone = verdict ? testSlotVerdictTone(verdict) : "info";
+
+  const currentSha = readiness?.headSha || "";
+  const deployedSha = status?.provision?.head_sha || "";
+  const stale = Boolean(
+    slotActive && deployedSha && currentSha && deployedSha !== currentSha,
+  );
+
+  // Live check names only apply to the current head; otherwise they describe a
+  // superseded commit and are hidden.
+  const checksCurrent =
+    liveChecks != null &&
+    (!currentSha || !liveChecks.headSha || liveChecks.headSha === currentSha);
+  const failingChecks = checksCurrent ? liveChecks!.failing : [];
+  const pendingChecks = checksCurrent ? liveChecks!.pending : [];
+  const checksSummary = (() => {
+    if (failingChecks.length > 0) return `${failingChecks.length} failing`;
+    if (pendingChecks.length > 0) return `${pendingChecks.length} running`;
+    switch (readiness?.checkState) {
+      case "success":
+        return "Passing";
+      case "failure":
+        return "Failing";
+      case "pending":
+        return "Running";
+      default:
+        return "Unknown";
+    }
+  })();
+
+  const repoUrl = githubRepoUrl(repoSlug);
+  const branchUrl = githubBranchUrl(repoSlug, branch);
+  const prUrl = readiness?.prUrl || "";
+  const prNumber = readiness?.prNumber || 0;
+  const slotLabel = testSlotSlotLabel(testState);
+
+  const doReturn = async () => {
+    if (!onReturnTestSlot || returning) return;
+    setReturning(true);
+    try {
+      await onReturnTestSlot();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReturning(false);
+    }
+  };
+
+  return (
+    <div className="run-session-data-screen">
+      <section
+        className="run-session-data-section"
+        aria-labelledby="run-test-slot-title"
+      >
+        <div className="run-session-data-page-head">
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={onOpenTranscript}
+            title="Back to transcript"
+          >
+            <ArrowLeftIcon
+              className="run-session-data-action-icon"
+              aria-hidden="true"
+            />
+            <span>Transcript</span>
+          </button>
+          <h2 className="run-session-data-title" id="run-test-slot-title">
+            Test slot
+          </h2>
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={() => void load(true, false)}
+            disabled={refreshing || loading}
+            aria-busy={refreshing || undefined}
+            title="Re-check PR readiness against GitHub now"
+          >
+            {refreshing ? (
+              <Loader2Icon
+                className="run-session-data-action-icon run-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <RotateCcwIcon
+                className="run-session-data-action-icon"
+                aria-hidden="true"
+              />
+            )}
+            <span>{refreshing ? "Checking…" : "Refresh"}</span>
+          </button>
+        </div>
+
+        {(repoSlug || (prNumber > 0 && prUrl)) && (
+          <p className="run-session-data-summary">
+            {repoUrl ? (
+              <a href={repoUrl} target="_blank" rel="noreferrer">
+                {repoSlug}
+              </a>
+            ) : (
+              repoSlug
+            )}
+            {branch && (
+              <>
+                {" · "}
+                {branchUrl ? (
+                  <a href={branchUrl} target="_blank" rel="noreferrer">
+                    {branch}
+                  </a>
+                ) : (
+                  branch
+                )}
+              </>
+            )}
+            {prNumber > 0 && prUrl && (
+              <>
+                {" · "}
+                <a href={prUrl} target="_blank" rel="noreferrer">
+                  PR #{prNumber}
+                </a>
+              </>
+            )}
+          </p>
+        )}
+
+        {error && <div className="run-session-data-name-error">{error}</div>}
+
+        {loading && !status ? (
+          <div className="run-session-data-card is-info">
+            <div className="run-session-data-card-top">
+              <span className="run-session-data-card-icon" aria-hidden="true">
+                <Loader2Icon className="run-spin" />
+              </span>
+              <span className="run-session-data-card-main">
+                <span className="run-session-data-card-label">
+                  Loading test-slot status…
+                </span>
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="run-session-data-page-list" aria-label="Test slot">
+            {/* Active environment — what slot is obtained, its URL, what's on it */}
+            {slotActive && (
+              <div className="run-session-data-card is-good">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <FlaskConicalIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      Test environment — running
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      {slotLabel || "Provisioned for this session"}
+                      {deployedSha
+                        ? ` · ${branch || "branch"} @ ${testSlotShortSha(deployedSha)}`
+                        : ""}
+                    </span>
+                  </span>
+                  {readyUrl && (
+                    <a
+                      className="run-session-data-card-status"
+                      href={readyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={onOpenReady}
+                      title={readyUrl}
+                    >
+                      <span>Open</span>
+                      <ExternalLinkIcon aria-hidden="true" />
+                    </a>
+                  )}
+                </div>
+                <SessionDataFacts
+                  facts={[
+                    ["Slot", slotLabel || "Assigned"],
+                    ["URL", readyUrl || "Unknown"],
+                    [
+                      "Deployed",
+                      deployedSha
+                        ? `${branch || "branch"} @ ${testSlotShortSha(deployedSha)}`
+                        : branch || "Unknown",
+                    ],
+                    ...((status?.provision?.started_at
+                      ? [["Started", formatTestSlotAsOf(status.provision.started_at)]]
+                      : []) as Array<[string, string]>),
+                  ]}
+                />
+                <div className="run-session-data-actions">
+                  {readyUrl && (
+                    <a
+                      className="run-session-data-action"
+                      href={readyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={onOpenReady}
+                      title={readyUrl}
+                    >
+                      <ExternalLinkIcon
+                        className="run-session-data-action-icon"
+                        aria-hidden="true"
+                      />
+                      <span>Open test slot</span>
+                    </a>
+                  )}
+                  {onReturnTestSlot && !readOnly && (
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={returning}
+                      aria-busy={returning || undefined}
+                      onClick={() => void doReturn()}
+                    >
+                      {returning ? (
+                        <Loader2Icon
+                          className="run-session-data-action-icon run-spin"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <RotateCcwIcon
+                          className="run-session-data-action-icon"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span>{returning ? "Returning…" : "Return lease"}</span>
+                    </button>
+                  )}
+                  {readOnly && (
+                    <span className="run-session-data-readonly">
+                      Read-only session
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Stale-slot warning: deployed commit no longer matches branch head */}
+            {stale && (
+              <div className="run-session-data-card is-warning">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <RotateCcwIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      Slot is running an older commit
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      Deployed {testSlotShortSha(deployedSha)}, but the branch is
+                      now at {testSlotShortSha(currentSha)}. Create the test slot
+                      again to test your latest.
+                    </span>
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* PR readiness */}
+            <div className={`run-session-data-card is-${tone}`}>
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <GitPullRequestIcon />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">
+                    {prNumber > 0
+                      ? `Pull request #${prNumber}`
+                      : "Pull request readiness"}
+                  </span>
+                  <span className="run-session-data-card-detail">
+                    {repoBlocked
+                      ? status?.repo_error ||
+                        "Could not resolve a repository to test."
+                      : readiness
+                        ? readiness.detail ||
+                          testSlotVerdictLabel(readiness.verdict)
+                        : "No PR readiness recorded yet — Refresh to check live."}
+                  </span>
+                </span>
+                {prUrl ? (
+                  <a
+                    className="run-session-data-card-status"
+                    href={prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={prUrl}
+                  >
+                    <span>{testSlotVerdictLabel(verdict)}</span>
+                    <ExternalLinkIcon aria-hidden="true" />
+                  </a>
+                ) : (
+                  <span className="run-session-data-card-status">
+                    {readiness ? testSlotVerdictLabel(verdict) : "Unknown"}
+                  </span>
+                )}
+              </div>
+              <SessionDataFacts
+                facts={[
+                  [
+                    "Mergeable",
+                    readiness
+                      ? humanizeMergeableState(readiness.mergeableState)
+                      : "Unknown",
+                  ],
+                  ["Checks", checksSummary],
+                  ...((failingChecks.length > 0
+                    ? [["Failing", failingChecks.slice(0, 6).join(", ")]]
+                    : pendingChecks.length > 0
+                      ? [["Running", pendingChecks.slice(0, 6).join(", ")]]
+                      : []) as Array<[string, string]>),
+                  [
+                    "Commit",
+                    currentSha ? testSlotShortSha(currentSha) : "Unknown",
+                  ],
+                  [
+                    "Source",
+                    readiness
+                      ? readiness.live
+                        ? "Live (just checked)"
+                        : `Last known${
+                            readiness.asOf
+                              ? ` · as of ${formatTestSlotAsOf(readiness.asOf)}`
+                              : ""
+                          }`
+                      : "Not checked",
+                  ],
+                ]}
+              />
+            </div>
+
+            {/* Create controls (only when no slot is up) */}
+            {!slotActive && (
+              <div className="run-session-data-card is-info">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <FlaskConicalIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      Create a test environment
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      {repoBlocked
+                        ? "Resolve a repository above to enable provisioning."
+                        : hasOpenPR
+                          ? "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict. CI validation can take several minutes."
+                          : "No open PR for this branch yet — publish a PR to test."}
+                    </span>
+                  </span>
+                </div>
+                <div className="run-session-data-actions">
+                  <button
+                    type="button"
+                    className="run-session-data-action"
+                    disabled={!canCreate}
+                    onClick={onCreateHold}
+                    title={
+                      canCreate
+                        ? "Provision a test slot for this branch"
+                        : repoBlocked
+                          ? "Resolve a repository first"
+                          : hasOpenPR
+                            ? "Unavailable"
+                            : "No open PR to test"
+                    }
+                  >
+                    <FlaskConicalIcon
+                      className="run-session-data-action-icon"
+                      aria-hidden="true"
+                    />
+                    <span>Create test slot</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="run-session-data-action"
+                    disabled={!canCreate}
+                    onClick={onCreateDrive}
+                    title={
+                      canCreate
+                        ? "Provision a slot, then have the agent validate it"
+                        : "Unavailable"
+                    }
+                  >
+                    <FlaskConicalIcon
+                      className="run-session-data-action-icon"
+                      aria-hidden="true"
+                    />
+                    <span>Create test slot and test</span>
+                  </button>
+                  {readOnly && (
+                    <span className="run-session-data-readonly">
+                      Read-only session
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Provisioning in flight / last failure (a ready slot shows above) */}
+            {status?.provision &&
+              (status.provision.status === "pending" ||
+                status.provision.status === "failed") && (
+                <div
+                  className={`run-session-data-card is-${
+                    status.provision.status === "failed" ? "danger" : "warning"
+                  }`}
+                >
+                  <div className="run-session-data-card-top">
+                    <span
+                      className="run-session-data-card-icon"
+                      aria-hidden="true"
+                    >
+                      {status.provision.status === "pending" ? (
+                        <Loader2Icon className="run-spin" />
+                      ) : (
+                        <XIcon />
+                      )}
+                    </span>
+                    <span className="run-session-data-card-main">
+                      <span className="run-session-data-card-label">
+                        {status.provision.status === "pending"
+                          ? "Provisioning…"
+                          : "Last provision failed"}
+                      </span>
+                      <span className="run-session-data-card-detail">
+                        {status.provision.detail ||
+                          `Status: ${status.provision.status}`}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function SessionDataFacts({ facts }: { facts: Array<[string, string]> }) {
   return (
     <dl className="run-session-data-facts">
@@ -8973,6 +11162,653 @@ function BackgroundMeta({
       <span className="run-shell-task-meta-value">{value}</span>
     </div>
   );
+}
+
+type BreakGlassRepoScopeKind = "current_repo" | "repos" | "all_repos";
+type BreakGlassBranchScopeKind = "named" | "count" | "unlimited";
+
+function TestSlotModelApprovalPage({
+  sessionId,
+  requestId,
+  rows,
+  busyEventId,
+  onApprove,
+}: {
+  sessionId: string;
+  requestId: string | null;
+  rows: ControlActionRow[];
+  busyEventId: string | null;
+  onApprove: (request: Pick<BreakGlassRequest, "eventId">, note?: string) => void;
+}) {
+  const request = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          nonemptyAdminValue(row.event_id) === requestId &&
+          row.action === "tank.test_slot_model.request",
+      ),
+    [requestId, rows],
+  );
+  const decision = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          row.action === "tank.test_slot_model.grant" &&
+          nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId,
+      ),
+    [requestId, rows],
+  );
+  const payload = useMemo(
+    () => (request ? adminBreakGlassPayload(request) : {}),
+    [request],
+  );
+  const decisionPayload = useMemo(
+    () => (decision ? adminBreakGlassPayload(decision) : {}),
+    [decision],
+  );
+  const [note, setNote] = useState("");
+  useEffect(() => setNote(""), [requestId]);
+
+  const pending = Boolean(request && !decision && request.status === "started");
+  const busy = Boolean(requestId && busyEventId === requestId);
+  const status = !request ? "loading" : decision ? "approved" : pending ? "pending" : "closed";
+  const model = nonemptyAdminValue(payload.model) ?? "unknown";
+  const effort = nonemptyAdminValue(payload.effort) ?? "unknown";
+  const lowModel = nonemptyAdminValue(payload.low_model) ?? "unknown";
+  const lowEffort = nonemptyAdminValue(payload.low_effort) ?? "unknown";
+
+  return (
+    <div className="break-glass-page">
+      <section className="break-glass-page-main">
+        <div className="break-glass-page-head">
+          <div className="break-glass-page-title">
+            <FlaskConicalIcon aria-hidden="true" />
+            <div>
+              <h2>Test-slot model approval</h2>
+              <p>{requestId ?? "Request"}</p>
+            </div>
+          </div>
+          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : "pending"}`}>
+            {status}
+          </span>
+        </div>
+
+        {request ? (
+          <>
+            <dl className="break-glass-facts">
+              <div>
+                <dt>Session</dt>
+                <dd>{sessionId}</dd>
+              </div>
+              <div>
+                <dt>Requester</dt>
+                <dd>{nonemptyAdminValue(request.owner_email) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Mode</dt>
+                <dd>{nonemptyAdminValue(payload.mode) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
+              </div>
+            </dl>
+            <div className="break-glass-scope-grid">
+              <div className="test-slot-model-pair">
+                <span>Requested</span>
+                <strong>{model}</strong>
+                <small>{effort}</small>
+              </div>
+              <div className="test-slot-model-pair">
+                <span>Low-cost baseline</span>
+                <strong>{lowModel}</strong>
+                <small>{lowEffort}</small>
+              </div>
+            </div>
+            <div className="break-glass-reason">
+              {nonemptyAdminValue(payload.reason) ?? "Non-low-cost model or effort requested"}
+            </div>
+            <label className="break-glass-note">
+              <span>Decision note</span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                disabled={!pending || busy}
+                rows={3}
+              />
+            </label>
+            {decision && (
+              <div className="admin-break-glass-decision">
+                <span>
+                  Approved by {nonemptyAdminValue(decisionPayload.approved_by) ?? "unknown"}
+                  {nonemptyAdminValue(decisionPayload.expires_at)
+                    ? ` until ${decisionPayload.expires_at}`
+                    : ""}
+                </span>
+                <span>{formatToolFullTime(decision.created_at)}</span>
+              </div>
+            )}
+            <div className="break-glass-actions">
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={!requestId || !pending || busy}
+                onClick={() => requestId && onApprove({ eventId: requestId }, note)}
+              >
+                <CheckIcon aria-hidden="true" />
+                <span>Approve</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="break-glass-empty">Request not found</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function StandaloneTestSlotModelApprovalSurface({
+  sessionId,
+  requestId,
+}: {
+  sessionId: string;
+  requestId: string;
+}) {
+  const [rows, setRows] = useState<ControlActionRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyEventId, setBusyEventId] = useState<string | null>(null);
+
+  const fetchRequest = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/test-slot-model-requests/${encodeURIComponent(requestId)}`,
+      );
+      if (!res.ok) throw new Error(`request lookup failed: ${res.status}`);
+      const body = (await res.json()) as TestSlotModelRequestLookupResponse;
+      setRows(
+        [body.request, body.decision].filter(
+          (row): row is ControlActionRow => Boolean(row?.event_id),
+        ),
+      );
+      setError(null);
+    } catch (err) {
+      setRows([]);
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [requestId, sessionId]);
+
+  useEffect(() => {
+    void fetchRequest();
+  }, [fetchRequest]);
+
+  const approveRequest = useCallback(
+    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+      setBusyEventId(request.eventId);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note }),
+          },
+        );
+        if (!res.ok) throw new Error(`approval failed: ${res.status}`);
+        await fetchRequest();
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusyEventId(null);
+      }
+    },
+    [fetchRequest, sessionId],
+  );
+
+  if (loading) {
+    return (
+      <div className="break-glass-page">
+        <section className="break-glass-page-main">
+          <div className="run-shell-loading" role="status">
+            <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+            <span>Loading request...</span>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {error && (
+        <div className="run-error" role="alert">
+          {error}
+        </div>
+      )}
+      <TestSlotModelApprovalPage
+        sessionId={sessionId}
+        requestId={requestId}
+        rows={rows}
+        busyEventId={busyEventId}
+        onApprove={(request, note) => {
+          void approveRequest(request, note);
+        }}
+      />
+    </>
+  );
+}
+
+function BreakGlassRequestPage({
+  sessionId,
+  requestId,
+  rows,
+  busyEventId,
+  onDecision,
+}: {
+  sessionId: string;
+  requestId: string | null;
+  rows: ControlActionRow[];
+  busyEventId: string | null;
+  onDecision: (
+    request: Pick<BreakGlassRequest, "eventId">,
+    decision: "approve" | "deny",
+    body?: Record<string, unknown>,
+  ) => void;
+}) {
+  const request = useMemo(
+    () =>
+      rows.find(
+        (row) =>
+          nonemptyAdminValue(row.event_id) === requestId &&
+          (row.action === "github.break_glass.request" ||
+            row.action === "azure.break_glass.request"),
+      ),
+    [requestId, rows],
+  );
+  const decision = useMemo(
+    () =>
+      rows.find((row) => {
+        if (
+          row.action !== "github.break_glass.grant" &&
+          row.action !== "github.break_glass.deny" &&
+          row.action !== "azure.break_glass.grant" &&
+          row.action !== "azure.break_glass.deny"
+        )
+          return false;
+        return nonemptyAdminValue(adminBreakGlassPayload(row).request_event_id) === requestId;
+      }),
+    [requestId, rows],
+  );
+  const requestPayload = useMemo(
+    () => (request ? adminBreakGlassPayload(request) : {}),
+    [request],
+  );
+  const repoScope = useMemo(
+    () => adminBreakGlassPayloadObject(requestPayload.repo_scope),
+    [requestPayload],
+  );
+  const branchScope = useMemo(
+    () => adminBreakGlassPayloadObject(requestPayload.branch_scope),
+    [requestPayload],
+  );
+  const defaultRepo = request ? adminBreakGlassTarget(request) : "";
+  const [repoKind, setRepoKind] = useState<BreakGlassRepoScopeKind>("current_repo");
+  const [repoText, setRepoText] = useState(defaultRepo);
+  const [branchKind, setBranchKind] = useState<BreakGlassBranchScopeKind>("unlimited");
+  const [branchText, setBranchText] = useState("");
+  const [branchCount, setBranchCount] = useState("10");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    const nextRepoKind =
+      nonemptyAdminValue(repoScope.kind) === "all_repos"
+        ? "all_repos"
+        : nonemptyAdminValue(repoScope.kind) === "repos"
+          ? "repos"
+          : "current_repo";
+    const repoValues =
+      nextRepoKind === "repos"
+        ? adminBreakGlassStringList(repoScope.repos)
+        : [nonemptyAdminValue(repoScope.repo) ?? defaultRepo].filter(Boolean);
+    const nextBranchKind =
+      nonemptyAdminValue(branchScope.kind) === "named"
+        ? "named"
+        : nonemptyAdminValue(branchScope.kind) === "count"
+          ? "count"
+          : "unlimited";
+    setRepoKind(nextRepoKind);
+    setRepoText(repoValues.join("\n"));
+    setBranchKind(nextBranchKind);
+    setBranchText(adminBreakGlassStringList(branchScope.branches).join("\n"));
+    setBranchCount(
+      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
+        ? String(branchScope.count)
+        : "10",
+    );
+    setNote("");
+  }, [branchScope, defaultRepo, repoScope, requestId]);
+
+  const pending = Boolean(request && !decision && request.status === "started");
+  const busy = Boolean(requestId && busyEventId === requestId);
+  const kind = request?.action === "azure.break_glass.request" ? "azure" : "git";
+  const approvalTitle = request
+    ? `${adminBreakGlassKind(request)} approval`
+    : "Break glass approval";
+  const accessType = request ? adminBreakGlassAccessType(request) : "";
+  const target = request ? adminBreakGlassTarget(request) : requestId ?? "Request";
+  const status = !request ? "loading" : decision ? adminBreakGlassStatusLabel(adminBreakGlassStatus({ request, decision, pending: false })) : pending ? "pending" : "closed";
+  const repoValues = splitBreakGlassScopeValues(repoText);
+  const branchValues = splitBreakGlassScopeValues(branchText);
+  const approveBody = (): Record<string, unknown> => {
+    const body: Record<string, unknown> = { note };
+    if (kind === "git") {
+      body.repo_scope =
+        repoKind === "all_repos"
+          ? { kind: "all_repos" }
+          : repoKind === "repos"
+            ? { kind: "repos", repos: repoValues }
+            : { kind: "current_repo", repo: repoValues[0] ?? defaultRepo };
+      body.branch_scope =
+        branchKind === "unlimited"
+          ? { kind: "unlimited" }
+          : branchKind === "count"
+            ? { kind: "count", count: Math.max(1, Number(branchCount) || 1) }
+            : { kind: "named", branches: branchValues };
+    }
+    return body;
+  };
+  const approveDisabled =
+    !requestId ||
+    !pending ||
+    busy ||
+    (kind === "git" &&
+      ((repoKind !== "all_repos" && repoValues.length === 0) ||
+        (branchKind === "named" && branchValues.length === 0)));
+
+  return (
+    <div className="break-glass-page">
+      <section className="break-glass-page-main">
+        <div className="break-glass-page-head">
+          <div className="break-glass-page-title">
+            <ShieldAlertIcon aria-hidden="true" />
+            <div>
+              <h2>{approvalTitle}</h2>
+              <p className="break-glass-page-subtitle">
+                {accessType && <span>{accessType}</span>}
+                <code>{target}</code>
+              </p>
+            </div>
+          </div>
+          <span className={`admin-break-glass-status is-${status === "approved" ? "approved" : status === "denied" ? "denied" : "pending"}`}>
+            {status}
+          </span>
+        </div>
+
+        {request ? (
+          <>
+            <dl className="break-glass-facts">
+              <div>
+                <dt>Type</dt>
+                <dd>{adminBreakGlassKind(request)}</dd>
+              </div>
+              <div>
+                <dt>Target</dt>
+                <dd>{adminBreakGlassTarget(request)}</dd>
+              </div>
+              <div>
+                <dt>Session</dt>
+                <dd>{sessionId}</dd>
+              </div>
+              <div>
+                <dt>Requester</dt>
+                <dd>{nonemptyAdminValue(request.owner_email) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service) ?? "unknown"}</dd>
+              </div>
+              <div>
+                <dt>Created</dt>
+                <dd>{formatToolFullTime(request.created_at) || "unknown"}</dd>
+              </div>
+            </dl>
+            <div className="break-glass-reason">
+              {adminBreakGlassReason(request)}
+            </div>
+            {kind === "git" && (
+              <div className="break-glass-scope-grid">
+                <label>
+                  <span>Repository scope</span>
+                  <select
+                    value={repoKind}
+                    onChange={(event) => setRepoKind(event.target.value as BreakGlassRepoScopeKind)}
+                    disabled={!pending || busy}
+                  >
+                    <option value="current_repo">Current repository</option>
+                    <option value="repos">Selected repositories</option>
+                    <option value="all_repos">All repositories</option>
+                  </select>
+                </label>
+                {repoKind !== "all_repos" && (
+                  <label>
+                    <span>Repositories</span>
+                    <textarea
+                      value={repoText}
+                      onChange={(event) => setRepoText(event.target.value)}
+                      disabled={!pending || busy}
+                      rows={repoKind === "repos" ? 4 : 2}
+                    />
+                  </label>
+                )}
+                <label>
+                  <span>Branch scope</span>
+                  <select
+                    value={branchKind}
+                    onChange={(event) => setBranchKind(event.target.value as BreakGlassBranchScopeKind)}
+                    disabled={!pending || busy}
+                  >
+                    <option value="unlimited">All branches</option>
+                    <option value="named">Named branches</option>
+                    <option value="count">Branch count</option>
+                  </select>
+                </label>
+                {branchKind === "named" && (
+                  <label>
+                    <span>Branches</span>
+                    <textarea
+                      value={branchText}
+                      onChange={(event) => setBranchText(event.target.value)}
+                      disabled={!pending || busy}
+                      rows={4}
+                    />
+                  </label>
+                )}
+                {branchKind === "count" && (
+                  <label>
+                    <span>Count</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={branchCount}
+                      onChange={(event) => setBranchCount(event.target.value)}
+                      disabled={!pending || busy}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+            <label className="break-glass-note">
+              <span>Decision note</span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                disabled={!pending || busy}
+                rows={3}
+              />
+            </label>
+            {decision && (
+              <div className="admin-break-glass-decision">
+                <span>{adminBreakGlassDecisionSummary(decision)}</span>
+                <span>{formatToolFullTime(decision.created_at)}</span>
+              </div>
+            )}
+            <div className="break-glass-actions">
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={approveDisabled}
+                onClick={() => requestId && onDecision({ eventId: requestId }, "approve", approveBody())}
+              >
+                <CheckIcon aria-hidden="true" />
+                <span>Approve</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-test-btn"
+                disabled={!requestId || !pending || busy}
+                onClick={() => requestId && onDecision({ eventId: requestId }, "deny", { note })}
+              >
+                <XIcon aria-hidden="true" />
+                <span>Deny</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="break-glass-empty">Request not found</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function splitBreakGlassScopeValues(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/[\n,]+/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part || seen.has(part)) return false;
+      seen.add(part);
+      return true;
+    });
+}
+
+function pendingTestSlotModelApprovalMenuItems(
+  sessionId: string,
+  rows: ControlActionRow[],
+): BreakGlassApprovalMenuItem[] {
+  const resolvedRequests = new Set<string>();
+  for (const row of rows) {
+    if (row.action !== "tank.test_slot_model.grant") continue;
+    const requestEventId = nonemptyAdminValue(
+      adminBreakGlassPayload(row).request_event_id,
+    );
+    if (requestEventId) resolvedRequests.add(requestEventId);
+  }
+  return rows
+    .flatMap((row) => {
+      const eventId = nonemptyAdminValue(row.event_id);
+      if (
+        row.action !== "tank.test_slot_model.request" ||
+        row.status !== "started" ||
+        !eventId ||
+        resolvedRequests.has(eventId)
+      ) {
+        return [];
+      }
+      const payload = adminBreakGlassPayload(row);
+      const model = nonemptyAdminValue(payload.model) ?? "unknown model";
+      const effort = nonemptyAdminValue(payload.effort) ?? "unknown effort";
+      return [{
+        id: eventId,
+        kind: "model" as const,
+        href: testSlotModelRequestUrl(sessionId, eventId),
+        label: "Agent selection",
+        target: `${model} / ${effort}`,
+        reason: nonemptyAdminValue(payload.reason),
+        createdAt: nonemptyAdminValue(row.created_at),
+      }];
+    });
+}
+
+function prLaneRepoScopeLabel(request: PRLaneRequest): string {
+  if (request.allRepos) return "all repos";
+  if (request.repos && request.repos.length > 0) {
+    return request.repos.join(", ");
+  }
+  return request.repo ?? "current repo";
+}
+
+function prLaneBranchScopeLabel(request: PRLaneRequest): string {
+  if (!request.allocationRequest) return request.laneName;
+  if (request.unlimited) return "unlimited governed lanes";
+  if (request.requestedCount) {
+    return `${request.requestedCount} governed lane${
+      request.requestedCount === 1 ? "" : "s"
+    }`;
+  }
+  const namedCount =
+    request.laneNames?.length || request.proposedBranches?.length || 0;
+  return `${namedCount} named lane${namedCount === 1 ? "" : "s"}`;
+}
+
+function prLaneApprovalMenuItems(
+  sessionId: string,
+  requests: PRLaneRequest[],
+): BreakGlassApprovalMenuItem[] {
+  return requests.map((request) => {
+    const branchScope = prLaneBranchScopeLabel(request);
+    const meta = [
+      request.allocationRequest ? branchScope : request.relationship,
+      request.base ? `from ${request.base}` : "",
+      prLaneRepoScopeLabel(request),
+      request.scope,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      id: request.eventId,
+      kind: "pr-lane" as const,
+      href: sessionUrl(sessionId),
+      label: request.allocationRequest ? "PR lane allocation" : "PR lane",
+      target: request.allocationRequest
+        ? meta
+        : `${request.laneName}${meta ? ` · ${meta}` : ""}`,
+      reason: request.reason,
+      createdAt: request.createdAt,
+      prLaneRequest: request,
+    };
+  });
+}
+
+function breakGlassApprovalMenuItemsForSession(
+  sessionId: string,
+  breakGlassRequests: BreakGlassRequest[],
+  testSlotModelRows: ControlActionRow[],
+  prLaneRequests: PRLaneRequest[],
+): BreakGlassApprovalMenuItem[] {
+  const breakGlassItems = breakGlassRequests.map((request) => ({
+    id: request.eventId,
+    kind: request.kind === "azure" ? ("azure" as const) : ("github" as const),
+    href: breakGlassRequestUrl(sessionId, request.eventId),
+    label:
+      request.kind === "azure"
+        ? "Azure break glass"
+        : "GitHub break glass",
+    target: request.target,
+    reason: request.reason,
+    createdAt: request.createdAt,
+  }));
+  return [
+    ...breakGlassItems,
+    ...pendingTestSlotModelApprovalMenuItems(sessionId, testSlotModelRows),
+    ...prLaneApprovalMenuItems(sessionId, prLaneRequests),
+  ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
 function BackgroundScreen({
@@ -9302,7 +12138,101 @@ function BackgroundScreen({
   );
 }
 
-function ToolBody({ entry }: { entry: TranscriptEntry }) {
+function AgentGitActivityScreen({
+  pullRequests,
+  commits,
+}: {
+  pullRequests: AgentGitActivityItem[];
+  commits: AgentGitActivityItem[];
+}) {
+  return (
+    <div className="run-session-data-screen run-git-activity-screen">
+      <section
+        className="run-session-data-section"
+        aria-labelledby="run-git-activity-title"
+      >
+        <div className="run-session-data-page-head">
+          <h2 className="run-session-data-title" id="run-git-activity-title">
+            PRs
+          </h2>
+          <span className="run-session-data-summary">
+            {pullRequests.length} PRs / {commits.length} commits
+          </span>
+        </div>
+        <div className="run-git-activity-group">
+          <h3 className="run-git-activity-heading">Pull requests</h3>
+          {pullRequests.length === 0 ? (
+            <div className="run-session-data-empty">
+              No pull requests touched yet.
+            </div>
+          ) : (
+            <div className="run-git-activity-list" role="list">
+              {pullRequests.map((item) => (
+                <a
+                  key={item.id}
+                  className="run-git-activity-row"
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="listitem"
+                >
+                  <span className="run-git-activity-icon" aria-hidden="true">
+                    <GitPullRequestIcon />
+                  </span>
+                  <span className="run-git-activity-main">
+                    <span className="run-git-activity-label">{item.label}</span>
+                    <span className="run-git-activity-detail">{item.detail}</span>
+                  </span>
+                  <ExternalLinkIcon
+                    className="run-git-activity-external"
+                    aria-hidden="true"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="run-git-activity-group">
+          <h3 className="run-git-activity-heading">Commits</h3>
+          {commits.length === 0 ? (
+            <div className="run-session-data-empty">No pushed commits yet.</div>
+          ) : (
+            <div className="run-git-activity-list" role="list">
+              {commits.slice(0, 50).map((item) => (
+                <a
+                  key={item.id}
+                  className="run-git-activity-row"
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="listitem"
+                >
+                  <span className="run-git-activity-icon" aria-hidden="true">
+                    <GitBranchIcon />
+                  </span>
+                  <span className="run-git-activity-main">
+                    <span className="run-git-activity-label">{item.label}</span>
+                    <span className="run-git-activity-detail">{item.detail}</span>
+                  </span>
+                  <ExternalLinkIcon
+                    className="run-git-activity-external"
+                    aria-hidden="true"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ToolBody({
+  entry,
+}: {
+  entry: TranscriptEntry;
+}) {
   const name = entry.toolName ?? "";
   const input = tryParseJson(entry.toolInput) as Record<string, unknown> | null;
   if (
@@ -9330,6 +12260,8 @@ interface AskUserQuestion {
   header?: string;
   multiSelect: boolean;
   options: Array<{ label: string; description?: string; preview?: string }>;
+  defaultSelectionLabel?: string | null;
+  freeFormSelectionLabel?: string | null;
   // allowFreeForm and secret are projected from the Tank-canonical
   // question shape produced by the runner adapters. Claude maps every
   // question to allowFreeForm=true (mirroring Claude Code's host UI's
@@ -9343,8 +12275,82 @@ interface AskUserQuestion {
   secret: boolean;
 }
 
+const PLAN_APPROVAL_REQUEST_CHANGES_LABEL = "Request changes";
+
+function isPlanApprovalAwaitingInput(
+  awaitingInput: TranscriptEntry["awaitingInput"] | undefined,
+): boolean {
+  return (
+    typeof awaitingInput?.plan === "string" &&
+    awaitingInput.plan.trim().length > 0
+  );
+}
+
+function isPlanApprovalAwaitingInputEntry(entry: TranscriptEntry): boolean {
+  return (
+    entry.metaKind === "awaiting_input" &&
+    isPlanApprovalAwaitingInput(entry.awaitingInput)
+  );
+}
+
+function askUserQuestionDefaultSelectionLabel(
+  q: Pick<AskUserQuestion, "defaultSelectionLabel">,
+): string | null {
+  return q.defaultSelectionLabel === undefined
+    ? SOMETHING_ELSE_LABEL
+    : q.defaultSelectionLabel;
+}
+
+function askUserQuestionFreeFormSelectionLabel(
+  q: Pick<AskUserQuestion, "defaultSelectionLabel" | "freeFormSelectionLabel">,
+): string | null {
+  return q.freeFormSelectionLabel === undefined
+    ? askUserQuestionDefaultSelectionLabel(q)
+    : q.freeFormSelectionLabel;
+}
+
+function planApprovalFreeFormSelectionLabel(
+  options: AskUserQuestion["options"],
+): string | null {
+  return (
+    options.find((opt) => opt.label === PLAN_APPROVAL_REQUEST_CHANGES_LABEL)
+      ?.label ??
+    options[1]?.label ??
+    null
+  );
+}
+
+function askUserQuestionHasResponse(
+  q: AskUserQuestion,
+  selections: Record<string, string[]>,
+  notes: Record<string, string>,
+): boolean {
+  if (
+    effectiveAskUserQuestionSelection(
+      selections,
+      q.question,
+      askUserQuestionDefaultSelectionLabel(q),
+    ).length > 0
+  ) {
+    return true;
+  }
+  if (
+    q.allowFreeForm &&
+    askUserQuestionFreeFormSelectionLabel(q) &&
+    (notes[q.question]?.trim().length ?? 0) > 0
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function parseAskUserQuestions(
   input: Record<string, unknown> | null,
+  {
+    planApproval = false,
+  }: {
+    planApproval?: boolean;
+  } = {},
 ): AskUserQuestion[] {
   if (!Array.isArray(input?.questions)) return [];
   return (input.questions as Array<Record<string, unknown>>).map((q) => {
@@ -9361,11 +12367,33 @@ function parseAskUserQuestions(
       question: String(q.question ?? ""),
       header: typeof q.header === "string" && q.header ? q.header : undefined,
       multiSelect: q.multiSelect === true,
-      options,
-      allowFreeForm: q.allowFreeForm === true,
+      options: planApproval ? options : appendSomethingElseOption(options),
+      defaultSelectionLabel: planApproval ? null : SOMETHING_ELSE_LABEL,
+      freeFormSelectionLabel: planApproval
+        ? planApprovalFreeFormSelectionLabel(options)
+        : undefined,
+      allowFreeForm: planApproval || q.allowFreeForm === true,
       secret: q.secret === true,
     } satisfies AskUserQuestion;
   });
+}
+
+// Normal AskUserQuestion cards carry a synthetic "Something else" choice,
+// selected by default (effectiveAskUserQuestionSelection). It is the user's
+// standing right to answer outside the agent's menu: the options are shortcuts,
+// never a cage. Plan approval opts out because its Approve/Request-changes
+// choices are the whole contract.
+function appendSomethingElseOption(
+  options: AskUserQuestion["options"],
+): AskUserQuestion["options"] {
+  if (options.some((opt) => opt.label === SOMETHING_ELSE_LABEL)) return options;
+  return [
+    ...options,
+    {
+      label: SOMETHING_ELSE_LABEL,
+      description: "None of these — type your own answer below.",
+    },
+  ];
 }
 
 function emptyAskUserQuestionDraft(): AskUserQuestionDraft {
@@ -9375,9 +12403,14 @@ function emptyAskUserQuestionDraft(): AskUserQuestionDraft {
 function RunAwaitingInputCard({
   entry,
   questionNavigation,
+  firstQuestionOnly = false,
 }: {
   entry: TranscriptEntry;
   questionNavigation?: QuestionPageNavigation;
+  // Inline-on-the-asking-turn rendering: the asking turn's question message
+  // carries the whole set, but only Q1 belongs inline (Q2+ live on dedicated
+  // pages). When set, the card shows just the first question.
+  firstQuestionOnly?: boolean;
 }) {
   const { submitAnswer, askUserQuestionDrafts, setAskUserQuestionDraft } =
     useContext(RunContext);
@@ -9403,15 +12436,19 @@ function RunAwaitingInputCard({
   // (awaitingInput.answered flips).
   const submittedSnapshot = draft.submittedSnapshot;
 
+  const planApproval = isPlanApprovalAwaitingInput(aw);
   const questions = parseAskUserQuestions(
     aw ? { questions: aw.questions } : null,
+    { planApproval },
   );
   const visibleQuestionIndex =
-    aw?.questionIndex &&
-    aw.questionIndex >= 1 &&
-    aw.questionIndex <= questions.length
-      ? aw.questionIndex - 1
-      : null;
+    firstQuestionOnly && questions.length > 0
+      ? 0
+      : aw?.questionIndex &&
+          aw.questionIndex >= 1 &&
+          aw.questionIndex <= questions.length
+        ? aw.questionIndex - 1
+        : null;
   const visibleQuestions =
     visibleQuestionIndex == null
       ? questions
@@ -9451,7 +12488,13 @@ function RunAwaitingInputCard({
     if (submittedSnapshot && submittedSnapshot.answers[q.question]) {
       return submittedSnapshot.answers[q.question];
     }
-    return selections[q.question] ?? [];
+    // Live (unanswered): normal questions default to "Something else"; plan
+    // approval opts out so Approve/Request-changes remain exhaustive.
+    return effectiveAskUserQuestionSelection(
+      selections,
+      q.question,
+      askUserQuestionDefaultSelectionLabel(q),
+    );
   }
 
   function answeredNoteFor(question: string): string | undefined {
@@ -9469,10 +12512,7 @@ function RunAwaitingInputCard({
   // the renderer surfaces a free-form textarea whenever allowFreeForm
   // is true, and submit accepts text without an option pick.
   function questionHasResponse(q: AskUserQuestion): boolean {
-    if ((selections[q.question]?.length ?? 0) > 0) return true;
-    if (q.allowFreeForm && (notes[q.question]?.trim().length ?? 0) > 0)
-      return true;
-    return false;
+    return askUserQuestionHasResponse(q, selections, notes);
   }
   const isReady =
     !answered &&
@@ -9492,19 +12532,12 @@ function RunAwaitingInputCard({
   function toggleSelection(q: AskUserQuestion, label: string): void {
     if (resolved || submitting) return;
     updateDraft((draft) => {
-      const prev = draft.selections;
-      const current = prev[q.question] ?? [];
-      let nextSelections: Record<string, string[]>;
-      if (q.multiSelect) {
-        const next = current.includes(label)
-          ? current.filter((l) => l !== label)
-          : [...current, label];
-        nextSelections = { ...prev, [q.question]: next };
-      } else {
-        // Single-select: clicking always selects exactly that label
-        // (re-clicking selected option is a no-op submit affordance).
-        nextSelections = { ...prev, [q.question]: [label] };
-      }
+      const nextSelections = nextAskUserQuestionSelections({
+        previousSelections: draft.selections,
+        question: q.question,
+        label,
+        multiSelect: q.multiSelect,
+      });
       return { ...draft, selections: nextSelections };
     });
   }
@@ -9518,35 +12551,11 @@ function RunAwaitingInputCard({
 
   async function submit(): Promise<void> {
     if (submitting || resolved || !isReady) return;
-    const answers: Record<string, string[]> = {};
-    const annotations: Record<string, { preview?: string; notes?: string }> =
-      {};
-    for (const q of questions) {
-      const labels = selections[q.question] ?? [];
-      const notesText = q.allowFreeForm
-        ? (notes[q.question]?.trim() ?? "")
-        : "";
-      // The wire shape requires `answers[question]` to be a non-empty
-      // string array. When the user only typed free-form text, we
-      // synthesize a single "Other" label so the answers map stays valid;
-      // the actual free-form text rides in `annotations[question].notes`.
-      // Both halves post to /answer; turn.input_answered resolves the question
-      // set, and the same backend request records the visible answer turn.
-      if (labels.length > 0) {
-        answers[q.question] = labels;
-      } else if (notesText) {
-        answers[q.question] = ["Other"];
-      } else {
-        continue;
-      }
-      const preview = q.options.find((opt) =>
-        labels.includes(opt.label),
-      )?.preview;
-      const ann: { preview?: string; notes?: string } = {};
-      if (preview) ann.preview = preview;
-      if (notesText) ann.notes = notesText;
-      if (ann.preview || ann.notes) annotations[q.question] = ann;
-    }
+    const { answers, annotations } = buildAskUserQuestionAnswerPayload(
+      questions,
+      selections,
+      notes,
+    );
     // Lock the card before the await; the snapshot is the user-visible
     // truth until the durable answer event lands (awaitingInput.answered).
     setSubmitting(true);
@@ -9578,12 +12587,26 @@ function RunAwaitingInputCard({
 
   if (!aw || questions.length === 0) return null;
 
+  // Prototype: the run composer is now the single answer input (the send
+  // button becomes Submit; see submitComposerAnswer in ChatPane), so the card
+  // no longer renders its own free-form textarea or Submit/Next row — it is
+  // selection + plan content only.
+  const SHOW_CARD_INPUT = false;
+
   return (
     <div
       className={`run-tool-body run-tool-ask${resolved ? " run-tool-ask-locked" : ""}`}
       data-answered={answered ? "true" : "false"}
       data-dismissed={dismissed ? "true" : "false"}
     >
+      {aw?.plan && aw.plan.trim() !== "" && (
+        <div className="run-tool-ask-plan" data-slot="plan">
+          <span className="run-tool-ask-chip">Plan</span>
+          <div className="run-tool-ask-plan-body">
+            <RunMarkdown>{aw.plan}</RunMarkdown>
+          </div>
+        </div>
+      )}
       {dismissed && (
         <div className="run-tool-ask-status" role="status" aria-live="polite">
           <span className="run-tool-ask-status-icon" aria-hidden="true">
@@ -9695,7 +12718,7 @@ function RunAwaitingInputCard({
                 </p>
               </div>
             )}
-            {showFreeForm && (
+            {SHOW_CARD_INPUT && showFreeForm && (
               <label className="run-tool-ask-notes-label">
                 <span>
                   {q.options.length === 0
@@ -9728,7 +12751,7 @@ function RunAwaitingInputCard({
           </div>
         );
       })}
-      {!resolved && (
+      {SHOW_CARD_INPUT && !resolved && (
         <div className="run-tool-ask-submit-row">
           {hasPreviousQuestion && (
             <button
@@ -9778,6 +12801,53 @@ function RunAwaitingInputCard({
         </div>
       )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
+    </div>
+  );
+}
+
+// A pending AskUserQuestion the main transcript should render inline: the asking
+// turn's derived question message (assistant, carries awaitingInput). The whole
+// set rides on this one message; only Q1 renders inline (Q2+ on dedicated pages),
+// and the run composer is the answer surface.
+function isPendingInlineQuestionEntry(entry: TranscriptEntry): boolean {
+  const aw = entry.awaitingInput;
+  return Boolean(
+    entry.kind === "message" &&
+      entry.role === "assistant" &&
+      aw &&
+      Array.isArray(aw.questions) &&
+      aw.questions.length > 0,
+  );
+}
+
+// RunInlineAskUserQuestion renders the question widget inline on the asking turn,
+// in place of the derived "summary" question message. It frames the card as the
+// agent's message (avatar gutter + content column) so it reads as a continuation
+// of the agent's preamble directly above it.
+function RunInlineAskUserQuestion({
+  entry,
+  avatar,
+}: {
+  entry: TranscriptEntry;
+  avatar: AgentAvatar | null;
+}) {
+  return (
+    <div
+      className="run-transcript-message run-inline-question"
+      data-slot="message"
+      data-variant="assistant"
+      data-role="assistant"
+      data-kind="inline-question"
+    >
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <RunAwaitingInputCard entry={entry} firstQuestionOnly />
+      </div>
     </div>
   );
 }
@@ -9961,66 +13031,70 @@ function RunToolItem({
         <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
-        <button
-          type="button"
-          className="run-transcript-tool-header"
-          data-slot="tool-item-header"
-          onClick={() => onExpandedChange(!expanded)}
-          aria-expanded={expanded}
-        >
-          <span
-            className="run-transcript-tool-icon"
-            data-slot="tool-item-icon"
-            title={cfg.tooltip}
-            aria-label={cfg.tooltip}
+        <div className="run-transcript-tool-header-row">
+          <button
+            type="button"
+            className="run-transcript-tool-header"
+            data-slot="tool-item-header"
+            onClick={() => onExpandedChange(!expanded)}
+            aria-expanded={expanded}
           >
             <span
-              className={`run-tool-icon-glyph ${cfg.colorClass}`}
-              aria-hidden="true"
+              className="run-transcript-tool-icon"
+              data-slot="tool-item-icon"
+              title={cfg.tooltip}
+              aria-label={cfg.tooltip}
             >
-              <cfg.Icon size={14} strokeWidth={2} />
+              <span
+                className={`run-tool-icon-glyph ${cfg.colorClass}`}
+                aria-hidden="true"
+              >
+                <cfg.Icon size={14} strokeWidth={2} />
+              </span>
             </span>
-          </span>
-          <span
-            className="run-transcript-tool-label"
-            data-slot="tool-item-label"
-          >
-            {entry.toolName ?? "tool"}
-          </span>
-          {showTimestamps && (
-            <ToolTiming
-              startedAt={entry.startedAt ?? entry.time}
-              completedAt={entry.completedAt}
-              running={running}
-            />
-          )}
-          {running && !showTimestamps && (
-            <Loader2Icon
-              size={12}
-              className="run-spin run-tool-spinner"
-              aria-hidden="true"
-            />
-          )}
-          <span
-            className="run-transcript-tool-chevron"
-            data-slot="tool-item-chevron"
-          >
-            {expanded ? (
-              <ChevronUpIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
-              />
-            ) : (
-              <ChevronDownIcon
-                size={14}
-                strokeWidth={2}
-                className="run-chevron-icon"
+            <span
+              className="run-transcript-tool-label"
+              data-slot="tool-item-label"
+            >
+              {entry.toolName ?? "tool"}
+            </span>
+            {showTimestamps && (
+              <ToolTiming
+                startedAt={entry.startedAt ?? entry.time}
+                completedAt={entry.completedAt}
+                running={running}
               />
             )}
-          </span>
-        </button>
-        {expanded && <ToolBody entry={entry} />}
+            {running && !showTimestamps && (
+              <Loader2Icon
+                size={12}
+                className="run-spin run-tool-spinner"
+                aria-hidden="true"
+              />
+            )}
+            <span
+              className="run-transcript-tool-chevron"
+              data-slot="tool-item-chevron"
+            >
+              {expanded ? (
+                <ChevronUpIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              ) : (
+                <ChevronDownIcon
+                  size={14}
+                  strokeWidth={2}
+                  className="run-chevron-icon"
+                />
+              )}
+            </span>
+          </button>
+        </div>
+        {expanded && (
+          <ToolBody entry={entry} />
+        )}
       </div>
     </div>
   );
@@ -10358,6 +13432,10 @@ type TurnViewItem = {
   loaded: boolean;
   costEstimate: SessionCostEstimate | null;
   contextTokens: number | null;
+  // The model/effort this turn actually ran on (from its user-message entry),
+  // distinct from the session's next-turn selection in the composer chip.
+  model: string | null;
+  effort: string | null;
   startedAt?: string;
   completedAt?: string;
   lastActivityAt?: string;
@@ -10382,6 +13460,17 @@ type TurnActivityLoadStateByTurn = Record<
   TurnActivityLoadState | undefined
 >;
 
+function turnActivityLoadStatusMetricCode(
+  status: TurnActivityLoadState["status"] | undefined,
+): number {
+  if (status == null) return 0;
+  if (status === "unloaded") return 1;
+  if (status === "loading") return 2;
+  if (status === "loaded") return 3;
+  if (status === "error") return 4;
+  return -1;
+}
+
 type ActivityRefreshProblem = TurnActivityLoadProblem;
 
 type TurnActivityLoadResult = {
@@ -10402,7 +13491,7 @@ type CombinedDropdownEntry = {
   directoryItem?: TurnActivityPageDirectoryItem;
 };
 
-function RunTurnViewControls({
+export function RunTurnViewControls({
   turns,
   selectedTurnId,
   turnActivityLoadsByTurn,
@@ -10417,10 +13506,9 @@ function RunTurnViewControls({
   onStatsExpandedChange: (expanded: boolean) => void;
   onNavigate: (turnId: string, page: number) => void;
 }) {
-  const selected =
-    turns.find((turn) => turn.turnId === selectedTurnId) ??
-    turns[turns.length - 1] ??
-    null;
+  // Displayed turn — same resolution as the activity body (resolveDisplayedActivityTurn)
+  // so the controls and the body agree on which turn is shown.
+  const selected = resolveDisplayedActivityTurn(turns, selectedTurnId);
   const selectedLoadState = selected
     ? turnActivityLoadsByTurn[selected.turnId]
     : undefined;
@@ -10532,8 +13620,18 @@ function RunTurnViewControls({
     }
   }, [combinedEntries, selectedEntry]);
 
-  return (
-    <div className="run-turn-titlebar-controls" aria-label="Turn view controls">
+  const { isCompact } = useViewport();
+  const [pagerOpen, setPagerOpen] = useState(false);
+  // Shared by the desktop inline controls and the compact bottom-sheet form so
+  // both render byte-identical navigation. On compact, navigating also closes
+  // the sheet (mirrors the nav drawer's close-on-navigate; design-system.md).
+  const navigate = (turnId: string, page: number) => {
+    onNavigate(turnId, page);
+    setPagerOpen(false);
+  };
+
+  const controls = (
+    <>
       <div
         className="run-turn-view-nav run-turn-view-combined-nav"
         role="group"
@@ -10544,7 +13642,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-triple"
           onClick={() => {
             const firstEntry = combinedEntries[0];
-            if (firstEntry) onNavigate(firstEntry.turnId, firstEntry.pageNumber);
+            if (firstEntry) navigate(firstEntry.turnId, firstEntry.pageNumber);
           }}
           disabled={
             !selectedEntry ||
@@ -10561,7 +13659,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-double"
           onClick={() => {
             if (prevTurnStartEntry) {
-              onNavigate(prevTurnStartEntry.turnId, prevTurnStartEntry.pageNumber);
+              navigate(prevTurnStartEntry.turnId, prevTurnStartEntry.pageNumber);
             }
           }}
           disabled={!prevTurnStartEntry}
@@ -10575,7 +13673,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn"
           onClick={() => {
             if (prevPageEntry) {
-              onNavigate(prevPageEntry.turnId, prevPageEntry.pageNumber);
+              navigate(prevPageEntry.turnId, prevPageEntry.pageNumber);
             }
           }}
           disabled={!prevPageEntry}
@@ -10589,7 +13687,7 @@ function RunTurnViewControls({
           value={selectedEntry?.key ?? ""}
           onValueChange={(value) => {
             const entry = combinedEntries.find((e) => e.key === value);
-            if (entry) onNavigate(entry.turnId, entry.pageNumber);
+            if (entry) navigate(entry.turnId, entry.pageNumber);
           }}
           disabled={combinedEntries.length === 0}
         >
@@ -10666,7 +13764,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn"
           onClick={() => {
             if (nextPageEntry) {
-              onNavigate(nextPageEntry.turnId, nextPageEntry.pageNumber);
+              navigate(nextPageEntry.turnId, nextPageEntry.pageNumber);
             }
           }}
           disabled={!nextPageEntry}
@@ -10680,7 +13778,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-double"
           onClick={() => {
             if (nextTurnEndEntry) {
-              onNavigate(nextTurnEndEntry.turnId, nextTurnEndEntry.pageNumber);
+              navigate(nextTurnEndEntry.turnId, nextTurnEndEntry.pageNumber);
             }
           }}
           disabled={!nextTurnEndEntry}
@@ -10694,7 +13792,7 @@ function RunTurnViewControls({
           className="run-turn-view-nav-btn run-turn-view-nav-btn-triple"
           onClick={() => {
             const lastEntry = combinedEntries[combinedEntries.length - 1];
-            if (lastEntry) onNavigate(lastEntry.turnId, lastEntry.pageNumber);
+            if (lastEntry) navigate(lastEntry.turnId, lastEntry.pageNumber);
           }}
           disabled={
             !selectedEntry ||
@@ -10739,6 +13837,69 @@ function RunTurnViewControls({
           <ChevronDownIcon size={14} aria-hidden="true" />
         )}
       </button>
+    </>
+  );
+
+  // Compact: the full stepper + combined picker do not fit a phone titlebar, so
+  // they collapse to a single always-present button that shows the current
+  // position and opens the identical controls in a bottom sheet. The button is
+  // never omitted while a turn is selected, satisfying the transcript-navigation
+  // "page control is never hidden" invariant in its sanctioned compact form.
+  if (isCompact) {
+    return (
+      <div className="run-turn-pager-compact">
+        <button
+          type="button"
+          className="run-turn-pager-compact-trigger"
+          onClick={() => setPagerOpen(true)}
+          disabled={combinedEntries.length === 0}
+          aria-haspopup="dialog"
+          aria-expanded={pagerOpen}
+          aria-label="Turn and page navigation"
+          title="Turn and page navigation"
+        >
+          {selectedEntry && selectedEntryParts ? (
+            <span className="run-turn-pager-compact-label">
+              <span className="run-turn-view-combined-turn">
+                {selectedEntry.turnLabel}
+              </span>
+              <span className="run-turn-pager-compact-sep" aria-hidden="true">
+                ·
+              </span>
+              <span>Page {selectedEntry.pageNumber}</span>
+              {selectedEntryParts.isQuestion && (
+                <span
+                  className="run-turn-view-combined-kind"
+                  aria-label={selectedEntryParts.semanticLabel}
+                  title={selectedEntryParts.semanticLabel}
+                >
+                  <MessageSquareIcon size={13} aria-hidden="true" />
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="run-turn-pager-compact-label">No turns</span>
+          )}
+          <ChevronDownIcon size={14} aria-hidden="true" />
+        </button>
+        <Sheet open={pagerOpen} onOpenChange={setPagerOpen}>
+          <SheetContent side="bottom" className="run-turn-pager-sheet">
+            <SheetTitle className="run-turn-pager-sheet-title">
+              Navigate transcript
+            </SheetTitle>
+            <SheetDescription className="sr-only">
+              Choose a turn and page, or step through the conversation.
+            </SheetDescription>
+            <div className="run-turn-pager-sheet-body">{controls}</div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    );
+  }
+
+  return (
+    <div className="run-turn-titlebar-controls" aria-label="Turn view controls">
+      {controls}
     </div>
   );
 }
@@ -10805,7 +13966,84 @@ function turnActivityLastActivityAt(
   );
 }
 
-function buildTurnViewItems(
+// mergeTurnDirectoryWithLiveShells overlays the live transcript window's fresh
+// turn_activity shells onto the durable directory's complete, ordered turn set.
+// The SET is always the directory's — a turnId only appears here if the
+// directory listed it — so a turn the directory doesn't yet carry is never
+// surfaced from the window alone (no silent fall-back to the bounded window).
+// The live shell wins on a turnId collision so an in-flight turn stays live
+// without re-reading the directory on every terminal. An empty directory yields
+// no turns (an explicit loading/error state renders instead).
+export function mergeTurnDirectoryWithLiveShells(
+  directoryEntries: TranscriptEntry[],
+  liveEntries: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (directoryEntries.length === 0) return directoryEntries;
+  const liveShellByTurn = new Map<string, TranscriptEntry>();
+  for (const entry of liveEntries) {
+    const tid = (entry.turnId ?? "").trim();
+    if (tid && isTurnActivityEntry(entry)) liveShellByTurn.set(tid, entry);
+  }
+  return directoryEntries.map((shell) => {
+    const tid = (shell.turnId ?? "").trim();
+    return (tid && liveShellByTurn.get(tid)) || shell;
+  });
+}
+
+type AutoFollowApprovalTurnCandidate = {
+  turnId?: string;
+  shell?: { activity?: { submittedSource?: string } };
+};
+
+const AUTO_FOLLOW_APPROVAL_SUBMITTED_SOURCES = new Set([
+  "break-glass-approval",
+  "test-slot-model-approval",
+]);
+
+export function latestAutoFollowApprovalTurnId(
+  turns: AutoFollowApprovalTurnCandidate[],
+): string | null {
+  const latest = turns[turns.length - 1];
+  const turnId = latest?.turnId?.trim() ?? "";
+  if (!turnId) return null;
+  const submittedSource = latest.shell?.activity?.submittedSource?.trim() ?? "";
+  return AUTO_FOLLOW_APPROVAL_SUBMITTED_SOURCES.has(submittedSource)
+    ? turnId
+    : null;
+}
+
+export function turnActivityShellIdsMissingFromDirectory(
+  liveEntries: TranscriptEntry[],
+  directoryTurnIds: ReadonlySet<string>,
+): string[] {
+  const missing: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of liveEntries) {
+    const tid = (entry.turnId ?? "").trim();
+    if (
+      tid &&
+      isTurnActivityEntry(entry) &&
+      !directoryTurnIds.has(tid) &&
+      !seen.has(tid)
+    ) {
+      seen.add(tid);
+      missing.push(tid);
+    }
+  }
+  return missing;
+}
+
+export function selectedActivityRouteSessionMismatch(
+  paneSessionId: string,
+  routeSessionId: string | null | undefined,
+): string | null {
+  const pane = paneSessionId.trim();
+  const route = (routeSessionId ?? "").trim();
+  if (!pane || !route || pane === route) return null;
+  return route;
+}
+
+export function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
@@ -10821,6 +14059,14 @@ function buildTurnViewItems(
   // shape) must still resolve "Turn N" instead of the "Current turn"
   // fallback label.
   const numbers = new Map<string, number>();
+  // The model/effort each turn ran on, harvested from its user-message entry
+  // (the backend stamps the resolved run config there). First user message per
+  // turn wins; surfaced on the TurnViewItem so the Turns surface can show the
+  // historical model even after a mid-session re-pin.
+  const runConfigByTurn = new Map<
+    string,
+    { model: string | null; effort: string | null }
+  >();
   const costRowsByTurn = new Map<string, Map<string, TranscriptEntry>>();
   const addCostRow = (entry: TranscriptEntry) => {
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
@@ -10836,6 +14082,11 @@ function buildTurnViewItems(
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
     if (!turnId) return;
     addCostRow(entry);
+    if (isUserMessageEntry(entry) && !runConfigByTurn.has(turnId)) {
+      const m = typeof entry.model === "string" ? entry.model.trim() : "";
+      const e = typeof entry.effort === "string" ? entry.effort.trim() : "";
+      if (m || e) runConfigByTurn.set(turnId, { model: m || null, effort: e || null });
+    }
     if (!order.has(turnId)) order.set(turnId, index);
     if (!numbers.has(turnId) && typeof entry.turnNumber === "number")
       numbers.set(turnId, entry.turnNumber);
@@ -10929,6 +14180,19 @@ function buildTurnViewItems(
           contextWindow,
           turnId,
         ),
+        // Prefer the shell's per-turn run config (always loaded for the viewed
+        // turn, including turn-page deep-links); fall back to the user-message
+        // capture for any path where only the message entry is present.
+        model:
+          shellSummary?.model ||
+          (typeof shell?.model === "string" ? shell.model.trim() : "") ||
+          runConfigByTurn.get(turnId)?.model ||
+          null,
+        effort:
+          shellSummary?.effort ||
+          (typeof shell?.effort === "string" ? shell.effort.trim() : "") ||
+          runConfigByTurn.get(turnId)?.effort ||
+          null,
         startedAt,
         completedAt,
         lastActivityAt,
@@ -11258,7 +14522,6 @@ function RunTurnActivityGroup({
   highlightedEntryId,
   onQuote,
   onFork,
-  onOpenTurn,
   onOpenBackgroundTask,
   loading,
   pageInfo,
@@ -11282,7 +14545,6 @@ function RunTurnActivityGroup({
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
   pageInfo?: TurnActivityPageInfo;
@@ -11404,17 +14666,6 @@ function RunTurnActivityGroup({
                 )}
               </span>
             </button>
-            {needsInput && onOpenTurn && (
-              <button
-                type="button"
-                className="run-turn-activity-action"
-                onClick={() =>
-                  onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
-                }
-              >
-                Answer questions
-              </button>
-            )}
             {open && (
               <div className="run-turn-activity-body">
                 {onSelectPage && (
@@ -11567,12 +14818,16 @@ function RunTurnActivityGroup({
 
 function RunTurnActivityScreen({
   turns,
+  truncated,
+  visible,
   selectedTurnId,
   avatar,
   systemAvatar,
   originSessionAvatarByID,
   sessionId,
   sessionMode,
+  activityLoadingTelemetrySource,
+  activityLoadingPreviousSessionId,
   showThinking,
   autoExpandTools,
   showTimestamps,
@@ -11581,6 +14836,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
+  onOpenTurn,
   transcriptHrefForEntry,
   onOpenTranscriptMessage,
   scrollRequest,
@@ -11589,12 +14845,25 @@ function RunTurnActivityScreen({
   onActivitySelectPage,
 }: {
   turns: TurnViewItem[];
+  // True when the durable directory exceeded its cap and the oldest turns were
+  // elided — a >5000-turn session. Surfaced so the list never silently claims
+  // to be complete when it isn't.
+  truncated?: boolean;
+  // Whether this pane is the on-screen, routed pane. The tabs view keeps
+  // non-routed session panes mounted, so a hidden pane still renders this
+  // screen and runs its effects. The stranded / route-session-mismatch
+  // telemetry below is gated on this: a hidden pane reading the live URL is not
+  // a user-visible strand, and emitting from it inflated the alert with one
+  // long-lived background pane's mismatches against every URL the user visited.
+  visible: boolean;
   selectedTurnId: string | null;
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   originSessionAvatarByID?: (sessionId: string) => AgentAvatar | null;
   sessionId: string;
   sessionMode: string;
+  activityLoadingTelemetrySource: string;
+  activityLoadingPreviousSessionId?: string | null;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
@@ -11605,6 +14874,7 @@ function RunTurnActivityScreen({
   turnActivityLoadsByTurn: TurnActivityLoadStateByTurn;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
   onOpenTranscriptMessage?: (entryId: string) => void;
   scrollRequest?: TurnViewScrollRequest | null;
@@ -11612,10 +14882,13 @@ function RunTurnActivityScreen({
   statsExpanded: boolean;
   onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
-  const selected =
-    turns.find((turn) => turn.turnId === selectedTurnId) ??
-    turns[turns.length - 1] ??
-    null;
+  // The displayed turn — the routed/selected turn, or the latest turn when the
+  // selected id is not in the (windowed) directory. MUST match what the load
+  // reconciler keys off (resolveDisplayedActivityTurn in ChatPane) so the turn
+  // shown here is always the turn being loaded; otherwise the body strands on
+  // "Loading activity…" (the dead-refresh bug). Single source of truth lives in
+  // turnActivityLoadReconcile.ts.
+  const selected = resolveDisplayedActivityTurn(turns, selectedTurnId);
   const selectedLoadState = selected
     ? turnActivityLoadsByTurn[selected.turnId]
     : undefined;
@@ -11624,6 +14897,9 @@ function RunTurnActivityScreen({
   const selectedTurnContext = selectedSnapshot?.context ?? null;
   const selectedFinalAnswerEntries = selectedSnapshot?.finalAnswerEntries ?? [];
   const selectedCollapse = selectedSnapshot?.collapse;
+  const selectedPagePlanApproval =
+    selectedPageInfo?.kind === "question" &&
+    (selectedSnapshot?.entries ?? []).some(isPlanApprovalAwaitingInputEntry);
   const pagerState = turnActivityPagerState(selectedPageInfo);
   const detailEntries = useMemo(
     () => {
@@ -11711,6 +14987,120 @@ function RunTurnActivityScreen({
     (selectedLoadState == null ||
       selectedLoadState.status === "unloaded" ||
       selectedLoadState.status === "loading");
+  const selectedTurnIdForTelemetry = selected?.turnId ?? "";
+  const selectedLoadStatus = selectedLoadState?.status;
+  const selectedLoadingReason = selectedLoadStatus ?? "absent";
+  const selectedHasTurnActivityShell = Boolean(selected?.shell);
+  const selectedTurnActivityChildCount =
+    selected?.shell?.activity?.childCount ?? 0;
+  const selectedDurableActiveTurnActivityShell =
+    selected?.shell != null
+      ? turnActivityShellIsDurablyActive(selected.shell.activity)
+      : false;
+  const selectedActivityRouteSessionId =
+    typeof window !== "undefined"
+      ? (readSessionRouteFromPath()?.sessionId ?? "")
+      : "";
+  const selectedActivityMismatchedRouteSessionId =
+    selectedActivityRouteSessionMismatch(
+      sessionId,
+      selectedActivityRouteSessionId,
+    );
+  const selectedActivityLoadingTelemetryKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!visible || !showActivityLoading || !selectedTurnIdForTelemetry) {
+      // A hidden pane (tabs view) still renders this screen, but a spinner on
+      // an off-screen pane is not a user-visible strand and a hidden pane never
+      // matches the live route — so neither the stranded nor the route-mismatch
+      // signal is meaningful here. The displayed-turn load reconciler keeps the
+      // visible pane from stranding, so an emit that survives this gate is a
+      // real, on-screen stuck spinner worth alerting on.
+      selectedActivityLoadingTelemetryKeyRef.current = null;
+      return;
+    }
+    const event =
+      selectedLoadStatus == null || selectedLoadStatus === "unloaded"
+        ? "turn-activity-selected-loading-stranded"
+        : selectedLoadStatus === "loading"
+          ? "turn-activity-selected-loading-slow"
+          : null;
+    if (!event) return;
+    const key = [
+      event,
+      selectedTurnIdForTelemetry,
+      selectedLoadingReason,
+      selectedHasTurnActivityShell ? "shell" : "no-shell",
+      selectedTurnActivityChildCount,
+      selectedDurableActiveTurnActivityShell ? "durable-active" : "inactive",
+      selectedActivityMismatchedRouteSessionId ?? "route-match",
+    ].join(":");
+    if (selectedActivityLoadingTelemetryKeyRef.current === key) return;
+    const timer = window.setTimeout(() => {
+      selectedActivityLoadingTelemetryKeyRef.current = key;
+      const currentMismatchedRouteSessionId =
+        selectedActivityRouteSessionMismatch(
+          sessionId,
+          typeof window !== "undefined"
+            ? readSessionRouteFromPath()?.sessionId
+            : "",
+        );
+      if (currentMismatchedRouteSessionId) {
+        logChatScrollEvent("turn-activity-selected-route-session-mismatch", {
+          surface: "session",
+          sessionId,
+          sessionMode,
+          previousSessionId: activityLoadingPreviousSessionId ?? undefined,
+          source: activityLoadingTelemetrySource,
+          reason: "route-session-mismatch",
+          key: currentMismatchedRouteSessionId,
+          routeSessionId: currentMismatchedRouteSessionId,
+          selectedTurnId: selectedTurnIdForTelemetry,
+          status: turnActivityLoadStatusMetricCode(selectedLoadStatus),
+          entries: detailEntries.length,
+          groups: detailGroups.length,
+          activityEntries: selectedTurnActivityChildCount,
+          turnActivityShells: selectedHasTurnActivityShell ? 1 : 0,
+          durableActiveTurnActivityShells: selectedDurableActiveTurnActivityShell
+            ? 1
+            : 0,
+        });
+      }
+      logChatScrollEvent(event, {
+        surface: "session",
+        sessionId,
+        sessionMode,
+        previousSessionId: activityLoadingPreviousSessionId ?? undefined,
+        source: activityLoadingTelemetrySource,
+        reason: selectedLoadingReason,
+        key: selectedTurnIdForTelemetry,
+        status: turnActivityLoadStatusMetricCode(selectedLoadStatus),
+        entries: detailEntries.length,
+        groups: detailGroups.length,
+        activityEntries: selectedTurnActivityChildCount,
+        turnActivityShells: selectedHasTurnActivityShell ? 1 : 0,
+        durableActiveTurnActivityShells: selectedDurableActiveTurnActivityShell
+          ? 1
+          : 0,
+      });
+    }, TURN_ACTIVITY_STUCK_THRESHOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    detailEntries.length,
+    detailGroups.length,
+    activityLoadingPreviousSessionId,
+    activityLoadingTelemetrySource,
+    selectedActivityMismatchedRouteSessionId,
+    selectedDurableActiveTurnActivityShell,
+    selectedHasTurnActivityShell,
+    selectedLoadStatus,
+    selectedLoadingReason,
+    selectedTurnActivityChildCount,
+    selectedTurnIdForTelemetry,
+    sessionId,
+    sessionMode,
+    showActivityLoading,
+    visible,
+  ]);
   const selectedThinkingStatus =
     selected?.shell?.activity?.status === "needs_input"
       ? "needs_input"
@@ -11997,11 +15387,18 @@ function RunTurnActivityScreen({
       showAssistantAvatar
       transcriptHref={transcriptHrefForEntry?.(entry)}
       onOpenTranscriptMessage={onOpenTranscriptMessage}
+      onOpenTurn={onOpenTurn}
     />
   );
 
   return (
     <div className="run-turn-view" aria-label="Turn view">
+      {truncated && (
+        <div className="run-turn-view-truncation" role="status">
+          This session has more turns than the directory lists; the oldest turns
+          aren’t shown.
+        </div>
+      )}
       {selected ? (
         <>
           {statsExpanded && (
@@ -12058,20 +15455,42 @@ function RunTurnActivityScreen({
                     truncated text) instead of hiding the body, so the prompt
                     stays recognizable in the Turns view. */}
                 {selectedTurnContext ? (
-                  <RunMessageBubble
-                    entry={selectedTurnContext}
-                    avatar={avatar}
+                  <>
+                    {selectedTurnContext.turnContextContinued &&
+                      !selectedTurnContextCollapsed && (
+                        <p className="run-turn-view-context-continued-label">
+                          Question prompt continued from previous turn
+                        </p>
+                      )}
+                    <RunMessageBubble
+                      entry={selectedTurnContext}
+                      avatar={avatar}
+                      systemAvatar={systemAvatar}
+                      originSessionAvatarByID={originSessionAvatarByID}
+                      sessionId={sessionId}
+                      highlighted={false}
+                      showTimestamps={showTimestamps}
+                      showDuration={showDuration}
+                      canonicalMessage={false}
+                      ownedByTurnActivity
+                      compact={selectedTurnContextCollapsed}
+                      transcriptHref={transcriptHrefForEntry?.(
+                        selectedTurnContext,
+                      )}
+                      onOpenTranscriptMessage={onOpenTranscriptMessage}
+                    />
+                  </>
+                ) : selectedPageInfo?.kind === "question" ? (
+                  // No user message started this turn — the agent did, by
+                  // invoking AskUserQuestion / ExitPlanMode. The "Question N of M"
+                  // heading is Tank's system-narrated framing around that
+                  // question, so the turn-starter speaks through the system avatar.
+                  <RunQuestionHeadingMessage
                     systemAvatar={systemAvatar}
-                    originSessionAvatarByID={originSessionAvatarByID}
-                    sessionId={sessionId}
-                    highlighted={false}
-                    showTimestamps={showTimestamps}
-                    showDuration={showDuration}
-                    canonicalMessage={false}
-                    ownedByTurnActivity
-                    compact={selectedTurnContextCollapsed}
-                    transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
-                    onOpenTranscriptMessage={onOpenTranscriptMessage}
+                    answered={selectedPageInfo.answered ?? false}
+                    planApproval={selectedPagePlanApproval}
+                    questionIndex={selectedPageInfo.questionIndex}
+                    questionCount={selectedPageInfo.questionCount}
                   />
                 ) : (
                   <div className="run-turn-view-context-unavailable" role="status">
@@ -12231,27 +15650,6 @@ function RunTurnActivityScreen({
                   </div>
                 </div>
               )}
-            </div>
-          )}
-          {selectedPageInfo?.kind === "question" && (
-            <div
-              className="run-turn-question-page-head"
-              data-answered={selectedPageInfo.answered ? "true" : "false"}
-            >
-              <span className="run-turn-question-page-title">
-                {selectedPageInfo.questionCount &&
-                selectedPageInfo.questionCount > 1
-                  ? "Questions"
-                  : "Question"}
-              </span>
-              <span className="run-turn-question-page-count">
-                {selectedPageInfo.questionIndex &&
-                selectedPageInfo.questionCount
-                  ? `Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}`
-                  : selectedPageInfo.questionCount
-                    ? plural(selectedPageInfo.questionCount, "question")
-                    : "Question"}
-              </span>
             </div>
           )}
           <div
@@ -12889,7 +16287,6 @@ export function RunMessages({
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
             onFork={onFork}
-            onOpenTurn={onOpenTurn}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
             pageInfo={turnActivityPageInfo[g.turnId]}
@@ -12900,6 +16297,11 @@ export function RunMessages({
             }
           />
         );
+      }
+      if (g.kind === "message" && isPendingInlineQuestionEntry(g.entry)) {
+        // The agent's pending question renders inline here as the widget,
+        // replacing the derived "summary" question message on the asking turn.
+        return <RunInlineAskUserQuestion entry={g.entry} avatar={avatar} />;
       }
       return (
         <RunMessageBubble
@@ -13033,6 +16435,351 @@ export function RunMessages({
       }}
     />
   );
+}
+
+function AdminBreakGlassPanel() {
+  const [filter, setFilter] = useState<AdminBreakGlassFilter>("pending");
+  const [items, setItems] = useState<AdminBreakGlassListItem[]>([]);
+  const [sessionScope, setSessionScope] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState("");
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ status: filter, limit: "100" });
+      const res = await authedFetch(`/api/admin/break-glass-requests?${params}`);
+      if (!res.ok) {
+        throw new Error(`break-glass requests returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminBreakGlassListBody;
+      setItems(Array.isArray(body.requests) ? body.requests : []);
+      setSessionScope(body.session_scope ?? "");
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const decide = useCallback(
+    async (item: AdminBreakGlassListItem, decision: "approve" | "deny") => {
+      const sessionID = nonemptyAdminValue(item.request.session_id);
+      const eventID = nonemptyAdminValue(item.request.event_id);
+      if (!sessionID || !eventID || !item.pending) return;
+      const note =
+        decision === "deny"
+          ? window.prompt("Deny note", "")?.trim()
+          : "";
+      if (decision === "deny" && note === undefined) return;
+      setBusyId(`${decision}:${eventID}`);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(sessionID)}/break-glass-requests/${encodeURIComponent(eventID)}/${decision}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note: note ?? "" }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`break-glass ${decision} returned ${res.status}`);
+        }
+        await refresh();
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setBusyId("");
+      }
+    },
+    [refresh],
+  );
+
+  return (
+    <div className="run-settings-diagnostics admin-break-glass">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <ShieldAlertIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Break glass</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={() => void refresh()}
+          disabled={loading}
+          aria-label="Refresh break-glass requests"
+          title="Refresh"
+        >
+          <RotateCcwIcon
+            aria-hidden="true"
+            className={loading ? "cluster-health-spin" : undefined}
+          />
+        </button>
+      </div>
+      <div className="admin-break-glass-toolbar">
+        {(["pending", "recent", "all"] as AdminBreakGlassFilter[]).map((nextFilter) => (
+          <button
+            key={nextFilter}
+            type="button"
+            className={`admin-break-glass-filter${filter === nextFilter ? " is-active" : ""}`}
+            onClick={() => setFilter(nextFilter)}
+            disabled={loading && filter === nextFilter}
+          >
+            {adminBreakGlassFilterLabel(nextFilter)}
+          </button>
+        ))}
+        {sessionScope && (
+          <span className="admin-break-glass-scope">{sessionScope}</span>
+        )}
+      </div>
+      {error && (
+        <div className="run-settings-observability-note" role="status">
+          {error}
+        </div>
+      )}
+      <div className="admin-break-glass-list">
+        {items.length > 0 ? (
+          items.map((item) => (
+            <AdminBreakGlassRow
+              key={adminBreakGlassItemKey(item)}
+              item={item}
+              busyId={busyId}
+              onDecision={decide}
+            />
+          ))
+        ) : (
+          <div className="admin-break-glass-empty">
+            {loading ? "Loading requests..." : "No break-glass requests"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminBreakGlassRow({
+  item,
+  busyId,
+  onDecision,
+}: {
+  item: AdminBreakGlassListItem;
+  busyId: string;
+  onDecision: (item: AdminBreakGlassListItem, decision: "approve" | "deny") => void;
+}) {
+  const request = item.request;
+  const decision = item.decision;
+  const sessionID = nonemptyAdminValue(request.session_id);
+  const eventID = nonemptyAdminValue(request.event_id);
+  const pending = item.pending === true;
+  const status = adminBreakGlassStatus(item);
+  const target = adminBreakGlassTarget(request);
+  const scope = adminBreakGlassScope(request);
+  const detail = [
+    nonemptyAdminValue(request.owner_email),
+    sessionID ? `session ${sessionID}` : "",
+    nonemptyAdminValue(request.source_tool) ?? nonemptyAdminValue(request.source_service),
+    formatToolFullTime(request.created_at),
+  ].filter(Boolean);
+  const sessionHref = sessionID ? `/sessions/${encodeURIComponent(sessionID)}` : "";
+  const focusedHref =
+    sessionID && eventID
+      ? `/sessions/${encodeURIComponent(sessionID)}/break-glass/${encodeURIComponent(eventID)}`
+      : "";
+
+  return (
+    <article className={`admin-break-glass-row is-${status}`}>
+      <div className="admin-break-glass-row-head">
+        <div className="admin-break-glass-title">
+          <span className="admin-break-glass-kind">
+            {adminBreakGlassKind(request)}
+          </span>
+          <span className="admin-break-glass-target" title={target}>
+            {target}
+          </span>
+        </div>
+        <span className={`admin-break-glass-status is-${status}`}>
+          {adminBreakGlassStatusLabel(status)}
+        </span>
+      </div>
+      <div className="admin-break-glass-reason">
+        {adminBreakGlassReason(request)}
+      </div>
+      <div className="admin-break-glass-meta">
+        {detail.map((part) => (
+          <span key={part}>{part}</span>
+        ))}
+      </div>
+      {scope && <div className="admin-break-glass-scope-line">{scope}</div>}
+      {decision && (
+        <div className="admin-break-glass-decision">
+          <span>{adminBreakGlassDecisionSummary(decision)}</span>
+          <span>{formatToolFullTime(decision.created_at)}</span>
+        </div>
+      )}
+      <div className="admin-break-glass-actions">
+        {sessionHref && (
+          <a className="run-settings-test-btn" href={sessionHref}>
+            Open session
+          </a>
+        )}
+        {focusedHref && (
+          <a className="run-settings-test-btn" href={focusedHref}>
+            Focus request
+          </a>
+        )}
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `approve:${eventID}`}
+          onClick={() => onDecision(item, "approve")}
+        >
+          <CheckIcon aria-hidden="true" />
+          <span>Approve</span>
+        </button>
+        <button
+          type="button"
+          className="run-settings-test-btn"
+          disabled={!pending || busyId === `deny:${eventID}`}
+          onClick={() => onDecision(item, "deny")}
+        >
+          <XIcon aria-hidden="true" />
+          <span>Deny</span>
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function adminBreakGlassFilterLabel(filter: AdminBreakGlassFilter): string {
+  switch (filter) {
+    case "pending":
+      return "Pending";
+    case "recent":
+      return "Recent";
+    case "all":
+      return "All";
+  }
+}
+
+function adminBreakGlassItemKey(item: AdminBreakGlassListItem): string {
+  return [
+    nonemptyAdminValue(item.request.session_id),
+    nonemptyAdminValue(item.request.event_id),
+    nonemptyAdminValue(item.decision?.event_id),
+  ].filter(Boolean).join(":");
+}
+
+function adminBreakGlassStatus(
+  item: AdminBreakGlassListItem,
+): "pending" | "approved" | "denied" {
+  if (item.pending) return "pending";
+  const action = nonemptyAdminValue(item.decision?.action);
+  return action?.endsWith(".deny") ? "denied" : "approved";
+}
+
+function adminBreakGlassStatusLabel(status: "pending" | "approved" | "denied"): string {
+  switch (status) {
+    case "pending":
+      return "pending";
+    case "approved":
+      return "approved";
+    case "denied":
+      return "denied";
+  }
+}
+
+function adminBreakGlassKind(row: ControlActionRow): string {
+  if (row.action === "azure.break_glass.request") return "Azure break glass";
+  return adminBreakGlassIncludesWorkflows(row)
+    ? "GitHub workflows break glass"
+    : "GitHub break glass";
+}
+
+function adminBreakGlassAccessType(row: ControlActionRow): string {
+  if (row.action === "azure.break_glass.request") return "Azure personal MCP access";
+  return adminBreakGlassIncludesWorkflows(row)
+    ? "GitHub workflow-file write access"
+    : "GitHub write access";
+}
+
+function adminBreakGlassTarget(row: ControlActionRow): string {
+  if (row.action === "azure.break_glass.request") return "azure-personal";
+  const repo = [nonemptyAdminValue(row.repo_owner), nonemptyAdminValue(row.repo_name)]
+    .filter(Boolean)
+    .join("/");
+  return repo || nonemptyAdminValue(row.target_ref) || "GitHub";
+}
+
+function adminBreakGlassReason(row: ControlActionRow): string {
+  return nonemptyAdminValue(adminBreakGlassPayload(row).reason) || "No reason provided";
+}
+
+function adminBreakGlassScope(row: ControlActionRow): string {
+  const payload = adminBreakGlassPayload(row);
+  const repoScope = adminBreakGlassPayloadObject(payload.repo_scope);
+  const branchScope = adminBreakGlassPayloadObject(payload.branch_scope);
+  const repos = adminBreakGlassStringList(repoScope.repos);
+  const branches = adminBreakGlassStringList(branchScope.branches);
+  const parts = [
+    adminScopeLabel("repos", nonemptyAdminValue(repoScope.kind), repos),
+    adminScopeLabel("branches", nonemptyAdminValue(branchScope.kind), branches),
+    adminBreakGlassIncludesWorkflows(row) ? "workflows: write" : "",
+  ].filter(Boolean);
+  return parts.join(" / ");
+}
+
+function adminBreakGlassIncludesWorkflows(row: ControlActionRow): boolean {
+  const payload = adminBreakGlassPayload(row);
+  const operations = adminBreakGlassStringList(payload.operations);
+  return payload.workflows === true || operations.includes("workflows");
+}
+
+function adminScopeLabel(
+  label: string,
+  kind: string | undefined,
+  values: string[],
+): string {
+  if (kind === "all_repos") return "all repos";
+  if (kind === "unlimited") return "all branches";
+  if (kind === "count") return `${label}: count`;
+  if (values.length > 0) return `${label}: ${values.join(", ")}`;
+  return "";
+}
+
+function adminBreakGlassDecisionSummary(row: ControlActionRow): string {
+  const payload = adminBreakGlassPayload(row);
+  const actor = nonemptyAdminValue(payload.approved_by) ?? nonemptyAdminValue(payload.denied_by);
+  const label = row.action?.endsWith(".deny") ? "Denied" : "Approved";
+  return actor ? `${label} by ${actor}` : label;
+}
+
+function adminBreakGlassPayload(row: ControlActionRow): Record<string, unknown> {
+  return adminBreakGlassPayloadObject(row.payload);
+}
+
+function adminBreakGlassPayloadObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function adminBreakGlassStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.flatMap((item) => {
+        const text = nonemptyAdminValue(item);
+        return text ? [text] : [];
+      })
+    : [];
+}
+
+function nonemptyAdminValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function AdminObservabilityPanel({
@@ -13187,10 +16934,6 @@ function AdminVersionPanel({
         { label: "App", image: state.summary.app_image },
         { label: "Claude sessions", image: state.summary.session_image },
         { label: "Codex sessions", image: state.summary.codex_session_image },
-        {
-          label: "Antigravity sessions",
-          image: state.summary.antigravity_session_image,
-        },
       ]
     : [];
   return (
@@ -13271,7 +17014,7 @@ function AdminTestSlotDefaultsPanel({
   const modelChoices = modelOptionsForMode(draft.mode, sessionRunOptions);
   const effortChoices = effortOptionsForMode(draft.mode, sessionRunOptions);
   const provider = MODE_MENU_ICONS[draft.mode];
-  const modelRequired = provider === "codex" || provider === "antigravity";
+  const modelRequired = provider === "codex";
   const canSave =
     !state.loading &&
     !state.saving &&
@@ -13364,6 +17107,141 @@ function AdminTestSlotDefaultsPanel({
       )}
     </div>
   );
+}
+
+function AdminHiddenTranscriptsPanel({
+  sessionScope,
+  onOpenSession,
+}: {
+  sessionScope: string;
+  onOpenSession: (session: AdminHiddenSession, sessionScope: string) => void;
+}) {
+  const [sessions, setSessions] = useState<AdminHiddenSession[]>([]);
+  const [selectedKey, setSelectedKey] = useState("");
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const selectedSession = useMemo(
+    () => sessions.find((session) => adminHiddenSessionKey(session) === selectedKey) ?? null,
+    [sessions, selectedKey],
+  );
+
+  const refreshList = useCallback(async () => {
+    setListLoading(true);
+    try {
+      const params = new URLSearchParams({
+        session_scope: sessionScope,
+        limit: "200",
+      });
+      const res = await authedFetch(`/api/admin/hidden-sessions?${params}`);
+      if (!res.ok) {
+        throw new Error(`hidden sessions returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminHiddenSessionsBody;
+      const nextSessions = Array.isArray(body.sessions) ? body.sessions : [];
+      setSessions(nextSessions);
+      setSelectedKey((current) => {
+        if (current && nextSessions.some((session) => adminHiddenSessionKey(session) === current)) {
+          return current;
+        }
+        return nextSessions[0] ? adminHiddenSessionKey(nextSessions[0]) : "";
+      });
+      setListError(null);
+    } catch (err) {
+      setListError(errorMessage(err));
+    } finally {
+      setListLoading(false);
+    }
+  }, [sessionScope]);
+
+  useEffect(() => {
+    void refreshList();
+  }, [refreshList]);
+
+  return (
+    <div className="run-settings-diagnostics admin-hidden-transcripts">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <SearchIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Hidden transcripts</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={() => void refreshList()}
+          disabled={listLoading}
+          aria-label="Refresh hidden sessions"
+        >
+          <RotateCcwIcon aria-hidden="true" />
+        </button>
+      </div>
+      <div className="admin-hidden-transcripts-toolbar">
+        <label>
+          <span>Session</span>
+          <select
+            value={selectedKey}
+            disabled={listLoading || sessions.length === 0}
+            onChange={(event) => {
+              const nextKey = event.target.value;
+              setSelectedKey(nextKey);
+            }}
+          >
+            {sessions.length === 0 ? (
+              <option value="">No hidden sessions</option>
+            ) : (
+              sessions.map((session) => (
+                <option key={adminHiddenSessionKey(session)} value={adminHiddenSessionKey(session)}>
+                  {adminHiddenSessionOptionLabel(session)}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+        {selectedSession && (
+          <div className="admin-hidden-transcripts-meta">
+            <span>{hiddenSessionModeLabel(selectedSession.mode)}</span>
+            <span>{selectedSession.status || "unknown"}</span>
+            <span>{selectedSession.transcript_row_count} rows</span>
+            <span>{formatToolFullTime(selectedSession.updated_at)}</span>
+          </div>
+        )}
+      </div>
+      {listError && (
+        <div className="run-settings-observability-note" role="status">
+          {listError}
+        </div>
+      )}
+      {selectedSession ? (
+        <div className="admin-hidden-transcripts-actions">
+          <button
+            type="button"
+            className="run-settings-test-btn"
+            onClick={() => onOpenSession(selectedSession, sessionScope)}
+          >
+            Open session
+          </button>
+          <span className="run-settings-scope-value">
+            Opens in the normal read-only session view
+          </span>
+        </div>
+      ) : (
+        <div className="admin-hidden-transcript-empty">No hidden sessions</div>
+      )}
+    </div>
+  );
+}
+
+function adminHiddenSessionKey(session: AdminHiddenSession): string {
+  return `${session.owner}\n${session.session_id}`;
+}
+
+function adminHiddenSessionOptionLabel(session: AdminHiddenSession): string {
+  const updated = formatToolFullTime(session.updated_at);
+  return [session.name || session.session_id, session.owner, updated].filter(Boolean).join(" / ");
+}
+
+function hiddenSessionModeLabel(mode: string): string {
+  return MODE_LABELS[mode as SessionMode] ?? mode;
 }
 
 function AdminVersionValue({ image }: { image: AdminVersionImage }) {
@@ -13504,284 +17382,6 @@ function providerRateLimitRows(
   return rows;
 }
 
-function quotaProviderFromInfo(
-  info: Record<string, unknown>,
-  fallback: Provider,
-): Provider {
-  const raw =
-    typeof info.provider === "string" ? info.provider.toLowerCase() : "";
-  if (raw.includes("codex") || raw.includes("openai")) return "codex";
-  if (raw.includes("claude") || raw.includes("anthropic")) return "anthropic";
-  return fallback;
-}
-
-function quotaWindowIdFromInfo(
-  info: Record<string, unknown>,
-): ProviderQuotaWindowId {
-  const raw =
-    typeof info.rateLimitType === "string"
-      ? info.rateLimitType.toLowerCase()
-      : "";
-  const normalized = raw.replace(/[\s-]+/g, "_");
-  if (normalized.includes("opus")) return "opus_weekly";
-  if (
-    normalized.includes("other") ||
-    normalized.includes("sonnet") ||
-    normalized.includes("non_opus")
-  )
-    return "weekly";
-  if (
-    normalized.includes("week") ||
-    normalized.includes("seven_day") ||
-    normalized.includes("7_day")
-  ) {
-    return "weekly";
-  }
-  return "five_hour";
-}
-
-function quotaPercentRemaining(info: Record<string, unknown>): number | null {
-  const raw = info.utilization;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
-  const percentUsed = raw <= 1 ? raw * 100 : raw;
-  return Math.max(0, Math.min(100, 100 - percentUsed));
-}
-
-function quotaResetAt(info: Record<string, unknown>): string | null {
-  const raw = info.resetsAt ?? info.overageResetsAt;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
-    const date = new Date(ms);
-    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
-  }
-  if (typeof raw === "string" && raw.trim()) {
-    const ms = Date.parse(raw);
-    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-  }
-  return null;
-}
-
-function quotaWindowStatus(
-  info: Record<string, unknown> | null,
-  percentRemaining: number | null,
-  resetAt: string | null,
-  observedAt: string | null,
-): ProviderQuotaStatus {
-  if (!info || !observedAt) return "unknown";
-  const now = Date.now();
-  const resetMs = resetAt ? Date.parse(resetAt) : Number.NaN;
-  if (Number.isFinite(resetMs) && resetMs < now) return "stale";
-  const observedMs = Date.parse(observedAt);
-  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000)
-    return "stale";
-  const status =
-    typeof info.status === "string" ? info.status.toLowerCase() : "";
-  if (status.includes("reject") || status.includes("exhaust"))
-    return "exhausted";
-  if (percentRemaining !== null && percentRemaining <= 0) return "exhausted";
-  if (percentRemaining !== null && percentRemaining <= 20) return "low";
-  return "ok";
-}
-
-function quotaSnapshotStatus(
-  windows: ProviderQuotaWindow[],
-): ProviderQuotaStatus {
-  if (windows.some((window) => window.status === "exhausted"))
-    return "exhausted";
-  if (windows.some((window) => window.status === "low")) return "low";
-  if (windows.some((window) => window.status === "ok")) return "ok";
-  if (windows.some((window) => window.status === "stale")) return "stale";
-  return "unknown";
-}
-
-function providerQuotaEvidenceFromPayload(
-  value: unknown,
-): ProviderQuotaEvidence[] {
-  if (!value || typeof value !== "object") return [];
-  const raw = value as Record<string, unknown>;
-  const rows = Array.isArray(raw.rate_limits) ? raw.rate_limits : [];
-  const out: ProviderQuotaEvidence[] = [];
-  for (const row of rows) {
-    if (!row || typeof row !== "object") continue;
-    const item = row as Record<string, unknown>;
-    const provider =
-      typeof item.provider === "string"
-        ? quotaProviderFromInfo(item, "anthropic")
-        : null;
-    const rateLimitType =
-      typeof item.rateLimitType === "string" ? item.rateLimitType : "";
-    if (!provider || !rateLimitType) continue;
-    const utilization =
-      typeof item.utilization === "number" && Number.isFinite(item.utilization)
-        ? item.utilization
-        : undefined;
-    out.push({
-      provider,
-      rateLimitType,
-      ...(typeof item.status === "string" ? { status: item.status } : {}),
-      ...(utilization !== undefined ? { utilization } : {}),
-      ...(typeof item.resetsAt === "string" ||
-      typeof item.resetsAt === "number" ||
-      item.resetsAt === null
-        ? { resetsAt: item.resetsAt }
-        : {}),
-      ...(typeof item.observedAt === "string"
-        ? { observedAt: item.observedAt }
-        : {}),
-    });
-  }
-  return out;
-}
-
-function providerQuotaEvidenceFromSessions(
-  sessions: readonly Session[],
-): ProviderQuotaEvidence[] {
-  const out: ProviderQuotaEvidence[] = [];
-  for (const session of sessions) {
-    const info = session.provider_rate_limit_info;
-    const observedAt = session.provider_rate_limit_observed_at;
-    if (!info || !observedAt) continue;
-    const fallbackProvider = MODE_MENU_ICONS[session.mode];
-    const provider = quotaProviderFromInfo(info, fallbackProvider);
-    const rateLimitType =
-      typeof info.rateLimitType === "string"
-        ? info.rateLimitType
-        : quotaWindowIdFromInfo(info);
-    out.push({
-      provider,
-      rateLimitType,
-      ...(typeof info.status === "string" ? { status: info.status } : {}),
-      ...(typeof info.utilization === "number" &&
-      Number.isFinite(info.utilization)
-        ? { utilization: info.utilization }
-        : {}),
-      ...(typeof info.resetsAt === "string" || typeof info.resetsAt === "number"
-        ? { resetsAt: info.resetsAt }
-        : typeof info.overageResetsAt === "string" ||
-            typeof info.overageResetsAt === "number"
-          ? { resetsAt: info.overageResetsAt }
-          : {}),
-      observedAt,
-    });
-  }
-  return out;
-}
-
-function buildProviderQuotaSnapshots(
-  sessions: readonly Session[],
-  remoteEvidence: readonly ProviderQuotaEvidence[] = [],
-): Record<Provider, ProviderQuotaSnapshot> {
-  const latest: Partial<
-    Record<
-      Provider,
-      Partial<
-        Record<
-          ProviderQuotaWindowId,
-          {
-            info: Record<string, unknown>;
-            observedAt: string;
-          }
-        >
-      >
-    >
-  > = {};
-  const evidence = [
-    ...providerQuotaEvidenceFromSessions(sessions),
-    ...remoteEvidence,
-  ];
-  for (const row of evidence) {
-    const observedAt =
-      typeof row.observedAt === "string" && row.observedAt
-        ? row.observedAt
-        : new Date().toISOString();
-    const info: Record<string, unknown> = {
-      provider: row.provider,
-      rateLimitType: row.rateLimitType,
-      ...(row.status ? { status: row.status } : {}),
-      ...(typeof row.utilization === "number"
-        ? { utilization: row.utilization }
-        : {}),
-      ...(row.resetsAt !== undefined && row.resetsAt !== null
-        ? { resetsAt: row.resetsAt }
-        : {}),
-    };
-    const provider = row.provider;
-    const windowId = quotaWindowIdFromInfo(info);
-    const current = latest[provider]?.[windowId];
-    if (!current || Date.parse(observedAt) > Date.parse(current.observedAt)) {
-      latest[provider] = {
-        ...(latest[provider] ?? {}),
-        [windowId]: { info, observedAt },
-      };
-    }
-  }
-
-  const out = {} as Record<Provider, ProviderQuotaSnapshot>;
-  for (const provider of PROVIDERS) {
-    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map(
-      (def): ProviderQuotaWindow => {
-        const evidence = latest[provider]?.[def.id];
-        const percentRemaining = evidence
-          ? quotaPercentRemaining(evidence.info)
-          : null;
-        const resetAt = evidence ? quotaResetAt(evidence.info) : null;
-        return {
-          ...def,
-          status: quotaWindowStatus(
-            evidence?.info ?? null,
-            percentRemaining,
-            resetAt,
-            evidence?.observedAt ?? null,
-          ),
-          percentRemaining,
-          resetAt,
-          observedAt: evidence?.observedAt ?? null,
-        };
-      },
-    );
-    const observedAt =
-      windows
-        .map((window) => window.observedAt)
-        .filter((value): value is string => Boolean(value))
-        .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
-    out[provider] = {
-      provider,
-      status: quotaSnapshotStatus(windows),
-      observedAt,
-      windows,
-    };
-  }
-  return out;
-}
-
-function providerQuotaSummary(window: ProviderQuotaWindow | undefined): string {
-  if (!window || window.status === "unknown") return "unknown";
-  if (window.status === "stale") return "stale";
-  if (window.percentRemaining === null) {
-    return window.status === "exhausted" ? "exhausted" : "captured";
-  }
-  return `${Math.round(window.percentRemaining)}% left`;
-}
-
-function formatProviderQuotaTimestamp(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return "";
-  return new Intl.DateTimeFormat([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  }).format(new Date(ms));
-}
-
-function providerQuotaResetLabel(window: ProviderQuotaWindow): string {
-  const resetAt = formatProviderQuotaTimestamp(window.resetAt);
-  return resetAt ? `resets ${resetAt}` : "";
-}
-
 function ProviderCapacityStrip({
   snapshots,
   selectedProvider,
@@ -13899,8 +17499,12 @@ function RunSettingsPanel({
     settingsTab === "admin" &&
     showAdminTab &&
     (adminView === "avatars" ||
+      adminView === "break-glass" ||
+      adminView === "orchestrations" ||
       adminView === "report" ||
-      adminView === "observability")
+      adminView === "hidden-transcripts" ||
+      adminView === "observability" ||
+      adminView === "data")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
   const adminObservabilityAttention = observabilityAttentionStatus(
@@ -13968,6 +17572,50 @@ function RunSettingsPanel({
               />
             </DesktopOnly>
           </>
+        ) : adminView === "break-glass" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Break glass</h2>
+              </div>
+            </section>
+            <section className="run-settings-section">
+              <AdminBreakGlassPanel />
+            </section>
+            <section className="run-settings-section">
+              <AdminBreakGlassGrantPanel
+                initialSessionId={session?.id}
+                sessionScope={adminControls.reportScope}
+              />
+            </section>
+          </>
+        ) : adminView === "orchestrations" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Orchestrations</h2>
+              </div>
+            </section>
+            <section className="run-settings-section">
+              <OrchestrationsDashboard />
+            </section>
+          </>
         ) : adminView === "report" ? (
           <>
             <section className="run-settings-section">
@@ -14005,6 +17653,26 @@ function RunSettingsPanel({
               onRefresh={adminControls.onRefreshObservability}
             />
           </>
+        ) : adminView === "hidden-transcripts" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Hidden transcripts</h2>
+              </div>
+            </section>
+            <AdminHiddenTranscriptsPanel
+              sessionScope={adminControls.reportScope}
+              onOpenSession={adminControls.onOpenHiddenSession}
+            />
+          </>
         ) : adminView === "version" ? (
           <>
             <section className="run-settings-section">
@@ -14024,6 +17692,23 @@ function RunSettingsPanel({
               state={adminControls.version}
               onRefresh={adminControls.onRefreshVersion}
             />
+          </>
+        ) : adminView === "data" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Database</h2>
+              </div>
+            </section>
+            <AdminDataBrowser />
           </>
         ) : (
           <>
@@ -14082,6 +17767,34 @@ function RunSettingsPanel({
               <button
                 type="button"
                 className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "data")}
+              >
+                <span className="run-settings-link-label">
+                  <DatabaseIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Database</span>
+                </span>
+                <span className="run-settings-scope-value">Browse</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "break-glass")}
+              >
+                <span className="run-settings-link-label">
+                  <ShieldAlertIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Break glass</span>
+                </span>
+                <span className="run-settings-scope-value">Grant</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
                 onClick={() => setSettingsRoute("admin", "report")}
               >
                 <span className="run-settings-link-label">
@@ -14092,6 +17805,34 @@ function RunSettingsPanel({
                   <span>Session repo report</span>
                 </span>
                 <span className="run-settings-scope-value">Draft</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "orchestrations")}
+              >
+                <span className="run-settings-link-label">
+                  <GitPullRequestIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Orchestrations</span>
+                </span>
+                <span className="run-settings-scope-value">Run</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "hidden-transcripts")}
+              >
+                <span className="run-settings-link-label">
+                  <SearchIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Hidden transcripts</span>
+                </span>
+                <span className="run-settings-scope-value">Open</span>
               </button>
               <button
                 type="button"
@@ -14439,6 +18180,162 @@ function RunHelpScreen() {
   );
 }
 
+// QueueBlockScreen is the focused "why is my typed message queued?" page,
+// reached from the small link on the queued-follow-up panel. The queue gate is
+// session-level (the drain effect submits the head the moment `running` goes
+// false), so this page explains the single live reason the run is still
+// considered active. It is purely diagnostic — it never changes when a message
+// queues. All signal values are passed in from the ChatPane, which owns the
+// client-only run latch the server cannot see.
+function QueueBlockScreen({
+  block,
+  durableActivityStatus,
+  runStatus,
+  running,
+  hasLocalRun,
+  localRunHasTerminal,
+  activeTurnId,
+  queuedMessages,
+  onOpenTranscript,
+}: {
+  block: RunBlockDescription | null;
+  durableActivityStatus: ConversationActivityStatus | null;
+  runStatus: LocalRunStatus;
+  running: boolean;
+  hasLocalRun: boolean;
+  localRunHasTerminal: boolean;
+  activeTurnId: string | null;
+  queuedMessages: QueuedMessage[];
+  onOpenTranscript: () => void;
+}) {
+  const signals: { label: string; value: string; detail: string }[] = [
+    {
+      label: "Run active",
+      value: running ? "Yes" : "No",
+      detail:
+        "While this is Yes, a message you type is queued instead of sent. It drains the moment this turns No.",
+    },
+    {
+      label: "Agent status (durable)",
+      value: durableActivityStatus ?? "—",
+      detail:
+        "The server-side turn state from the activity ledger (streaming, needs_input, stopping, scheduled, …).",
+    },
+    {
+      label: "Local run status",
+      value: runStatus,
+      detail: "The browser's local view of the current run.",
+    },
+    {
+      label: "Local run latch",
+      value: hasLocalRun ? "In flight" : "Clear",
+      detail:
+        "An optimistic run the browser tracks until its durable terminal lands. It holds the run 'active' even after the server goes idle.",
+    },
+    {
+      label: "Latch reconciled",
+      value: hasLocalRun ? (localRunHasTerminal ? "Terminal landed" : "Waiting") : "—",
+      detail:
+        "Whether the latch has seen its durable terminal. 'Terminal landed' while still queued is the 'looks done but won't send' case — a reload clears it.",
+    },
+    {
+      label: "Active turn",
+      value: activeTurnId ?? "—",
+      detail: "The turn id the server currently reports as in flight, if any.",
+    },
+    {
+      label: "Queued messages",
+      value: String(queuedMessages.length),
+      detail: "Messages waiting to auto-send, in order, once the run goes idle.",
+    },
+  ];
+  return (
+    <div className="run-queue-status-screen">
+      <div className="run-queue-status-topbar">
+        <h2 className="run-queue-status-title">Queue status</h2>
+        <button
+          type="button"
+          className="run-queue-status-back"
+          onClick={onOpenTranscript}
+        >
+          Back to transcript
+        </button>
+      </div>
+      <section
+        className="run-queue-status-headline"
+        aria-live="polite"
+        aria-label="Current queue reason"
+      >
+        {block ? (
+          <>
+            <span
+              className={`status-dot status-${block.dotStatus}`}
+              aria-hidden="true"
+            />
+            <div className="run-queue-status-headline-copy">
+              <span className="run-queue-status-headline-label">
+                {block.label}
+              </span>
+              <span className="run-queue-status-headline-detail">
+                {block.detail}
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <span
+              className="status-dot status-agent-waiting"
+              aria-hidden="true"
+            />
+            <div className="run-queue-status-headline-copy">
+              <span className="run-queue-status-headline-label">
+                Nothing is blocking
+              </span>
+              <span className="run-queue-status-headline-detail">
+                The run is idle — a message you send now goes through
+                immediately.
+              </span>
+            </div>
+          </>
+        )}
+      </section>
+      <section className="run-queue-status-section">
+        <h3 className="run-queue-status-section-title">Live signals</h3>
+        <div className="run-queue-status-signals">
+          {signals.map((row) => (
+            <div className="run-queue-status-signal" key={row.label}>
+              <span className="run-queue-status-signal-label">{row.label}</span>
+              <span className="run-queue-status-signal-value">{row.value}</span>
+              <span className="run-queue-status-signal-detail">
+                {row.detail}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+      {queuedMessages.length > 0 && (
+        <section className="run-queue-status-section">
+          <h3 className="run-queue-status-section-title">
+            Queued, in send order
+          </h3>
+          <ol className="run-queue-status-queued">
+            {queuedMessages.map((message) => (
+              <li className="run-queue-status-queued-row" key={message.id}>
+                <span className="run-queue-status-queued-text">
+                  {message.displayText ?? message.text}
+                </span>
+                <span className="run-queue-status-queued-origin">
+                  {message.submitSurface === "turns" ? "Turns" : "Chat"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+    </div>
+  );
+}
+
 // The visible pane reports its current in-session location up to the App so the
 // App-level title chrome can render the breadcrumb trail. Mirrors the
 // onConnectionLabelChange bubble-up; null when the pane isn't the visible one.
@@ -14518,6 +18415,7 @@ function ChatPane({
   sidebarTurnsOpenRequest?: number;
   avatarEditorOpenRequest?: number;
 }) {
+  const { isPhone } = useViewport();
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [turnActivityLoadsByTurn, setTurnActivityLoadsByTurn] =
     useState<TurnActivityLoadStateByTurn>({});
@@ -14600,6 +18498,11 @@ function ChatPane({
     turnId: string;
     turnNumber: number;
   } | null>(null);
+  const [pendingApprovalTurnOpenId, setPendingApprovalTurnOpenId] = useState<
+    string | null
+  >(null);
+  const approvalAutoFollowPrimedRef = useRef(false);
+  const approvalAutoFollowKnownTurnIdsRef = useRef<Set<string>>(new Set());
   // The route now carries a durable per-session turn NUMBER, not a turn_id. It
   // is resolved to a turn_id server-side (or from the loaded window) into
   // selectedTurnId; until then it stays pending so the URL isn't overwritten.
@@ -14640,6 +18543,29 @@ function ChatPane({
   const [controlActionEntries, setControlActionEntries] = useState<
     TranscriptEntry[]
   >([]);
+  const [controlActionRows, setControlActionRows] = useState<
+    ControlActionRow[]
+  >([]);
+  const [focusedBreakGlassRows, setFocusedBreakGlassRows] = useState<
+    ControlActionRow[]
+  >([]);
+  const [focusedTestSlotModelRows, setFocusedTestSlotModelRows] = useState<
+    ControlActionRow[]
+  >([]);
+  const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
+    string | null
+  >(null);
+  const [breakGlassApprovalBusyId, setBreakGlassApprovalBusyId] = useState<
+    string | null
+  >(null);
+  const [testSlotModelApprovalBusyId, setTestSlotModelApprovalBusyId] = useState<
+    string | null
+  >(null);
+  const [activeBreakGlassRequestId, setActiveBreakGlassRequestId] = useState<
+    string | null
+  >(() => readBreakGlassRequestRoute());
+  const [activeTestSlotModelRequestId, setActiveTestSlotModelRequestId] =
+    useState<string | null>(() => readTestSlotModelRequestRoute());
   // Background (run_in_background) shell tasks come from the durable session-level
   // /background-tasks projection, not the main transcript rows. background_task
   // entries only ever live inside per-turn activity bodies, so the old
@@ -14655,7 +18581,6 @@ function ChatPane({
   );
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
-  const isAntigravity = isAntigravityRunMode(session.mode);
   const usesModel = sessionModeUsesModel(session.mode);
   const usesEffort = sessionModeUsesEffort(session.mode);
   const ready = sessionContainerAvailable(session);
@@ -14669,11 +18594,24 @@ function ChatPane({
       if (publicView && publicShareTokenValue) {
         return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/timeline${query ? `?${query}` : ""}`;
       }
+      if (session.read_only_hidden === true) {
+        let path = `/api/admin/hidden-sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`;
+        path = appendQueryParam(path, "session_scope", sessionScope);
+        if (session.owner) path = appendQueryParam(path, "owner", session.owner);
+        return path;
+      }
       return scopedSessionPathForPane(
         `/api/sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`,
       );
     },
-    [publicShareTokenValue, publicView, scopedSessionPathForPane],
+    [
+      publicShareTokenValue,
+      publicView,
+      scopedSessionPathForPane,
+      session.owner,
+      session.read_only_hidden,
+      sessionScope,
+    ],
   );
   const turnActivityRequestPathForPane = useCallback(
     (turnId: string, page?: number) => {
@@ -14687,6 +18625,31 @@ function ChatPane({
     },
     [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id],
   );
+  // Durable turn-directory path. Mirrors timelineRequestPathForPane across the
+  // three transcript-read surfaces (public share / admin hidden / owner) so the
+  // Turns selector reads the same complete turn set on every surface.
+  const turnDirectoryRequestPathForPane = useCallback(() => {
+    if (publicView && publicShareTokenValue) {
+      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/directory`;
+    }
+    if (session.read_only_hidden === true) {
+      let path = `/api/admin/hidden-sessions/${encodeURIComponent(session.id)}/turns/directory`;
+      path = appendQueryParam(path, "session_scope", sessionScope);
+      if (session.owner) path = appendQueryParam(path, "owner", session.owner);
+      return path;
+    }
+    return scopedSessionPathForPane(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/directory`,
+    );
+  }, [
+    publicShareTokenValue,
+    publicView,
+    scopedSessionPathForPane,
+    session.id,
+    session.owner,
+    session.read_only_hidden,
+    sessionScope,
+  ]);
   const fetchPaneResource = useCallback(
     (input: RequestInfo, init?: RequestInit) =>
       publicView ? fetch(input, init) : authedFetch(input, init),
@@ -14713,6 +18676,16 @@ function ChatPane({
   const fetchControlActionEntries = useCallback(async () => {
     if (publicView) {
       setControlActionEntries([]);
+      setControlActionRows([]);
+      setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
+      return;
+    }
+    if (readOnly) {
+      setControlActionEntries([]);
+      setControlActionRows([]);
+      setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       return;
     }
     const res = await fetchPaneResource(
@@ -14722,12 +18695,284 @@ function ChatPane({
     );
     if (!res.ok) return;
     const body = (await res.json()) as ControlActionRow[];
+    setControlActionRows(body);
     setControlActionEntries(
       controlActionRowsToEntries(body) as TranscriptEntry[],
     );
-  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  }, [
+    fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
+  const fetchFocusedBreakGlassRequest = useCallback(async () => {
+    if (publicView || readOnly || !activeBreakGlassRequestId) {
+      setFocusedBreakGlassRows([]);
+      return;
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(activeBreakGlassRequestId)}`,
+      ),
+    );
+    if (!res.ok) {
+      setFocusedBreakGlassRows([]);
+      return;
+    }
+    const body = (await res.json()) as BreakGlassRequestLookupResponse;
+    const rows = [body.request, body.decision].filter(
+      (row): row is ControlActionRow => Boolean(row?.event_id),
+    );
+    setFocusedBreakGlassRows(rows);
+  }, [
+    activeBreakGlassRequestId,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
+  const fetchFocusedTestSlotModelRequest = useCallback(async () => {
+    if (publicView || readOnly || !activeTestSlotModelRequestId) {
+      setFocusedTestSlotModelRows([]);
+      return;
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(activeTestSlotModelRequestId)}`,
+      ),
+    );
+    if (!res.ok) {
+      setFocusedTestSlotModelRows([]);
+      return;
+    }
+    const body = (await res.json()) as TestSlotModelRequestLookupResponse;
+    const rows = [body.request, body.decision].filter(
+      (row): row is ControlActionRow => Boolean(row?.event_id),
+    );
+    setFocusedTestSlotModelRows(rows);
+  }, [
+    activeTestSlotModelRequestId,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
+  const breakGlassActionRows = useMemo(
+    () => [...controlActionRows, ...focusedBreakGlassRows],
+    [controlActionRows, focusedBreakGlassRows],
+  );
+  const testSlotModelActionRows = useMemo(
+    () => [...controlActionRows, ...focusedTestSlotModelRows],
+    [controlActionRows, focusedTestSlotModelRows],
+  );
+  const prLaneRequests = useMemo(
+    () => pendingPRLaneRequests(controlActionRows),
+    [controlActionRows],
+  );
+  const breakGlassRequests = useMemo(
+    () => pendingBreakGlassRequests(breakGlassActionRows),
+    [breakGlassActionRows],
+  );
+  const breakGlassApprovalMenuItems = useMemo(
+    () =>
+      breakGlassApprovalMenuItemsForSession(
+        session.id,
+        breakGlassRequests,
+        testSlotModelActionRows,
+        prLaneRequests,
+      ),
+    [breakGlassRequests, prLaneRequests, session.id, testSlotModelActionRows],
+  );
+  const postPRLaneDecision = useCallback(
+    async (
+      request: PRLaneRequest,
+      decision: "approve" | "deny",
+      override?: "listed" | "count" | "unlimited",
+    ) => {
+      if (publicView || readOnly) return;
+      setPRLaneApprovalBusyId(request.eventId);
+      try {
+        const requestedBranches = [
+          ...(request.laneNames ?? []),
+          ...(request.proposedBranches ?? []),
+        ];
+        const body =
+          decision === "approve" && request.allocationRequest
+            ? {
+                note: override
+                  ? `agent-requested allocation approved with ${override} override`
+                  : "agent-requested allocation approved",
+                branch_scope:
+                  override === "unlimited" || (override === undefined && request.unlimited === true)
+                    ? { kind: "unlimited" }
+                    : override === "count"
+                      ? { kind: "count", count: 10 }
+                      : requestedBranches.length > 0
+                        ? { kind: "named", branches: requestedBranches }
+                        : { kind: "count", count: request.requestedCount ?? 10 },
+              }
+            : {};
+        await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/${decision}`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        await fetchControlActionEntries();
+      } finally {
+        setPRLaneApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const postBreakGlassDecision = useCallback(
+    async (
+      request: Pick<BreakGlassRequest, "eventId">,
+      decision: "approve" | "deny",
+      body: Record<string, unknown> = {},
+    ) => {
+      if (publicView || readOnly) return;
+      setBreakGlassApprovalBusyId(request.eventId);
+      try {
+        const res = await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/${encodeURIComponent(request.eventId)}/${decision}`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        const responseBody = await res.json().catch(() => null);
+        if (decision === "approve") {
+          const turnId = approvalNotificationTurnId(responseBody);
+          if (turnId) setPendingApprovalTurnOpenId(turnId);
+        }
+        await fetchControlActionEntries();
+        await fetchFocusedBreakGlassRequest();
+      } finally {
+        setBreakGlassApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      fetchFocusedBreakGlassRequest,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const postBreakGlassBatchApproval = useCallback(
+    async (items: BreakGlassApprovalMenuItem[]) => {
+      if (publicView || readOnly) return;
+      const requests = items
+        .filter(isBatchableBreakGlassMenuItem)
+        .map((item) => ({ event_id: item.id, note: "" }));
+      if (requests.length === 0) return;
+      setBreakGlassApprovalBusyId(BREAK_GLASS_BATCH_BUSY_ID);
+      try {
+        const res = await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests/batch/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ requests }),
+          },
+        );
+        const responseBody = await res.json().catch(() => null);
+        const turnId = approvalNotificationTurnId(responseBody);
+        if (turnId) setPendingApprovalTurnOpenId(turnId);
+        await fetchControlActionEntries();
+        await fetchFocusedBreakGlassRequest();
+      } finally {
+        setBreakGlassApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      fetchFocusedBreakGlassRequest,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const postTestSlotModelApproval = useCallback(
+    async (request: Pick<BreakGlassRequest, "eventId">, note = "") => {
+      if (publicView || readOnly) return;
+      setTestSlotModelApprovalBusyId(request.eventId);
+      try {
+        const res = await authedFetch(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/test-slot-model-requests/${encodeURIComponent(request.eventId)}/approve`,
+          ),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ note }),
+          },
+        );
+        const responseBody = await res.json().catch(() => null);
+        const turnId = approvalNotificationTurnId(responseBody);
+        if (turnId) setPendingApprovalTurnOpenId(turnId);
+        await fetchControlActionEntries();
+        await fetchFocusedTestSlotModelRequest();
+      } finally {
+        setTestSlotModelApprovalBusyId(null);
+      }
+    },
+    [
+      fetchControlActionEntries,
+      fetchFocusedTestSlotModelRequest,
+      publicView,
+      readOnly,
+      scopedSessionPathForPane,
+      session.id,
+    ],
+  );
+  const quickApproveBreakGlassMenuItem = useCallback(
+    (item: BreakGlassApprovalMenuItem) => {
+      if (item.kind === "model") {
+        void postTestSlotModelApproval({ eventId: item.id }, "");
+        return;
+      }
+      if (item.kind === "pr-lane") {
+        if (item.prLaneRequest) {
+          void postPRLaneDecision(item.prLaneRequest, "approve");
+        }
+        return;
+      }
+      void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
+    },
+    [postBreakGlassDecision, postPRLaneDecision, postTestSlotModelApproval],
+  );
+  const quickApproveBreakGlassMenuItems = useCallback(
+    (items: BreakGlassApprovalMenuItem[]) => {
+      void postBreakGlassBatchApproval(items);
+    },
+    [postBreakGlassBatchApproval],
+  );
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
+      setBackgroundTaskLedgerEntries([]);
+      return;
+    }
+    if (readOnly) {
       setBackgroundTaskLedgerEntries([]);
       return;
     }
@@ -14741,7 +18986,13 @@ function ChatPane({
     setBackgroundTaskLedgerEntries(
       normalizeProjectedTranscriptEntries(body.background_tasks ?? []),
     );
-  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  }, [
+    fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const supportsFileAttachments =
     !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
   const filesAvailable =
@@ -14751,12 +19002,11 @@ function ChatPane({
     adminControls?.observability.summary ?? null,
     adminControls?.observability.error ?? null,
   );
-  // Seed model + effort from RunPrefs (browser-persisted). State is local
-  // because the runners seal model + effort from the first submit_turn —
-  // the splash screen is where the user adjusts the defaults before a
-  // session is created.
-  // Existing sessions prefer the durable session-owned run config; browser
-  // prefs are only the fallback for older rows that do not have it.
+  // Seed model + effort from the durable session run config (browser prefs are
+  // the fallback for older rows). State is local and MUTABLE: the composer
+  // model dropdown updates it optimistically and PUTs /run-config, and the
+  // runner re-pins on the next turn. Existing sessions prefer the durable
+  // session-owned run config.
   const configuredModelId = (session.model ?? "").trim();
   const configuredEffortId = (session.effort ?? "").trim();
   const hasConfiguredSessionRunConfig = Boolean(
@@ -14768,9 +19018,7 @@ function ChatPane({
     ? runPrefs.claudeModelId
     : isCodex
       ? runPrefs.codexModelId
-      : isAntigravity
-        ? runPrefs.antigravityModelId
-        : "";
+      : "";
   const preferredEffortId = isClaude
     ? runPrefs.claudeEffort
     : isCodex
@@ -14780,9 +19028,7 @@ function ChatPane({
     ? defaultModelForMode(session.mode, sessionRunOptions)
     : isCodex
       ? defaultModelForMode(session.mode, sessionRunOptions)
-      : isAntigravity
-        ? defaultModelForMode(session.mode, sessionRunOptions)
-        : "";
+      : "";
   const fallbackEffortId = isClaude
     ? defaultEffortForMode(session.mode, sessionRunOptions)
     : isCodex
@@ -14798,8 +19044,9 @@ function ChatPane({
     : effortOptions.some((opt) => opt.id === preferredEffortId)
       ? preferredEffortId
       : fallbackEffortId;
-  const [selectedModelId] = useState<string>(initialModelId);
-  const [selectedEffortId] = useState<string>(initialEffortId);
+  const [selectedModelId, setSelectedModelId] = useState<string>(initialModelId);
+  const [selectedEffortId, setSelectedEffortId] =
+    useState<string>(initialEffortId);
   const runtimeContextWindowTokens =
     typeof session.runtime_context_window_tokens === "number" &&
     Number.isFinite(session.runtime_context_window_tokens) &&
@@ -14826,6 +19073,59 @@ function ChatPane({
   const [slashCommands, setSlashCommands] =
     useState<SlashCommand[]>(SLASH_COMMANDS);
   const [mcpOpen, setMcpOpen] = useState(false);
+  // In-session model/effort dropdown — the mid-session model switch. Mirrors
+  // the splash picker; option (a): a pick applies to the NEXT turn silently
+  // (the runner re-pins at an idle boundary), never interrupting a live turn.
+  const [runModelMenuOpen, setRunModelMenuOpen] = useState(false);
+  const applyRunConfig = useCallback(
+    async (model: string, effort: string) => {
+      const prevModel = selectedModelId;
+      const prevEffort = selectedEffortId;
+      if (model === prevModel && effort === prevEffort) return;
+      // Optimistic: the trigger reflects the pick immediately. SSE converges
+      // session.model/effort, and the runner reports runtime_model once it
+      // re-pins on the next turn.
+      setSelectedModelId(model);
+      setSelectedEffortId(effort);
+      try {
+        const res = await authedFetch(
+          `/api/sessions/${session.id}/run-config`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model, effort }),
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`run-config update failed: ${res.status}`);
+        }
+        const updated = normalizeSession(await res.json());
+        onSessionPatch(session.id, {
+          model: updated.model,
+          effort: updated.effort,
+        });
+      } catch (err) {
+        // Revert the optimistic selection so the trigger doesn't lie.
+        setSelectedModelId(prevModel);
+        setSelectedEffortId(prevEffort);
+        console.error("run-config update failed:", err);
+      }
+    },
+    [session.id, selectedModelId, selectedEffortId, onSessionPatch],
+  );
+  // Close the in-session model dropdown on an outside click (same data-menu
+  // routing as the splash picker).
+  useEffect(() => {
+    if (!runModelMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const root = target?.closest("[data-menu]") as HTMLElement | null;
+      if (root?.dataset.menu === "run-model") return;
+      setRunModelMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [runModelMenuOpen]);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -15059,6 +19359,143 @@ function ChatPane({
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+
+  // Durable turn directory (transcript-navigation contract: the selectable turn
+  // set is owned by the durable ledger, not by whatever transcript window the
+  // browser has loaded). The Turns selector lists EVERY turn from here; the
+  // chat surface keeps its own bounded `entries` window. A directory miss
+  // surfaces an explicit error state — it never silently falls back to listing
+  // only the loaded window (that was the bug this replaces).
+  const [turnDirectoryEntries, setTurnDirectoryEntries] = useState<
+    TranscriptEntry[]
+  >([]);
+  const [turnDirectoryStatus, setTurnDirectoryStatus] =
+    useState<TurnDirectoryStatus>("idle");
+  const [turnDirectoryTruncated, setTurnDirectoryTruncated] = useState(false);
+  // Revision bumps after every load attempt so the new-turn refetch effect
+  // re-evaluates against the freshly-known turn-id set (and re-fires if a turn
+  // appeared while a single-flighted load was in progress).
+  const [turnDirectoryRevision, setTurnDirectoryRevision] = useState(0);
+  const turnDirectoryTurnIdsRef = useRef<Set<string>>(new Set());
+  const loadTurnDirectoryInFlightRef = useRef(false);
+  const turnDirectoryNewTurnLoopRef = useRef<{
+    key: string;
+    count: number;
+    reported: boolean;
+  }>({ key: "", count: 0, reported: false });
+  const turnDirectoryRouteMismatchKeyRef = useRef<string | null>(null);
+  const loadTurnDirectory = useCallback(
+    async (source: string): Promise<void> => {
+      // The pre-session splash has no session to read; admin/public read-only
+      // surfaces do load their complete directory.
+      if (publicView && !publicShareTokenValue) return;
+      if (loadTurnDirectoryInFlightRef.current) return;
+      loadTurnDirectoryInFlightRef.current = true;
+      const requestSessionId = session.id;
+      const routeSessionId = readSessionRouteFromPath()?.sessionId ?? "";
+      if (routeSessionId && routeSessionId !== requestSessionId) {
+        const mismatchKey = `${requestSessionId}:${routeSessionId}:${source}`;
+        if (turnDirectoryRouteMismatchKeyRef.current !== mismatchKey) {
+          turnDirectoryRouteMismatchKeyRef.current = mismatchKey;
+          logChatScrollEvent("turn-directory-route-session-mismatch", {
+            surface: "session",
+            sessionId: requestSessionId,
+            sessionMode: session.mode,
+            source,
+            reason: "route-session-mismatch",
+            key: routeSessionId,
+            eventCount: turnDirectoryTurnIdsRef.current.size,
+          });
+        }
+      } else {
+        turnDirectoryRouteMismatchKeyRef.current = null;
+      }
+      setTurnDirectoryStatus((prev) => (prev === "ready" ? prev : "loading"));
+      logChatScrollEvent("turn-directory-request", {
+        surface: "session",
+        sessionId: requestSessionId,
+        sessionMode: session.mode,
+        source,
+      });
+      try {
+        const res = await fetchPaneResource(turnDirectoryRequestPathForPane());
+        if (sessionIdRef.current !== requestSessionId) return;
+        if (!res.ok) {
+          setTurnDirectoryStatus("error");
+          logChatScrollEvent("turn-directory-error", {
+            surface: "session",
+            sessionId: requestSessionId,
+            sessionMode: session.mode,
+            source,
+            status: res.status,
+          });
+          return;
+        }
+        const body = (await res.json()) as TurnDirectoryBody;
+        if (sessionIdRef.current !== requestSessionId) return;
+        const shells = normalizeProjectedTranscriptEntries(
+          Array.isArray(body.turns) ? body.turns : [],
+        );
+        const ids = new Set<string>();
+        for (const shell of shells) {
+          const tid = (shell.turnId ?? "").trim();
+          if (tid) ids.add(tid);
+        }
+        turnDirectoryTurnIdsRef.current = ids;
+        setTurnDirectoryEntries(shells);
+        setTurnDirectoryTruncated(body.truncated === true);
+        setTurnDirectoryStatus("ready");
+        logChatScrollEvent("turn-directory-loaded", {
+          surface: "session",
+          sessionId: requestSessionId,
+          sessionMode: session.mode,
+          source,
+          eventCount: shells.length,
+        });
+      } catch {
+        if (sessionIdRef.current === requestSessionId) {
+          setTurnDirectoryStatus("error");
+        }
+      } finally {
+        loadTurnDirectoryInFlightRef.current = false;
+        setTurnDirectoryRevision((n) => n + 1);
+      }
+    },
+    [
+      fetchPaneResource,
+      publicShareTokenValue,
+      publicView,
+      session.id,
+      session.mode,
+      turnDirectoryRequestPathForPane,
+    ],
+  );
+  // Drop the previous session's directory the instant the pane is pointed at a
+  // new session, so the Turns view never shows a stale turn set during the
+  // cross-session load (harmless if the pane remounts per session).
+  useEffect(() => {
+    setTurnDirectoryEntries([]);
+    setTurnDirectoryStatus("idle");
+    setTurnDirectoryTruncated(false);
+    turnDirectoryTurnIdsRef.current = new Set();
+    setPendingApprovalTurnOpenId(null);
+    approvalAutoFollowPrimedRef.current = false;
+    approvalAutoFollowKnownTurnIdsRef.current = new Set();
+    turnDirectoryNewTurnLoopRef.current = {
+      key: "",
+      count: 0,
+      reported: false,
+    };
+    turnDirectoryRouteMismatchKeyRef.current = null;
+  }, [session.id]);
+  // Load the directory when the pane becomes visible (open / tab switch /
+  // session change). The new-turn refetch effect lives lower, after
+  // renderedEntries is defined.
+  useEffect(() => {
+    if (!visible) return;
+    if (publicView && !publicShareTokenValue) return;
+    void loadTurnDirectory("open");
+  }, [visible, publicView, publicShareTokenValue, loadTurnDirectory]);
   // runningRef is read from the SSE silence watchdog so we can tell
   // whether a silent stream was silent *during a turn* (the
   // candidate-B signature) or just idle. Mirrors the visibleRef
@@ -15104,6 +19541,16 @@ function ChatPane({
   } | null>(null);
   const terminalCorrelationReportedRef = useRef<Set<string>>(new Set());
   const queuedFollowupBlockedReportedRef = useRef<string | null>(null);
+  // Last durable activity status seen from applySdkActivitySummaryToUi.
+  // needs_input/streaming/submitted/claimed/scheduled all collapse into
+  // runStatus "running", so this ref is the only surviving distinction the
+  // "why is my message queued?" diagnostic can read. Read-only signal — it
+  // never feeds the queue gate, only the explanation surface.
+  const latestDurableActivityStatusRef = useRef<ConversationActivityStatus | null>(
+    null,
+  );
+  const [activityLoadingSessionSwitchTelemetry, setActivityLoadingSessionSwitchTelemetry] =
+    useState<{ previousSessionId: string; changedAt: number } | null>(null);
   // Mirror of the durable activity summary's active turn. The main transcript
   // no longer reduces raw item events in the browser; projected row updates and
   // session activity summaries own visible run state.
@@ -15185,6 +19632,10 @@ function ChatPane({
       session_id: session.id,
     });
     if (!activity) return;
+    // Capture the raw durable status before the sdkActive collapse and the
+    // `if (currentRunRef.current) return;` early-out below, so the queued-input
+    // diagnostic can recover needs_input/scheduled/etc. and the latch-lag tail.
+    latestDurableActivityStatusRef.current = activity.status;
     const sdkActive =
       activity.status === "submitted" ||
       activity.status === "claimed" ||
@@ -15748,6 +20199,7 @@ function ChatPane({
   }
   function scheduleSdkReadStateUpdate(): void {
     if (publicView) return;
+    if (readOnly) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     // Read-cursor advancement is gated on navigation mode. The durable
@@ -15775,6 +20227,7 @@ function ChatPane({
   }
   async function flushSdkReadStateUpdate(): Promise<void> {
     if (publicView) return;
+    if (readOnly) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     if (navigationModeRef.current !== "live-tail") return;
@@ -15973,13 +20426,13 @@ function ChatPane({
 
   useEffect(() => {
     visibleRef.current = visible;
-    if (!visible && sdkReadStateTimerRef.current !== null) {
+    if ((!visible || readOnly) && sdkReadStateTimerRef.current !== null) {
       window.clearTimeout(sdkReadStateTimerRef.current);
       sdkReadStateTimerRef.current = null;
       return;
     }
-    if (visible) scheduleSdkReadStateUpdate();
-  }, [session.id, visible]);
+    if (visible && !readOnly) scheduleSdkReadStateUpdate();
+  }, [readOnly, session.id, visible]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -16064,6 +20517,24 @@ function ChatPane({
     }
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
+    const routedBreakGlassRequestId = readBreakGlassRequestRoute();
+    if (routedBreakGlassRequestId) {
+      setActiveBreakGlassRequestId(routedBreakGlassRequestId);
+      setActiveTab("break-glass");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    const routedTestSlotModelRequestId = readTestSlotModelRequestRoute();
+    if (routedTestSlotModelRequestId) {
+      setActiveTestSlotModelRequestId(routedTestSlotModelRequestId);
+      setActiveTab("test-slot-model");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
@@ -16098,6 +20569,36 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (route.tab === "queue-status") {
+      setActiveTab("queue-status");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "pull-requests") {
+      setActiveTab("pull-requests");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "break-glass") {
+      setActiveBreakGlassRequestId(route.breakGlassRequestId);
+      setActiveTab("break-glass");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "test-slot-model") {
+      setActiveTestSlotModelRequestId(route.testSlotModelRequestId);
+      setActiveTab("test-slot-model");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     if (route.tab === "files") {
       setActiveTab("files");
       if (route.filePath) {
@@ -16124,6 +20625,20 @@ function ChatPane({
     }
     if (route.tab === "background") {
       setActiveTab("background");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "test-slot") {
+      setActiveTab("test-slot");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "orchestrate") {
+      setActiveTab("orchestrate");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -17128,6 +21643,15 @@ function ChatPane({
   // When the session id changes, reset transcript state and allow the
   // history sync to run again. The replay paths repopulate from backend.
   useLayoutEffect(() => {
+    const previousSessionId = sessionIdRef.current;
+    if (previousSessionId && previousSessionId !== session.id) {
+      setActivityLoadingSessionSwitchTelemetry({
+        previousSessionId,
+        changedAt: Date.now(),
+      });
+    } else {
+      setActivityLoadingSessionSwitchTelemetry(null);
+    }
     sessionIdRef.current = session.id;
     wasVisibleRef.current = visible;
     resetSdkTimelineBootstrapState("session-change", {
@@ -17138,6 +21662,7 @@ function ChatPane({
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
+    latestDurableActivityStatusRef.current = null;
     setQueuedMessages([]);
     setRunStatus("idle");
     setRunning(false);
@@ -17146,6 +21671,16 @@ function ChatPane({
     // passive timeline bootstrap effects can start.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
+  useEffect(() => {
+    if (!activityLoadingSessionSwitchTelemetry) return;
+    const observed = activityLoadingSessionSwitchTelemetry;
+    const timer = window.setTimeout(() => {
+      setActivityLoadingSessionSwitchTelemetry((current) =>
+        current === observed ? null : current,
+      );
+    }, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [activityLoadingSessionSwitchTelemetry]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
   // Ctrl/⌘+Enter submits. Implemented by intercepting at capture phase
@@ -17548,12 +22083,6 @@ function ChatPane({
     const newPos = start + insert.length;
     ta.setSelectionRange(newPos, newPos);
     ta.focus();
-  }
-
-  function getComposerValue(): string {
-    const wrap = composerWrapRef.current;
-    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
-    return ta?.value ?? composerText;
   }
 
   function setComposerValue(value: string) {
@@ -18104,24 +22633,49 @@ function ChatPane({
     });
   }
 
-  function startTestSkill() {
+  // startInteractiveTestWorkflow is the deterministic, zero-LLM replacement for
+  // the retired `/test` skill send. It POSTs to the gated backend endpoint,
+  // which validates the session's governed-PR readiness and provisions a
+  // Glimmung test slot server-side only on a green/mergeable verdict. The 202
+  // accept is immediate (validation can take minutes).
+  //
+  // Visible feedback is the durable `test_provision.updated` thread the backend
+  // emits — an opener ("Creating test slot.") on kickoff, validating/waiting
+  // progress, and a terminal ready/refusal record — which renders inline as a
+  // grouped role:system thread. We deliberately do NOT append an optimistic
+  // local meta chip for the happy path: that chip was the old silent,
+  // refresh-ephemeral feedback the durable thread now replaces. We also do NOT
+  // mark the test pill active here: a refused workflow must not leave a
+  // phantom-active pill. The only client-side surface is the immediate
+  // pre-gate refusal (e.g. 409 already-active, ambiguous repo), which the
+  // backend rejects synchronously and therefore emits no thread for.
+  function startInteractiveTestWorkflow(drive = false) {
     if (session.status !== "Active") return;
-    const promptText = getComposerValue().trim();
-    const composed = composePromptWithAttachments(promptText);
-    if (composed == null) return;
-    setComposerValue("");
-    void markTestState({ active: true }).catch((e) => {
-      setEntries((prev) =>
-        appendMeta(
-          prev,
-          nextEntryId("test-state-error"),
-          "test state update failed",
-          String(e),
-          "error",
-        ),
-      );
-    });
-    submitSkillInvocation("test", composed.prompt);
+    void startTestWorkflow(session.id, authedFetch, { drive })
+      .then((result) => {
+        if (!result.ok) {
+          setEntries((prev) =>
+            appendMeta(
+              prev,
+              nextEntryId("test-workflow-error"),
+              "Test workflow could not start",
+              result.detail,
+              "error",
+            ),
+          );
+        }
+      })
+      .catch((e) => {
+        setEntries((prev) =>
+          appendMeta(
+            prev,
+            nextEntryId("test-workflow-error"),
+            "Test workflow could not start",
+            String(e),
+            "error",
+          ),
+        );
+      });
   }
 
   function startGuiRollout() {
@@ -18275,6 +22829,7 @@ function ChatPane({
 
   function scheduleSdkEventStreamReconnect(): void {
     if (publicView) return;
+    if (readOnly) return;
     if (sdkEventReconnectTimerRef.current !== null) {
       window.clearTimeout(sdkEventReconnectTimerRef.current);
     }
@@ -18289,6 +22844,10 @@ function ChatPane({
 
   async function openSdkEventStream(): Promise<EventSource | null> {
     if (publicView) {
+      setSdkConnectionState("idle");
+      return null;
+    }
+    if (readOnly) {
       setSdkConnectionState("idle");
       return null;
     }
@@ -18397,7 +22956,12 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped)
+    if (
+      readOnly ||
+      !visible ||
+      !CHAT_MODES.has(session.mode) ||
+      !historyBootstrapped
+    )
       return;
     // Long-task correlation: switching active sessions triggers a
     // reducer reset + transcript bootstrap + scroll rewire. Attribute
@@ -18432,6 +22996,7 @@ function ChatPane({
   }, [
     historyBootstrapped,
     publicView,
+    readOnly,
     visible,
     session.id,
     session.mode,
@@ -18444,6 +23009,27 @@ function ChatPane({
       : runStatus === "error"
         ? "error"
         : undefined;
+
+  // The single, session-level "why is typed input queued?" explanation. The
+  // queue gate is exactly `running`, so when the run is active this is the live
+  // reason the queue won't drain; null when idle (input sends immediately).
+  // These are the same latch inputs handleSubmit feeds decideFollowupSubmit, so
+  // the diagnostic and the gate agree by construction.
+  const queueBlockHasLocalRun = currentRunRef.current !== null;
+  const queueBlockLocalRunHasTerminal =
+    currentRunRef.current !== null &&
+    terminalResultForTurn(
+      sdkServerProjectedEntriesRef.current,
+      currentRunRef.current.turnId,
+    ) !== null;
+  const queueBlock: RunBlockDescription | null = running
+    ? describeRunBlock({
+        durableActivityStatus: latestDurableActivityStatusRef.current,
+        runStatus,
+        hasLocalRun: queueBlockHasLocalRun,
+        localRunHasTerminal: queueBlockLocalRunHasTerminal,
+      })
+    : null;
 
   const sessionAvatar = useMemo(
     () => getSessionAvatarByID(session.agent_avatar_id),
@@ -18499,17 +23085,36 @@ function ChatPane({
     () => entries.filter((entry) => !entry.backgroundOnly),
     [entries],
   );
+  const glimmungRunLinks = useMemo(() => {
+    const runEntries = [...renderedEntries];
+    for (const activityEntries of Object.values(activityEntriesByTurn)) {
+      if (activityEntries) runEntries.push(...activityEntries);
+    }
+    return collectGlimmungRunsFromEntries(runEntries);
+  }, [activityEntriesByTurn, renderedEntries]);
   useEffect(() => {
-    if (publicView || !visible) {
+    if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
+      setControlActionRows([]);
+      setFocusedBreakGlassRows([]);
+      setFocusedTestSlotModelRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
     }
     let cancelled = false;
     const refresh = () => {
       void fetchControlActionEntries().catch(() => {
-        if (!cancelled) setControlActionEntries([]);
+        if (!cancelled) {
+          setControlActionEntries([]);
+          setControlActionRows([]);
+        }
+      });
+      void fetchFocusedBreakGlassRequest().catch(() => {
+        if (!cancelled) setFocusedBreakGlassRows([]);
+      });
+      void fetchFocusedTestSlotModelRequest().catch(() => {
+        if (!cancelled) setFocusedTestSlotModelRows([]);
       });
       void fetchBackgroundTaskEntries().catch(() => {
         if (!cancelled) setBackgroundTaskLedgerEntries([]);
@@ -18524,7 +23129,10 @@ function ChatPane({
   }, [
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
+    fetchFocusedBreakGlassRequest,
+    fetchFocusedTestSlotModelRequest,
     publicView,
+    readOnly,
     visible,
   ]);
   // Background tasks come from the durable session-level feed, not the main
@@ -18533,6 +23141,10 @@ function ChatPane({
   const backgroundTaskEntries = useMemo(
     () => backgroundTaskLedgerEntries.filter(isBackgroundTaskEntry),
     [backgroundTaskLedgerEntries],
+  );
+  const agentGitActivity = useMemo(
+    () => buildAgentGitActivity(controlActionEntries),
+    [controlActionEntries],
   );
   const runningShellInvocationEntries = useMemo(
     () => renderedEntries.filter(isRunningShellInvocationEntry),
@@ -18578,10 +23190,25 @@ function ChatPane({
   const appliedModelId = (session.runtime_model ?? "").trim();
   const modelForCostEstimate = appliedModelId || selectedModelId;
   const contextWindow = runtimeContextWindowTokens;
+  // The Turns selector is built from the durable turn directory, NOT the
+  // bounded chat window: the directory owns the COMPLETE turn set so every turn
+  // (Turn 1..N) is listable regardless of how far back the chat window paged.
+  // The live `renderedEntries` window only OVERLAYS fresh status onto the turns
+  // the directory already lists (the active/recent tail), so an in-flight turn
+  // stays live without re-reading the directory on every terminal; the live
+  // shell wins on a turnId collision. The set is always the directory's — a
+  // directory the browser hasn't loaded yields no turns here (an explicit
+  // loading/error state renders), it never falls back to listing the window.
+  // buildTurnViewItems still appends the single active turn (renderedActiveTurnId)
+  // for the sub-second gap between submitting a turn and the directory refetch.
+  const turnViewSourceEntries = useMemo(
+    () => mergeTurnDirectoryWithLiveShells(turnDirectoryEntries, renderedEntries),
+    [turnDirectoryEntries, renderedEntries],
+  );
   const turnViewItems = useMemo(
     () =>
       buildTurnViewItems(
-        renderedEntries,
+        turnViewSourceEntries,
         renderedActiveTurnId,
         activityEntriesByTurn,
         modelForCostEstimate,
@@ -18592,13 +23219,70 @@ function ChatPane({
       contextWindow,
       modelForCostEstimate,
       renderedActiveTurnId,
-      renderedEntries,
+      turnViewSourceEntries,
     ],
   );
+  // Refetch the directory when the live tail surfaces a turn it does not yet
+  // list — a turn was submitted/started after the last directory read. The
+  // directory read is durable (materialize-on-read), so the new turn joins with
+  // its durable number; until then buildTurnViewItems shows it as the active
+  // "Current turn". turnDirectoryRevision re-runs this after each load so a turn
+  // that appeared mid-load is not missed.
+  useEffect(() => {
+    if (turnDirectoryStatus !== "ready") return;
+    const known = turnDirectoryTurnIdsRef.current;
+    const missingTurnIds = turnActivityShellIdsMissingFromDirectory(
+      renderedEntries,
+      known,
+    );
+    if (missingTurnIds.length === 0) {
+      turnDirectoryNewTurnLoopRef.current = {
+        key: "",
+        count: 0,
+        reported: false,
+      };
+      return;
+    }
+    const missingKey = missingTurnIds.join("|");
+    const previous = turnDirectoryNewTurnLoopRef.current;
+    const next =
+      previous.key === missingKey
+        ? { ...previous, count: previous.count + 1 }
+        : { key: missingKey, count: 1, reported: false };
+    if (
+      next.count >= TURN_DIRECTORY_NEW_TURN_LOOP_THRESHOLD &&
+      !next.reported
+    ) {
+      next.reported = true;
+      logChatScrollEvent("turn-directory-new-turn-loop", {
+        surface: "session",
+        sessionId: session.id,
+        sessionMode: session.mode,
+        source: "new-turn",
+        reason: "stable-missing-turn-activity-shell",
+        key: missingTurnIds[0],
+        eventCount: missingTurnIds.length,
+        canonicalEventCount: known.size,
+        entries: renderedEntries.length,
+        turnActivityShells: renderedEntries.filter(isTurnActivityEntry).length,
+      });
+    }
+    turnDirectoryNewTurnLoopRef.current = next;
+    void loadTurnDirectory("new-turn");
+  }, [
+    renderedEntries,
+    session.id,
+    session.mode,
+    turnDirectoryStatus,
+    turnDirectoryRevision,
+    loadTurnDirectory,
+  ]);
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId =
     turnViewItems.find((turn) => turn.active)?.turnId ?? null;
   const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
+  const latestApprovalAutoFollowTurnId =
+    latestAutoFollowApprovalTurnId(turnViewItems);
   const selectedTurnExists =
     selectedTurnId != null &&
     turnViewItems.some((turn) => turn.turnId === selectedTurnId);
@@ -18881,6 +23565,39 @@ function ChatPane({
       replaceAppRoute("cluster");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "queue-status") {
+      replaceSessionRoute(session.id, "queue-status");
+    } else if (activeTab === "pull-requests") {
+      replaceSessionRoute(session.id, "pull-requests");
+    } else if (activeTab === "break-glass") {
+      const next = activeBreakGlassRequestId
+        ? sessionRouteUrl(
+            session.id,
+            "break-glass",
+            null,
+            null,
+            null,
+            null,
+            null,
+            activeBreakGlassRequestId,
+          )
+        : sessionRouteUrl(session.id);
+      if (next !== window.location.href) window.history.replaceState({}, "", next);
+    } else if (activeTab === "test-slot-model") {
+      const next = activeTestSlotModelRequestId
+        ? sessionRouteUrl(
+            session.id,
+            "test-slot-model",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            activeTestSlotModelRequestId,
+          )
+        : sessionRouteUrl(session.id);
+      if (next !== window.location.href) window.history.replaceState({}, "", next);
     } else if (activeTab === "files") {
       replaceSessionRoute(
         session.id,
@@ -18892,6 +23609,10 @@ function ChatPane({
       );
     } else if (activeTab === "background") {
       replaceSessionRoute(session.id, "background");
+    } else if (activeTab === "test-slot") {
+      replaceSessionRoute(session.id, "test-slot");
+    } else if (activeTab === "orchestrate") {
+      replaceSessionRoute(session.id, "orchestrate");
     } else if (activeTab === "chat") {
       replaceSessionTranscriptRoute(session.id);
     } else {
@@ -18900,6 +23621,8 @@ function ChatPane({
   }, [
     activeTab,
     adminView,
+    activeBreakGlassRequestId,
+    activeTestSlotModelRequestId,
     effectivePendingScrollMessageId,
     publicView,
     routeTurnUnavailable,
@@ -18911,11 +23634,99 @@ function ChatPane({
     settingsTab,
     visible,
   ]);
+  // The turn the activity body actually renders. resolveDisplayedActivityTurn
+  // is the SAME resolver the body uses, so the loader and the body never
+  // disagree about which turn is on screen. It falls back to the latest turn
+  // when the selected id is not in the (windowed) directory — which is exactly
+  // what happens on a deep-link or refresh of /sessions/{id}/turns/{n} while
+  // that turn is still resolving (effectiveSelectedTurnId holds the unresolved
+  // id to keep the URL stable). Keying the load off effectiveSelectedTurnId
+  // (every prior fix did) loaded the off-screen id while the body showed the
+  // latest turn → the shown turn never loaded → "Loading activity…" forever.
+  const displayedActivityTurnId =
+    resolveDisplayedActivityTurn(turnViewItems, effectiveSelectedTurnId)
+      ?.turnId ?? null;
+  // Level-triggered activity-load reconciler. A Turns pane with a displayed,
+  // non-terminal, not-loading turn ALWAYS has a load running — closing the
+  // strand for every selection path (gestures, live-run follow, deep-link
+  // match, route-number resolver, default-latest), present and future, instead
+  // of wiring a load into each path. turnActivityShouldStartLoad dedups
+  // concurrent loads, so re-running on every relevant render is safe
+  // (loading/loaded/error all resolve to idle). Mirrors the directory-load
+  // reconcile design; pure gate + resolver are truth-table tested in
+  // turnActivityLoadReconcile.ts.
   useEffect(() => {
+    const decision = evaluateTurnActivityReconcile({
+      active: activeTab === "turns",
+      hasDisplayedTurn: displayedActivityTurnId != null,
+      status: displayedActivityTurnId
+        ? turnActivityLoadsByTurn[displayedActivityTurnId]?.status
+        : undefined,
+    });
+    if (decision.action === "load" && displayedActivityTurnId) {
+      ensureTurnActivityLoaded(displayedActivityTurnId);
+    }
+  }, [
+    activeTab,
+    displayedActivityTurnId,
+    ensureTurnActivityLoaded,
+    turnActivityLoadsByTurn,
+  ]);
+  // Answering runs through the run composer, which only enters answer mode once
+  // the pending question turn's activity is loaded (answeringContext reads its
+  // snapshot). The reconciler above only loads while the Turns tab is active,
+  // which is why the question used to be reachable only from Turns. Load the
+  // pending needs_input turn regardless of tab so its question widget renders
+  // inline in the main transcript and the composer can answer it right there.
+  const pendingNeedsInputTurnId = useMemo(() => {
+    if (publicView || readOnly) return null;
+    return (
+      turnViewItems.find(
+        (turn) => turn.shell?.activity?.status === "needs_input",
+      )?.turnId ?? null
+    );
+  }, [publicView, readOnly, turnViewItems]);
+  useEffect(() => {
+    if (!pendingNeedsInputTurnId) return;
+    ensureTurnActivityLoaded(pendingNeedsInputTurnId);
+  }, [pendingNeedsInputTurnId, ensureTurnActivityLoaded]);
+  // Behavior-free watchdog (telemetry only): report when the selected turn's
+  // activity body stays on "Loading activity..." past the threshold. It emits a
+  // bounded session-event-stream metric and does NOT start a load, touch the
+  // cache, or change any state — it only observes. The existing
+  // turn_activity_load_* events fire only when a load actually runs, so a load
+  // that never started (the selected turn left `unloaded` with nothing
+  // re-triggering it) is invisible today; this fills that gap so the strand is
+  // measurable in prod data before any fix. See turnActivityState.ts.
+  const displayedActivityStatus = displayedActivityTurnId
+    ? turnActivityLoadsByTurn[displayedActivityTurnId]?.status
+    : undefined;
+  useEffect(() => {
+    if (!visible) return;
     if (activeTab !== "turns") return;
-    if (!effectiveSelectedTurnId) return;
-    ensureTurnActivityLoaded(effectiveSelectedTurnId);
-  }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+    if (!displayedActivityTurnId) return;
+    // Arm only while the body shows the spinner (a non-terminal status). Keyed
+    // on the DISPLAYED turn — the turn the spinner is actually for — so the
+    // watchdog can't fire on an off-screen id whose body already cleared.
+    if (turnActivityStuckEvent(displayedActivityStatus) === null) return;
+    const turnId = displayedActivityTurnId;
+    const timer = window.setTimeout(() => {
+      // Recompute from the ref at fire time so a load that resolved within the
+      // threshold does not produce a false positive.
+      const event = turnActivityStuckEvent(
+        turnActivityLoadsByTurnRef.current[turnId]?.status,
+      );
+      if (!event) return;
+      logSessionEventStreamEvent(event, { sessionMode: session.mode });
+    }, TURN_ACTIVITY_STUCK_THRESHOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    visible,
+    activeTab,
+    displayedActivityTurnId,
+    displayedActivityStatus,
+    session.mode,
+  ]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (pendingTurnViewRouteAnchor !== "bottom") return;
@@ -18942,17 +23753,36 @@ function ChatPane({
         effectiveSelectedTurnId ||
         latestTurnId;
       if (target) {
+        const targetPage =
+          typeof options?.page === "number" &&
+          Number.isSafeInteger(options.page) &&
+          options.page > 0
+            ? options.page
+            : null;
         setPendingRouteTurnNumber(null);
         setRouteTurnUnavailable(false);
         setPendingTurnViewRouteAnchor(null);
         setSelectedTurnNumberAnchor(null);
-        if (options?.resetPage) {
+        if (targetPage != null) {
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [target]: targetPage,
+          };
+        } else if (options?.resetPage) {
           const nextSelectedPages = { ...selectedTurnPageRef.current };
           delete nextSelectedPages[target];
           selectedTurnPageRef.current = nextSelectedPages;
         }
         setSelectedTurnId(target);
-        ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        if (targetPage != null) {
+          startTurnActivityLoad(target, {
+            force: true,
+            page: targetPage,
+            reason: "page",
+          });
+        } else {
+          ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        }
         if (options?.anchor) {
           turnViewScrollRequestSeqRef.current += 1;
           setTurnViewScrollRequest({
@@ -18969,8 +23799,46 @@ function ChatPane({
       effectiveSelectedTurnId,
       ensureTurnActivityLoaded,
       latestTurnId,
+      startTurnActivityLoad,
     ],
   );
+  useEffect(() => {
+    if (!pendingApprovalTurnOpenId) return;
+    if (!turnViewItems.some((turn) => turn.turnId === pendingApprovalTurnOpenId))
+      return;
+    openTurnPage(pendingApprovalTurnOpenId, {
+      anchor: "bottom",
+      resetPage: true,
+    });
+    setPendingApprovalTurnOpenId(null);
+  }, [openTurnPage, pendingApprovalTurnOpenId, turnViewItems]);
+  useEffect(() => {
+    if (turnDirectoryStatus !== "ready") return;
+    const currentTurnIds = new Set(turnViewItems.map((turn) => turn.turnId));
+    const target = latestApprovalAutoFollowTurnId;
+    const wasKnown = target
+      ? approvalAutoFollowKnownTurnIdsRef.current.has(target)
+      : false;
+    const wasPrimed = approvalAutoFollowPrimedRef.current;
+    approvalAutoFollowKnownTurnIdsRef.current = currentTurnIds;
+    approvalAutoFollowPrimedRef.current = true;
+    if (!wasPrimed || !target || wasKnown || pendingApprovalTurnOpenId === target)
+      return;
+    if (
+      activeTab !== "turns" &&
+      activeTab !== "break-glass" &&
+      activeTab !== "test-slot-model"
+    )
+      return;
+    openTurnPage(target, { anchor: "bottom", resetPage: true });
+  }, [
+    activeTab,
+    latestApprovalAutoFollowTurnId,
+    openTurnPage,
+    pendingApprovalTurnOpenId,
+    turnDirectoryStatus,
+    turnViewItems,
+  ]);
 
   // T opens the turn-detail view from the focused transcript; Escape returns
   // from Turns to the transcript. The T side uses the same "highlighted
@@ -19081,8 +23949,8 @@ function ChatPane({
       // clearRealtime=false keeps any in-flight optimistic local echo; the
       // refreshed server rows are deduped against it by syncSdkRenderedEntries.
       const pull = refreshSdkRunHistoryResult(false, "keyboard-refresh");
-      if (activeTab === "turns" && effectiveSelectedTurnId) {
-        ensureTurnActivityLoaded(effectiveSelectedTurnId, { force: true });
+      if (activeTab === "turns" && displayedActivityTurnId) {
+        ensureTurnActivityLoaded(displayedActivityTurnId, { force: true });
       }
       void pull.finally(() => {
         keyboardRefreshInFlightRef.current = false;
@@ -19092,7 +23960,7 @@ function ChatPane({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [
     activeTab,
-    effectiveSelectedTurnId,
+    displayedActivityTurnId,
     ensureTurnActivityLoaded,
     mcpOpen,
     mentionOpen,
@@ -19284,7 +24152,11 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const pullRequestURL = testState?.pull_request_url?.trim() || "";
+  // The composer pull-request menu surfaces two links separately: the latest PR
+  // the agent opened (derived from control-action git activity) and the PR
+  // explicitly linked to the session via set_pull_request_link (test/rollout).
+  const latestPullRequestURL = agentGitActivity.pullRequests[0]?.href ?? "";
+  const linkedPullRequestURL = testState?.pull_request_url?.trim() ?? "";
   const sessionDataRows = useMemo(
     () =>
       buildSessionDataStatusRows({
@@ -19304,6 +24176,28 @@ function ChatPane({
     selectedEffortId,
     sessionRunOptions,
   );
+  // When paging back through the Turns view to a turn that isn't the latest,
+  // the composer model chip shows THAT turn's model read-only — a past turn's
+  // model is immutable, so it is unselectable — instead of the interactive
+  // next-turn selector. It reverts to the live selector on the latest turn (and
+  // in the chat view). The session re-pinning to a different model is rare, so
+  // this read-only-when-historical view is the intended, low-friction behavior.
+  const viewedTurn =
+    activeTab === "turns"
+      ? turnViewItems.find((turn) => turn.turnId === effectiveSelectedTurnId)
+      : undefined;
+  const viewingPreviousTurn =
+    activeTab === "turns" &&
+    effectiveSelectedTurnId != null &&
+    latestTurnId != null &&
+    effectiveSelectedTurnId !== latestTurnId &&
+    Boolean(viewedTurn?.model);
+  const viewedTurnModelLabel = viewedTurn?.model
+    ? modelDisplayLabel(session.mode, viewedTurn.model, sessionRunOptions)
+    : "";
+  const viewedTurnEffortLabel = viewedTurn?.effort
+    ? effortDisplayLabel(session.mode, viewedTurn.effort, sessionRunOptions)
+    : "";
   const modelChipLabel = hasAppliedRuntimeConfig
     ? modelDisplayLabel(session.mode, appliedModelId, sessionRunOptions) ||
       configuredModelLabel
@@ -19549,7 +24443,7 @@ function ChatPane({
   async function submitAnswer(
     askingTurnId: string,
     payload: AnswerPayload,
-  ): Promise<void> {
+  ): Promise<{ answerTurnId: string | null }> {
     const turnID = askingTurnId.trim();
     const providerItemID = payload.providerItemId.trim();
     const timelineID = payload.timelineId.trim();
@@ -19566,6 +24460,11 @@ function ChatPane({
     };
     if (payload.annotations && Object.keys(payload.annotations).length > 0) {
       body.annotations = payload.annotations;
+    }
+    if (payload.displayAttachments && payload.displayAttachments.length > 0) {
+      body.display_attachments = attachmentPayloadsForApi(
+        payload.displayAttachments,
+      );
     }
     const res = await authedFetch(
       `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/answer`,
@@ -19585,8 +24484,289 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    // The answer lands durably over SSE; no local activity-cache patch.
+    // turn.input_answered is a state marker, not a normal transcript row, so
+    // the open Turns page may not receive a row-driven activity refresh. Pull
+    // the affected question turn directly; this is the same projection manual
+    // refresh would load, scoped to the card the user just answered. Mark it
+    // pending first so an already-running live refresh schedules one more pass.
+    // The answer creates the next durable turn (the user's answer message +
+    // the agent's continuation). Surface its id so the Turns view can advance
+    // there, ready for the ensuing conversation.
+    let answerTurnId: string | null = null;
+    try {
+      const data = await res.json();
+      if (typeof data?.turn_id === "string" && data.turn_id.trim()) {
+        answerTurnId = data.turn_id.trim();
+      }
+    } catch {
+      // Non-JSON success body — nothing to navigate to.
+    }
+    if (!activityLiveRefreshPendingCursorRef.current.has(turnID)) {
+      activityLiveRefreshPendingCursorRef.current.set(turnID, "");
+    }
+    silentlyRefreshCachedTurnActivity(turnID);
+    return { answerTurnId };
   }
+
+  // --- AskUserQuestion answering mode ------------------------------------
+  // The single run composer doubles as the answer box for a pending synthetic
+  // AskUserQuestion turn, so the question screen never shows two text inputs.
+  // It reads the same askUserQuestionDrafts the option chips write to; its send
+  // button becomes "Submit answer" and posts the assembled answer to /answer.
+  const answeringContext = useMemo(() => {
+    if (publicView || readOnly) return null;
+    const pendingTurn = turnViewItems.find(
+      (turn) => turn.shell?.activity?.status === "needs_input",
+    );
+    if (!pendingTurn) return null;
+    const snapshot = turnActivityLoadVisibleSnapshot(
+      turnActivityLoadsByTurn[pendingTurn.turnId],
+    );
+    const awEntry = (snapshot?.entries ?? []).find(
+      (entry) =>
+        entry.metaKind === "awaiting_input" &&
+        entry.awaitingInput &&
+        !(entry.awaitingInput.answered || entry.awaitingInput.dismissed),
+    );
+    const aw = awEntry?.awaitingInput;
+    if (!awEntry || !aw) return null;
+    const planApproval = isPlanApprovalAwaitingInput(aw);
+    const questions = parseAskUserQuestions(
+      { questions: aw.questions },
+      { planApproval },
+    );
+    if (questions.length === 0) return null;
+    const draftKey = (aw.timelineId || awEntry.id || "").trim();
+    const visibleIndex =
+      aw.questionIndex && aw.questionIndex >= 1 ? aw.questionIndex - 1 : 0;
+    const visibleQuestion = questions[visibleIndex] ?? questions[0] ?? null;
+    const pager = turnActivityPagerState(snapshot?.pageInfo);
+    return {
+      questionTurnId: (
+        aw.questionTurnId ||
+        awEntry.turnId ||
+        aw.askingTurnId ||
+        ""
+      ).trim(),
+      providerItemId: aw.providerItemId,
+      timelineId: aw.timelineId,
+      draftKey,
+      questions,
+      visibleQuestion,
+      planApproval,
+      multiQuestion: questions.length > 1,
+      // hasNextPage/nextPage drive paging — Enter advances mid-set and submits
+      // on the last page; the per-question answer values are read from the draft
+      // + live composer at submit time.
+      hasNextPage: pager.page < pager.pageCount,
+      nextPage: pager.page + 1,
+    };
+  }, [publicView, readOnly, turnActivityLoadsByTurn, turnViewItems]);
+
+  // Observability for the inline-question surface: once the pending turn's
+  // activity has loaded, answeringContext is non-null exactly when a question is
+  // surfaced (the inline widget renders it and the composer can answer it). A
+  // loaded pending turn with no answeringContext means the question is invisible
+  // — the user-trust failure this surface could introduce. Fire once per turn so
+  // a stuck state doesn't spam the metric.
+  const noInlineCardReportedTurnRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingNeedsInputTurnId) {
+      noInlineCardReportedTurnRef.current = null;
+      return;
+    }
+    const snapshot = turnActivityLoadVisibleSnapshot(
+      turnActivityLoadsByTurn[pendingNeedsInputTurnId],
+    );
+    if (!snapshot) return; // still loading — not yet a miss
+    if (answeringContext) {
+      if (noInlineCardReportedTurnRef.current === pendingNeedsInputTurnId) {
+        noInlineCardReportedTurnRef.current = null;
+      }
+      return;
+    }
+    if (noInlineCardReportedTurnRef.current === pendingNeedsInputTurnId) return;
+    noInlineCardReportedTurnRef.current = pendingNeedsInputTurnId;
+    logSessionEventStreamEvent("turn_activity_needs_input_no_inline_card", {
+      sessionMode: session.mode,
+    });
+  }, [
+    answeringContext,
+    pendingNeedsInputTurnId,
+    turnActivityLoadsByTurn,
+    session.mode,
+  ]);
+
+  // Refs to the latest composer text + drafts so the page-change effect below
+  // reads current values without re-running on every keystroke.
+  const composerTextRef = useRef(composerText);
+  composerTextRef.current = composerText;
+  const askUserQuestionDraftsRef = useRef(askUserQuestionDrafts);
+  askUserQuestionDraftsRef.current = askUserQuestionDrafts;
+  // Persist + restore free-form text per question while paging through a
+  // multi-question set. Leaving a question saves whatever is in the box for it;
+  // entering one restores its saved text. Covers the composer's Next button AND
+  // the header page arrows. Without this, typing on question 1, moving to
+  // question 2, and coming back showed an empty box (and a re-type overwrote).
+  const prevAnsweringVisibleRef = useRef<{
+    draftKey: string;
+    question: string;
+  } | null>(null);
+  const answeringDraftKey = answeringContext?.draftKey ?? null;
+  const answeringVisibleQuestion =
+    answeringContext?.visibleQuestion?.question ?? null;
+  useEffect(() => {
+    // Do NOT clear the binding on a transient null (the gap while the next
+    // question's activity page loads). Dropping it there is what leaked the
+    // previous question's text into the next one — the box was never saved or
+    // cleared. Keep the last binding and act only on a real question change.
+    if (!answeringDraftKey || !answeringVisibleQuestion) return;
+    const prev = prevAnsweringVisibleRef.current;
+    const cur = {
+      draftKey: answeringDraftKey,
+      question: answeringVisibleQuestion,
+    };
+    if (
+      prev &&
+      (prev.draftKey !== cur.draftKey || prev.question !== cur.question)
+    ) {
+      // Capture eagerly: the setComposerValue("") seed below fires a synchronous
+      // setComposerText(""), which flips composerTextRef before this updater
+      // runs — reading the ref inside the updater would save "" over the text.
+      const leavingText = composerTextRef.current;
+      setAskUserQuestionDraft(prev.draftKey, (d) => ({
+        ...(d ?? emptyAskUserQuestionDraft()),
+        notes: { ...(d?.notes ?? {}), [prev.question]: leavingText },
+      }));
+      const draft = askUserQuestionDraftsRef.current[cur.draftKey];
+      setComposerValue(draft?.notes?.[cur.question] ?? "");
+    }
+    prevAnsweringVisibleRef.current = cur;
+  }, [answeringDraftKey, answeringVisibleQuestion, setAskUserQuestionDraft]);
+
+  // After answering, advance the Turns view to the new answer turn so the user
+  // is where the conversation continues. That turn is brand new and unnumbered,
+  // so navigating immediately falls back to the latest loaded turn; instead we
+  // hold the target id and navigate once it appears in the loaded turn list.
+  const [pendingAnswerNavTurnId, setPendingAnswerNavTurnId] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (!pendingAnswerNavTurnId) return;
+    if (turnViewItems.some((t) => t.turnId === pendingAnswerNavTurnId)) {
+      selectTurnViewTurn(pendingAnswerNavTurnId);
+      setPendingAnswerNavTurnId(null);
+    }
+  }, [pendingAnswerNavTurnId, turnViewItems, selectTurnViewTurn]);
+
+  async function submitComposerAnswer(): Promise<void> {
+    const ctx = answeringContext;
+    if (!ctx) return;
+    const typed = composerText.trim();
+    const draft =
+      askUserQuestionDrafts[ctx.draftKey] ?? emptyAskUserQuestionDraft();
+    const selections = draft.selections;
+    const notes: Record<string, string> = { ...draft.notes };
+    // Companion text works with ANY selection and is never gated on
+    // allowFreeForm and never silently dropped. The visible question's live
+    // composer text wins over its persisted draft note.
+    if (typed && ctx.visibleQuestion) {
+      notes[ctx.visibleQuestion.question] = typed;
+    }
+    // Never-empty + companion-text-on-any-selection invariants live in the
+    // pure, directly-tested buildAskUserQuestionAnswerPayload so the contract is
+    // provable in isolation.
+    const { answers, annotations } = buildAskUserQuestionAnswerPayload(
+      ctx.questions,
+      selections,
+      notes,
+    );
+    if (Object.keys(answers).length === 0) return;
+    // Carry any attached files the same way the normal turn path does: they're
+    // already uploaded to /workspace via uploadAttachment; forward the ready
+    // ones as display_attachments. Block while an upload is still in flight so
+    // the screenshot isn't dropped from the answer (mirrors composePrompt).
+    if (attachments.some((a) => a.status === "uploading")) return;
+    const readyAttachments = attachments.filter((a) => a.status === "ready");
+    const displayAttachments = messageAttachmentDisplays(readyAttachments);
+    try {
+      const { answerTurnId } = await submitAnswer(ctx.questionTurnId, {
+        providerItemId: ctx.providerItemId,
+        timelineId: ctx.timelineId,
+        answers,
+        annotations,
+        ...(displayAttachments.length > 0 ? { displayAttachments } : {}),
+      });
+      setComposerValue("");
+      // Attachments have been baked into the answer turn — clear the tray and
+      // release any object URLs, same cleanup as the normal submit path.
+      if (readyAttachments.length > 0) {
+        setAttachments((prev) => {
+          for (const a of prev) {
+            if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+          }
+          return [];
+        });
+      }
+      // Advance the Turns view to the new answer turn so the user lands where
+      // the conversation continues, not stranded on the answered question. The
+      // turn isn't loaded yet, so hold it; the effect above navigates once it
+      // streams into the turn list.
+      if (answerTurnId) {
+        setPendingAnswerNavTurnId(answerTurnId);
+      }
+    } catch (err) {
+      // Surface failures instead of swallowing them — a silent failure here is
+      // exactly what reads as a frozen box.
+      console.error("AskUserQuestion answer submit failed", err);
+    }
+  }
+
+  function advanceToNextQuestion(): void {
+    const ctx = answeringContext;
+    if (!ctx || !ctx.hasNextPage) return;
+    // Q1 answers inline in the main transcript; Q2+ live on their dedicated
+    // question pages. Advancing from chat therefore leaves the inline surface
+    // for the Turns view rather than flipping the inline card in place (which
+    // the design explicitly rules out). From Turns, advancing just pages.
+    if (activeTab === "chat") {
+      setActiveTab("turns");
+    }
+    // Navigation only — the page-change effect above persists the current
+    // question's text and restores the next one's, so this button and the
+    // header page arrows behave identically.
+    selectTurnAndPage(ctx.questionTurnId, ctx.nextPage);
+  }
+
+  const answeringDraft = !answeringContext
+    ? null
+    : (askUserQuestionDrafts[answeringContext.draftKey] ??
+        emptyAskUserQuestionDraft());
+  const answeringNotes: Record<string, string> =
+    answeringContext && answeringDraft
+      ? { ...answeringDraft.notes }
+      : {};
+  if (answeringContext?.visibleQuestion && composerText.trim()) {
+    answeringNotes[answeringContext.visibleQuestion.question] =
+      composerText.trim();
+  }
+  const answerModeCanSubmit = answeringContext
+    ? answeringContext.hasNextPage
+      ? answeringContext.visibleQuestion
+        ? askUserQuestionHasResponse(
+            answeringContext.visibleQuestion,
+            answeringDraft?.selections ?? {},
+            answeringNotes,
+          )
+        : false
+      : answeringContext.questions.every((q) =>
+          askUserQuestionHasResponse(
+            q,
+            answeringDraft?.selections ?? {},
+            answeringNotes,
+          ),
+        )
+    : false;
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
     if (publicView && tab !== "turns") return;
@@ -19789,6 +24969,13 @@ function ChatPane({
                   title: "Session data",
                   onOpen: () => toggleRunTab("session-data"),
                 }}
+                pullRequests={{
+                  active: activeTab === "pull-requests",
+                  disabled: false,
+                  title: "PRs and commits touched by this session",
+                  count: agentGitActivity.pullRequests.length,
+                  onOpen: () => toggleRunTab("pull-requests"),
+                }}
                 settingsActive={activeTab === "settings"}
                 helpActive={activeTab === "help"}
                 clusterActive={activeTab === "cluster"}
@@ -19843,7 +25030,7 @@ function ChatPane({
                       );
                     })}
                 </div>
-                <div className="run-files-body">
+                <div className={filesBodyClassName(isPhone, selectedFile != null)}>
                   <div className="run-files-list">
                     {filesPath && (
                       <button
@@ -20017,6 +25204,20 @@ function ChatPane({
                     ) : (
                       <>
                         <div className="run-files-viewer-header">
+                          {isPhone && (
+                            <button
+                              type="button"
+                              className="run-files-viewer-back"
+                              onClick={() => {
+                                setSelectedFile(null);
+                                setSelectedFileLine(null);
+                              }}
+                              aria-label="Back to file list"
+                            >
+                              <ArrowLeftIcon size={14} aria-hidden="true" />
+                              <span>Files</span>
+                            </button>
+                          )}
                           <span className="run-files-viewer-path">
                             {selectedFile.path}
                             {selectedFileLine ? `:${selectedFileLine}` : ""}
@@ -20186,15 +25387,61 @@ function ChatPane({
                     </div>
                   </div>
                 </div>
+              ) : turnViewItems.length === 0 &&
+                turnDirectoryStatus === "error" ? (
+                <div className="run-turn-view" aria-label="Turn view">
+                  <div className="run-turn-view-body run-transcript run-transcript-claude">
+                    <div className="run-turn-view-alert" role="alert">
+                      <span>Couldn’t load this session’s turns.</span>
+                      <button
+                        type="button"
+                        className="btn-secondary run-turn-view-alert-action"
+                        onClick={() => void loadTurnDirectory("retry")}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : turnViewItems.length === 0 &&
+                (turnDirectoryStatus === "loading" ||
+                  turnDirectoryStatus === "idle") ? (
+                <div className="run-turn-view" aria-label="Turn view">
+                  <div className="run-turn-view-body run-transcript run-transcript-claude">
+                    <div
+                      className="run-shell-loading"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <Loader2Icon
+                        size={18}
+                        className="run-spin"
+                        aria-hidden="true"
+                      />
+                      <span>Loading turns...</span>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <RunTurnActivityScreen
                   turns={turnViewItems}
+                  truncated={turnDirectoryTruncated}
+                  visible={visible}
                   selectedTurnId={effectiveSelectedTurnId}
                   avatar={sessionAvatar}
                   systemAvatar={systemAvatar}
                   originSessionAvatarByID={originSessionAvatarByID}
                   sessionId={session.id}
                   sessionMode={session.mode}
+                  activityLoadingTelemetrySource={
+                    activityLoadingSessionSwitchTelemetry
+                      ? "session-switch"
+                      : "turns-selected"
+                  }
+                  activityLoadingPreviousSessionId={
+                    activityLoadingSessionSwitchTelemetry?.previousSessionId ??
+                    null
+                  }
                   showThinking={runPrefs.showThinking}
                   autoExpandTools={runPrefs.autoExpandTools}
                   showTimestamps={runPrefs.showTimestamps}
@@ -20210,6 +25457,7 @@ function ChatPane({
                   onOpenBackgroundTask={
                     publicView ? undefined : openBackgroundPage
                   }
+                  onOpenTurn={publicView ? undefined : openTurnPage}
                   transcriptHrefForEntry={transcriptHrefForEntry}
                   onOpenTranscriptMessage={openTranscriptMessage}
                   scrollRequest={turnViewScrollRequest}
@@ -20218,6 +25466,28 @@ function ChatPane({
                   onActivitySelectPage={selectTurnActivityPage}
                 />
               )
+            ) : activeTab === "test-slot" ? (
+              <TestSlotScreen
+                sessionId={session.id}
+                testState={testState}
+                authedFetch={authedFetch}
+                disabled={!ready}
+                readOnly={readOnly}
+                onCreateHold={() => startInteractiveTestWorkflow(false)}
+                onCreateDrive={() => startInteractiveTestWorkflow(true)}
+                onReturnTestSlot={readOnly ? undefined : returnTestSlot}
+                onOpenReady={() => {
+                  if (testState)
+                    void markTestState({ ...testState, active: true });
+                }}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
+              />
             ) : activeTab === "background" ? (
               <BackgroundScreen
                 shellEntries={backgroundShellEntries}
@@ -20265,6 +25535,56 @@ function ChatPane({
                       }
                 }
                 readOnly={readOnly}
+              />
+            ) : activeTab === "queue-status" ? (
+              <QueueBlockScreen
+                block={queueBlock}
+                durableActivityStatus={latestDurableActivityStatusRef.current}
+                runStatus={runStatus}
+                running={running}
+                hasLocalRun={queueBlockHasLocalRun}
+                localRunHasTerminal={queueBlockLocalRunHasTerminal}
+                activeTurnId={renderedActiveTurnId}
+                queuedMessages={queuedMessages}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
+              />
+            ) : activeTab === "pull-requests" ? (
+              <AgentGitActivityScreen
+                pullRequests={agentGitActivity.pullRequests}
+                commits={agentGitActivity.commits}
+              />
+            ) : activeTab === "break-glass" ? (
+              <BreakGlassRequestPage
+                sessionId={session.id}
+                requestId={activeBreakGlassRequestId}
+                rows={breakGlassActionRows}
+                busyEventId={breakGlassApprovalBusyId}
+                onDecision={(request, decision, body) => {
+                  void postBreakGlassDecision(request, decision, body);
+                }}
+              />
+            ) : activeTab === "test-slot-model" ? (
+              <TestSlotModelApprovalPage
+                sessionId={session.id}
+                requestId={activeTestSlotModelRequestId}
+                rows={testSlotModelActionRows}
+                busyEventId={testSlotModelApprovalBusyId}
+                onApprove={(request, note) => {
+                  void postTestSlotModelApproval(request, note);
+                }}
+              />
+            ) : activeTab === "orchestrate" ? (
+              <OrchestratePanel
+                sessionId={session.id}
+                spokeConfig={session.spoke_config}
+                spawnedSessions={session.spawned_sessions ?? []}
+                ready={ready}
               />
             ) : activeTab === "settings" ? (
               <RunSettingsPanel
@@ -20701,6 +26021,36 @@ function ChatPane({
                   <span>Queued follow-up inputs</span>
                   <span>{queuedMessages.length}</span>
                 </div>
+                <div className="run-queued-followups-reason">
+                  <span
+                    className={`status-dot status-${queueBlock?.dotStatus ?? "agent-working"}`}
+                    aria-hidden="true"
+                  />
+                  <span className="run-queued-followups-reason-label">
+                    {queueBlock?.label ?? "Finishing up"}
+                  </span>
+                  <a
+                    className="run-queued-followups-reason-link"
+                    href={sessionRouteUrl(session.id, "queue-status")}
+                    title="See why this is queued"
+                    onClick={(e) => {
+                      if (
+                        e.button !== 0 ||
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey
+                      )
+                        return;
+                      e.preventDefault();
+                      navigateToSessionRoute(
+                        sessionRouteUrl(session.id, "queue-status"),
+                      );
+                    }}
+                  >
+                    Why queued?
+                  </a>
+                </div>
                 <div className="run-queued-followups-list">
                   {queuedMessages.map((message, index) => (
                     <div className="run-queued-followup" key={message.id}>
@@ -20752,7 +26102,38 @@ function ChatPane({
         composer={
           <ChatComposer
             className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
-            placeholder={RUN_COMPOSER_PLACEHOLDER}
+            placeholder={
+              answeringContext
+                ? answeringContext.planApproval
+                  ? "Approve the plan or request changes — add feedback if needed · Esc to cancel"
+                  : "Type your answer, pick an option, or leave empty to pass — ⏎ to send · Esc to cancel"
+                : RUN_COMPOSER_PLACEHOLDER
+            }
+            answerMode={
+              answeringContext
+                ? {
+                    // hasNextPage drives the verb: Enter/the button advances
+                    // mid-set and submits on the last (or only) page. Normal
+                    // questions stay submittable through the "Something else"
+                    // default; plan approval requires an actual choice or
+                    // typed feedback.
+                    label: answeringContext.hasNextPage
+                      ? "Next"
+                      : answeringContext.multiQuestion
+                        ? "Submit answers"
+                        : "Submit answer",
+                    canSubmit: answerModeCanSubmit,
+                    onSubmit: () => {
+                      if (!answerModeCanSubmit) return;
+                      if (answeringContext.hasNextPage) {
+                        advanceToNextQuestion();
+                      } else {
+                        void submitComposerAnswer();
+                      }
+                    },
+                  }
+                : undefined
+            }
             onSubmit={(args) => {
               if (readOnly) return;
               handleSubmit({ text: args.text, files: [] });
@@ -20792,20 +26173,55 @@ function ChatPane({
                     ? "Use /rollout in this run"
                     : "Use $rollout in this run",
                 }}
+                orchestrate={{
+                  visible: GUI_ROLLOUT_MODES.has(session.mode),
+                  active: Boolean(
+                    session.spoke_config &&
+                      Object.keys(session.spoke_config).length > 0,
+                  ),
+                  disabled: !ready,
+                  title: "Orchestrate a spoke session",
+                  onClick: () => setActiveTab("orchestrate"),
+                }}
                 test={{
                   active: testActionActive,
                   readyUrl: testState?.active ? testState.url?.trim() : "",
-                  onReadyClick: () => {
-                    if (testState)
-                      void markTestState({ ...testState, active: true });
-                  },
-                  onClick: startTestSkill,
+                  onOpenPage: () => setActiveTab("test-slot"),
                   disabled: !ready,
-                  title: testState?.active
-                    ? "Test skill is active"
-                    : "Use the test skill",
+                  title: "Open the test slot page",
                 }}
-                pullRequest={{ url: pullRequestURL }}
+                glimmungRuns={{
+                  runs: glimmungRunLinks,
+                }}
+                spawnedSessions={{ items: session.spawned_sessions ?? [] }}
+                breakGlass={{
+                  items: breakGlassApprovalMenuItems,
+                  approvingId:
+                    breakGlassApprovalBusyId ??
+                    testSlotModelApprovalBusyId ??
+                    prLaneApprovalBusyId,
+                  onQuickApprove:
+                    publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
+                  onQuickApproveMany:
+                    publicView || readOnly ? undefined : quickApproveBreakGlassMenuItems,
+                  onApprovePRLane:
+                    publicView || readOnly
+                      ? undefined
+                      : (request, override) => {
+                          void postPRLaneDecision(request, "approve", override);
+                        },
+                  onDenyPRLane:
+                    publicView || readOnly
+                      ? undefined
+                      : (request) => {
+                          void postPRLaneDecision(request, "deny");
+                        },
+                }}
+                pullRequest={{
+                  latestUrl: latestPullRequestURL,
+                  linkedUrl: linkedPullRequestURL,
+                  sessionId: session.id,
+                }}
                 slash={{
                   title: "Show slash commands",
                   count: slashCommands.length,
@@ -20826,24 +26242,147 @@ function ChatPane({
                 }}
                 modelChip={
                   usesModel ? (
-                    <span
-                      className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
-                      title={modelChipTitle}
-                      aria-label={modelChipTitle}
-                    >
-                      <BrainIcon
-                        className="run-model-chip-icon"
-                        aria-hidden="true"
-                      />
-                      <span className="run-model-chip-label">
-                        {modelChipLabel}
-                      </span>
-                      {effortChipLabel && (
-                        <span className="run-model-chip-effort">
-                          {effortChipLabel}
+                    viewingPreviousTurn ? (
+                      <span
+                        className="run-model-chip run-model-chip-historical"
+                        title={`Model used for this turn: ${viewedTurnModelLabel}${viewedTurnEffortLabel ? ` / ${viewedTurnEffortLabel}` : ""}`}
+                        aria-label={`Model used for this turn: ${viewedTurnModelLabel}`}
+                      >
+                        <BrainIcon
+                          className="run-model-chip-icon"
+                          aria-hidden="true"
+                        />
+                        <span className="run-model-chip-label">
+                          {viewedTurnModelLabel}
                         </span>
-                      )}
-                    </span>
+                        {viewedTurnEffortLabel && (
+                          <span className="run-model-chip-effort">
+                            {viewedTurnEffortLabel}
+                          </span>
+                        )}
+                      </span>
+                    ) : isClaude || isCodex ? (
+                      <span className="run-model-select" data-menu="run-model">
+                        <button
+                          type="button"
+                          className={`run-model-chip run-model-trigger${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                          title={`Model: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""} — applies to your next turn`}
+                          aria-haspopup="listbox"
+                          aria-expanded={runModelMenuOpen}
+                          disabled={readOnly}
+                          onClick={() => setRunModelMenuOpen((v) => !v)}
+                        >
+                          <BrainIcon
+                            className="run-model-chip-icon"
+                            aria-hidden="true"
+                          />
+                          <span className="run-model-chip-label">
+                            {configuredModelLabel}
+                          </span>
+                          {configuredEffortLabel && (
+                            <span className="run-model-chip-effort">
+                              {configuredEffortLabel}
+                            </span>
+                          )}
+                          <IconChevronDown
+                            className="run-model-chip-caret"
+                            aria-hidden="true"
+                          />
+                        </button>
+                        {runModelMenuOpen && (
+                          <ul
+                            className="dropdown run-model-menu"
+                            role="listbox"
+                            aria-label="model"
+                          >
+                            {modelOptions.map((model) => {
+                              const selected = model.id === selectedModelId;
+                              return (
+                                <li
+                                  key={model.id}
+                                  role="option"
+                                  aria-selected={selected}
+                                >
+                                  <button
+                                    type="button"
+                                    className={
+                                      selected ? "is-selected" : undefined
+                                    }
+                                    onClick={() => {
+                                      setRunModelMenuOpen(false);
+                                      void applyRunConfig(
+                                        model.id,
+                                        selectedEffortId,
+                                      );
+                                    }}
+                                  >
+                                    <span className="run-model-chip-label">
+                                      {model.label}
+                                    </span>
+                                  </button>
+                                </li>
+                              );
+                            })}
+                            {usesEffort && effortOptions.length > 0 && (
+                              <li
+                                role="separator"
+                                aria-hidden="true"
+                                className="run-model-menu-sep"
+                              />
+                            )}
+                            {usesEffort &&
+                              effortOptions.map((effort) => {
+                                const selected =
+                                  effort.id === selectedEffortId;
+                                return (
+                                  <li
+                                    key={`effort-${effort.id}`}
+                                    role="option"
+                                    aria-selected={selected}
+                                  >
+                                    <button
+                                      type="button"
+                                      className={
+                                        selected ? "is-selected" : undefined
+                                      }
+                                      onClick={() => {
+                                        setRunModelMenuOpen(false);
+                                        void applyRunConfig(
+                                          selectedModelId,
+                                          effort.id,
+                                        );
+                                      }}
+                                    >
+                                      <span className="run-model-chip-effort">
+                                        {effort.label}
+                                      </span>
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                          </ul>
+                        )}
+                      </span>
+                    ) : (
+                      <span
+                        className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                        title={modelChipTitle}
+                        aria-label={modelChipTitle}
+                      >
+                        <BrainIcon
+                          className="run-model-chip-icon"
+                          aria-hidden="true"
+                        />
+                        <span className="run-model-chip-label">
+                          {modelChipLabel}
+                        </span>
+                        {effortChipLabel && (
+                          <span className="run-model-chip-effort">
+                            {effortChipLabel}
+                          </span>
+                        )}
+                      </span>
+                    )
                   ) : null
                 }
               />
@@ -21109,6 +26648,11 @@ function AuthenticatedApp() {
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   const { isCompact } = useViewport();
+  // Drag-reorder follows the input device, not the window width: a fine
+  // (mouse-like) pointer keeps the gesture even in a narrow/compact window or
+  // with DevTools docked. Gating on isCompact (≤768px) wrongly killed mouse-drag
+  // there; the real boundary is "no dead gesture on touch" (Session Bar).
+  const canDragSessions = useFinePointer();
   // Off-canvas session drawer, compact viewports only. Per the App Chrome
   // contract, drawer open/closed is browser UI state — not durable product
   // state — so it lives in React state and resets on reload by design.
@@ -21146,6 +26690,8 @@ function AuthenticatedApp() {
       if (isDurableRunPref(key)) {
         persistRunPrefsLocally(next);
         persistRunPrefs(next);
+      } else {
+        writeEphemeralRunPrefForSession(key, value);
       }
       return next;
     });
@@ -21306,6 +26852,7 @@ function AuthenticatedApp() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
+  const [hiddenReadOnlySessions, setHiddenReadOnlySessions] = useState<Session[]>([]);
   const [sessionTurnsOpenRequests, setSessionTurnsOpenRequests] = useState<
     Record<string, number>
   >({});
@@ -21321,6 +26868,7 @@ function AuthenticatedApp() {
   // reducer mutates the canonical state via setState; the refs are
   // updated by the effects below.
   const sessionsRef = useRef<Session[]>([]);
+  const hiddenReadOnlySessionsRef = useRef<Session[]>([]);
   const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>(
     {},
   );
@@ -21345,12 +26893,6 @@ function AuthenticatedApp() {
   const [defaultInteraction, setDefaultInteraction] =
     useState<SessionInteraction>(readDefaultInteraction);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [draggingSessionId, setDraggingSessionId] = useState<string | null>(
-    null,
-  );
-  const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(
-    null,
-  );
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
@@ -21490,6 +27032,9 @@ function AuthenticatedApp() {
   const [repoError, setRepoError] = useState<string | null>(null);
   const [homeBugLabels, setHomeBugLabels] = useState<string[]>([]);
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
+  const [homeRestrictedGitEnabled, setHomeRestrictedGitEnabled] = useState(
+    readHomeRestrictedGitEnabled,
+  );
   const visibleRecentRepos = useMemo(() => {
     if (dismissedRecentRepos.length === 0) return recentRepos;
     const dismissed = new Set(
@@ -21727,12 +27272,78 @@ function AuthenticatedApp() {
   const viewingProdSessions =
     canViewProdSessions && effectiveSessionScope === PROD_SESSION_SCOPE;
   const readOnlySessionView = effectiveSessionScope !== currentSessionScope;
+  // Commit one drop's durable + optimistic consequences. Extracted from the old
+  // inline dropSession so the decision (planSessionDrop) and the event wiring
+  // (useSessionDrag) are each tested; persistSessionOrder/Parent stay below.
+  const applyDropPlan = (plan: DropDecision) => {
+    const withParent = plan.parentChanged
+      ? sessions.map((session) =>
+          session.id === plan.movedId
+            ? // Local row type omits the pointer when absent (the wire's
+              // omitempty shape); null-to-root maps to undefined here while the
+              // durable write still sends null to clear it.
+              { ...session, parent_session_id: plan.newParentId ?? undefined }
+            : session,
+        )
+      : sessions;
+    sessionStoreRef.current.applyLocalOrder(plan.nextOrder);
+    const ordered = orderSessionsByIds(withParent, plan.nextOrder);
+    setSessions(ordered);
+    sessionsRef.current = ordered;
+    if (plan.parentChanged) {
+      void persistSessionParent(plan.movedId, plan.newParentId);
+    }
+    if (plan.orderChanged) {
+      void persistSessionOrder(plan.nextOrder);
+    }
+  };
+  // Drag state + per-row DOM handlers live in the tested hook. enabled gates on
+  // an authenticated user; readOnly disables drag in a cross-scope view.
+  const sessionDrag = useSessionDrag({
+    sessions,
+    readOnly: readOnlySessionView,
+    enabled: user != null,
+    onDrop: applyDropPlan,
+  });
   const scopedSessionPath = useCallback(
     (path: string) =>
       appendQueryParam(path, "session_scope", effectiveSessionScope),
     [effectiveSessionScope],
   );
   const localSessionPath = useCallback((path: string) => path, []);
+  const openHiddenAdminSession = useCallback(
+    (session: AdminHiddenSession, sessionScope: string) => {
+      const hiddenSession = hiddenReadOnlySessionFromAdmin(
+        session,
+        sessionScope,
+      );
+      setHiddenReadOnlySessions((prev) =>
+        upsertHiddenReadOnlySession(prev, hiddenSession),
+      );
+      hiddenReadOnlySessionsRef.current = upsertHiddenReadOnlySession(
+        hiddenReadOnlySessionsRef.current,
+        hiddenSession,
+      );
+      setSessions((prev) => upsertHiddenReadOnlySession(prev, hiddenSession));
+      setSessionActivities((prev) => {
+        if (prev[hiddenSession.id] == null) return prev;
+        const next = { ...prev };
+        delete next[hiddenSession.id];
+        return next;
+      });
+      setClosingIds((prev) => {
+        if (!prev.has(hiddenSession.id)) return prev;
+        const next = new Set(prev);
+        next.delete(hiddenSession.id);
+        return next;
+      });
+      setNavDrawerOpen(false);
+      requestSessionTurnsOpen(hiddenSession.id);
+      replaceSessionRoute(hiddenSession.id, "turns");
+      activate(hiddenSession.id);
+    },
+    [],
+  );
   const adminSettingsControls = hasAdminAccess
     ? {
         visible: true,
@@ -21761,6 +27372,7 @@ function AuthenticatedApp() {
         onRefreshVersion: refreshAdminVersion,
         onSaveTestSlotDefaults: saveAdminTestSlotDefaults,
         onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
+        onOpenHiddenSession: openHiddenAdminSession,
         onViewingProdSessionsChange: (value: boolean) => {
           const next = value ? PROD_SESSION_SCOPE : "";
           setSessionViewScopeOverride(next);
@@ -22438,6 +28050,9 @@ function AuthenticatedApp() {
       name: row.name,
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
+      spoke_config: row.spoke_config,
+      spawned_sessions: row.spawned_sessions,
+      parent_session_id: row.parent_session_id,
       sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
@@ -22455,6 +28070,9 @@ function AuthenticatedApp() {
       runtime_context_window_source: row.runtime_context_window_source ?? "",
       runtime_context_window_observed_at:
         row.runtime_context_window_observed_at ?? null,
+      runtime_provider_session_id: row.runtime_provider_session_id ?? "",
+      runtime_provider_session_observed_at:
+        row.runtime_provider_session_observed_at ?? null,
       provider_rate_limit_info: normalizeProviderRateLimitInfo(
         row.provider_rate_limit_info,
       ),
@@ -22500,6 +28118,13 @@ function AuthenticatedApp() {
       activity_summary: raw.activity ?? undefined,
       test_state: raw.test_state ?? undefined,
       rollout_state: raw.rollout_state ?? undefined,
+      spoke_config:
+        raw.spoke_config != null &&
+        typeof raw.spoke_config === "object" &&
+        !Array.isArray(raw.spoke_config)
+          ? (raw.spoke_config as Record<string, unknown>)
+          : undefined,
+      spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities)
@@ -22529,6 +28154,14 @@ function AuthenticatedApp() {
       runtime_context_window_observed_at:
         typeof raw.runtime_context_window_observed_at === "string"
           ? raw.runtime_context_window_observed_at
+          : undefined,
+      runtime_provider_session_id:
+        typeof raw.runtime_provider_session_id === "string"
+          ? raw.runtime_provider_session_id
+          : undefined,
+      runtime_provider_session_observed_at:
+        typeof raw.runtime_provider_session_observed_at === "string"
+          ? raw.runtime_provider_session_observed_at
           : undefined,
       provider_rate_limit_info:
         normalizeProviderRateLimitInfo(raw.provider_rate_limit_info) ??
@@ -22591,9 +28224,10 @@ function AuthenticatedApp() {
         sessionCount: listed.length,
         source: "initial",
       });
-      const sessionsFromStore = sessionStoreRef.current
-        .list()
-        .map(rowToSession);
+      const sessionsFromStore = mergeHiddenReadOnlySessions(
+        sessionStoreRef.current.list().map(rowToSession),
+        hiddenReadOnlySessionsRef.current,
+      );
       setSessions(sessionsFromStore);
       const nextActivities: Record<string, SessionActivitySummary> = {};
       for (const row of sessionStoreRef.current.list()) {
@@ -22643,6 +28277,8 @@ function AuthenticatedApp() {
     sessionStoreRef.current = new SessionStore();
     activitySnapshotAppliedRef.current = false;
     lastSoundedOrderKeyRef.current = new Map();
+    hiddenReadOnlySessionsRef.current = [];
+    setHiddenReadOnlySessions([]);
     setSessions([]);
     setSessionActivities({});
     sessionActivitiesRef.current = {};
@@ -22689,6 +28325,9 @@ function AuthenticatedApp() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+  useEffect(() => {
+    hiddenReadOnlySessionsRef.current = hiddenReadOnlySessions;
+  }, [hiddenReadOnlySessions]);
   useEffect(() => {
     sessionActivitiesRef.current = sessionActivities;
   }, [sessionActivities]);
@@ -22874,7 +28513,10 @@ function AuthenticatedApp() {
         // store's durable sidebar_position sort mirrors what
         // refresh() does on snapshot.
         const rows = store.list();
-        const sessionsFromStore: Session[] = rows.map(rowToSession);
+        const sessionsFromStore: Session[] = mergeHiddenReadOnlySessions(
+          rows.map(rowToSession),
+          hiddenReadOnlySessionsRef.current,
+        );
         setSessions(sessionsFromStore);
         sessionsRef.current = sessionsFromStore;
 
@@ -23283,22 +28925,6 @@ function AuthenticatedApp() {
     activate(id);
   }
 
-  function dragSessionStart(id: string, event: ReactDragEvent<HTMLLIElement>) {
-    if (readOnlySessionView) return;
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", id);
-    setDraggingSessionId(id);
-    setDragOverSessionId(id);
-  }
-
-  function dragSessionOver(id: string, event: ReactDragEvent<HTMLLIElement>) {
-    if (readOnlySessionView) return;
-    if (!draggingSessionId || draggingSessionId === id) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setDragOverSessionId(id);
-  }
-
   async function persistSessionOrder(sessionIds: string[]): Promise<void> {
     try {
       const res = await authedFetch("/api/sessions/order", {
@@ -23306,37 +28932,54 @@ function AuthenticatedApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_ids: sessionIds }),
       });
-      if (!res.ok) {
-        throw new Error(`session order update failed: ${res.status}`);
+      if (res.ok) return;
+      // 409 is a benign stale-order conflict — another tab or a freshly spawned
+      // child changed the visible set out from under this drag. Reconcile
+      // silently from the authoritative snapshot rather than alarming the user
+      // with a raw status code (the old behavior showed "...failed: 500"/409).
+      if (res.status !== 409) {
+        setError("Couldn't save the new session order — reverting to the saved order.");
       }
-    } catch (e) {
-      setError(String(e));
+      void refresh();
+    } catch {
+      setError("Couldn't save the new session order — reverting to the saved order.");
       void refresh();
     }
   }
 
-  function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
-    event.preventDefault();
-    if (readOnlySessionView) return;
-    const movedId =
-      event.dataTransfer.getData("text/plain") || draggingSessionId;
-    setDraggingSessionId(null);
-    setDragOverSessionId(null);
-    if (!movedId || movedId === id || !user) return;
-
-    const currentOrder = sessions.map((session) => session.id);
-    const next = moveSessionId(currentOrder, movedId, id);
-    if (next === currentOrder) return;
-    sessionStoreRef.current.applyLocalOrder(next);
-    const ordered = orderSessionsByIds(sessions, next);
-    setSessions(ordered);
-    sessionsRef.current = ordered;
-    void persistSessionOrder(next);
+  async function persistSessionParent(
+    id: string,
+    parentId: string | null,
+  ): Promise<void> {
+    try {
+      const res = await authedFetch(`/api/sessions/${id}/parent`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parent_session_id: parentId }),
+      });
+      if (res.ok) return;
+      setError("Couldn't update the session nesting — reverting.");
+      void refresh();
+    } catch {
+      setError("Couldn't update the session nesting — reverting.");
+      void refresh();
+    }
   }
 
-  function dragSessionEnd() {
-    setDraggingSessionId(null);
-    setDragOverSessionId(null);
+  // unnestSession is the "…" menu's explicit, unambiguous inverse of drag-to-nest
+  // (dragging a child out to a root slot also un-nests, but the menu item is the
+  // discoverable path). It clears the durable parent pointer; the row returns to
+  // the top level on the next arrangeSessionTree pass.
+  function unnestSession(id: string) {
+    if (readOnlySessionView) return;
+    const updated = sessions.map((session) =>
+      session.id === id
+        ? { ...session, parent_session_id: undefined }
+        : session,
+    );
+    setSessions(updated);
+    sessionsRef.current = updated;
+    void persistSessionParent(id, null);
   }
 
   async function markCreatedSessionTestState(id: string): Promise<void> {
@@ -23372,6 +29015,34 @@ function AuthenticatedApp() {
     setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
   }
 
+  function resetHomeLaunchDefaults() {
+    clearHomeDraftModePreference();
+    setDefaultInteraction(DEFAULT_HOME_INTERACTION);
+    setDefaultSessionMode(DEFAULT_HOME_SESSION_MODE);
+
+    clearEphemeralRunPrefsForSession();
+    setRunPrefs((prev) => {
+      const base: RunPrefs = {
+        ...prev,
+        claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
+        claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
+        codexModelId: DEFAULT_CODEX_MODEL_ID,
+        codexEffort: DEFAULT_CODEX_EFFORT_ID,
+        initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
+      };
+      const next = sessionRunOptions
+        ? reconcileRunPrefsWithRunOptions(base, sessionRunOptions)
+        : base;
+      persistRunPrefsLocally(next);
+      persistRunPrefs(next);
+      return next;
+    });
+
+    clearHomeRestrictedGitPreference();
+    setHomeRestrictedGitEnabled(true);
+    setHomeModelMenuOpen(false);
+  }
+
   async function createSession(
     mode: SessionMode = defaultSessionMode,
     initialPrompt?: string,
@@ -23399,8 +29070,14 @@ function AuthenticatedApp() {
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     const bugLabel = homeBugLabels[0]?.trim() ?? "";
-    const capabilities =
-      spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
+    const capabilities = [
+      ...(spireLensMcpAvailable && homeSpireLensMcpEnabled
+        ? ["spirelens_mcp"]
+        : []),
+      ...(REPO_SUPPORTED_MODES.has(mode) && homeRestrictedGitEnabled
+        ? [RESTRICTED_GIT_CAPABILITY]
+        : []),
+    ];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
       homeEditingDefaultTitleRef.current,
@@ -23500,6 +29177,7 @@ function AuthenticatedApp() {
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
+      resetHomeLaunchDefaults();
       recordSessionListDebugEvent({
         kind: "create-response",
         source: "createSession",
@@ -23819,7 +29497,7 @@ function AuthenticatedApp() {
   }
 
   function beginSessionTitleEdit(session: Session) {
-    if (readOnlySessionView) return;
+    if (readOnlySessionView || session.read_only_hidden) return;
     editingSessionTitleClosingRef.current = false;
     // name is the always-present canonical title; seed the editor with it.
     // Capture the seeded value so commit can tell an untouched title from a
@@ -24055,6 +29733,17 @@ function AuthenticatedApp() {
     active == null
       ? null
       : (sessions.find((session) => session.id === active) ?? null);
+  const standaloneSessionRoute =
+    active == null ? readSessionRouteFromPath() : null;
+  const standaloneTestSlotModelRoute =
+    standaloneSessionRoute?.tab === "test-slot-model" &&
+    standaloneSessionRoute.sessionId &&
+    standaloneSessionRoute.testSlotModelRequestId
+      ? {
+          sessionId: standaloneSessionRoute.sessionId,
+          requestId: standaloneSessionRoute.testSlotModelRequestId,
+        }
+      : null;
   const activeConnectionLabel =
     activeWorkspaceSession == null
       ? null
@@ -24238,6 +29927,16 @@ function AuthenticatedApp() {
   const turnCompleteSoundVolumePct = Math.round(
     runPrefs.turnCompleteSoundVolume * 100,
   );
+  const sidebarSessions = sessions.filter(
+    (session) => session.read_only_hidden !== true,
+  );
+  // Group spawned sub-sessions directly under their origin session so a running
+  // sub-session is never lost in the flat list. Exactly one indent tier (see
+  // sessionTree.ts and the "nested-spawned-sessions" capability). This is pure
+  // presentation over the durable `spawned_sessions` lineage — it converges
+  // over the session-list SSE like the spawned-sessions chip and otherwise
+  // preserves the durable sidebar_position sort and the user's drag order.
+  const arrangedSidebarSessions = arrangeSessionTree(sidebarSessions);
 
   // The sidebar contents have exactly one source of truth. On the desktop shell
   // they render inline as the grid's first column; on a compact viewport the
@@ -24287,13 +29986,14 @@ function AuthenticatedApp() {
           </button>
         </div>
         <ul className="sessions">
-          {sessions.length === 0 ? (
+          {arrangedSidebarSessions.length === 0 ? (
             <li className="sessions-empty">no sessions</li>
           ) : (
-            sessions.map((s) => {
+            arrangedSidebarSessions.map(({ session: s, depth, isLastChild }) => {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
+              const rowReadOnly = readOnlySessionView || s.read_only_hidden === true;
               const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(
                 s,
@@ -24308,17 +30008,18 @@ function AuthenticatedApp() {
                 <li
                   key={s.id}
                   data-session-id={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                  draggable={!isClosing && !readOnlySessionView && !isCompact}
-                  onDragStart={(e) => dragSessionStart(s.id, e)}
-                  onDragOver={(e) => dragSessionOver(s.id, e)}
-                  onDrop={(e) => dropSession(s.id, e)}
-                  onDragEnd={dragSessionEnd}
+                  data-depth={depth}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${depth > 0 ? " is-nested" : ""}${depth > 0 && isLastChild ? " is-nested-last" : ""}${sessionDrag.draggingSessionId === s.id ? " is-dragging" : ""}${sessionDrag.dragOverSessionId === s.id && sessionDrag.draggingSessionId !== s.id ? ` is-drag-over is-drag-${sessionDrag.dragIntent ?? "nest"}` : ""}`}
+                  draggable={!isClosing && !rowReadOnly && canDragSessions}
+                  {...sessionDrag.rowHandlers(s.id)}
                   onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={
                     sidebarCollapsed ? `${s.name} (${statusLabel})` : undefined
                   }
                 >
+                  {depth > 0 && (
+                    <span className="session-nest-connector" aria-hidden="true" />
+                  )}
                   <SessionAvatarIcon
                     avatar={avatar}
                     className="session-avatar"
@@ -24339,16 +30040,18 @@ function AuthenticatedApp() {
                     <SessionTabMenu
                       session={s}
                       isClosing={isClosing}
-                      readOnly={readOnlySessionView}
+                      readOnly={rowReadOnly}
+                      nested={depth > 0}
                       onClose={() => deleteSession(s.id)}
                       onResurrect={() => resurrectSession(s.id)}
+                      onUnnest={() => unnestSession(s.id)}
                       onSaveCredentials={
                         CONFIG_MODES.has(s.mode)
                           ? () => saveCredentials(s.id)
                           : undefined
                       }
                       saveDisabled={
-                        busy || !isLive || isClosing || readOnlySessionView
+                        busy || !isLive || isClosing || rowReadOnly
                       }
                     />
                   </div>
@@ -24361,6 +30064,7 @@ function AuthenticatedApp() {
                     <ModeChip
                       mode={s.mode}
                       interaction={sessionInteractionForSession(s)}
+                      restrictedGit={hasRestrictedGit(s.capabilities)}
                     />
                     <SessionStats session={s} />
                     {isClosing && (
@@ -24474,7 +30178,21 @@ function AuthenticatedApp() {
 
       <main className="workspace">
         {workspaceTitleChrome}
-        {active == null ? (
+        {standaloneTestSlotModelRoute ? (
+          <WorkspaceShell
+            className="run-panel-home"
+            bodyAriaLabel="Test-slot model approval"
+            title={<WorkspaceTitleSpacer />}
+            body={
+              <StandaloneTestSlotModelApprovalSurface
+                sessionId={standaloneTestSlotModelRoute.sessionId}
+                requestId={standaloneTestSlotModelRoute.requestId}
+              />
+            }
+            composer={null}
+            composerVisible={false}
+          />
+        ) : active == null ? (
           // Pre-session "home" state. Same workspace scaffold as an active
           // session — same body/composer column and same composer footer at
           // the same y-coordinate — with the header strip restored so the
@@ -24541,6 +30259,13 @@ function AuthenticatedApp() {
                     active: false,
                     disabled: true,
                     title: "Session data is available once the session starts",
+                    onOpen: () => undefined,
+                  }}
+                  pullRequests={{
+                    active: false,
+                    disabled: true,
+                    title: "PRs are available once the session starts",
+                    count: 0,
                     onOpen: () => undefined,
                   }}
                   settingsActive={homeActiveTab === "settings"}
@@ -25052,6 +30777,32 @@ function AuthenticatedApp() {
                             </span>
                           </button>
                         )}
+                        {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
+                          <button
+                            type="button"
+                            className={`home-quick-action home-capability-action${!homeRestrictedGitEnabled ? " is-selected" : ""}`}
+                            onClick={() => {
+                              setHomeRestrictedGitEnabled((value) => {
+                                const next = !value;
+                                writeHomeRestrictedGitEnabled(next);
+                                return next;
+                              });
+                            }}
+                            disabled={busy}
+                            aria-pressed={!homeRestrictedGitEnabled}
+                            title="Disable Tank-governed Git for this session and use standard git access"
+                          >
+                            <GitBranchIcon className="home-quick-icon" />
+                            <span className="home-quick-main">
+                              <span className="home-quick-title">
+                                Unrestricted Git
+                              </span>
+                              <span className="home-quick-sub">
+                                Standard git access
+                              </span>
+                            </span>
+                          </button>
+                        )}
                       </section>
                     </div>
                   </div>
@@ -25164,8 +30915,18 @@ function AuthenticatedApp() {
                       disabled: true,
                       title: "Use /rollout once your session starts",
                     }}
+                    orchestrate={{
+                      visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
+                      disabled: true,
+                      title: "Orchestrate is available in an active chat session",
+                    }}
                     test={{
-                      onClick: () => {
+                      // Splash beaker: disabled here (no live session yet), but
+                      // it keeps the create-a-session-seeded-with-the-/test-skill
+                      // wiring. The per-session beaker is what navigates to the
+                      // dedicated test-slot page (onOpenPage); on the splash there
+                      // is no session to open a page for.
+                      onCreateHold: () => {
                         void createSession(
                           defaultSessionMode,
                           homeComposerText.trim() || undefined,
@@ -25175,6 +30936,9 @@ function AuthenticatedApp() {
                       disabled: true,
                       title: "Available in an active chat session",
                     }}
+                    glimmungRuns={{ runs: [] }}
+                    spawnedSessions={{ items: [] }}
+                    breakGlass={{ items: [] }}
                     pullRequest={{}}
                     slash={{
                       disabled: true,
@@ -25224,7 +30988,7 @@ function AuthenticatedApp() {
                       primeTurnCompleteSound={primeTurnCompleteSound}
                       playTurnCompleteSound={playTurnCompleteSound}
                       adminControls={adminSettingsControls}
-                      readOnly={readOnlySessionView}
+                      readOnly={readOnlySessionView || s.read_only_hidden === true}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
                       sidebarTurnsOpenRequest={
@@ -25237,7 +31001,7 @@ function AuthenticatedApp() {
                   </div>
                 ) : (
                   <div key={s.id} className="run-body" hidden={active !== s.id}>
-                    {readOnlySessionView ? (
+                    {readOnlySessionView || s.read_only_hidden === true ? (
                       <section className="run-panel">
                         <main className="run-main">
                           <div

@@ -99,7 +99,7 @@ test("session-data root and app-level tabs have no trailing trail", () => {
   expect(breadcrumbTrail("s-1", loc({ tab: "help" }), HREF)).toEqual([]);
 });
 
-test("file-browser and background surfaces render a single current crumb", () => {
+test("file-browser, PR, and background surfaces render a single current crumb", () => {
   expect(
     breadcrumbTrail("s-1", loc({ tab: "files" }), HREF).map((c) => [
       c.label,
@@ -116,6 +116,15 @@ test("file-browser and background surfaces render a single current crumb", () =>
   ).toEqual([
     ["background", "https://tank.example.test/sessions/s-1/background", true],
   ]);
+  expect(
+    breadcrumbTrail("s-1", loc({ tab: "pull-requests" }), HREF).map((c) => [
+      c.label,
+      c.href,
+      c.current,
+    ]),
+  ).toEqual([
+    ["pull-requests", "https://tank.example.test/sessions/s-1/pull-requests", true],
+  ]);
 });
 
 test("compact mobile label is the joined trail; null at base/root", () => {
@@ -127,6 +136,7 @@ test("compact mobile label is the joined trail; null at base/root", () => {
   expect(
     breadcrumbCompactLabel(loc({ tab: "static", staticPath: "a/b.html" })),
   ).toBe("files / a/b.html");
+  expect(breadcrumbCompactLabel(loc({ tab: "pull-requests" }))).toBe("pull-requests");
 });
 
 test("mobile up-href climbs one navigable ancestor", () => {

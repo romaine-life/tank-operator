@@ -136,6 +136,50 @@ func TestProjectTurnPagesFinalAnswerIsServerOwnedAcrossPages(t *testing.T) {
 	}
 }
 
+func TestProjectTurnPagesFinalAnswerCarriesTerminalUsage(t *testing.T) {
+	finalID := "turn-1:item:final"
+	usage := map[string]any{
+		"input_tokens":                3560,
+		"cache_creation_input_tokens": 40842,
+		"cache_read_input_tokens":     21303,
+		"output_tokens":               1498,
+	}
+	observation := map[string]any{
+		"usage_source":       "claude.result",
+		"terminal_had_usage": true,
+	}
+	terminalPayload := projectionFinalAnswerPayload(finalID)
+	terminalPayload["usage"] = usage
+	terminalPayload["usage_observation"] = observation
+
+	proj := projectTurnPages("turn-1", []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "summarize the bears wikipedia article for me",
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("final", "00000003", "item.completed", "assistant", "claude", "turn-1", finalID, map[string]any{
+			"kind": "message",
+			"text": "Here is the summary.",
+		}),
+		projectionTestEvent("terminal", "00000004", "turn.completed", "runner", "claude", "turn-1", "", terminalPayload),
+	})
+
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("final answer entries = %#v, want one", proj.FinalAnswerEntries)
+	}
+	final := proj.FinalAnswerEntries[0]
+	if got := transcriptAnyMap(final["turnUsage"]); got == nil {
+		t.Fatalf("final answer missing turnUsage: %#v", final)
+	} else if got["cache_read_input_tokens"] != usage["cache_read_input_tokens"] {
+		t.Fatalf("final answer turnUsage = %#v, want %#v", got, usage)
+	}
+	if got := transcriptAnyMap(final["usageObservation"]); got == nil {
+		t.Fatalf("final answer missing usageObservation: %#v", final)
+	} else if got["usage_source"] != observation["usage_source"] {
+		t.Fatalf("final answer usageObservation = %#v, want %#v", got, observation)
+	}
+}
+
 func TestProjectTurnPagesCompletedTurnFallsBackToLastAssistantAsFinalAnswer(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -288,6 +332,45 @@ func TestProjectTurnPagesIncludesUserContextOutsidePageBody(t *testing.T) {
 	}
 }
 
+func TestProjectTurnPagesIncludesSystemContextForBackgroundWake(t *testing.T) {
+	const prompt = "A background task you started earlier has finished while this session was idle.\n\nTask id: task-ci\nFinal status: completed\n\nReview the task's output and continue from the result."
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "00000001", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{
+			"status":  "submitted",
+			"source":  "background-task",
+			"task_id": "task-ci",
+			"prompt":  prompt,
+		}),
+		projectionTestEvent("wake-tool", "00000002", "item.completed", "tool", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:tool", map[string]any{
+			"kind": "tool_result", "name": "Bash", "output": "ok",
+		}),
+	}
+
+	proj := projectTurnPages("turn_bgtask-task-ci", events)
+	if proj.TurnContext == nil {
+		t.Fatalf("TurnContext = nil, want projected system wake prompt")
+	}
+	if got := transcriptMapString(proj.TurnContext, "id"); got != "wake-submitted:turn_context" {
+		t.Fatalf("TurnContext id = %q, want wake-submitted:turn_context: %#v", got, proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "text"); got != prompt {
+		t.Fatalf("TurnContext text = %q, want wake prompt", got)
+	}
+	if got := transcriptMapString(proj.TurnContext, "authorKind"); got != "system" {
+		t.Fatalf("TurnContext authorKind = %q, want system: %#v", got, proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "turnContextSource"); got != "background-task" {
+		t.Fatalf("TurnContext source = %q, want background-task: %#v", got, proj.TurnContext)
+	}
+	for _, page := range proj.Pages {
+		for _, entry := range page.Entries {
+			if entry["kind"] == "message" && entry["role"] == "user" {
+				t.Fatalf("background wake prompt leaked into activity page body as a user message: %#v", page.Entries)
+			}
+		}
+	}
+}
+
 func TestProjectTurnPagesKeepsUserContextAcrossPagedActivity(t *testing.T) {
 	var events []map[string]any
 	seq := 0
@@ -388,8 +471,197 @@ func TestProjectTurnPagesAskingTurnKeepsInvocationAndQuestionProseTogether(t *te
 	if marker["toolStatus"] != "completed" {
 		t.Fatalf("marker toolStatus = %v, want completed", marker["toolStatus"])
 	}
+	target, _ := marker["questionTarget"].(map[string]any)
+	if target == nil {
+		t.Fatalf("marker questionTarget missing: %#v", marker)
+	}
+	if target["turnId"] != "turn-2" {
+		t.Fatalf("marker questionTarget.turnId = %v, want turn-2", target["turnId"])
+	}
+	if target["timelineId"] != "turn-2:item:ask" {
+		t.Fatalf("marker questionTarget.timelineId = %v, want turn-2:item:ask", target["timelineId"])
+	}
+	if target["page"] != 1 {
+		t.Fatalf("marker questionTarget.page = %v, want 1", target["page"])
+	}
 	if activityPage.Entries[2]["kind"] != "message" || activityPage.Entries[2]["role"] != "assistant" {
 		t.Fatalf("last activity entry = %#v, want assistant question prose", activityPage.Entries[2])
+	}
+
+	// The asking turn pauses without a turn.completed, so its hand-off plays the
+	// final-answer role: with no preamble snapshot here, the bundle is the
+	// AskUserQuestion card alone, which makes the turn collapsible.
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("hand-off final answer = %d entries, want the AskUserQuestion card: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	if awaiting, _ := proj.FinalAnswerEntries[0]["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("hand-off final answer = %#v, want the question card carrying the turn-2 shortcut", proj.FinalAnswerEntries[0])
+	}
+	if collapsible, _ := proj.Collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = false, want true once the hand-off final answer exists: %#v", proj.Collapse)
+	}
+}
+
+func TestProjectTurnPagesAskingTurnHandoffFinalAnswerIsPreamblePlusQuestionCard(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "go", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("tool-a", "00000003", "item.completed", "tool", "claude", "turn-1", "turn-1:item:a", map[string]any{
+			"kind": "tool_result", "name": "Read", "output": "x",
+		}),
+		projectionTestEvent("preamble", "00000004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:preamble", map[string]any{
+			"kind": "message", "text": "I found two deployment paths. The safer one is the staged rollout.",
+		}),
+		projectionTestEvent("invoke", "00000005", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:ask",
+			"question_turn_id": "turn-2",
+			"questions": []any{
+				map[string]any{"question": "Which path?", "options": []any{map[string]any{"label": "A"}, map[string]any{"label": "B"}}},
+			},
+		}),
+		projectionTestEvent("msg", "00000006", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+			"text":    "1. Which path?",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":       "turn-1",
+				"question_turn_id":     "turn-2",
+				"provider_item_id":     "toolu_ask",
+				"timeline_id":          "turn-2:item:ask",
+				"provider_timeline_id": "turn-1:item:ask",
+				"asking_turn_final_answer": map[string]any{
+					"timeline_ids":      []any{"turn-1:item:preamble"},
+					"provider_item_ids": []any{"assistant:preamble"},
+				},
+				"questions": []any{map[string]any{"question": "Which path?"}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+
+	// The asking turn never reaches turn.completed, but its hand-off is its final
+	// answer: the agent's preamble prose then the AskUserQuestion card.
+	if len(proj.FinalAnswerEntries) != 2 {
+		t.Fatalf("final answer entries = %d, want preamble + question card: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	preamble := proj.FinalAnswerEntries[0]
+	if got := transcriptMapString(preamble, "id"); got != "turn-1:item:preamble" {
+		t.Fatalf("first final answer id = %q, want the preamble item", got)
+	}
+	if got := transcriptMapString(preamble, "text"); got != "I found two deployment paths. The safer one is the staged rollout." {
+		t.Fatalf("preamble text = %q", got)
+	}
+	if got := transcriptMapString(preamble, "turnDetailRole"); got != "final_answer" {
+		t.Fatalf("preamble role = %q, want final_answer", got)
+	}
+	card := proj.FinalAnswerEntries[1]
+	if transcriptMapString(card, "turnDetailRole") != "final_answer" {
+		t.Fatalf("card role = %#v, want final_answer", card)
+	}
+	if awaiting, _ := card["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("second final answer = %#v, want the AskUserQuestion card with the turn-2 shortcut", card)
+	}
+
+	// Hand-off promotion makes the turn collapsible to that bundle.
+	if got := proj.Collapse["final_answer_count"]; got != 2 {
+		t.Fatalf("collapse final_answer_count = %#v, want 2", got)
+	}
+	if collapsible, _ := proj.Collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = false, want true: %#v", proj.Collapse)
+	}
+	if got := transcriptMapString(proj.Collapse, "reason"); got != "final_answer" {
+		t.Fatalf("collapse reason = %q, want final_answer", got)
+	}
+
+	// Page body and event counts are untouched — the hand-off final answer is a
+	// projection of existing rows, not a new page or durable event (contract).
+	if len(proj.Pages) != 1 || proj.Pages[0].Kind != "activity" {
+		t.Fatalf("pages = %#v, want a single activity page", proj.Pages)
+	}
+	if proj.TotalEventCount != len(events) {
+		t.Fatalf("total event count = %d, want %d (unchanged)", proj.TotalEventCount, len(events))
+	}
+}
+
+func TestProjectTurnPagesAskingTurnHandoffFinalAnswerWithoutPreambleIsCardOnly(t *testing.T) {
+	// The agent paused with no preceding prose: no asking_turn_final_answer
+	// snapshot. The bundle is the card alone — still better than "No turn
+	// activity".
+	events := []map[string]any{
+		projectionTestEvent("submitted", "00000001", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("invoke", "00000002", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:ask",
+			"question_turn_id": "turn-2",
+			"questions":        []any{map[string]any{"question": "Which path?", "options": []any{map[string]any{"label": "A"}}}},
+		}),
+		projectionTestEvent("msg", "00000003", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+			"text":    "1. Which path?",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":   "turn-1",
+				"question_turn_id": "turn-2",
+				"provider_item_id": "toolu_ask",
+				"questions":        []any{map[string]any{"question": "Which path?"}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("final answer entries = %d, want the question card only: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	if awaiting, _ := proj.FinalAnswerEntries[0]["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("final answer = %#v, want the AskUserQuestion card", proj.FinalAnswerEntries[0])
+	}
+}
+
+func TestProjectTurnPagesExitPlanModeHandoffPromotesPlanCardFinalAnswer(t *testing.T) {
+	// Plan-approval reuses the AskUserQuestion hand-off (one Approve/Request-
+	// changes question plus a plan body). Its asking turn must get the same
+	// final-answer bundle so the Turns view shows the plan + shortcut, not "No
+	// turn activity".
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "plan it", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("preamble", "00000002", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:lead", map[string]any{
+			"kind": "message", "text": "Plan written. Here it is for approval.",
+		}),
+		projectionTestEvent("invoke", "00000003", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:plan", map[string]any{
+			"provider_item_id": "toolu_plan",
+			"timeline_id":      "turn-1:item:plan",
+			"question_turn_id": "turn-2",
+			"questions":        []any{map[string]any{"question": "Approve this plan?", "options": []any{map[string]any{"label": "Approve"}, map[string]any{"label": "Request changes"}}}},
+		}),
+		projectionTestEvent("msg", "00000004", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:plan", map[string]any{
+			"text":    "1. Approve this plan?",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":   "turn-1",
+				"question_turn_id": "turn-2",
+				"provider_item_id": "toolu_plan",
+				"plan":             "## Plan\n\nDo the thing.",
+				"asking_turn_final_answer": map[string]any{
+					"timeline_ids": []any{"turn-1:item:lead"},
+				},
+				"questions": []any{map[string]any{"question": "Approve this plan?"}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.FinalAnswerEntries) != 2 {
+		t.Fatalf("final answer entries = %d, want lead-in + plan card: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	if got := transcriptMapString(proj.FinalAnswerEntries[0], "text"); got != "Plan written. Here it is for approval." {
+		t.Fatalf("first final answer text = %q, want the plan lead-in", got)
+	}
+	if awaiting, _ := proj.FinalAnswerEntries[1]["awaitingInput"].(map[string]any); transcriptMapString(awaiting, "questionTurnId") != "turn-2" {
+		t.Fatalf("second final answer = %#v, want the plan-approval card", proj.FinalAnswerEntries[1])
 	}
 }
 
@@ -468,6 +740,124 @@ func TestProjectTurnPagesQuestionOnlyTurnOwnsOnlyQuestionPages(t *testing.T) {
 	}
 }
 
+func TestProjectTurnPagesQuestionOnlyTurnIncludesAskingFinalAnswerContext(t *testing.T) {
+	finalMessage := projectionTestEvent("final", "00000003", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:final", map[string]any{
+		"kind": "message",
+		"text": "I found two deployment paths. The safer one is the staged rollout.",
+	})
+	finalMessage[questionFinalAnswerContextForTurnField] = "turn-2"
+
+	events := []map[string]any{
+		projectionTestEvent("submitted", "00000004", "turn.submitted", "runner", "tank", "turn-2", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("await", "00000005", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{
+			"asking_turn_id":       "turn-1",
+			"question_turn_id":     "turn-2",
+			"provider_item_id":     "toolu_ask",
+			"timeline_id":          "turn-2:item:ask",
+			"provider_timeline_id": "turn-1:item:ask",
+			"asking_turn_final_answer": map[string]any{
+				"timeline_ids":      []any{"turn-1:item:final"},
+				"provider_item_ids": []any{"assistant:final"},
+			},
+			"questions": []any{
+				map[string]any{"question": "Which path?"},
+			},
+		}),
+		finalMessage,
+	}
+
+	proj := projectTurnPages("turn-2", events)
+	if len(proj.Pages) != 1 {
+		t.Fatalf("page count = %d, want only the question page", len(proj.Pages))
+	}
+	page := proj.Pages[0]
+	if page.Kind != "question" {
+		t.Fatalf("page kind = %q, want question", page.Kind)
+	}
+	if proj.TotalEventCount != 2 {
+		t.Fatalf("total event count = %d, want question-turn events only", proj.TotalEventCount)
+	}
+	if len(page.Entries) != 2 {
+		t.Fatalf("page entries = %d, want final message context + awaiting card: %#v", len(page.Entries), page.Entries)
+	}
+	context := page.Entries[0]
+	if context["questionFinalAnswerContext"] != true || context["kind"] != "message" || context["role"] != "assistant" {
+		t.Fatalf("first entry = %#v, want assistant final-answer context message", context)
+	}
+	if got := transcriptMapString(context, "text"); got != "I found two deployment paths. The safer one is the staged rollout." {
+		t.Fatalf("context text = %q", got)
+	}
+	if context["turnId"] != "turn-1" {
+		t.Fatalf("context turnId = %v, want asking turn", context["turnId"])
+	}
+	if page.Entries[1]["metaKind"] != "awaiting_input" {
+		t.Fatalf("second entry = %#v, want awaiting input card", page.Entries[1])
+	}
+
+	// The asking turn's preamble is page context only on the question turn; it
+	// must NOT become the synthetic question turn's final answer (contract). The
+	// hand-off final-answer promotion is the asking turn's behavior alone.
+	if len(proj.FinalAnswerEntries) != 0 {
+		t.Fatalf("question turn final answer = %#v, want none (preamble stays page context only)", proj.FinalAnswerEntries)
+	}
+}
+
+func TestProjectTurnPagesQuestionOnlyTurnSurfacesAskingPromptAsContinuedContext(t *testing.T) {
+	// readUserFacingTurnEventsWithChain copies the asking turn's triggering user
+	// message into the question turn's window tagged for the question turn; this
+	// simulates that tagged event.
+	askingPrompt := projectionTestEvent("u1", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+		"text": "Should we redesign the question UI?",
+	})
+	askingPrompt[questionPromptContextForTurnField] = "turn-2"
+
+	events := []map[string]any{
+		askingPrompt,
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-2", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("await", "00000003", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{
+			"asking_turn_id":       "turn-1",
+			"question_turn_id":     "turn-2",
+			"provider_item_id":     "toolu_ask",
+			"timeline_id":          "turn-2:item:ask",
+			"provider_timeline_id": "turn-1:item:ask",
+			"questions": []any{
+				map[string]any{"question": "Which path?", "options": []any{map[string]any{"label": "A"}}},
+				map[string]any{"question": "Deploy after?", "options": []any{map[string]any{"label": "Yes"}}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-2", events)
+
+	// The triggering prompt becomes the question turn's context, marked continued
+	// so the Turns view labels it "continued from previous turn".
+	if proj.TurnContext == nil {
+		t.Fatalf("turn context = nil, want the asking turn's triggering prompt")
+	}
+	if proj.TurnContext["turnContextContinued"] != true {
+		t.Fatalf("turn context = %#v, want turnContextContinued=true", proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "text"); got != "Should we redesign the question UI?" {
+		t.Fatalf("turn context text = %q, want the asking turn's prompt", got)
+	}
+
+	// The copied prompt is page-context only: it must not add a page, change the
+	// per-question pages, or count toward the question turn's events.
+	if proj.TotalEventCount != 2 {
+		t.Fatalf("total event count = %d, want question-turn events only (prompt copy excluded)", proj.TotalEventCount)
+	}
+	if len(proj.Pages) != 2 {
+		t.Fatalf("page count = %d, want one page per question", len(proj.Pages))
+	}
+	for _, page := range proj.Pages {
+		for _, entry := range page.Entries {
+			if entry["turnContextContinued"] == true {
+				t.Fatalf("question page %d leaked the continued prompt into its body: %#v", page.Number, entry)
+			}
+		}
+	}
+}
+
 func TestProjectTurnPagesQuestionOnlyTurnSealsAfterDurableAnswer(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("await", "00000001", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{
@@ -496,6 +886,64 @@ func TestProjectTurnPagesQuestionOnlyTurnSealsAfterDurableAnswer(t *testing.T) {
 	}
 	if proj.Pages[0].Kind != "question" || !proj.Pages[0].Answered {
 		t.Fatalf("page = kind %q answered %v, want answered question", proj.Pages[0].Kind, proj.Pages[0].Answered)
+	}
+}
+
+// TestProjectTurnPagesQuestionOnlyTurnStopFoldsIntoSingleQuestionPage pins #1312:
+// Stop drives a question turn to its dismissing turn.interrupted via a preceding
+// turn.interrupt_requested on the SAME turn. That pre-terminal marker is not a
+// dismissal terminal, so before the fix it broke the pending-question fold and
+// spilled the Stop sequence into a spurious trailing "activity" page. A dismissed
+// turn defaults to its LAST page, so that extra page opened the Turns view on a
+// contextless activity page and stranded the prompt slot on "Prompt context
+// unavailable". The Stop sequence must fold onto the one question page.
+func TestProjectTurnPagesQuestionOnlyTurnStopFoldsIntoSingleQuestionPage(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("submitted", "00000001", "turn.submitted", "runner", "tank", "turn-2", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("await", "00000002", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{
+			"asking_turn_id":   "turn-1",
+			"question_turn_id": "turn-2",
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-2:item:ask",
+			"questions": []any{
+				map[string]any{"question": "Pick one", "options": []any{map[string]any{"label": "A"}}},
+			},
+		}),
+		// Stop: interrupt_requested precedes the dismissing interrupted, both on
+		// the question turn — the exact sequence the live ledger showed (#1312).
+		projectionTestEvent("interrupt-req", "00000003", "turn.interrupt_requested", "runner", "tank", "turn-2", "", map[string]any{"client_nonce": "stop-1"}),
+		projectionTestEvent("interrupted", "00000004", "turn.interrupted", "runner", "claude", "turn-2", "", map[string]any{"reason": "question_dismissed_by_stop"}),
+	}
+
+	proj := projectTurnPages("turn-2", events)
+	if len(proj.Pages) != 1 {
+		t.Fatalf("page count = %d, want a single question page; the Stop sequence must not spill a trailing activity page: %#v", len(proj.Pages), proj.Pages)
+	}
+	page := proj.Pages[0]
+	if page.Kind != "question" {
+		t.Fatalf("page kind = %q, want question", page.Kind)
+	}
+	if page.QuestionIndex != 1 || page.QuestionCount != 1 {
+		t.Fatalf("page index/count = %d/%d, want 1/1", page.QuestionIndex, page.QuestionCount)
+	}
+	if page.Answered {
+		t.Fatalf("dismissed question must not report answered")
+	}
+	if got := defaultTurnActivityPageNumber(proj); got != page.Number {
+		t.Fatalf("default page = %d, want the question page %d; a trailing activity page would open the Turns view contextless and strand the prompt slot on %q", got, page.Number, "Prompt context unavailable")
+	}
+	var card map[string]any
+	for _, entry := range page.Entries {
+		if entry["metaKind"] == "awaiting_input" {
+			card = entry
+		}
+	}
+	if card == nil {
+		t.Fatalf("no awaiting card on the question page: %#v", page.Entries)
+	}
+	awaiting := card["awaitingInput"].(map[string]any)
+	if dismissed, _ := awaiting["dismissed"].(bool); !dismissed {
+		t.Fatalf("awaiting card not dismissed after Stop: %#v", awaiting)
 	}
 }
 

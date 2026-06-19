@@ -1,9 +1,8 @@
 """Prometheus instrumentation for the api-proxy ext_proc service.
 
-The api-proxy is deployed once per managed provider (Claude, Codex, and
-Antigravity). The deployments share this code and the ``provider`` label
-distinguishes their metrics at scrape time so Grafana can show them on one
-dashboard.
+The api-proxy is deployed once per managed provider. The deployments share
+this code and the ``provider`` label distinguishes their metrics at scrape
+time so Grafana can show them on one dashboard.
 
 Cardinality discipline matches the orchestrator's: bounded labels only.
 ``provider`` has a bounded value set; ``result`` is a small enum;

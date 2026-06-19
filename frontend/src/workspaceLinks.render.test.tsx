@@ -1,6 +1,6 @@
 // Render test for the exact markdown boundary that turns model text into DOM.
 // The pure workspaceLinks tests pin parser output; this layer proves Streamdown
-// no longer exposes a `[blocked]` marker for agy-style workspace file links.
+// no longer exposes a `[blocked]` marker for workspace file links.
 import { expect, test } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Streamdown } from "streamdown";
@@ -15,7 +15,7 @@ function renderMarkdown(markdown: string) {
   );
 }
 
-test("renders agy workspace file markdown links without Streamdown blocked markers", () => {
+test("renders workspace file markdown links without Streamdown blocked markers", () => {
   renderMarkdown(
     [
       "Please check [visual_verification_report.md](file:///workspace/chess-tactics/visual_verification_report.md) for full details.",

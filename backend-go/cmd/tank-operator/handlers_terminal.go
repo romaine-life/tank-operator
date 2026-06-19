@@ -46,19 +46,6 @@ func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
 		// at $HOME/.claude/.credentials.json for the save-credentials
 		// button.
 		base.Args = []string{"-lc", "claude /login; exec bash"}
-	case sessionmodel.AntigravityConfigMode:
-		// Antigravity (`agy`) has no dedicated `login` subcommand. Running
-		// it interactively when unauthenticated triggers a paste-code OAuth
-		// flow: it prints an accounts.google.com PKCE URL, the user
-		// authorizes with their Ultra Google account, copies the code from
-		// antigravity.google/oauth-callback, and pastes it back. Unlike
-		// `agy -p` (30s auth timeout — too short for a human), the
-		// interactive TTY wait is human-paced. agy then writes the OAuth token
-		// to ~/.gemini/antigravity-cli/antigravity-oauth-token, which the
-		// save-credentials button harvests.
-		base.Args = []string{"-lc", "agy; exec bash"}
-	case sessionmodel.AntigravityCLIMode:
-		base.Args = []string{"-lc", "agy; exec bash"}
 	default:
 		base.Args = []string{"-l"}
 	}

@@ -13,7 +13,7 @@
 
 export const TANK_ACTORS = ["user", "assistant", "system", "tool", "runner"];
 
-export const TANK_EVENT_SOURCES = ["tank", "claude", "codex", "antigravity"];
+export const TANK_EVENT_SOURCES = ["tank", "claude", "codex"];
 
 // Tank events are durable-by-design; `live-only` was retired once the
 // producer-side live channel never landed. The enum stays single-valued so
@@ -42,6 +42,8 @@ export const TANK_EVENT_TYPES = [
   "shell_task.updated",
   "shell_task.exited",
   "scheduled_wakeup.updated",
+  "ci_status.updated",
+  "test_provision.updated",
   "turn.awaiting_input",
   "turn.awaiting_input.invocation",
 ];
@@ -183,6 +185,20 @@ function isValidEventByType(event) {
         event.source === "tank" &&
         hasStrings(event, ["timeline_id", "client_nonce"]) &&
         isScheduledWakeupPayload(event.payload)
+      );
+    case "ci_status.updated":
+      return (
+        event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["timeline_id", "client_nonce"]) &&
+        isCIStatusPayload(event.payload)
+      );
+    case "test_provision.updated":
+      return (
+        event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["timeline_id", "client_nonce"]) &&
+        isTestProvisionPayload(event.payload)
       );
     case "turn.awaiting_input":
       return (
@@ -386,6 +402,39 @@ function isScheduledWakeupPayload(payload) {
     ].includes(payload.status) &&
     typeof payload.due_at === "string" &&
     payload.due_at.length > 0
+  );
+}
+
+function isCIStatusPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    payload.kind === "ci_status" &&
+    typeof payload.repo === "string" &&
+    payload.repo.length > 0 &&
+    typeof payload.pr_number === "number" &&
+    [
+      "watching",
+      "ready",
+      "failed",
+      "conflict",
+      "merged",
+      "superseded",
+      "cancelled",
+    ].includes(payload.state)
+  );
+}
+
+function isTestProvisionPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    payload.kind === "test_provision" &&
+    ["creating", "validating", "waiting", "ready", "error"].includes(
+      payload.phase,
+    ) &&
+    typeof payload.text === "string" &&
+    payload.text.length > 0
   );
 }
 

@@ -1,15 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { z } from "zod";
 
 import {
+  askUserQuestionInputSchema,
   claudeRateLimitEventIsTerminal,
   claudeRateLimitInfo,
   claudeRestartClosureEvent,
   classifyProviderFailure,
   dispatch,
+  isConversationNotFoundMessage,
   logUnhandledSdkMessage,
   pickContextWindowFromModelUsage,
   Runner,
@@ -161,6 +165,10 @@ test("AskUserQuestion handoff emits a route-safe question turn id", () => {
     providerItemID: "toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
     providerTimelineID:
       "turn_askq-test-1780648459:item:toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
+    finalAnswer: {
+      timelineIDs: ["turn_askq-test-1780648459:item:final"],
+      providerItemIDs: ["assistant:final"],
+    },
     questions: [
       { question: "Which cat coat color do you like best?" },
       { question: "Which cat behavior is your favorite?" },
@@ -175,6 +183,20 @@ test("AskUserQuestion handoff emits a route-safe question turn id", () => {
     handoff.awaitingInput.payload.question_turn_id,
     handoff.questionTurnID,
   );
+  assert.ok(handoff.invocation.payload);
+  assert.equal(
+    handoff.invocation.payload.question_turn_id,
+    handoff.questionTurnID,
+  );
+  assert.equal(
+    handoff.invocation.payload.question_timeline_id,
+    handoff.questionTimelineID,
+  );
+  assert.equal(handoff.invocation.payload.question_page, 1);
+  assert.deepEqual(handoff.awaitingInput.payload.asking_turn_final_answer, {
+    timeline_ids: ["turn_askq-test-1780648459:item:final"],
+    provider_item_ids: ["assistant:final"],
+  });
 });
 
 test("claudeRateLimitEventIsTerminal follows primary quota status, not overage status", () => {
@@ -714,6 +736,46 @@ test("acceptCommandTurn emits turn.claimed before provider output", async () => 
   );
 });
 
+// Break-glass surfacing: an approval turn carries mcp_activate_name; the runner
+// rebuilds the SDK query so the now-granted server's tools are fetched fresh.
+// Reconnecting an existing server does NOT re-register its tools, and a server
+// written into .mcp.json mid-session is not re-read — only a full rebuild
+// surfaces the granted tools (azure-personal pg_query, tank-git-break-glass
+// mint_full_git_token, ...). The rebuild runs at the idle boundary before the
+// turn is fed, so the tools are live for the very turn the user sees.
+test("acceptCommandTurn rebuilds the query to surface break-glass tools named on the approval turn", async () => {
+  const { runner } = makeInterruptHarness();
+  let rebuilds = 0;
+  const r = runner as unknown as {
+    sink: { findTurnTerminal: () => Promise<null> };
+    ensureSdkQuery: () => void;
+    performRebuild: () => Promise<void>;
+    pendingMcpRebuild: boolean;
+    acceptCommandTurn: (record: unknown) => Promise<void>;
+  };
+  r.sink.findTurnTerminal = async () => null;
+  r.ensureSdkQuery = () => undefined;
+  r.performRebuild = async () => {
+    rebuilds += 1;
+    r.pendingMcpRebuild = false;
+  };
+
+  await r.acceptCommandTurn({
+    type: "submit_turn",
+    id: "submit-bg",
+    client_nonce: "client-bg",
+    prompt: "Azure break-glass approved",
+    mcp_activate_name: "azure-personal",
+    created_at: new Date(Date.now() - 250).toISOString(),
+  });
+
+  assert.equal(
+    rebuilds,
+    1,
+    "a break-glass approval turn must rebuild the query so the granted MCP tools surface",
+  );
+});
+
 // The Tank-owned AskUserQuestion MCP tool publishes durable turn.awaiting_input,
 // keeps the turn active, and resolves only when input_reply arrives for the
 // same durable question target.
@@ -772,6 +834,10 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
     turnID: "turn-active",
     clientNonce: "turn-active",
     terminalEmitted: false,
+    finalAnswer: {
+      timelineIDs: ["turn-active:item:final"],
+      providerItemIDs: ["assistant:final"],
+    },
     commandRecord: {},
   };
 
@@ -807,8 +873,16 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
     "AskUserQuestion is the Tank-visible response, but the provider command stays in flight for MCP reply delivery",
   );
   const payload = (awaiting as {
-    payload?: { provider_item_id?: string; provider_timeline_id?: string };
+    payload?: {
+      provider_item_id?: string;
+      provider_timeline_id?: string;
+      asking_turn_final_answer?: unknown;
+    };
   }).payload;
+  assert.deepEqual(payload?.asking_turn_final_answer, {
+    timeline_ids: ["turn-active:item:final"],
+    provider_item_ids: ["assistant:final"],
+  });
 
   await runner.acceptInputReply({
     type: "input_reply",
@@ -829,6 +903,112 @@ test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from inpu
     completedRecord,
     "input_reply command should be acked after resolving the tool",
   );
+});
+
+test("Tank AskUserQuestion MCP tool accepts the top-level single-question shorthand", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    handleTankAskUserQuestion: (input: unknown) => Promise<{
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+      structuredContent?: { answers?: Record<string, string> };
+    }>;
+    acceptInputReply: (record: unknown) => Promise<void>;
+    activeTurn: unknown;
+    publishTerminalWithRetry: (
+      event: TankConversationEvent,
+    ) => Promise<boolean>;
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
+    commandBus: {
+      markCompleted: (record: unknown) => Promise<void>;
+      markFailed: (record: unknown) => Promise<void>;
+    };
+    sink: { upsert: (event: TankConversationEvent) => Promise<void> };
+  };
+
+  const dispatched: TankConversationEvent[] = [];
+  let awaiting: TankConversationEvent | null = null;
+  let completedRecord: unknown;
+  runner.activeTurn = {
+    turnID: "turn-active",
+    clientNonce: "turn-active",
+    terminalEmitted: false,
+    commandRecord: {},
+  };
+  runner.sink = {
+    async upsert(event) {
+      dispatched.push(event);
+    },
+  };
+  runner.publishTerminalWithRetry = async (event) => {
+    awaiting = event;
+    return true;
+  };
+  runner.rotateTurnForInputReply = async () => {};
+  runner.commandBus = {
+    async markCompleted(record) {
+      completedRecord = record;
+    },
+    async markFailed() {
+      assert.fail("input_reply should resolve the shorthand AskUserQuestion");
+    },
+  };
+
+  const resultPromise = runner.handleTankAskUserQuestion({
+    question: "Proceed?",
+    options: [{ label: "Yes" }],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    dispatched.map((e) => e.type),
+    [
+      "turn.awaiting_input.invocation",
+      "assistant_message.created",
+      "turn.submitted",
+    ],
+  );
+  assert.ok(awaiting, "expected shorthand to publish turn.awaiting_input");
+  assert.deepEqual(
+    (awaiting as { payload?: { questions?: unknown } }).payload?.questions,
+    [
+      {
+        question: "Proceed?",
+        multiSelect: false,
+        options: [{ label: "Yes" }],
+        allowFreeForm: true,
+        secret: false,
+      },
+    ],
+  );
+
+  const payload = awaiting as {
+    payload?: {
+      provider_timeline_id?: string;
+      provider_item_id?: string;
+    };
+  };
+  await runner.acceptInputReply({
+    type: "input_reply",
+    client_nonce: "answer-continuation",
+    target_turn_id: "turn-active",
+    target_timeline_id: payload.payload?.provider_timeline_id,
+    target_provider_item_id: payload.payload?.provider_item_id,
+    answers: { "Proceed?": ["Yes"] },
+  });
+  const result = await resultPromise;
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.structuredContent?.answers, { "Proceed?": "Yes" });
+  assert.ok(completedRecord);
+});
+
+test("Tank AskUserQuestion MCP schema accepts the top-level single-question shorthand", () => {
+  const parsed = z.object(askUserQuestionInputSchema).safeParse({
+    question: "Proceed?",
+    options: [{ label: "Yes" }],
+    allowFreeForm: false,
+  });
+
+  assert.equal(parsed.success, true, parsed.success ? undefined : parsed.error.message);
 });
 
 test("Tank AskUserQuestion MCP tool delivers free-form Other text instead of synthetic label", async () => {
@@ -962,19 +1142,19 @@ test("acceptInputReply parks under heartbeat when the provider callback is not r
 //   2. First submit_turn with empty values falls back to DEFAULT_MODEL /
 //      DEFAULT_EFFORT — the wire shape is additive so empty must keep
 //      working for legacy clients.
-//   3. Subsequent submit_turns are a no-op (the SDK Options are sealed
-//      by the running query iterator). The override is silently honored
-//      for telemetry only.
-// If a future change wires per-turn setModel/applyFlagSettings to make
-// the dropdown switchable mid-session, these tests will need to flip from
-// "ignore overrides" to "apply overrides" — the regression that test #3
-// catches today is the silent divergence between dropdown pick and pod
-// behavior, which would be the user-trust failure.
+//   3. A subsequent submit_turn whose model/effort differ does NOT relaunch
+//      from ensureSdkQuery (Options is sealed on the running query); it
+//      SCHEDULES a re-pin (pendingRepin) that performRebuild applies at the
+//      next idle turn boundary by rebuilding query() with provider-session
+//      resume. model/effort are sealed within a turn, re-pinnable between
+//      turns — the mid-session model switch the SPA dropdown drives.
 test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     launchSdkQuery: (opts: {
       model?: string;
       effort?: string;
+      continue?: boolean;
+      resume?: string;
       stderr?: (data: string) => void;
       permissionMode?: string;
       allowDangerouslySkipPermissions?: boolean;
@@ -990,6 +1170,8 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
     opts: {
       model?: string;
       effort?: string;
+      continue?: boolean;
+      resume?: string;
       stderr?: (data: string) => void;
       permissionMode?: string;
       allowDangerouslySkipPermissions?: boolean;
@@ -1012,17 +1194,17 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   assert.equal(runner.pinnedModel, "claude-haiku-4-5");
   assert.equal(runner.pinnedEffort, "low");
   assert.notEqual(runner.sdkQuery, null);
-  assert.ok(captured.opts, "launchSdkQuery should have been called");
-  assert.equal(captured.opts.model, "claude-haiku-4-5");
-  assert.equal(captured.opts.effort, "low");
-  assert.equal(typeof captured.opts.stderr, "function");
-  assert.equal(captured.opts.permissionMode, "bypassPermissions");
-  assert.equal(captured.opts.allowDangerouslySkipPermissions, true);
-  assert.equal(
-    captured.opts.toolAliases?.AskUserQuestion,
-    "mcp__tank__AskUserQuestion",
-  );
-  assert.ok(captured.opts.mcpServers?.tank, "Tank MCP server should be wired");
+  const opts = captured.opts;
+  assert.ok(opts, "launchSdkQuery should have been called");
+  assert.equal(opts.model, "claude-haiku-4-5");
+  assert.equal(opts.effort, "low");
+  assert.equal(opts.continue, true);
+  assert.equal(opts.resume, undefined);
+  assert.equal(typeof opts.stderr, "function");
+  assert.equal(opts.permissionMode, "bypassPermissions");
+  assert.equal(opts.allowDangerouslySkipPermissions, true);
+  assert.equal(opts.toolAliases?.AskUserQuestion, "mcp__tank__AskUserQuestion");
+  assert.ok(opts.mcpServers?.tank, "Tank MCP server should be wired");
 });
 
 test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {
@@ -1057,16 +1239,65 @@ test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {
   assert.doesNotMatch(warnings.join("\n"), /sk-ant-secret|very\.secret\.token/);
 });
 
+test("ensureSdkQuery resumes explicit provider session id when command carries one", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    }) => unknown;
+    ensureSdkQuery: (record: unknown) => void;
+  };
+  const captured: {
+    opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    } | null;
+  } = { opts: null };
+  runner.launchSdkQuery = (opts) => {
+    captured.opts = opts;
+    return { interrupt: () => {} } as unknown;
+  };
+
+  runner.ensureSdkQuery({
+    id: "cmd-1",
+    type: "submit_turn",
+    model: "claude-opus-4-8",
+    effort: "max",
+    provider_session_id: "db0a8b4b-64cd-4a9a-a592-ad5622075dc8",
+  });
+
+  const opts = captured.opts;
+  assert.ok(opts);
+  assert.equal(opts.resume, "db0a8b4b-64cd-4a9a-a592-ad5622075dc8");
+  assert.equal(opts.continue, undefined);
+  assert.equal(opts.model, "claude-opus-4-8");
+  assert.equal(opts.effort, "max");
+});
+
 test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
+    launchSdkQuery: (opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    }) => unknown;
     pinnedModel: string | null;
     pinnedEffort: string | null;
     ensureSdkQuery: (record: unknown) => void;
   };
-  const captured: { opts: { model?: string; effort?: string } | null } = {
-    opts: null,
-  };
+  const captured: {
+    opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    } | null;
+  } = { opts: null };
   runner.launchSdkQuery = (opts) => {
     captured.opts = opts;
     return { interrupt: () => {} } as unknown;
@@ -1083,18 +1314,22 @@ test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first
   // assertion and the SPA's DEFAULT_RUN_PREFS need to update together.
   assert.equal(runner.pinnedModel, "claude-opus-4-8");
   assert.equal(runner.pinnedEffort, "high");
-  assert.ok(captured.opts);
-  assert.equal(captured.opts.model, "claude-opus-4-8");
-  assert.equal(captured.opts.effort, "high");
+  const opts = captured.opts;
+  assert.ok(opts);
+  assert.equal(opts.model, "claude-opus-4-8");
+  assert.equal(opts.effort, "high");
+  assert.equal(opts.continue, true);
+  assert.equal(opts.resume, undefined);
 });
 
-test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => {
+test("ensureSdkQuery schedules a re-pin on a differing subsequent turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
     pinnedModel: string | null;
     pinnedEffort: string | null;
     sdkQuery: unknown;
     ensureSdkQuery: (record: unknown) => void;
+    pendingRepin: { model: string; effort: string } | null;
   };
   let launchCalls = 0;
   runner.launchSdkQuery = (_opts) => {
@@ -1108,13 +1343,12 @@ test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => 
     model: "claude-opus-4-7",
     effort: "high",
   });
-  // Second turn requests a different model + effort. The runner MUST
-  // keep the pinned values because the SDK's Options is sealed; an
-  // override here would be a no-op at the pod, and silently appearing
-  // to honor it would lie to the user. The metric path catches the
-  // divergence (optionsOverrideIgnoredTotal) — we don't assert the
-  // metric here because it's a prom-client global, but the no-launch +
-  // pinned-values assertions cover the observable behavior.
+  // Second turn requests a different model + effort. ensureSdkQuery must NOT
+  // relaunch here (Options is sealed on the running query) and keeps the
+  // pinned values for now — but it schedules the change as pendingRepin, which
+  // performRebuild applies at the next idle boundary by rebuilding the query.
+  // This is the mid-session model switch; the old "silently ignore" behavior
+  // is gone.
   runner.ensureSdkQuery({
     id: "cmd-2",
     type: "submit_turn",
@@ -1122,9 +1356,99 @@ test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => 
     effort: "low",
   });
 
-  assert.equal(launchCalls, 1, "second turn must not relaunch the SDK query");
-  assert.equal(runner.pinnedModel, "claude-opus-4-7");
+  assert.equal(
+    launchCalls,
+    1,
+    "ensureSdkQuery must not relaunch; rebuild is deferred to performRebuild",
+  );
+  assert.equal(
+    runner.pinnedModel,
+    "claude-opus-4-7",
+    "pinned values stay until the re-pin is applied",
+  );
   assert.equal(runner.pinnedEffort, "high");
+  assert.deepEqual(
+    runner.pendingRepin,
+    { model: "claude-haiku-4-5", effort: "low" },
+    "the differing turn schedules a re-pin",
+  );
+});
+
+test("performRebuild rebuilds with resume + new model and tears down the old query", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: {
+      model?: string;
+      effort?: string;
+      resume?: string;
+      continue?: boolean;
+    }) => unknown;
+    ensureSdkQuery: (record: unknown) => void;
+    performRebuild: () => Promise<void>;
+    reportedProviderSessionID: string;
+    reportedContextWindowTokens: number | null;
+    pendingRepin: { model: string; effort: string } | null;
+    pinnedModel: string | null;
+  };
+  const launches: {
+    model?: string;
+    effort?: string;
+    resume?: string;
+    continue?: boolean;
+  }[] = [];
+  let interrupts = 0;
+  runner.launchSdkQuery = (opts) => {
+    launches.push(opts);
+    return {
+      interrupt: () => {
+        interrupts += 1;
+      },
+    } as unknown;
+  };
+
+  // First turn pins Haiku and builds the query.
+  runner.ensureSdkQuery({
+    id: "cmd-1",
+    type: "submit_turn",
+    model: "claude-haiku-4-5",
+    effort: "low",
+  });
+  // The runner has since latched the live conversation id + a context window.
+  runner.reportedProviderSessionID = "sess-live-123";
+  runner.reportedContextWindowTokens = 200000;
+  // A differing turn schedules the re-pin; performRebuild applies it.
+  runner.ensureSdkQuery({
+    id: "cmd-2",
+    type: "submit_turn",
+    model: "claude-opus-4-8",
+    effort: "high",
+  });
+  await runner.performRebuild();
+
+  assert.equal(launches.length, 2, "performRebuild constructs a second query");
+  assert.equal(launches[1].model, "claude-opus-4-8", "rebuild uses the new model");
+  assert.equal(launches[1].effort, "high");
+  assert.equal(
+    launches[1].resume,
+    "sess-live-123",
+    "rebuild resumes the live conversation id",
+  );
+  assert.equal(
+    launches[1].continue,
+    undefined,
+    "resume, not continue, when a session id is known",
+  );
+  assert.equal(interrupts, 1, "the old query is interrupted");
+  assert.equal(
+    runner.pinnedModel,
+    "claude-opus-4-8",
+    "pinned model updated after rebuild",
+  );
+  assert.equal(
+    runner.reportedContextWindowTokens,
+    null,
+    "context-window latch reset for the new model",
+  );
+  assert.equal(runner.pendingRepin, null, "pending re-pin cleared");
 });
 
 test("terminal turn failures ack the durable submit command", async () => {
@@ -1592,81 +1916,134 @@ test("Claude rate_limit_event with allowed primary quota does not fail the activ
 });
 
 test("Claude api_retry rate_limit stall fails the turn durably once the no-progress window elapses", async () => {
-  const { runner, harness } = makeInterruptHarness();
+  const tmp = mkdtempSync(path.join(tmpdir(), "claude-runner-test-"));
+  const tokenPath = path.join(tmp, "token");
+  writeFileSync(tokenPath, "runtime-token\n", "utf8");
+  const fetchCalls: Array<{ url: string; init?: RequestInit; body: Record<string, unknown> }> = [];
+  let resolveFirstFetchCall: (() => void) | null = null;
+  const firstFetchCall = new Promise<void>((resolve) => {
+    resolveFirstFetchCall = resolve;
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchCalls.push({
+      url: String(url),
+      init,
+      body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    });
+    resolveFirstFetchCall?.();
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const { runner, harness } = makeInterruptHarness({
+    ...runnerConfig(),
+    operatorInternalURL: "http://operator.internal",
+    operatorTokenPath: tokenPath,
+  });
   const r = runner as unknown as {
     activeTurn: unknown;
     providerRetryStallMs: number;
     handleEvent: (message: unknown) => Promise<void>;
   };
-  // Collapse the no-progress window so the second frame trips it
-  // deterministically without sleeping for the production default.
-  r.providerRetryStallMs = 0;
-  r.activeTurn = {
-    turnID: "turn_retry-stalled",
-    clientNonce: "retry-stalled",
-    text: "hello",
-    // started:false — the 638 pathology: claimed but the SDK never produced
-    // a first frame, only api_retry.
-    started: false,
-    interrupted: false,
-    terminalEmitted: false,
-    commandRecord: { id: "submit-1", type: "submit_turn" },
-    stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
-  };
+  try {
+    // Collapse the no-progress window so the second frame trips it
+    // deterministically without sleeping for the production default.
+    r.providerRetryStallMs = 0;
+    r.activeTurn = {
+      turnID: "turn_retry-stalled",
+      clientNonce: "retry-stalled",
+      text: "hello",
+      // started:false — the 638 pathology: claimed but the SDK never produced
+      // a first frame, only api_retry.
+      started: false,
+      interrupted: false,
+      terminalEmitted: false,
+      commandRecord: { id: "submit-1", type: "submit_turn" },
+      stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
+    };
 
-  // First api_retry arms the stall window; no terminal yet.
-  await r.handleEvent({
-    type: "system",
-    subtype: "api_retry",
-    error: "rate_limit",
-    uuid: "retry-1",
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    harness.events.length,
-    0,
-    "a single retry frame must not fail the turn",
-  );
-  assert.deepEqual(
-    harness.bus,
-    [],
-    "command stays in flight while the SDK is still retrying",
-  );
+    // First api_retry arms the stall window; no terminal yet.
+    await r.handleEvent({
+      type: "system",
+      subtype: "api_retry",
+      error: "rate_limit",
+      uuid: "retry-1",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      harness.events.length,
+      0,
+      "a single retry frame must not fail the turn",
+    );
+    assert.deepEqual(
+      harness.bus,
+      [],
+      "command stays in flight while the SDK is still retrying",
+    );
+    assert.equal(fetchCalls.length, 0, "a single retry frame must not report rate-limit state");
 
-  // Second api_retry, past the (zeroed) window, forces the durable terminal.
-  await r.handleEvent({
-    type: "system",
-    subtype: "api_retry",
-    error: "rate_limit",
-    uuid: "retry-2",
-  });
-  await new Promise((resolve) => setImmediate(resolve));
+    // Second api_retry, past the (zeroed) window, forces the durable terminal.
+    await r.handleEvent({
+      type: "system",
+      subtype: "api_retry",
+      error: "rate_limit",
+      uuid: "retry-2",
+    });
+    await Promise.race([
+      firstFetchCall,
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("timed out waiting for provider rate-limit report")),
+          1000,
+        ),
+      ),
+    ]);
 
-  assert.equal(
-    harness.events.length,
-    1,
-    "a sustained rate-limit retry stall must emit exactly one durable terminal",
-  );
-  assert.equal(harness.events[0]!.type, "turn.failed");
-  assert.equal(
-    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
-    "provider_rate_limit",
-  );
-  assert.match(
-    (harness.events[0] as { payload?: { error?: string } }).payload?.error ??
-      "",
-    /retry stall/,
-  );
-  assert.deepEqual(
-    harness.bus,
-    ["ack"],
-    "the submit command must ack after the durable stall terminal",
-  );
-  assert.equal(
-    r.activeTurn,
-    null,
-    "the stalled turn is released after the terminal",
-  );
+    assert.equal(
+      harness.events.length,
+      1,
+      "a sustained rate-limit retry stall must emit exactly one durable terminal",
+    );
+    assert.equal(harness.events[0]!.type, "turn.failed");
+    assert.equal(
+      (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
+      "provider_rate_limit",
+    );
+    assert.match(
+      (harness.events[0] as { payload?: { error?: string } }).payload?.error ??
+        "",
+      /retry stall/,
+    );
+    assert.deepEqual(
+      harness.bus,
+      ["ack"],
+      "the submit command must ack after the durable stall terminal",
+    );
+    assert.equal(
+      r.activeTurn,
+      null,
+      "the stalled turn is released after the terminal",
+    );
+    assert.equal(fetchCalls.length, 1, "the terminal retry stall reports provider rate-limit state");
+    assert.equal(
+      fetchCalls[0]!.url,
+      "http://operator.internal/api/internal/sessions/63/runtime-config",
+    );
+    assert.equal(
+      fetchCalls[0]!.init?.headers instanceof Headers
+        ? fetchCalls[0]!.init.headers.get("Authorization")
+        : (fetchCalls[0]!.init?.headers as Record<string, string>)?.Authorization,
+      "Bearer runtime-token",
+    );
+    assert.deepEqual(fetchCalls[0]!.body.provider_rate_limit_info, {
+      provider: "claude",
+      status: "rejected",
+      rateLimitType: "api_retry",
+      uuid: "retry-2",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("Claude api_retry rate_limit resets after real turn progress so a later isolated retry does not fail the turn", async () => {
@@ -1911,4 +2288,154 @@ test("claudeRestartClosureEvent closes an orphaned task honestly and determinist
   const second = claudeRestartClosureEvent(cfg, task);
   assert.equal(first.event_id, second.event_id);
   assert.ok(String(first.event_id ?? "").length > 0);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Unrecoverable provider-session resume → loud, terminal session.provider_fatal
+//
+// When the runner container restarts, the SDK conversation transcript (on the
+// container-ephemeral filesystem — no per-session PVC, by design) is gone, so
+// query({ resume }) throws "No conversation found with session ID: <uuid>".
+// Before this fix the runner treated that like any transient query death
+// (exit(1)-to-restart) and crash-looped forever (session 979, 2026-06-16):
+// only a transient-looking turn.failed{provider_failure}, a flapping session
+// status, and no alert. Now it resolves the active turn with the honest reason,
+// reports session.provider_fatal (the loud terminal banner), and exits
+// terminally instead of restarting. The orchestrator reaps the pod on the
+// report. Contract: docs/features/agent-runners/contract.md → "Failure And
+// Recovery" ("Provider failures must become durable failure events instead of
+// silent strandings").
+// ───────────────────────────────────────────────────────────────────────────
+
+test("isConversationNotFoundMessage matches the SDK resume-not-found signature only", () => {
+  assert.equal(
+    isConversationNotFoundMessage(
+      "No conversation found with session ID: bdbca9e6-ee03-4ad7-8334-edc536bdfc3f",
+    ),
+    true,
+  );
+  // Case-insensitive: the only available discriminator is the message text.
+  assert.equal(
+    isConversationNotFoundMessage("no conversation found with session id: x"),
+    true,
+  );
+  assert.equal(isConversationNotFoundMessage("API Error: 529 overloaded"), false);
+  assert.equal(isConversationNotFoundMessage(""), false);
+});
+
+test("isUnrecoverableResumeFailure fires only for a resume, not a fresh continue boot", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    activeResumeID: string | null;
+    isUnrecoverableResumeFailure: (err: unknown) => boolean;
+  };
+  const notFound = new Error(
+    "No conversation found with session ID: bdbca9e6-ee03-4ad7-8334-edc536bdfc3f",
+  );
+
+  // Fresh boot (continue:true, no resume id): the same message is NOT the
+  // resume-lost case — a brand-new session that simply has no transcript yet
+  // must not be declared terminally dead.
+  runner.activeResumeID = null;
+  assert.equal(runner.isUnrecoverableResumeFailure(notFound), false);
+
+  // Resume boot: a conversation-not-found throw is terminal for the session.
+  runner.activeResumeID = "bdbca9e6-ee03-4ad7-8334-edc536bdfc3f";
+  assert.equal(runner.isUnrecoverableResumeFailure(notFound), true);
+
+  // Resume boot but a different (transient) error stays on the normal
+  // restart-and-retry path.
+  assert.equal(
+    runner.isUnrecoverableResumeFailure(new Error("API Error: 529 overloaded")),
+    false,
+  );
+});
+
+test("failActiveCommandTurn emits the honest provider_session_lost reason", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    failActiveCommandTurn: (err: unknown, reason?: string) => Promise<void>;
+  };
+  r.activeTurn = {
+    turnID: "turn_resume-lost",
+    clientNonce: "resume-lost",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+    commandRecord: { id: "submit-1", type: "submit_turn" },
+    stopCommandHeartbeat: () => {},
+  };
+
+  await r.failActiveCommandTurn(
+    new Error("No conversation found with session ID: x"),
+    "provider_session_lost",
+  );
+
+  assert.equal(harness.events.length, 1, "exactly one durable terminal");
+  assert.equal(harness.events[0]!.type, "turn.failed");
+  assert.equal(
+    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
+    "provider_session_lost",
+    "the transcript names the real cause, not the generic provider_failure",
+  );
+});
+
+test("reportUnrecoverableResume POSTs session.provider_fatal and exits terminally", async () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "claude-runner-fatal-"));
+  const tokenPath = path.join(tmp, "token");
+  writeFileSync(tokenPath, "fatal-token\n", "utf8");
+  const fetchCalls: Array<{
+    url: string;
+    init?: RequestInit;
+    body: Record<string, unknown>;
+  }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    fetchCalls.push({
+      url: String(url),
+      init,
+      body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>,
+    });
+    return new Response(null, { status: 204 });
+  }) as typeof fetch;
+  try {
+    const runner = new Runner({
+      ...runnerConfig(),
+      operatorInternalURL: "http://operator.internal",
+      operatorTokenPath: tokenPath,
+    }) as unknown as {
+      reportUnrecoverableResume: (err: unknown) => Promise<void>;
+      exitProcess: (code: number) => void;
+    };
+    const exits: number[] = [];
+    runner.exitProcess = (code: number) => exits.push(code);
+
+    await runner.reportUnrecoverableResume(
+      new Error("No conversation found with session ID: bdbca9e6"),
+    );
+
+    assert.equal(fetchCalls.length, 1, "exactly one provider-fatal report");
+    assert.equal(
+      fetchCalls[0]!.url,
+      "http://operator.internal/api/internal/sessions/63/provider-fatal",
+    );
+    assert.equal(fetchCalls[0]!.init?.method, "POST");
+    assert.equal(
+      fetchCalls[0]!.init?.headers instanceof Headers
+        ? fetchCalls[0]!.init.headers.get("Authorization")
+        : (fetchCalls[0]!.init?.headers as Record<string, string>)?.Authorization,
+      "Bearer fatal-token",
+    );
+    assert.equal(fetchCalls[0]!.body.provider, "claude");
+    assert.equal(fetchCalls[0]!.body.reason, "provider_session_lost");
+    assert.equal(fetchCalls[0]!.body.exit_code, 3);
+    assert.match(
+      String(fetchCalls[0]!.body.message ?? ""),
+      /No conversation found/,
+    );
+    assert.deepEqual(exits, [3], "exits terminally with the unrecoverable code");
+  } finally {
+    globalThis.fetch = originalFetch;
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

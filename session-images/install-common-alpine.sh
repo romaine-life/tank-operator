@@ -80,3 +80,9 @@ npm install -g \
 pip install --no-cache-dir --break-system-packages \
   "pytest==${PYTEST_VERSION}" \
   "ruff==${RUFF_VERSION}"
+
+# Durable gh: shadow the apk-installed /usr/bin/gh with a wrapper (earlier on
+# PATH) that mints a fresh GitHub App token on demand for non-restricted
+# sessions, so the agent never re-auths. Restricted sessions pass through.
+cp /opt/tank/session-images/gh-tank-wrapper.sh /usr/local/bin/gh
+chmod 0755 /usr/local/bin/gh

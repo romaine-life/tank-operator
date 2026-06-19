@@ -59,12 +59,14 @@ Contract impact:
   The browser fetches this metadata before enabling new-session creation; MCP
   exposes it through `get_session_run_options` for agents that want to pick a
   non-default run shape.
-- Tank validates create, turn, and runtime-config model/effort values against
-  the same provider-owned allowlists. Rejections are hard `400` responses with
-  an actionable allowed-value list instead of a silent runner default.
+- Tank validates create, turn, runtime-config, and mid-session
+  run-config-update model/effort values against the same provider-owned
+  allowlists. Rejections are hard `400` responses with an actionable
+  allowed-value list instead of a silent runner default. (`run_config_update`
+  is the surface label for the mid-session `PUT /api/sessions/{id}/run-config`
+  path — see the Mid-Session Model/Effort Change capability below.)
 - `antigravity_gui` sessions stamp the validated create-time model into the
   pod manifest as `TANK_SESSION_MODEL`; the runner must pass that exact value
-  to `agy --model` before the first turn and echo it through the internal
   runtime-config endpoint. Missing model env is a startup failure, not a silent
   provider default.
 - `codex_exec_gui` and `codex_app_server` are retired create modes. Existing
@@ -86,11 +88,7 @@ Evidence:
   unknown-mode, unsupported-model, missing-model, and unsupported-effort
   rejection paths.
 - `backend-go/internal/sessionmodel/sessionmodel_test.go` covers
-  `TANK_SESSION_MODEL` pod env stamping for `antigravity_gui`.
-- `backend-go/cmd/antigravity-runner/main_test.go` covers the required
-  `agy --model` argument and runtime-config report for the applied model.
 - `backend-go/cmd/tank-operator/observability_test.go` covers the
-  `antigravity` provider bucket for runtime-config metrics.
 - `frontend/src/modelEffortDefaults.test.ts` covers the SPA's Tank metadata
   fetch, Claude provider-key normalization, preference reconciliation, and
   create-time readiness guard.
@@ -98,6 +96,63 @@ Evidence:
   MCP `get_session_run_options` tool and assert MCP schemas do not carry local
   hardcoded model/mode enums.
 - Metric: `tank_session_run_config_rejected_total{surface,provider,reason}`.
+
+## Mid-Session Model/Effort Change
+
+Status: complete
+
+Intent:
+Let a user change a running Claude or Codex GUI session's model/effort from the
+composer, so model selection is no longer locked at create time. The change
+applies to the next turn and preserves the conversation.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `PUT /api/sessions/{id}/run-config` updates the durable user-chosen
+  `model`/`effort` columns (the create-time-immutable assumption is retired).
+  The turn handler already overrides each `submit_turn` with the registered
+  config, so the next turn carries the new values; validation reuses the
+  create/turn allowlist choke point and rejects under the `run_config_update`
+  surface. Antigravity is rejected (its model is an `agy` process-start arg).
+- The runner re-pins at an idle turn boundary, never mid-turn: the claude-runner
+  tears down and rebuilds `query()` with provider-session resume + the new
+  options; the codex app-server transport drops and re-resumes its thread.
+  model/effort are sealed within a turn, re-pinnable between turns (see the
+  Agent Runners contract). The composer model chip is an interactive dropdown
+  for Claude/Codex (read-only for Antigravity); a pick applies to the next turn
+  silently and never interrupts a running turn.
+- The runner-reported context window is latest-observed-wins so a switch to a
+  model with a different window updates the durable UI denominator.
+- Per-turn model history: because the model can change between turns, the
+  resolved model/effort for a turn is stamped onto its `user_message.created`
+  and `turn.submitted` payloads (the event payload is additionalProperties, so
+  no schema change) and surfaced on the projected user-message entry. The Turns
+  surface shows the model each turn actually ran on — distinct from the composer
+  chip, which only reflects the next turn's selection. A historical turn keeps
+  showing its own model after later re-pins.
+
+Evidence:
+- `backend-go/cmd/tank-operator/handlers_run_config_test.go` covers the
+  run-config route: Claude switch, model-only-preserves-effort, unsupported
+  model/effort, missing Codex model, Antigravity rejection, and not-found.
+- `claude-runner/src/runner.test.ts` covers scheduling a re-pin on a differing
+  turn and `performRebuild` rebuilding with resume + the new model.
+- `codex-runner/src/appServerTransport.test.ts` covers re-resuming the thread
+  under a new model on a mid-session change.
+- `frontend/src/modelEffortDefaults.test.ts` covers the Claude/Codex-gated
+  composer dropdown, the run-config `PUT` (option-a next-turn apply), and the
+  per-turn model capture-and-render guard.
+- Per-turn model history:
+  `backend-go/internal/conversation/contract_test.go` (model/effort stamped on
+  both boundary events' payloads) and
+  `backend-go/cmd/tank-operator/transcript_projection_test.go`
+  (`SurfacesPerTurnModel` — surfaced on the projected user-message entry).
+- Metrics: `tank_session_run_config_rejected_total{surface="run_config_update"}`,
+  `tank_runner_options_repinned_total{model,effort}`.
 
 ## SpireLens MCP Session Capability
 
@@ -144,10 +199,10 @@ Status: in progress
 
 Intent:
 Let a developer iterating in a Glimmung test slot make NEWLY-created sessions
-boot branch-built session-runner code, not just hot-swap the already-running
+boot branch-built session-runner code, not just update the already-running
 pods. The slot's orchestrator stamps a per-scope override image onto new pods
 the same way production stamps its chart-pinned image — no runtime overlay, full
-fidelity. Production is never affected.
+accuracy. Production is never affected.
 
 Affected contracts:
 - Session Lifecycle
@@ -165,7 +220,6 @@ Contract impact:
 - A lookup failure falls back to the pinned image rather than failing session
   creation.
 - The override is durable (survives orchestrator rollout), covers Claude,
-  Codex, and Antigravity session images, and lives in shared Postgres keyed by
   scope, so a slot override can never bleed into prod or another slot.
 
 Evidence:
@@ -181,16 +235,11 @@ Evidence:
   `tank_session_image_override_write_total{action}`.
 - Operator flow: `docs/testing.md` → "Making new slot sessions inherit a change".
 
-## Antigravity proxy-owned OAuth (credential boundary)
 
 Status: in progress
 
 Intent:
-Keep the real Antigravity (Gemini-Ultra / Google) OAuth refresh token off the
-model/tool-capable runtime's filesystem. Previously `antigravity_gui` pods
 mounted the harvested OAuth blob (refresh token included) into the
-`antigravity-runner` container and copied it into agy's home — a prompt-injected
-agy could exfiltrate it. The fix gives agy the same proxy-owned boundary the
 Claude/Codex providers use.
 
 Affected contracts:
@@ -198,71 +247,43 @@ Affected contracts:
 - Observability
 
 Contract impact:
-- `antigravity_gui` pods never mount the `antigravity-credentials` Secret. The
   launch script seeds a placeholder token (`access_token:
-  "managed-by-tank-operator"`, far-future `expiry`, no refresh token) so agy
   never refreshes in place.
-- agy's `cloudcode-pa.googleapis.com` traffic is host-aliased to the production
-  `antigravity-api-proxy`, which owns the refresh token (mounted only in the
   proxy pod), injects the real access token per request, single-flight-refreshes
   against `oauth2.googleapis.com` on upstream 401, and writes rotated blobs back
-  to KV. agy (a Go binary) trusts the proxy leaf via `SSL_CERT_FILE`.
 - The credential authority is a single production deployment; validation slots
-  route to it and render no antigravity credential Secret / KV key (same slot
-  contract as claude/codex). `antigravity_config` (interactive login) is the one
-  antigravity mode NOT proxied — it reaches real Google to mint the token.
 
 Evidence:
 - `backend-go/internal/sessionmodel/sessionmodel_test.go`
-  (`TestPodManifestAntigravityGUIRunnerProxiedNoCredMount`): no `antigravity-cred`
-  mount/volume, no `ANTIGRAVITY_CRED_FILE` env, has the `cloudcode-pa` hostAlias
   + `oauth-gateway-ca` mount.
-- `api-proxy/tests/test_server.py`: the `antigravity`/`google` provider config
   (form-encoded refresh, KV-sourced client secret), `expiry` blob patch, and
   `expiry`-based freshness.
 - Migration guards: `scripts/check-removed-chat-runtime.mjs` blocks the retired
-  `ANTIGRAVITY_CRED_FILE` / `/var/run/antigravity-cred` / `AntigravityCredentialsSecret`
   surface; `scripts/check-test-slot-provider-credentials.sh` asserts slots route
-  antigravity to the production proxy and mount no antigravity credential.
-- Mechanism reference: `docs/api-proxy-auth.md` → "Antigravity (Gemini-Ultra) provider".
-- Metrics: `tank_api_proxy_*{provider="antigravity"}` (scraped via the
   `tank-api-proxy` ServiceMonitor; the provider-generic `TankApiProxy*` alerts
   cover it).
 
-## Antigravity native MCP config
 
 Status: in progress
 
 Intent:
-Give `antigravity_gui` the same Tank MCP surface as Claude and Codex GUI
 sessions. The pod-level `mcp-auth-proxy` sidecar and chart-managed
-`mcp.json` are not sufficient by themselves: `agy` discovers MCP servers from
-its native config file, `~/.gemini/config/mcp_config.json`.
 
 Affected contracts:
 - Session Lifecycle
 - Agent Runners
 
 Contract impact:
-- `antigravity_gui` runner startup copies the mounted
   `/opt/tank/session-config/mcp.json` into
-  `$HOME/.gemini/config/mcp_config.json` before the first `agy` turn.
 - The launch script validates the source is a JSON document with an
   `mcpServers` object and fails the runner if the mounted config is missing or
-  malformed. Starting an Antigravity runner without MCP tools is a startup
   failure, not a degraded mode.
 - The runtime authority remains the chart-managed session config plus the
   `mcp-auth-proxy` sidecar. No MCP bearer or upstream credential is written into
-  Antigravity's config; it contains only localhost proxy URLs.
 
 Evidence:
-- Live-binary proof against the pinned `agy` image: with only
-  `~/.gemini/config/mcp_config.json` populated in an isolated HOME, `agy`
   initialized a fake HTTP MCP server and issued `tools/list`.
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
-  (`TestAntigravityRunnerLaunchSeedsNativeMCPConfig` and
-  `TestAntigravityRunnerLaunchFailsWithoutMCPConfig` /
-  `TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig`) asserts the launch
   script materializes the native MCP config and fails before runner exec when
   `mcp.json` is absent or malformed.
 
@@ -332,38 +353,575 @@ Affected contracts:
 - Observability
 
 Contract impact:
-- Stage 1 is additive and changes no existing behavior: the claude-runner runs
+- Capture is additive and changes no existing behavior: the claude-runner runs
   an in-process, read-only, crash-isolated snapshotter that ships whole-file
-  JSONL snapshots to a new orchestrator-internal endpoint, which stores them in
-  a private Azure Blob container. `session_events` remains the display
-  projection; the transcript blob is the separate resume-faithful record. This
-  closes the Agent Runners gap where the resume-faithful record lived ONLY on
-  the pod.
+  JSONL snapshots to an orchestrator-internal endpoint, which stores them in a
+  private Azure Blob container. `session_events` remains the display projection;
+  the transcript blob is the separate resume-faithful record. This closes the
+  Agent Runners gap where the resume-faithful record lived ONLY on the pod.
 - Capture is best-effort: when transcript storage is unconfigured the endpoint
   answers `503` and the runner counts a skip and retries — never an error, never
   a turn-loop fault.
-- Stage 2 (not yet built) will amend the Session Lifecycle Contract's
-  "without pretending a dead pod can be resurrected" wording: pod death stays
-  terminal for the running session; resurrection is a NEW explicit lifecycle
-  (new session row, `resurrected_from` lineage, re-cloned repos, transcript
-  materialized + `resume`) — not silent continuation, and the workspace is still
-  gone.
+- Resurrection is a NEW explicit lifecycle, not a revival: `POST
+  /api/sessions/{id}/resurrect` (Claude-only) creates a new session that
+  re-clones the same repos and whose runner fetches the dead session's captured
+  transcript (brokered `GET .../resume-transcript`, orchestrator re-verifies
+  ownership) and `resume`s it. Pod death stays terminal; the workspace is still
+  gone; SDK-version mismatch starts fresh rather than a corrupt resume. Lineage
+  currently rides pod env (`TANK_RESURRECT_SOURCE_SESSION_ID`); a durable
+  `resurrected_from` column + UI badge is a follow-up.
 
 Evidence:
-- `claude-runner/src/transcriptCapture.test.ts` covers the scan/dedup core:
-  new-file upload + snapshot fields, no-reupload-when-unchanged,
-  reupload-on-change, skip-without-advancing-cursor (storage unconfigured),
-  error-counted-and-retried-never-thrown, and multi-file/multi-subdir capture.
-- `backend-go/internal/transcriptstore/store_test.go` covers the store
-  round-trip, caller-buffer isolation, and last-write-wins semantics.
-- `backend-go/cmd/tank-operator/handlers_internal_transcript_test.go` covers
-  the SDK-session-id path-traversal guard, blob-key/segment sanitization,
-  metadata ASCII sanitization, and header decode.
+- `claude-runner/src/transcriptCapture.test.ts` (capture scan/dedup core) and
+  `claude-runner/src/resumeBootstrap.test.ts` (materialize, version-mismatch,
+  path containment, fetch-failure-starts-fresh).
+- `backend-go/internal/transcriptstore/store_test.go` (Put/Get/Latest, buffer
+  isolation, last-write-wins).
+- `backend-go/cmd/tank-operator/handlers_internal_transcript_test.go`
+  (path-traversal guard, blob-key/metadata sanitization, header decode).
 - Auth reuses `requireInternalSessionPodCaller` (SA TokenReview + live pod
-  lookup), the same gate as the runtime-config endpoint.
-- Infra: `infra/transcript_storage.tf` (private container + container-scoped
-  `Storage Blob Data Contributor` for the orchestrator UAMI). Chart wiring:
-  `k8s/values.yaml` `transcriptStorage` + `k8s/templates/deployment.yaml` env.
+  lookup); resurrect uses `requireAuth` owner scoping.
+- Infra: `infra/transcript_storage.tf`. Chart: `k8s/values.yaml`
+  `transcriptStorage` + `k8s/templates/deployment.yaml` env.
 - Metrics: `tank_runner_transcript_capture_total{result}` +
-  `tank_runner_transcript_capture_lag_ms` (runner);
-  `tank_transcript_upload_total{result}` (orchestrator).
+  `tank_runner_transcript_capture_lag_ms` +
+  `tank_runner_transcript_resume_total{outcome}` (runner);
+  `tank_transcript_upload_total{result}` + `tank_session_resurrect_total{result}`
+  (orchestrator).
+
+## Governed Git publish path
+
+Status: in progress
+
+Intent:
+Tank sessions should not rely on an agent remembering to push, open a PR, or
+watch checks. For selected GitHub repos, session startup creates a
+Tank-owned `tank/session/<session-id>/<repo>` branch and draft PR. Every local
+commit is auto-published through the Tank MCP `publish_current_head` path,
+which owns the GitHub write token inside the session sidecar, records the
+commit in the control-action ledger, and starts CI/mergeability watching.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `repo-cloner` prepares the governed branch and draft PR before the repo is
+  marked cloned.
+- Service-principal session creation (`spawn_run_session`,
+  `spawn_test_slot_session`, and the backing `/api/internal/sessions` route)
+  defaults every repo-capable session into `restricted_git`, even when the
+  agent omits `capabilities` or supplies only unrelated capabilities. Direct
+  orchestration phase spokes do the same before calling the session manager.
+  Agents that need privileged Git use the audited Git break-glass request/grant
+  flow inside a governed session instead of spawning an unrestricted child
+  session. The browser splash's human opt-out remains a deliberate
+  create-time exception and is surfaced in the session bar as unrestricted Git.
+- The user-facing sandbox has no normal direct-push path. The `pre-push` hook
+  fails loudly, and the localhost GitHub MCP proxy denies write-capable
+  `mint_clone_token` and file/PR write tools in restricted mode (a read-only
+  `mint_clone_token` is allowed through so reads keep working — see "Restricted
+  Session Read-Only Git Access").
+- The `post-commit` hook calls the Tank MCP publish tool rather than printing
+  reminder-only guidance.
+- Commit publication, CI state, PR creation, and mergeability are durable
+  `control_action_events`, so the UI can show PR/commit evidence after reload.
+- Control-action ledger writes (`POST /api/internal/sessions/{id}/control-actions`)
+  are authorized solely off the caller's **verified per-session service-principal
+  subject** — `svc:tank:<id>` for production sessions, `svc:tank:slot-<n>-session-<id>`
+  for test-slot sessions — which auth.romaine.life mints from the pod's
+  `tank-operator/session-id` annotation (the same identity `nats-auth-callout`
+  trusts). The subject is scope-bound to the backend (`localSessionScope`), so a
+  production identity cannot write a slot session's ledger or vice versa. A
+  caller-asserted request header is never an authorization input: requiring one
+  (#1207) silently 403'd every already-running session pod and froze the ledger
+  system-wide on 2026-06-16 — the `TankControlActionAuthorizationDenied` alert
+  (`result="forbidden"`) and the `check-control-action-authz` guard exist so that
+  regression cannot recur silently.
+- The governed PR's title, body, and merge are mutated only through Tank MCP
+  tools — `rename_current_session_pr`, `update_current_session_pr_body`, and
+  `merge_current_session_pr` — each recorded as a `github.pull_request.*`
+  control-action event (`tank_control_action_events_total`).
+  `update_current_session_pr_body` exists because the `check-pr-body` workflow
+  validates the Feature Contracts section in `pull_request.body`, which a
+  restricted-git agent otherwise cannot edit without break-glass (a PR comment
+  does not satisfy the check). The tool writes the full body via the sidecar's
+  governed GitHub token and previews the `check-pr-body` result so the body can
+  be corrected before CI runs.
+
+Open hardening:
+- Network/RBAC policy still needs a dedicated pass if the threat model includes
+  a deliberately direct in-cluster call to `mcp-github`. The normal agent path
+  is governed, but this capability is not a complete adversarial sandbox until
+  direct service egress is denied or scoped to the sidecar.
+- Break-glass does not advertise privileged Git options in the normal MCP tool
+  list. The visible normal-mode surface is the narrow
+  `request_git_break_glass` request tool, which records the request and returns
+  a Tank approval URL (`/sessions/{id}?break_glass_request={event_id}`) without
+  minting or revealing a token. Grants are stored as
+  `github.break_glass.grant` control-action events with repo, operation, request
+  event id, and TTL scope. Denials are stored as `github.break_glass.deny`.
+  Workflow-file pushes are an explicit GitHub break-glass flavor:
+  `request_git_break_glass(workflows=true)` records the extra `workflows`
+  operation, and `mint_full_git_token(workflows=true)` is refused unless the
+  active grant includes it. Branch/count-scoped break-glass git tokens are
+  contents(+workflows)-write only, not full App-scope tokens, and stay on the
+  governed push path. An **unlimited-branch** grant is different: it carries the
+  `full_github_api` operation and mints the App's FULL permission set (pull
+  requests, issues, merges) so the agent's `gh`/`git` get full raw GitHub API
+  write automatically — see "Break-glass full GitHub API elevation (unlimited
+  grants)" below.
+  Once an active grant exists, calling
+  `request_git_break_glass` again activates a separate `tank-git-break-glass`
+  MCP server for the session/repo and writes runtime MCP config for Codex and
+  Claude. That privileged server lists no tools before activation, rechecks the
+  grant on every list/call, and records token/push use as
+  `github.break_glass.token` or `github.break_glass.push`. Tank's browser UI
+  renders the approval panel and writes the grant or denial. auth.romaine.life
+  only authenticates the admin JWT that Tank verifies. When a grant is
+  persisted, Tank starts a system-authored follow-up turn telling the agent the
+  user approved the request and to call `request_git_break_glass` again to
+  activate the privileged MCP server.
+- Break-glass approval chip + panel (added 2026-06-14). A started
+  `github.break_glass.request` with no unexpired grant for its repo is surfaced
+  as a "chip": the composer pull-request button turns amber with an alert dot,
+  and its popup menu exposes an "Approve break glass" entry linking to the Tank
+  session deep link. The composer also renders `BreakGlassApprovalIndicator`;
+  if the URL carries `break_glass_request`, the pane fetches that exact request
+  from Tank (`GET /api/sessions/{id}/break-glass-requests/{event_id}`) so an
+  admin can approve another user's request without relying on the owner's
+  control-action list. Approve/deny POST to
+  `/api/sessions/{id}/break-glass-requests/{event_id}/{approve|deny}`. The
+  same popup also separates the two PR links the UI already tracked: the latest
+  PR the agent opened (control-action git activity) and the PR explicitly linked
+  via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
+  positioning so the composer input-group's `overflow: hidden` cannot clip it.
+
+## Locked-by-default Azure MCP (break-glass)
+
+The `azure-personal` MCP (Postgres `pg_query`/`pg_execute`, Key Vault secrets,
+Cosmos, ARM/AKS, Entra/UAMI) is locked by default for every session. Normal
+feature development never needs Azure access; obtaining it requires an
+approved, time-bounded, audited break-glass grant.
+
+Affected contracts:
+- Session Lifecycle
+- Observability
+
+Enforcement is in the server we own, not the sidecar:
+- `mcp-azure-personal` requires a valid auth.romaine.life JWT identifying the
+  caller's session **and** an active azure break-glass grant. With no grant it
+  returns an MCP-shaped JSON-RPC refusal — **not** a bare HTTP 403, which the
+  Claude MCP SDK treats as an OAuth challenge (it falls into an
+  `authenticate`/`complete_authentication` flow instead of failing cleanly) —
+  including on a direct in-cluster call from the agent shell, not just the
+  localhost MCP path.
+- A sidecar gate cannot be the boundary here: every session pod shares the
+  `claude-session` ServiceAccount (so RBAC cannot express per-session
+  break-glass), and the `mcp-auth-proxy` sidecar shares the pod (IP + SA) with
+  the agent container (so no NetworkPolicy can allow the sidecar but deny the
+  agent). Only the server requiring an unforgeable per-session grant both
+  revokes by default and grants per session. This is the canonical pattern:
+  *first-party MCP servers check the Tank grant.* Git break-glass's in-sidecar
+  `tank-git-break-glass` wrapper is the external-resource exception (github.com
+  cannot be taught our grants, so Tank must mint a real GitHub token); a named
+  follow-up folds git into this pattern.
+
+Contract impact:
+- The visible normal-mode surface is the narrow `request_azure_break_glass`
+  tool (proxy-injected into the mcp-tank-operator surface, independent of
+  restricted-git). For **every** session it records an
+  `azure.break_glass.request` control-action event and returns the Tank approval
+  deep-link shape (`/sessions/{id}?break_glass_request={event_id}`) without
+  granting access or revealing a token. Approval is always an explicit human
+  admin action — there is no auto-approval path for any session.
+- Grants are stored as `azure.break_glass.grant` control-action events
+  (`target_kind=azure_mcp`, `target_ref=azure-personal`) with TTL scope, in the
+  same `control_action_events` ledger as git break-glass. They are not
+  repo-scoped: a grant authorizes the whole azure-personal MCP for the session.
+  Denials are stored as `azure.break_glass.deny`.
+- After an admin approves in Tank, `mcp-azure-personal` reads the grant through
+  `GET /api/internal/sessions/{id}/azure-break-glass/grant` (short-cached) on
+  every list/call, so expiry re-locks automatically. Each privileged call is
+  recorded as `azure.break_glass.use`. All three actions increment
+  `tank_control_action_events_total`.
+- The proxy forwards the auth.romaine.life service JWT (`X-Auth-Romaine-Token`)
+  and the caller-session headers to port 9991 so the server can identify the
+  session and look up its grant.
+- **Client surfacing (mirrors git break-glass).** `azure-personal` is absent
+  from the default session `.mcp.json` while locked, so the harness never
+  connects to a locked server (no 403/OAuth noise). On an approved grant,
+  `request_azure_break_glass` activates it back into `.mcp.json` / Codex / Claude
+  settings (`_activate_azure_break_glass_mcp_config`) — the reconnect trigger
+  that surfaces its tools, exactly how git break-glass surfaces
+  `mint_full_git_token`. Enforcement (server-side grant check) and surfacing
+  (`.mcp.json` activation) are separate concerns and the design needs both: a
+  server-side gate alone is invisible to the harness, with no event to reconnect
+  on after a grant.
+- **Live surfacing (event-driven).** A mid-session SDK reconnect does *not*
+  re-register an MCP server's tools, so on grant the orchestrator also POSTs
+  `mcp-azure-personal`'s `/internal/grant-activated {session_id}`
+  (`internal/azurepersonal`, fired from `enqueueAzureBreakGlassApprovalTurn` —
+  best-effort + async, counter `tank_azure_grant_activated_total`). The stateful
+  azure-personal server emits `notifications/tools/list_changed` on that session's
+  live stream and the SDK auto-refreshes `tools/list`, so the tools surface with
+  no reconnect or re-request. That endpoint is off the kube-rbac SA gate
+  (kube-rbac-proxy `--ignore-paths`) and authorized by the orchestrator's
+  auth.romaine.life service principal (`svc:tank-operator:orchestrator`), keeping
+  it on the same identity plane as the rest of the ecosystem.
+
+Open hardening:
+- Hermes (the only other subject on `mcp-azure-personal`'s RoleBinding) was
+  retired, so its subject was dropped from the RoleBinding and no exemption is
+  configured. `breakGlass.exemptSubjects` remains for any future unattended
+  automation that legitimately needs Azure without a per-session grant.
+- Tank owns the public azure break-glass approval panel and approve/deny API;
+  auth.romaine.life remains the identity provider for the admin JWT, not the
+  approval workflow owner.
+
+## Non-Restricted Session Full Git Access
+
+Status: complete
+
+Intent:
+A non-restricted session (`TANK_RESTRICTED_GIT` false/unset) is a trusted
+workspace and should have full, automatic git access — `git clone`/`fetch`/`pull`/
+`push` to any repo the session's installation can reach, with no manual token
+handling. Restricting git is an opt-in (`TANK_RESTRICTED_GIT=true`) governed
+mode, not the default posture.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- `install-agent-git-template.sh` is mode-aware. Restricted sessions install the
+  governed hook templates (post-commit auto-publish + pre-push block) exactly as
+  before. Non-restricted sessions install `git-credential-tank.sh` as the global
+  git credential helper (`credential.helper` + `credential.useHttpPath=true`).
+- `git-credential-tank.sh` mints a short-lived GitHub App token on each git op
+  via the in-pod `mcp-github` MCP (`127.0.0.1:9992`), authenticated with the
+  pod's projected `auth.romaine.life` service-account token, scoped per-repo via
+  the request path, requesting the App's full permission set. It grants nothing
+  the session cannot already mint through the MCP tool surface; it removes the
+  manual step.
+- `gh` is durable the same way: the session image bakes a `gh` wrapper at
+  `/usr/local/bin/gh` (ahead of the apk `/usr/bin/gh` on PATH) that mints a fresh
+  token (scoped to the `/workspace` repos plus any `--repo`/`-R` arg) and execs
+  the real gh — so `gh` never needs a manual re-auth. The scope is mode-aware:
+  full read/write in non-restricted mode, read-only in restricted mode (see
+  "Restricted Session Read-Only Git Access" below). See
+  `session-images/gh-tank-wrapper.sh`.
+- `repo-cloner` keeps no local `credential.helper` override in either mode, so
+  the clone inherits the global mode-aware helper (full in non-restricted,
+  read-only in restricted). (An empty local `credential.helper` clears the helper
+  list — it was the reason a non-restricted clone could not push, and would also
+  disable restricted-mode reads, so it is no longer written.)
+- The helper ships in the `tank-session-config` ConfigMap and is mounted into
+  every session pod under `/opt/tank/session-config/`; it is wired up in both
+  modes (mode-aware scope).
+
+Evidence:
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedGit`)
+  covers non-restricted⇒helper-wired / no governed hooks, and
+  (`TestInstallAgentGitTemplateScriptRunsUnderSh`) covers restricted⇒hooks **and**
+  the read-only helper wired alongside them.
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperMintsToken`) covers the helper's mode-aware mint
+  request shape (full vs read-only), SSE reply parsing, and non-github bail.
+
+## Restricted Session Read-Only Git Access
+
+Status: complete
+
+Intent:
+A restricted session (`TANK_RESTRICTED_GIT=true`) governs *writes* — pushes go
+through `publish_current_head` / break-glass, not a raw token in the shell — but
+it must not feel like *reads* are disabled. The agent already has full GitHub
+read access through the GitHub read MCP tools and the pre-cloned `/workspace`
+repos; restricted sessions additionally get automatic **read-only** git/`gh`
+access so the familiar tools (`gh pr view`, `gh run view`, `git fetch`/`clone`)
+just work and an agent does not wrongly conclude "read is disabled here". A
+read-only token grants nothing the session can't already do via the read MCP
+tools and cannot push, so it does not weaken the governed-write invariant.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `git-credential-tank.sh` and the `gh` wrapper are **mode-aware**: in restricted
+  mode they request `mint_clone_token` with no `write`/`workflows`/`full`, so
+  mcp-github mints a `{contents: read, metadata: read}` token. Non-restricted
+  mode is unchanged (full read/write).
+- **Break-glass elevation (restricted mode).** Before the read-only mint, both
+  wrappers first POST to the in-pod break-glass server's `POST /mint-git-token`
+  endpoint (`:9999`, the grant source of truth). If an active, repo-covering,
+  **unlimited-branch** break-glass grant exists, that endpoint mints the App's
+  FULL permission set (`full=true`) and audits the use, so the wrappers hand the
+  shell a full token and `gh pr edit`/`ready`/merge, issues, and `git push`
+  "just work" automatically while the grant is live. With no qualifying grant
+  the endpoint returns `{"active": false}` and the wrappers keep the read-only
+  default unchanged. See "Break-glass full GitHub API elevation (unlimited
+  grants)" below.
+- **Fail loud, never silent (elevation).** The wrappers treat only a clean
+  `{"active": true, "token": …}` (elevate) or `{"active": false}` over HTTP 200
+  (quiet, expected no-grant) as recognized answers. Any other shape — a JSON-RPC
+  error such as `{"error": {"code": -32600, "message": "invalid MCP request"}}`
+  (what the `:9999` MCP catch-all returns when the `mcp-auth-proxy` sidecar
+  predates the `/mint-git-token` route, i.e. an image/version skew), an HTTP
+  error, a timeout, or any unrecognized body — is reported to **stderr** before
+  the read-only fallback, instead of being silently collapsed to read-only. A
+  silent downgrade here is what made the sidecar-skew regression undiagnosable
+  (an active grant produced a read-only token with no signal, so `gh pr close`
+  failed with `Resource not accessible by integration`); the silent collapse is
+  treated as part of the bug, not an acceptable fallback. The break-glass
+  curl also uses a timeout with headroom (`-m 8`) so the cold full-mint path
+  (Tank grant lookup + GitHub App mint) is not misread as "no grant".
+- `install-agent-git-template.sh` installs the credential helper in **both**
+  modes; the elevated cluster kubeconfig stays non-restricted-only.
+- `repo-cloner.sh` no longer writes an empty local `credential.helper` in
+  restricted mode, so cloned repos inherit the global read-only helper.
+- The mcp-auth-proxy keeps `mint_clone_token` and the file/PR write tools on the
+  restricted-mode denylist, but **allows a read-only `mint_clone_token`** through
+  to mcp-github (`_is_read_only_clone_token_request`); `write`/`workflows`/`full`
+  mints are still blocked with the governed-path error. This carve-out is the
+  only thing that lets the mode-aware helper/wrapper mint at all.
+- Writes stay governed regardless: the `pre-push` hook still fails direct pushes
+  and a read-only token cannot push even if the hook is bypassed.
+- Observability:
+  `tank_mcp_auth_proxy_github_write_tool_decision_total{tool,decision}` counts
+  `allowed_read_only` vs `blocked` decisions on the denylist.
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_read_only_mint_clone_token_is_forwarded_in_restricted_mode`,
+  `test_write_mint_clone_token_is_blocked_in_restricted_mode`,
+  `test_is_read_only_clone_token_request`).
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperMintsToken`, `TestGhTankWrapperMintsModeAwareToken`
+  assert the read-only request shape in restricted mode;
+  `TestInstallAgentGitTemplateScriptRunsUnderSh` asserts the helper installs in
+  restricted mode).
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperBreakGlassElevation`,
+  `TestGhTankWrapperBreakGlassElevation`) cover all three elevation cases against
+  a live mock break-glass server: active grant → full token (no read-only
+  fallback), no grant → quiet read-only fallback, and `error mint response fails
+  loud and falls back to read-only` (the JSON-RPC `invalid MCP request` shape →
+  stderr diagnostic + read-only fallback, the fail-loud guard).
+
+## Break-glass full GitHub API elevation (unlimited grants)
+
+Status: complete
+
+Intent:
+"Unlimited break-glass should give EVERY GitHub permission." An UNLIMITED
+break-glass grant (`repo_scope: all_repos`, `branch_scope: unlimited`,
+admin-approved + TTL-bounded) is the explicit "this session needs to operate as
+a full maintainer" escape hatch. Before this capability it only widened the
+repo/branch reach of `git push`; the permission ceiling stayed hardcoded to
+`contents`, so the agent still could not do `gh pr edit`/`ready`/merge, issue,
+or other GitHub API writes, and `gh`/`git` never consulted the grant at all.
+This capability closes that gap: while an unlimited grant is active, the
+session's `gh` and `git` operate with the GitHub App's FULL permission set
+automatically, with no manual `GH_TOKEN` juggling. Branch/count-scoped grants
+are unchanged — they stay least-privilege on the governed push path.
+
+This is a deliberate, admin-consented blast-radius widening: a full raw GitHub
+App token bypasses the governed PR ledger (the `rename_current_session_pr` /
+`update_current_session_pr_body` / `merge_current_session_pr` Tank tools and
+their `github.pull_request.*` control-action records). It is therefore gated on
+an explicit, audited, TTL-bounded grant and surfaced in the approval prompt,
+the admin panel, and the audit ledger so the approving human accepts it
+knowingly.
+
+Affected contracts:
+- Session Lifecycle
+- Observability
+
+Enforcement / source of truth:
+- The grant's `full_github_api` operation is the authorization signal. It is
+  **bound to the branch scope, not the request**: the orchestrator's
+  `normalizeBreakGlassOperations` force-ADDs it for unlimited-branch grants and
+  force-STRIPs it for branch/count-scoped grants, so a request cannot smuggle
+  full-API write into a least-privilege grant and an unlimited grant always
+  advertises it (`backend-go/cmd/tank-operator/control_actions.go`).
+- The break-glass MCP server (`mcp-auth-proxy` sidecar, `:9999`) is the single
+  source of truth the wrappers consult. It already performs the durable Tank
+  grant lookup (`GET /api/internal/sessions/{id}/git-break-glass/grant`) for
+  `mint_full_git_token` / `push_current_head`; the wrappers reach it at the
+  dedicated `POST /mint-git-token` route. That route deliberately does NOT
+  require the agent-facing MCP activation marker — the durable, admin-approved,
+  TTL-bounded grant is the authorization; the marker only governs whether the
+  agent-facing privileged MCP tools are surfaced. Expiry re-locks automatically
+  because the grant is re-looked-up on every mint.
+- **Hot-path cost/scale.** The wrapper mint runs on every restricted git/`gh`
+  op (overwhelmingly the no-grant case), so the `:9999` server caches the grant
+  lookup RESULT (not a token) with a ~10s TTL, keyed by repo. A burst of ops in
+  a no-grant session makes ONE Tank call, not N (negative results are cached);
+  the durable grant stays the authz. A cached POSITIVE is never served past the
+  grant's own `expires_at`, so expiry re-locks within ~TTL. The wrapper scripts
+  also use a short (`-m 3`) timeout on the optional `:9999` pre-check so a slow
+  or unreachable Tank falls back to the read-only mint fast instead of stalling
+  git; the read-only `mint_clone_token` call keeps its normal timeout.
+
+Contract impact:
+- **Clamp 1 — `mint_full_git_token`.** The break-glass MCP mint
+  (`_handle_break_glass_mint_token`) now mints with `full=true` for the only
+  case it can reach: an unlimited-branch grant (the branch-restricted refusal
+  fires first). The raw break-glass git token therefore carries the App's full
+  permission set, not just contents(+workflows).
+- **Clamps 2 & 3 — the wrappers.** `gh-tank-wrapper.sh` and
+  `git-credential-tank.sh` are break-glass-aware in restricted mode: they
+  consult `:9999` first and use a full token when an active unlimited grant
+  covers the repo(s); otherwise they keep the read-only `mint_clone_token`
+  default. No active grant → restricted sessions stay READ-ONLY exactly as
+  before.
+- **Governance + audit.** The grant operations carry `full_github_api`; the
+  agent approval turn (`gitBreakGlassApprovalPrompt`/`DisplayText`) and the
+  admin grant panel (`frontend/src/AdminBreakGlassPanel.tsx`) both state "full
+  GitHub API write … bypasses the governed PR ledger"; every full-API mint
+  (raw MCP path and wrapper path) is recorded as a `github.break_glass.token`
+  control-action use via `_record_break_glass_use` (the wrapper path tags
+  `channel: wrapper`, `full_github_api: true`), counted by
+  `tank_control_action_events_total`.
+- **Least privilege preserved.** Branch/count-scoped grants never get
+  `full_github_api`, never mint a raw full token, and stay on the governed
+  `publish_current_head` / `push_current_head` path.
+
+Deploy caveat:
+- This changes the session image (wrappers), the `mcp-auth-proxy` sidecar, and
+  the orchestrator, so it only takes effect for NEW sessions after the images
+  rebuild + deploy. It does NOT retroactively elevate an already-running
+  session.
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_break_glass_mint_token_unlimited_mints_full_github_api_scope`,
+  `test_break_glass_mint_token_refuses_branch_restricted_grant`,
+  `test_break_glass_operations_appends_full_api_only_when_unlimited`,
+  `test_break_glass_wrapper_mint_full_token_for_active_unlimited_grant`,
+  `test_break_glass_wrapper_mint_inactive_without_grant`,
+  `test_break_glass_wrapper_mint_inactive_for_branch_restricted_grant`,
+  `test_break_glass_wrapper_mint_inactive_when_repo_outside_grant_scope`,
+  `test_break_glass_wrapper_mint_negative_result_is_cached`,
+  `test_active_break_glass_grant_cached_serves_positive_within_ttl`,
+  `test_active_break_glass_grant_cached_does_not_serve_positive_past_expiry`).
+- `backend-go/cmd/tank-operator/control_actions_test.go`
+  (`TestNormalizeBreakGlassOperationsBindsFullAPIToUnlimitedBranch`,
+  `TestGitBreakGlassApprovalTextReflectsFullAPIForUnlimited`, and the updated
+  grant/approve tests asserting `full_github_api` for unlimited and its absence
+  for count-scoped grants).
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperBreakGlassElevation`,
+  `TestGhTankWrapperBreakGlassElevation`): the wrappers mint full under an
+  active grant and fall back to read-only without one.
+
+## Non-Restricted Session Read-Only DB Access
+
+Status: complete
+
+Intent:
+Give non-restricted (trusted) sessions arbitrary READ-ONLY SQL against the
+tank-operator Postgres DB for diagnostics (the `session_events` ledger,
+`profiles`, `session_registry`, `control_action_events`, …) — the durable-ledger
+query path `docs/diagnostic-discipline.md` calls for — without putting DB
+credentials in the session pod.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- The mcp-auth-proxy injects a `query_tank_db` MCP tool into the
+  mcp-tank-operator surface **only for non-restricted sessions**
+  (`not RESTRICTED_GIT_ENABLED`). It calls Tank's internal
+  `POST /api/internal/sessions/{id}/db-read-query`.
+- The endpoint runs the SQL under the orchestrator pool in a **read-only
+  transaction** with a `statement_timeout` and a row cap, and refuses
+  restricted-git sessions (`podRestrictedGit`). Writes/DDL are rejected by the
+  read-only tx; the Flexible-Server admin is not a filesystem superuser, so the
+  blast radius is "read the app's own data" — acceptable for the trusted owner's
+  non-restricted sessions, and unavailable to restricted/test sessions.
+- No DB credential ever lands in a session pod; the orchestrator (the DB's AAD
+  admin) proxies the read. (Full `psql` CLI with a dedicated read-only role +
+  KV password is a heavier optional follow-up.)
+
+Evidence:
+- `claude-container/mcp-auth-proxy/tests/test_server.py`
+  (`test_query_tank_db_tool_injected_only_for_non_restricted`,
+  `test_handle_query_tank_db_tool_runs_read_query`).
+- `backend-go/cmd/tank-operator/handlers_db_read_query_test.go`
+  (`TestDBReadQuery_RestrictedRefused`, `TestDBReadQuery_NonRestrictedRequiresPool`).
+
+## Orchestrate Hub Launch (Self-Grant + Durable Spoke Config)
+
+Status: in progress
+
+Intent:
+Let a user turn their own GUI chat session into the hub of a spoke fleet: one
+confirm persists the fleet's run config, grants the hub full git authority, and
+kicks off the `/orchestrate` skill — so the session can delegate task slices to
+fresh spoke sessions that report back to the hub instead of the user. See the
+Orchestrate feature folder and `app-chrome` for the surface that drives it.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- New durable `sessions.spoke_config jsonb` column (migration `0180`) threaded
+  through the registry write/read, `SessionRecord`, `Info`, the `RowPublisher`
+  snapshot, and the session-list-events read — the same full path
+  `rollout_state`/`spawned_sessions` ride, so the hub flag survives reload and
+  rides SSE. It is NULL until the launch endpoint sets it; there is no
+  pod-annotation source (hub state is server-owned, not runtime-reported).
+- `POST /api/sessions/{id}/orchestrate` is the launch endpoint. Gating is the
+  **human session owner only**: service principals are rejected outright (`403`
+  — this is a human-initiated full-power git grant, not a service path), and
+  ownership is the write-class per-owner `GetByOwner` gate, **not** the
+  admin-liftable read gate, so an admin cannot launch orchestrate on another
+  user's session. The hub must itself be an SDK chat (GUI) session so a spoke's
+  `send_prompt` ping-back wakes it as a new turn.
+- The spoke config (`provider` / `surface` (gui|cli) / `model` / `effort`, no
+  repo) is validated through the same provider allowlists as session create —
+  rejections increment `tank_session_run_config_rejected_total{surface="orchestrate"}`.
+  `provider`+`surface` derive the concrete spoke session mode the hub passes to
+  `spawn_run_session`.
+- On confirm the endpoint, in order: persists `spoke_config`; **self-grants git
+  break-glass with no approval round-trip** — `all_repos` / `unlimited` branch /
+  full ops (`mint_full_git_token`+`push_current_head`+`workflows`+`full_github_api`)
+  / 24h — reusing `appendGitBreakGlassGrant` with a `source: "orchestrate-self-grant"`
+  audit marker on the durable `github.break_glass.grant` control-action event;
+  and enqueues the `/orchestrate` kickoff turn (spoke config, the hub's own id
+  for ping-backs, break-glass status + expiry, plan-first reminder) over the
+  exact `enqueueSDKTurn` path a spoke ping-back later uses.
+- The 24h grant ceiling is hard (the break-glass writer clamps to 86400s): a run
+  longer than 24h needs a human re-confirm (re-POST), which appends a fresh
+  grant — orchestrate invents no renewal model. `all_repos` full-API suspends the
+  governed PR flow for the grant's life; the confirm surface states that blast
+  radius.
+
+Evidence:
+- `backend-go/cmd/tank-operator/handlers_orchestrate.go` (handler + spoke-config
+  validation + kickoff prompt) with
+  `backend-go/cmd/tank-operator/orchestrate_launch_test.go` covering the
+  service-reject, non-owner `404`, non-GUI-hub reject, invalid-spoke-config,
+  the full-power grant shape + `orchestrate-self-grant` marker + persisted
+  spoke_config + single kickoff command, and re-confirm-appends-grant paths.
+- Column threading: `backend-go/internal/pgstore/migrations.go` (`0180`),
+  `internal/sessionmodel/sessionmodel.go`, `internal/sessionregistry/registry.go`
+  + `write.go` (`SetSpokeConfig`), `internal/sessions/sessions.go` + `manager.go`,
+  `internal/sessioncontroller/row_publisher.go`, and
+  `cmd/tank-operator/handlers_session_list_events.go`, with
+  `internal/sessionmodel/spoke_config_test.go`.
+- The skill the kickoff turn loads:
+  `k8s/session-config/skills/common/orchestrate/SKILL.md`.
+- Metrics: `tank_orchestrate_launch_total{result}` (launch outcomes) and the
+  reused `tank_control_action_events_total` (the self-grant) +
+  `tank_session_run_config_rejected_total{surface="orchestrate"}`.

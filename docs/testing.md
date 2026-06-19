@@ -12,7 +12,7 @@ actually prove the behavior:
    actually navigate; does the right thing render for these props/state*. This
    is the [Frontend test layers](#frontend-test-layers) section below.
 3. **Real browser / integration** — a Glimmung test slot driven by
-   `inspect_browser_url`, for visual fidelity, real auth, and full
+   `inspect_browser_url`, for visual accuracy, real auth, and full
    cross-service flows. Everything from [Glimmung Test Slots](#glimmung-test-slots)
    down is this layer.
 
@@ -49,12 +49,12 @@ never leaks across tests.
   the Vite-native fit. RTL drives the testing-trophy idea: assert on what a user
   perceives (accessible roles/names, rendered text), not implementation detail.
 - **jsdom, not Vitest browser mode.** Browser mode (real Chromium via Playwright)
-  buys real layout/CSS and true focus/clipboard fidelity, but at the cost of
+  buys real layout/CSS and true focus/clipboard accuracy, but at the cost of
   browser binaries in CI and slower, flakier runs. This repo already owns the
   real-browser tier — Glimmung slots + `inspect_browser_url` — and
   `product-inspirations.md` names a live styleguide route + per-change
   environment as the *visual* review surface. So jsdom covers interaction
-  *logic* here, and real-browser fidelity stays in the slot tier. Reconsider
+  *logic* here, and real-browser accuracy stays in the slot tier. Reconsider
   browser mode only for a specific behavior jsdom genuinely cannot model (e.g.
   real focus-ring/measurement-dependent logic); add it as a third Vitest project
   rather than swapping jsdom out.
@@ -124,9 +124,26 @@ so this whole layer runs in CI with no extra workflow wiring.
 
 ## Glimmung Test Slots
 
-Tank-operator test slots are provisioned by Glimmung. Before relying on
-hardcoded slot paths or pod names, read the current hot-swap contract from
-Glimmung and use its hot-swap tools when they cover the artifact being tested.
+Tank-operator test slots are provisioned by Glimmung. Provisioning is
+deterministic and server-side: Tank's Test button /
+`POST /api/sessions/{id}/test-workflow/start` endpoint validates readiness
+(published + CI-green + mergeable + current-with-main) and then checks out a
+slot and deploys the branch's CI-built image for pushed refs. Agents do not
+check out or deploy slots by hand; before relying on hardcoded slot paths or pod
+names, check the current slot lease.
+
+For `/test-drive`, user-visible Tank UI behavior must be proven in a real
+session created inside the checked-out test slot. Use `spawn_test_slot_session`
+so the slot orchestrator owns session creation, then drive the actual slot UI
+with browser automation and record the session URL plus a screenshot or trace.
+This is mandatory for transcript, Turns, composer, session-list, session-bar,
+auth/onboarding, and other browser-visible flows where the product surface is a
+Tank session. Static fixtures, styleguide pages, direct CSS checks, and API
+reads are useful supplemental evidence, but they do not satisfy `/test-drive`
+for those flows by themselves. If a real slot session cannot be driven, record
+the exact blocker (for example runner crash, auth failure, unavailable browser,
+or missing data) in the PR evidence and still run the best lower-level checks
+available.
 
 Slot hostnames such as `https://tank-operator-slot-N.tank.dev.romaine.life`
 are trusted auth origins through Glimmung-managed auth origins, not through a
@@ -213,19 +230,29 @@ gate for branches. For normal same-repo PRs it logs into ACR, computes each
 repo-owned image fingerprint, reuses an existing proof image when present, and
 pushes the missing proof image to ACR.
 
-That proof-image path is separate from hot-swap and session-image repointing:
+Authenticated image-build workflows use the ACR registry cache as the canonical
+BuildKit cache. Do not add a second `type=gha,mode=max` export to those paths:
+large session-image layers make GitHub Actions cache export dominate the job
+after the proof image is already built and pushed. Fork PRs that cannot log into
+ACR may still use GHA cache because it is their only cache backend.
 
-- Use hot-swap for the fast inner loop against already-running slot pods.
-- Use PR CI proof images to prove buildability and prime ACR for merge/deploy.
+That proof-image path is the input for slot deploys:
+
+- The deterministic Test workflow deploys the CI-built image for a pushed ref
+  into the provisioned slot server-side (Tank's backend drives Glimmung's
+  `/v1/test-slots/deploy-image` HTTP API). Glimmung resolves the ref to the
+  app image's CI-run lookup tag, which points at the fingerprint tag CI
+  produced; the registry contract is not a raw commit-SHA image alias.
+- Use PR CI proof images to prove buildability and prime ACR for slot
+  validation and merge/deploy.
 - Use `session-images-build.yml` when newly-created Tank session pods must boot
   branch `claude-container` / `codex-container` images.
 
 ## Making new slot sessions inherit a change (session-image repoint)
 
-`apply_test_slot_hot_swap` patches the runner code in **already-running**
-session pods. A **newly-created** session boots the image its orchestrator
-stamps, so to make new sessions inherit a branch change you point the slot's
-session image at the branch build — the same lever production uses
+Newly-created sessions boot the image their orchestrator stamps. To make new
+sessions inherit a branch change, point the slot's session image at the branch
+build — the same lever production uses
 (`CODEX_SESSION_IMAGE` / `SESSION_IMAGE`), not a runtime overlay. New sessions
 then boot the branch code natively, exactly like prod boots its pinned image.
 
@@ -263,7 +290,6 @@ Two steps:
    curl -X PUT \
      https://tank-operator-slot-1.tank.dev.romaine.life/api/internal/session-scopes/tank-operator-slot-1/image-override \
      -H "Authorization: Bearer $AUTH_JWT" -H 'Content-Type: application/json' \
-     -d '{"codex_image":"romainecr.azurecr.io/codex-container:codex-<fp>","antigravity_image":"romainecr.azurecr.io/antigravity-container:antigravity-<fp>","git_ref":"<branch>"}'
    ```
 
    `GET` the same path to see what new sessions will inherit; `DELETE` it to
@@ -273,7 +299,6 @@ Two steps:
    production scope, and is honored only by test-env orchestrators — production
    sessions are never repointed.
 
-The existing `apply_test_slot_hot_swap` remains the fast inner loop for the
-session you are already in; the repoint is what makes *new* sessions match. A
-future `mcp-tank-operator` tool will wrap both steps ("build, wait, point") into
-one call.
+For app-level validation, let the deterministic Test workflow deploy the
+CI-built image to the slot. For session-image validation, build the session
+image and repoint the slot so newly created sessions boot the branch image.

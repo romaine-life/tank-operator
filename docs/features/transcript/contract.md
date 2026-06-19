@@ -55,6 +55,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
   when a durable event exists or can be written.
 - A first prompt typed on the splash screen must be written durably before
   startup status events.
+- Service-created GUI chat sessions must include and durably write an initial
+  prompt as part of creation. A promptless GUI session is invalid; there is no
+  debug, operator, or pod-boot-smoke exception. CLI/config sessions may exist
+  without a chat transcript because they are different products, not empty GUI
+  transcripts.
 - Old provider-specific transcript render paths must be deleted when replaced
   by Tank protocol rendering.
 - Refresh-only recovery must not be accepted as proof that live transcript
@@ -168,11 +173,28 @@ answer; it must not visibly move a rendered row from one surface to the other.
   whose details are already loaded must invalidate that cache and re-read
   `/turns/{id}/activity`; the browser must not synthesize child activity rows
   from the live shell.
-- The dedicated Turns view renders the turn's initiating user message, when the
-  turn has one, as server-projected turn context above the paged activity body.
-  This context is sourced from durable `user_message.created` and is not an
-  activity child row, so it stays visible while the reader moves between
-  activity pages.
+- The dedicated Turns view renders the turn's initiating instruction as
+  server-projected turn context above the paged activity body. Human turns
+  source this context from durable `user_message.created`; backend-owned
+  background-task wake turns source it from durable
+  `turn.submitted.payload.prompt` and mark it system-authored. This context is
+  not an activity child row, so it stays visible while the reader moves between
+  activity pages. A synthetic AskUserQuestion turn has no `user_message.created`
+  of its own, so it sources this context from the asking turn's triggering
+  `user_message.created` (carried over server-side and marked
+  `turnContextContinued`); the Turns view labels that copy "Question prompt
+  continued from previous turn" so the question stays fused to what produced it.
+  This is page-context copy only: it must not add an activity page or change the
+  question turn's lifecycle/event counts.
+- Synthetic AskUserQuestion turns may render the asking turn's durable
+  final-answer candidate on each question page before the answer card. The
+  candidate is snapshotted by the runner on
+  `turn.awaiting_input.payload.asking_turn_final_answer` using the same
+  `final_answer.timeline_ids` shape as `turn.completed`; the backend then reads
+  those exact assistant `item.completed` rows from the asking turn. This is a
+  page-context copy only: it must not create an extra activity page, change the
+  question turn's lifecycle/event counts, or become the synthetic turn's final
+  answer.
 - The dedicated Turns view renders successful final assistant prose from the
   server-projected `/turns/{id}/activity` `final_answer.entries` section, not by
   inferring finality from the currently selected activity page. Agent activity
@@ -184,7 +206,55 @@ answer; it must not visibly move a rendered row from one surface to the other.
   final-answer event belongs to a different activity page. Expanding the turn
   reveals the execution trace for that turn. Failed, interrupted, and no-final
   completed turns do not expose a compacted final-answer projection because
-  there is no durable assistant result to show.
+  there is no durable assistant result to show, except the AskUserQuestion /
+  ExitPlanMode hand-off turn described next.
+- An asking turn that paused on AskUserQuestion / ExitPlanMode never carries a
+  durable `turn.completed.final_answer`: the answer rotates execution onto a
+  separate continuation turn. The hand-off itself plays the final-answer role, so
+  `/turns/{id}/activity` `final_answer.entries` for that turn is the agent's
+  preamble (the `asking_turn_final_answer` assistant prose the runner
+  snapshotted, named with the same `final_answer.timeline_ids` shape) followed by
+  the AskUserQuestion card. The pending question's widget renders inline in the
+  main transcript (single question fully inline; for a multi-question set, Q1
+  inline and Q2+ on their dedicated pages), so there is no navigate-to-the-
+  question-turn shortcut. This makes the asking turn collapsible to that bundle
+  instead of rendering "No turn activity", and is the same snapshot the question
+  page copies
+  as page context — but only the asking turn promotes it to a final answer; the
+  synthetic question turn's copy stays a page-context copy (above) and never
+  becomes that turn's final answer. The promotion projects existing durable rows;
+  it must not add an activity page or change either turn's event counts.
+- AskUserQuestion answer input never traps the user. A pending question is a
+  conversation the user steers, not a form that must be satisfied before the UI
+  releases them. Four invariants hold for every question regardless of what the
+  agent sent:
+  - No nothing-selected state. Every question carries a synthetic "Something
+    else" choice, selected by default; the answer reader
+    (`effectiveAskUserQuestionSelection`) resolves an empty stored selection to
+    "Something else", so Submit is always live and Enter always advances or
+    submits. An agent's option list is a set of shortcuts, never a fence.
+  - Companion text is a valid answer on ANY selection. The composer free-form
+    text is never gated on `allowFreeForm` and never silently dropped: it rides
+    as `annotations.notes` whether the selection is a real option or "Something
+    else" (where it becomes the whole answer). The agent may hint that it
+    expects a pick; it cannot revoke the user's ability to answer outside the
+    menu.
+  - An empty pass is acceptable. Submitting with nothing typed and nothing
+    picked sends "Something else" with no elaboration — an honest "I'm not
+    answering this", not a forced choice and not a blocked Submit. On the wire
+    that is `answers:{question:["Something else"]}`, which satisfies the
+    backend's >=1-non-empty-label gate by construction; the backend does not
+    validate answer labels against the question's offered options.
+  - A visible exit is always present. The Stop control (also bound to Esc)
+    renders ALONGSIDE the answer Submit while a question is pending, never
+    swapped out for it. Stopping the turn is the durable dismiss path
+    (`turn.interrupt_requested` -> `turn.interrupted` -> card `dismissed`); it is
+    the emergency hatch, not the primary flow, and Esc is advertised rather than
+    the only way out.
+  In a multi-question set, Enter (or the button) advances to the next question
+  mid-set and submits on the last page; per-question free-form text is persisted
+  on page change and restored on return, so advancing never discards a typed
+  answer.
 - The authenticated Turns view is a chat-capable continuation surface. Its
   composer uses the same `POST /api/sessions/{session_id}/turns` durable
   boundary as the main transcript composer; it does not create a second submit
@@ -197,7 +267,7 @@ answer; it must not visibly move a rendered row from one surface to the other.
   transcript message.
 - Copy links, unread counts, latest-message state, and fork-from-message actions
   must target the settled transcript projection, not duplicate activity-log
-  copies or the Turns view's context copy of the initiating user message.
+  copies or the Turns view's context copy of the initiating instruction.
 
 ## Failure And Recovery
 
@@ -263,9 +333,44 @@ answer; it must not visibly move a rendered row from one surface to the other.
   retryable Turns detail error and `tank_session_event_client_events_total`
   labels for the failure.
 - Opening a numbered turn route (`/sessions/{id}/turns/{n}`) renders the
-  initiating user message at the top of the Turns view from the server
+  initiating instruction at the top of the Turns view from the server
   projection. Switching activity pages keeps that same context visible and does
-  not duplicate the human user message inside the activity page body.
+  not duplicate the human user message or system wake prompt inside the activity
+  page body.
+- Opening a synthetic AskUserQuestion turn route renders the linked asking
+  turn's final-answer candidate above the answer card when the awaiting-input
+  payload names one, keeps the page kind as `question`, and invalidates the
+  cached page when the asking turn's durable high-water mark changes.
+- A pending AskUserQuestion renders its question widget inline in the main
+  transcript on the asking turn — the widget renders in place of the derived
+  "summary" question message, beneath the agent's preamble — and is answerable there
+  through the composer. There is no assistant-message "Answer in Turns" / tool
+  "Open question page" shortcut. For a multi-question set, only Q1 renders inline;
+  advancing leaves the inline surface for Q2+'s dedicated pages rather than
+  flipping the inline card in place.
+- Each Q2+ question page renders the asking turn's triggering prompt (projected
+  as `turnContextContinued` turn context) under a "Question prompt continued from
+  previous turn" header.
+- A pending AskUserQuestion renders a visible Stop/cancel control in the
+  composer alongside Submit; the exit is not removed while a question is active.
+- An AskUserQuestion with no option picked and nothing typed is submittable and
+  posts `answers:{question:["Something else"]}` (an honest pass), not a blocked
+  Submit.
+- Free-form composer text is included as the answer note for any selection —
+  including a real-option pick and an options-only (`allowFreeForm:false`)
+  question — and is never discarded on submit or on multi-question page change.
+- `frontend/src/askUserQuestionSelection.test.ts` proves the never-empty default
+  ("Something else"), the sentinel's mutual exclusion with real options, and the
+  answer-payload builder's empty-pass + companion-text-on-any-selection
+  invariants.
+- A stopped or dismissed synthetic AskUserQuestion / ExitPlanMode turn keeps
+  exactly one `question` page per question: the Stop sequence
+  (`turn.interrupt_requested` followed by the dismissing `turn.interrupted`) and
+  any other non-answer terminal fold onto the question page, never a spurious
+  trailing `activity` page. Because a non-`needs_input` turn opens on its last
+  page, that extra page would land the Turns view on a contextless activity page
+  and strand the prompt slot on "Prompt context unavailable"; instead the turn
+  opens on its question page and the slot shows the "Question N of M" heading.
 - Collapsing agent activity in the Turns view keeps the server-projected final
   answer visible, hides ordinary tool/reasoning/progress rows, keeps
   server-owned always-visible context such as background-wake prompts visible,

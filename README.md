@@ -15,7 +15,7 @@ to point each session mode at the right image.
 
 The HTTP MCP servers it talks to live in standalone repos:
 
-- [`mcp-azure-personal`](https://github.com/romaine-life/mcp-azure-personal) â€” first-party personal Azure MCP server and chart.
+- [`mcp-azure-personal`](https://github.com/romaine-life/mcp-azure-personal) â€” first-party personal Azure MCP server and chart. Locked by default behind break-glass: the server requires an active Tank grant (call the `request_azure_break_glass` MCP tool for an approval URL). See `docs/features/session-lifecycle/capabilities.md` → "Locked-by-default Azure MCP".
 - [`mcp-github`](https://github.com/romaine-life/mcp-github) â€” custom GitHub App-backed MCP server.
 - [`mcp-k8s`](https://github.com/romaine-life/mcp-k8s) â€” read-only kubectl/helm MCP server.
 - [`mcp-argocd`](https://github.com/romaine-life/mcp-argocd) â€” read-only ArgoCD MCP server.
@@ -133,95 +133,20 @@ notifications, tray/menu/global shortcuts, or deeper clipboard integration.
 ArgoCD auto-syncs `k8s/` when changes hit `main`. Image is built and pushed to
 `romainecr.azurecr.io/tank-operator:<sha>` (and `:latest`) by `.github/workflows/build.yml`.
 
-## Glimmung Test-Slot Hot Swap
+## Glimmung Test-Slot Deploy
 
-Tank validation slots run the orchestrator through `/app/tank-supervisor` when
-`renderMode=hot`. The chart mounts `/var/run/tank-operator-hot` for
-backend artifacts and `/var/run/tank-operator-static-override` for frontend
-assets. Production keeps the normal `/app/tank-operator-go` command and image
-rollout path.
+Tank validation slots are updated deterministically and server-side: Tank's Test
+button / `POST /api/sessions/{id}/test-workflow/start` endpoint validates branch
+readiness and then drives Glimmung's `/v1/test-slots/checkout` +
+`/v1/test-slots/deploy-image` HTTP APIs from the backend. The deploy step
+deploys the CI-built image for a pushed, verified git ref and polls the slot
+operation until it reaches `deployed` or `deploy_failed`. (The former
+agent-facing slot checkout/deploy MCP tools were retired — the deterministic
+gate replaces them for every project.)
 
-Operational notes:
-
-- Test slots mount `/var/run/tank-operator-static-override` read-write in the
-  app container; write static overrides through the `tank-operator` container.
-  Older slots may still include a `static-writer` sidecar, but the sidecar is
-  not required for hot-swap.
-- `/app/tank-supervisor` does not watch the hot backend artifact. After copying
-  a new backend binary to `/var/run/tank-operator-hot/tank-operator-go`, send
-  `SIGHUP` to PID 1 in the `tank-operator` container. Do not kill the child
-  `tank-operator-go` process directly; the supervisor treats child exit as
-  terminal and exits the container.
-- Hot-swap every ready app pod unless you intentionally scaled the deployment
-  down for a one-off diagnostic.
-
-Project metadata for Glimmung:
-
-```json
-{
-  "test_slot_hot_swap": {
-    "enabled": true,
-    "static": {
-      "enabled": true,
-      "source": "frontend/dist",
-      "target": "/var/run/tank-operator-static-override"
-    },
-    "backend": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "cd backend-go && go build -o /tmp/tank-operator-go ./cmd/tank-operator",
-      "artifact": "/tmp/tank-operator-go",
-      "target": "/var/run/tank-operator-hot/tank-operator-go",
-      "health_path": "/healthz"
-    },
-    "fidelity_classifier": {
-      "enabled": true,
-      "command": "node scripts/classify-tank-test-fidelity.mjs"
-    },
-    "agent_runner": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "cd claude-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/claude-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/claude-runner-hot/runner-shared/|g' {} +",
-      "source": "claude-runner/hot",
-      "target": "/var/run/claude-runner-hot",
-      "restart": "SIGHUP",
-      "container": "claude-runner",
-      "pod_selector": "tank-operator/session-id,tank-operator/mode in (claude_gui,claude_secondary_gui)",
-      "builder_image": "node:20-alpine"
-    },
-    "codex_runner": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "cd codex-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/codex-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/codex-runner-hot/runner-shared/|g' {} +",
-      "source": "codex-runner/hot",
-      "target": "/var/run/codex-runner-hot",
-      "restart": "SIGHUP",
-      "container": "codex-runner",
-      "pod_selector": "tank-operator/session-id,tank-operator/mode in (codex_gui,codex_exec_gui,codex_app_server)",
-      "builder_image": "node:20-alpine"
-    },
-    "antigravity_runner": {
-      "enabled": true,
-      "strategy": "supervisor",
-      "build_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates && curl -fsSL https://go.dev/dl/go1.26.0.linux-amd64.tar.gz -o /tmp/go.tgz && rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz && export PATH=/usr/local/go/bin:$PATH && rm -rf antigravity-runner-hot && mkdir -p antigravity-runner-hot && cd backend-go && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o ../antigravity-runner-hot/antigravity-cli-runner ./cmd/antigravity-runner",
-      "source": "antigravity-runner-hot",
-      "target": "/var/run/antigravity-runner-hot",
-      "restart": "SIGHUP",
-      "container": "antigravity-runner",
-      "pod_selector": "tank-operator/session-id,tank-operator/mode=antigravity_gui",
-      "builder_image": "node:20-bookworm-slim"
-    }
-  }
-}
-```
-
-The `antigravity_runner` builder is a Node image that installs the Go
-toolchain at build time, not a stock `golang:` image. The shared
-`fidelity_classifier` (`node scripts/classify-tank-test-fidelity.mjs`) runs in
-the builder *before* the build command, so the builder image must carry `node`,
-while compiling the Go runner needs `go` — and no stock image ships both. A
-dedicated go+node builder image baked to ACR would be a cleaner future
-replacement for the install-at-build-time step.
+Project metadata for slot deployment lives under `test_slot_helm`; there is no
+per-artifact build contract. PR CI is the image-build gate, and slot validation
+uses that same image rather than building or copying artifacts from a session.
 
 Auth: Microsoft sign-in is delegated to auth.romaine.life. The SPA fetches
 an auth.romaine.life JWT (silent if the `.romaine.life` session cookie is

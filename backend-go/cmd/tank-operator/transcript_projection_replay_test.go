@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -21,11 +20,6 @@ import (
 //     durable read model with bare user prompts — every ack the user saw lived
 //     only in the live SSE stream, and the missing shells are why the turn
 //     pager rendered "Current turn" instead of numbers.
-//   - session 160 (antigravity, "1036-fold-round3"): the fold re-homed the
-//     wake replies ("THE TIMER FIRED.") onto the asking turns, but the parked
-//     turns' own acks were annihilated the same way.
-//   - session 159 (antigravity, pre-fold builds): the old unfolded shape plus
-//     restart-replay artifacts; replayed to keep the fail-soft path honest.
 //
 // The invariant under test is the repo's first principle applied to the
 // projection: every projected entry gets exactly one durable home. A parked
@@ -313,46 +307,3 @@ func TestProjectTranscriptEventsReplaySlotSession161CodexBugMuseum(t *testing.T)
 		t.Fatalf("fixture shape changed: only %d parked-turn prose items, want >= 6", parked)
 	}
 }
-
-func TestProjectTranscriptEventsReplaySlotSession160AntigravityFoldMuseum(t *testing.T) {
-	projection, facts := assertReplayDurableHomes(t, "slot1_session_160_events.json")
-
-	if got, want := len(facts.realTurnOrder), 3; got != want {
-		t.Fatalf("fixture shape changed: %d real turns, want %d", got, want)
-	}
-
-	// The wake replies stay settled, re-homed onto the asking turns with
-	// backend-turn provenance preserved.
-	wantFolded := map[string]string{
-		"THE TIMER FIRED.":  facts.realTurnOrder[1],
-		"ROUND FOUR FIRED.": facts.realTurnOrder[2],
-	}
-	for _, entry := range projection.Entries {
-		text := strings.TrimSpace(transcriptMapString(entry, "text"))
-		wantTurn, ok := wantFolded[text]
-		if !ok {
-			continue
-		}
-		delete(wantFolded, text)
-		if got := transcriptMapString(entry, "turnId"); got != wantTurn {
-			t.Errorf("folded wake reply %q owned by turn %s, want originating turn %s", text, got, wantTurn)
-		}
-		if transcriptMapString(entry, "backendTurnId") == "" {
-			t.Errorf("folded wake reply %q lost backendTurnId provenance", text)
-		}
-	}
-	for text := range wantFolded {
-		t.Errorf("folded wake reply %q missing from settled projection", text)
-	}
-}
-
-func TestProjectTranscriptEventsReplaySlotSession159PreFoldMuseum(t *testing.T) {
-	// The pre-fold museum (broken builds, restart-replay artifacts) only has to
-	// satisfy the generic invariants: nothing annihilated, order preserved,
-	// shells for terminal turns.
-	assertReplayDurableHomes(t, "slot1_session_159_events.json")
-}
-
-// sortedness helper kept out of assertReplayDurableHomes so fixture-shape
-// drift produces a targeted failure instead of a confusing ordering error.
-var _ = sort.StringsAreSorted

@@ -121,6 +121,51 @@ func TestTurnActivityCacheHitAvoidsRefold(t *testing.T) {
 	}
 }
 
+func TestTurnActivityCacheTracksAskUserQuestionAskingFinalAnswerContext(t *testing.T) {
+	fake := &cacheFakeEventStore{}
+	fake.addEvent("turn-ask", projectionTestEvent("final", "001", "item.completed", "assistant", "claude", "turn-ask", "turn-ask:item:final", map[string]any{
+		"kind": "message",
+		"text": "The migration looks ready.",
+	}))
+	fake.addEvent("turn-question", projectionTestEvent("submit", "002", "turn.submitted", "runner", "tank", "turn-question", "", map[string]any{"status": "submitted"}))
+	fake.addEvent("turn-question", projectionTestEvent("await", "003", "turn.awaiting_input", "runner", "claude", "turn-question", "turn-question:item:ask", map[string]any{
+		"asking_turn_id":   "turn-ask",
+		"question_turn_id": "turn-question",
+		"provider_item_id": "toolu_ask",
+		"timeline_id":      "turn-question:item:ask",
+		"asking_turn_final_answer": map[string]any{
+			"timeline_ids": []any{"turn-ask:item:final"},
+		},
+		"questions": []any{map[string]any{"question": "Proceed?"}},
+	}))
+
+	cache := newTurnActivityCache()
+	ctx := context.Background()
+	first, err := cache.projectionFor(ctx, fake, "default", "63", "turn-question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Pages) != 1 || len(first.Pages[0].Entries) != 2 {
+		t.Fatalf("first projection missing linked final-answer context: %#v", first.Pages)
+	}
+	readsAfterFirst := fake.turnReads
+
+	if _, err := cache.projectionFor(ctx, fake, "default", "63", "turn-question"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.turnReads != readsAfterFirst {
+		t.Fatalf("unchanged question page should hit cache: reads went %d → %d", readsAfterFirst, fake.turnReads)
+	}
+
+	fake.addEvent("turn-ask", cacheTurnEvent("turn-ask", "004", "turn.usage"))
+	if _, err := cache.projectionFor(ctx, fake, "default", "63", "turn-question"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.turnReads == readsAfterFirst {
+		t.Fatal("asking-turn freshness change must invalidate the question-page cache")
+	}
+}
+
 // TestTurnActivityCacheEvictsByEventBudget pins the LRU memory bound: the
 // total cached projected-event count never exceeds the budget (except a
 // single oversized entry), and eviction removes least-recently-used turns.

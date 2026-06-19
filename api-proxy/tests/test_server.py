@@ -6,7 +6,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def install_proto_stubs() -> None:
@@ -92,6 +92,39 @@ def claude_config(credentials_file: str) -> ProxyConfig:
         fedramp_header="",
         patch_last_refresh=False,
     )
+
+
+class _UsageResponse:
+    def __init__(self, status_code: int, body: object) -> None:
+        self.status_code = status_code
+        self._body = body
+        self.text = json.dumps(body) if isinstance(body, dict) else str(body)
+
+    def json(self) -> object:
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
+
+
+class _UsageClient:
+    responses: list[object] = []
+    request_count: int = 0
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    async def __aenter__(self) -> "_UsageClient":
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def get(self, url: str, headers: dict[str, str]) -> object:
+        self.__class__.request_count += 1
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class ServerTests(unittest.TestCase):
@@ -206,6 +239,84 @@ class ServerTests(unittest.TestCase):
             self.assertIn("anthropic.com/api/oauth/usage", claude._usage_urls()[0])
             self.assertTrue(any("chatgpt.com" in url for url in codex._usage_urls()))
 
+    def test_usage_snapshot_serves_last_good_snapshot_on_rate_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.request_count = 0
+            _UsageClient.responses = [
+                _UsageResponse(200, {"five_hour": {"utilization": 18}}),
+                _UsageResponse(429, {"error": "rate_limited"}),
+            ]
+
+            with (
+                patch("tank_api_proxy.server.httpx.AsyncClient", _UsageClient),
+                patch.object(
+                    injector,
+                    "_get_access_token",
+                    new=AsyncMock(return_value="access-token"),
+                ),
+            ):
+                first = asyncio.run(injector.usage_snapshot())
+                second = asyncio.run(injector.usage_snapshot())
+
+            self.assertEqual(first["status"], "ok")
+            self.assertNotIn("cached", first)
+            self.assertEqual(second["status"], "ok")
+            self.assertEqual(_UsageClient.request_count, 2)
+            self.assertTrue(second["cached"])
+            self.assertTrue(second["stale"])
+            self.assertEqual(second["source_status_code"], 429)
+            self.assertEqual(second["usage"], first["usage"])
+            self.assertEqual(second["observed_at"], first["observed_at"])
+
+    def test_usage_snapshot_without_cache_reports_rate_limit_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.request_count = 0
+            _UsageClient.responses = [
+                _UsageResponse(429, {"error": "rate_limited"}),
+            ]
+
+            with (
+                patch("tank_api_proxy.server.httpx.AsyncClient", _UsageClient),
+                patch.object(
+                    injector,
+                    "_get_access_token",
+                    new=AsyncMock(return_value="access-token"),
+                ),
+            ):
+                payload = asyncio.run(injector.usage_snapshot())
+
+            self.assertEqual(payload["status"], "error")
+            self.assertEqual(payload["status_code"], 429)
+            self.assertEqual(_UsageClient.request_count, 1)
+
+    def test_usage_snapshot_does_not_hide_credential_failure_with_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = AuthInjector(claude_config(str(Path(tmp) / "auth.json")))
+            _UsageClient.responses = [
+                _UsageResponse(200, {"five_hour": {"utilization": 18}}),
+                _UsageResponse(401, {"error": "expired"}),
+                _UsageResponse(401, {"error": "expired"}),
+            ]
+
+            with (
+                patch("tank_api_proxy.server.httpx.AsyncClient", _UsageClient),
+                patch.object(
+                    injector,
+                    "_get_access_token",
+                    new=AsyncMock(return_value="access-token"),
+                ),
+                patch.object(injector, "_refresh", new=AsyncMock(return_value=None)),
+            ):
+                first = asyncio.run(injector.usage_snapshot())
+                second = asyncio.run(injector.usage_snapshot())
+
+            self.assertEqual(first["status"], "ok")
+            self.assertEqual(second["status"], "error")
+            self.assertEqual(second["status_code"], 401)
+            self.assertNotIn("cached", second)
+
 
 class ConfigFromEnvTests(unittest.TestCase):
     def test_missing_provider_env_fails_fast(self) -> None:
@@ -256,159 +367,61 @@ class ConfigFromEnvTests(unittest.TestCase):
 
         self.assertEqual(config.kv_secret_name, "tank-operator-slot-2-codex-credentials")
 
-    def test_antigravity_config_from_env(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {
-                "PROXY_PROVIDER": "antigravity",
-                "ANTIGRAVITY_CREDENTIALS_FILE": "/etc/antigravity-credentials/antigravity-oauth-token",
-                "ANTIGRAVITY_CREDENTIALS_KV_KEY": "antigravity-credentials",
-                "ANTIGRAVITY_CLIENT_SECRET": "GOCSPX-test",
-            },
-            clear=True,
-        ):
-            config = _config_from_env()
-
-        self.assertEqual(config.provider, "antigravity")
-        # Google's /token endpoint requires form-encoding (not JSON).
-        self.assertTrue(config.token_request_form)
-        self.assertEqual(config.token_url, "https://oauth2.googleapis.com/token")
-        self.assertTrue(config.client_id.endswith(".apps.googleusercontent.com"))
-        self.assertEqual(config.client_secret, "GOCSPX-test")
-        # Antigravity uses plain Bearer — no account / fedramp headers.
-        self.assertIsNone(config.account_header)
-        self.assertFalse(config.patch_last_refresh)
-
-    def test_antigravity_requires_client_secret(self) -> None:
-        with patch.dict(
-            "os.environ",
-            {
-                "PROXY_PROVIDER": "antigravity",
-                "ANTIGRAVITY_CREDENTIALS_FILE": "/etc/antigravity-credentials/antigravity-oauth-token",
-                "ANTIGRAVITY_CREDENTIALS_KV_KEY": "antigravity-credentials",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "ANTIGRAVITY_CLIENT_SECRET is required"):
-                _config_from_env()
-
-    def test_patch_blob_updates_antigravity_expiry(self) -> None:
-        # agy's harvested blob shape: {token:{access_token, refresh_token,
-        # expiry}, auth_method}. The expiry is an RFC3339 string, not epoch ms.
-        blob = {
-            "token": {
-                "access_token": "old-access",
-                "token_type": "Bearer",
-                "refresh_token": "the-refresh",
-                "expiry": "2026-06-06T09:42:16Z",
-            },
-            "auth_method": "consumer",
-        }
-
-        # Google does not return a new refresh token on refresh; the proxy
-        # reuses the cached one (passed in as new_refresh).
-        patched = _patch_blob(blob, "new-access", "the-refresh", 3600)
-
-        self.assertEqual(patched["token"]["access_token"], "new-access")
-        self.assertEqual(patched["token"]["refresh_token"], "the-refresh")
-        self.assertNotEqual(patched["token"]["expiry"], blob["token"]["expiry"])
-        # expiry stays an RFC3339 Z string, not converted to epoch ms.
-        self.assertTrue(patched["token"]["expiry"].endswith("Z"))
-        # No spurious last_refresh injected for the antigravity shape.
-        self.assertNotIn("last_refresh", patched)
-
-    def test_antigravity_reload_uses_expiry_for_freshness(self) -> None:
-        antigravity_cfg = ProxyConfig(
-            provider="antigravity",
-            credentials_file="",
-            token_url="https://oauth2.googleapis.com/token",
-            client_id="x.apps.googleusercontent.com",
-            kv_secret_name="antigravity-credentials",
-            client_secret="GOCSPX-test",
-            token_request_form=True,
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "antigravity-oauth-token"
-            path.write_text(
-                json.dumps(
-                    {
-                        "token": {
-                            "access_token": "access",
-                            "refresh_token": "refresh",
-                            "expiry": "2099-01-01T00:00:00Z",
-                        },
-                        "auth_method": "consumer",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            injector = AuthInjector(
-                ProxyConfig(**{**antigravity_cfg.__dict__, "credentials_file": str(path)})
-            )
-            injector._reload_from_file()
-            self.assertEqual(injector._cached_access, "access")
-            self.assertEqual(injector._cached_refresh, "refresh")
-            # The RFC3339 expiry is parsed into the freshness marker.
-            self.assertIsNotNone(injector._cached_freshness_ms())
-
-
-def _antigravity_injector(credentials_file: str) -> AuthInjector:
+def _codex_injector(credentials_file: str) -> AuthInjector:
     return AuthInjector(
         ProxyConfig(
-            provider="antigravity",
+            provider="codex",
             credentials_file=credentials_file,
-            token_url="https://oauth2.googleapis.com/token",
-            client_id="x.apps.googleusercontent.com",
-            kv_secret_name="antigravity-credentials",
-            client_secret="GOCSPX-test",
-            token_request_form=True,
+            token_url="https://auth.openai.com/oauth/token",
+            client_id="codex-client",
+            kv_secret_name="codex-credentials",
+            account_header="ChatGPT-Account-ID",
+            fedramp_header="X-OpenAI-Fedramp",
+            patch_last_refresh=True,
         )
     )
 
 
 class RefreshKeeperTests(unittest.TestCase):
-    """The proactive keeper that fixes the antigravity cold-start: the token is
-    warmed before traffic and the refresh + KV write run in a long-lived task,
-    not a cancellable request stream.
-    """
+    """The proactive keeper warms tokens outside cancellable request streams."""
 
     def test_should_refresh_false_without_refresh_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj = _codex_injector(str(Path(tmp) / "t"))
             inj._cached_refresh = None
             self.assertFalse(inj._should_refresh())
 
     def test_should_refresh_true_when_invalidated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj = _codex_injector(str(Path(tmp) / "t"))
             inj._cached_refresh = "r"
             inj._access_invalidated = True
             self.assertTrue(inj._should_refresh())
 
     def test_should_refresh_true_when_access_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj = _codex_injector(str(Path(tmp) / "t"))
             inj._cached_refresh = "r"
             inj._cached_access = None
             self.assertTrue(inj._should_refresh())
 
     def test_should_refresh_false_when_token_is_fresh(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj = _codex_injector(str(Path(tmp) / "t"))
             inj._cached_refresh = "r"
             inj._cached_access = "a"
             inj._access_invalidated = False
-            inj._cached_blob = {"token": {"access_token": "a", "expiry": "2099-01-01T00:00:00Z"}}
+            inj._cached_blob = {"access_token": "a", "last_refresh": "2099-01-01T00:00:00Z"}
             self.assertFalse(inj._should_refresh())
 
     def test_should_refresh_true_when_near_expiry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj = _codex_injector(str(Path(tmp) / "t"))
             inj._cached_refresh = "r"
             inj._cached_access = "a"
             inj._access_invalidated = False
             # Expired in the past -> within skew -> needs refresh.
-            inj._cached_blob = {"token": {"access_token": "a", "expiry": "2000-01-01T00:00:00Z"}}
+            inj._cached_blob = {"access_token": "a", "last_refresh": "2000-01-01T00:00:00Z"}
             self.assertTrue(inj._should_refresh())
 
     def test_refresh_skips_redundant_rotation_when_fresh(self) -> None:
@@ -416,21 +429,18 @@ class RefreshKeeperTests(unittest.TestCase):
         # token is already fresh and not invalidated, _refresh must NOT burn the
         # provider round trip (no httpx client constructed).
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "antigravity-oauth-token"
+            path = Path(tmp) / "auth.json"
             path.write_text(
                 json.dumps(
                     {
-                        "token": {
-                            "access_token": "a",
-                            "refresh_token": "r",
-                            "expiry": "2099-01-01T00:00:00Z",
-                        },
-                        "auth_method": "consumer",
+                        "access_token": "a",
+                        "refresh_token": "r",
+                        "last_refresh": "2099-01-01T00:00:00Z",
                     }
                 ),
                 encoding="utf-8",
             )
-            inj = _antigravity_injector(str(path))
+            inj = _codex_injector(str(path))
             inj._access_invalidated = False
             with patch("tank_api_proxy.server.httpx.AsyncClient") as mock_client:
                 asyncio.run(inj._refresh())

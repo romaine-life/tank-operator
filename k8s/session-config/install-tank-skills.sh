@@ -1,9 +1,8 @@
 skill_targets_for_scope() {
   case "$1" in
-    common) printf '%s\n' "claude codex antigravity" ;;
+    common) printf '%s\n' "claude codex" ;;
     claude) printf '%s\n' "claude" ;;
     codex) printf '%s\n' "codex" ;;
-    antigravity) printf '%s\n' "antigravity" ;;
     *) return 1 ;;
   esac
 }
@@ -11,7 +10,7 @@ skill_targets_for_scope() {
 install_tank_skills() {
   config_dir="${INSTALL_TANK_SKILLS_CONFIG_DIR:-/opt/tank/session-config}"
   [ -d "$config_dir" ] || return 0
-  mkdir -p "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.gemini/skills"
+  mkdir -p "$HOME/.claude/skills" "$HOME/.codex/skills"
 
   for bundled_file in "$config_dir"/skills__*; do
     [ -e "$bundled_file" ] || continue
@@ -30,7 +29,6 @@ install_tank_skills() {
       case "$target" in
         claude) root="$HOME/.claude/skills" ;;
         codex) root="$HOME/.codex/skills" ;;
-        antigravity) root="$HOME/.gemini/skills" ;;
         *) continue ;;
       esac
       dest_path="$root/$skill/$rel"

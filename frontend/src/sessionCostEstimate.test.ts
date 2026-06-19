@@ -9,6 +9,7 @@ import {
   formatCompactTokens,
   formatComposerCostUsd,
   formatTurnCostUsd,
+  tokenUsageBreakdown,
 } from "./sessionCostEstimate";
 
 function assertNearlyEqual(actual: number | null, expected: number): void {
@@ -103,6 +104,37 @@ test("formats compact token counts", () => {
   expect(formatCompactTokens(1_239_999)).toBe("1.23m");
   expect(formatCompactTokens(1_200_000)).toBe("1.2m");
   expect(formatCompactTokens(12_900_000)).toBe("12.9m");
+});
+
+test("summarizes OpenAI token usage into total input output cached and reasoning", () => {
+  expect(tokenUsageBreakdown({
+    input_tokens: 10_000,
+    input_tokens_details: { cached_tokens: 4_000 },
+    output_tokens: 2_000,
+    reasoning_output_tokens: 500,
+    total_tokens: 12_500,
+  })).toEqual({
+    total: 12_500,
+    input: 10_000,
+    output: 2_000,
+    cachedInput: 4_000,
+    reasoningOutput: 500,
+  });
+});
+
+test("summarizes Claude additive cache usage without hiding cache pressure", () => {
+  expect(tokenUsageBreakdown({
+    input_tokens: 4,
+    cache_read_input_tokens: 157_652,
+    cache_creation_input_tokens: 161_334,
+    output_tokens: 5_016,
+  })).toEqual({
+    total: 324_006,
+    input: 4,
+    output: 5_016,
+    cachedInput: 318_986,
+    reasoningOutput: 0,
+  });
 });
 
 test("context window token count uses active uncached Codex delta for cumulative thread usage", () => {

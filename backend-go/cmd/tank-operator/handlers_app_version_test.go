@@ -44,7 +44,6 @@ func TestAdminAppVersionReportsConfiguredImageTags(t *testing.T) {
 	t.Setenv("SESSION_IMAGE", "romainecr.azurecr.io/claude-container:claude-def456")
 	t.Setenv("SESSION_IMAGE_METADATA", `{"built_at":"2026-06-10T18:00:00Z","git_sha":"abcdef0123456789","pr_number":"1001"}`)
 	t.Setenv("CODEX_SESSION_IMAGE", "romainecr.azurecr.io/codex-container:codex-789")
-	t.Setenv("ANTIGRAVITY_SESSION_IMAGE", "romainecr.azurecr.io/antigravity-container:antigravity-012")
 	t.Setenv("SESSION_REGISTRY_SCOPE", "tank-operator-slot-6")
 	t.Setenv("HOSTNAME", "tank-operator-6d7")
 
@@ -52,9 +51,6 @@ func TestAdminAppVersionReportsConfiguredImageTags(t *testing.T) {
 
 	if body.AppImage.Tag != "app-abc123" || body.SessionImage.Tag != "claude-def456" || body.CodexSessionImage.Tag != "codex-789" {
 		t.Fatalf("tags = %#v", body)
-	}
-	if body.AntigravitySessionImage.Tag != "antigravity-012" {
-		t.Fatalf("antigravity tag = %#v", body.AntigravitySessionImage)
 	}
 	if body.AppImage.Display != "2026-06-11 08:06 UTC / 532dd02 / PR #1049" {
 		t.Fatalf("app display = %q", body.AppImage.Display)
@@ -74,7 +70,6 @@ func TestAdminAppVersionPrefersDurableDeploymentLedger(t *testing.T) {
 	t.Setenv("TANK_OPERATOR_IMAGE", "romainecr.azurecr.io/tank-operator:app-env")
 	t.Setenv("SESSION_IMAGE", "romainecr.azurecr.io/claude-container:claude-env")
 	t.Setenv("CODEX_SESSION_IMAGE", "romainecr.azurecr.io/codex-container:codex-env")
-	t.Setenv("ANTIGRAVITY_SESSION_IMAGE", "romainecr.azurecr.io/antigravity-container:antigravity-env")
 	t.Setenv("SESSION_REGISTRY_SCOPE", "default")
 
 	observedAt := time.Date(2026, 6, 12, 1, 44, 6, 0, time.UTC)
@@ -142,11 +137,10 @@ func TestObservedDeploymentImageVersionsIncludesAllImageKinds(t *testing.T) {
 	t.Setenv("TANK_OPERATOR_IMAGE_METADATA", `{"git_sha":"abcdef0123456789","unknown":"dropped"}`)
 	t.Setenv("SESSION_IMAGE", "romainecr.azurecr.io/claude-container:claude-abc")
 	t.Setenv("CODEX_SESSION_IMAGE", "romainecr.azurecr.io/codex-container:codex-abc")
-	t.Setenv("ANTIGRAVITY_SESSION_IMAGE", "romainecr.azurecr.io/antigravity-container:antigravity-abc")
 
 	records := observedDeploymentImageVersions("", "tank-operator-abc", time.Date(2026, 6, 12, 1, 2, 3, 0, time.UTC))
-	if len(records) != 4 {
-		t.Fatalf("records = %d, want 4", len(records))
+	if len(records) != 3 {
+		t.Fatalf("records = %d, want 3", len(records))
 	}
 	byKind := map[string]pgstore.DeploymentImageVersion{}
 	for _, record := range records {
@@ -157,8 +151,5 @@ func TestObservedDeploymentImageVersionsIncludesAllImageKinds(t *testing.T) {
 	}
 	if got := byKind[pgstore.DeploymentImageKindApp].Metadata["unknown"]; got != "" {
 		t.Fatalf("unknown metadata key survived normalization: %q", got)
-	}
-	if byKind[pgstore.DeploymentImageKindSessionAntigravity].ImageRef == "" {
-		t.Fatalf("antigravity record missing: %#v", byKind)
 	}
 }

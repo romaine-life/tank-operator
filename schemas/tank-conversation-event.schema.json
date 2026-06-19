@@ -103,7 +103,7 @@
     },
     "source": {
       "type": "string",
-      "enum": ["tank", "claude", "codex", "antigravity"]
+      "enum": ["tank", "claude", "codex"]
     },
     "type": {
       "type": "string",
@@ -129,6 +129,8 @@
         "shell_task.updated",
         "shell_task.exited",
         "scheduled_wakeup.updated",
+        "ci_status.updated",
+        "test_provision.updated",
         "turn.awaiting_input",
         "turn.awaiting_input.invocation"
       ]
@@ -145,7 +147,7 @@
     "runtime": {
       "description": "Session-events storage runtime stamp.",
       "type": "string",
-      "enum": ["claude", "codex", "antigravity"]
+      "enum": ["claude", "codex"]
     },
     "producer": {
       "type": "object",
@@ -246,7 +248,8 @@
               "type": "array",
               "minItems": 1,
               "items": { "$ref": "#/$defs/askUserQuestion" }
-            }
+            },
+            "plan": { "type": "string" }
           }
         }
       }
@@ -321,6 +324,14 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/askUserQuestion" }
         },
+        "plan": {
+          "description": "ExitPlanMode plan markdown rendered on the question page above the Approve/Request-changes question. Absent for ordinary AskUserQuestion pauses.",
+          "type": "string"
+        },
+        "asking_turn_final_answer": {
+          "description": "Optional final-answer candidate from the asking turn at the moment the runner paused for AskUserQuestion. Uses the same shape as turn.completed.payload.final_answer so the question page can render the exact assistant item(s) the adapter considered final before the pause.",
+          "$ref": "#/$defs/finalAnswer"
+        },
         "provider_item_id": { "type": "string", "minLength": 1 },
         "timeline_id": { "type": "string", "minLength": 1 }
       }
@@ -352,7 +363,7 @@
         "status": { "$ref": "#/$defs/nonEmptyString" },
         "source": {
           "description": "Optional payload-level provenance for backend-originated self-submit paths. The turn.submitted envelope source remains tank.",
-          "enum": ["schedule-wakeup", "background-task", "launch-dispatch", "agent-continuation"]
+          "enum": ["schedule-wakeup", "background-task", "launch-dispatch", "break-glass-approval", "test-slot-model-approval", "test-slot-drive", "orchestrate-launch"]
         },
         "prompt": {
           "description": "Optional backend-owned prompt text for self-submit paths whose user-facing message is not persisted as a main-transcript user_message.created row. Background-task wake projection uses this as a turn-only system-user message in Turn activity.",
@@ -389,7 +400,7 @@
         "final_answer": { "$ref": "#/$defs/finalAnswer" },
         "background_work_pending": {
           "type": "boolean",
-          "description": "Harness observation stamped by the antigravity runner: true when the agent still has background work (a timer/build/run_command task) running at this terminal, so the user-facing turn is mid-flight, not an end. The activity fold folds a would-be-ready terminal carrying this to the non-summoning scheduled status. See backend-go/cmd/antigravity-runner/ARCHITECTURE.md."
+          "description": "Harness observation stamped by a runner: true when the agent still has background work in flight at this terminal, so the user-facing turn is mid-flight, not an end. The activity fold folds a would-be-ready terminal carrying this to the non-summoning scheduled status."
         }
       }
     },
@@ -678,6 +689,42 @@
           "actor": { "const": "system" },
           "source": { "const": "tank" },
           "payload": { "$ref": "#/$defs/scheduledWakeupPayload" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "ci_status.updated" } }, "required": ["type"] },
+      "then": {
+        "required": ["timeline_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" },
+          "payload": {
+            "type": "object",
+            "required": ["kind", "pr_url", "state"],
+            "properties": {
+              "kind": { "const": "ci_status" },
+              "state": { "enum": ["merged", "ready", "failed", "conflict"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "test_provision.updated" } }, "required": ["type"] },
+      "then": {
+        "required": ["timeline_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" },
+          "payload": {
+            "type": "object",
+            "required": ["kind", "phase", "text"],
+            "properties": {
+              "kind": { "const": "test_provision" },
+              "phase": { "enum": ["creating", "validating", "waiting", "ready", "error"] }
+            }
+          }
         }
       }
     },

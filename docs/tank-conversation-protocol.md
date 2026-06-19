@@ -17,7 +17,7 @@ resurrection or preservation of in-flight agent work after the pod is gone.
 
 Tank sessions should behave like durable conversations with live event
 delivery layered on top. Browser tabs are clients, pod-side runners are
-producers, the Cosmos `session-events` ledger is the replay source of truth,
+producers, the Postgres `session_events` ledger is the replay source of truth,
 NATS JetStream is the durable live work fabric, and React renders a projection
 of Tank conversation events. Provider-specific events are inputs to adapters;
 they are not UI state.
@@ -62,7 +62,6 @@ terminal under its own id, like the AskUserQuestion question shell, paused
 asking turn, and rotated continuation, must be excluded from its candidate
 model or the sweep writes false `turn.command_failed` terminals onto it;
 this happened in production on the sweep's first day, 2026-06-12). Producer-side completeness is not
-completeness. Precedent: tank-operator#1030 introduced `agent-continuation`
 turns (a new source, a new no-user-message turn shape, a new terminal flag)
 with zero read-model changes; the relay rendered as a standalone turn and the
 pending task was invisible at rest until tank-operator#1035 published the
@@ -259,7 +258,6 @@ A conversation projection has these UI states:
   the submitted turn. The provider callback may still be paused internally,
   but the transcript turn boundary is owned by Tank.
 - `scheduled`: the agent parked itself with pending time-bound work (a Claude
-  `ScheduleWakeup`, an Antigravity `schedule`, or a `run_in_background` wake).
   The sibling of
   `needs_input` — a non-terminal pause-phase of a live (simulated) turn that
   resumes on the clock/event, not on the user, so it does **not** summon. A turn
@@ -395,9 +393,14 @@ shows a page selector (disabled at a single-page boundary) and lets the reader
 move between sealed activity pages and question pages. Sealing is a durable
 `order_key`-range concept so deep links and reloads are stable. The
 endpoint also returns `turn_context`, a server-projected copy of the initiating
-durable user message when the turn has one. This context is not an activity
-page entry; it gives `/sessions/{id}/turns/{n}` an orienting prompt header on
-every selected page while the canonical message remains the main transcript row.
+instruction for the turn. Human turns source it from the durable
+`user_message.created` row. Backend-owned continuations that intentionally do
+not create a main-transcript user row, such as background-task wakes, source it
+from the durable `turn.submitted.payload.prompt` and mark it system-authored.
+This context is not an activity page entry; it gives
+`/sessions/{id}/turns/{n}` an orienting prompt header on every selected page
+while the canonical user message, when one exists, remains the main transcript
+row.
 The
 `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
 counter and `TankTurnActiveWithDurableTerminal` alert guard against a regression
@@ -535,21 +538,14 @@ Codex SDK adapter:
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
 | Abort from user interrupt | `turn.interrupted` | Distinct from provider failure. |
 
-Antigravity transcript adapter:
 
 | Provider transcript step | Tank event | Notes |
 | --- | --- | --- |
 | JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
-| First mapped provider step for a turn | `turn.started` | agy writes append-only JSONL transcript files instead of streaming a first-class SDK event. The runner synthesizes the Tank turn start from the first mapped step. |
 | `source=USER_EXPLICIT` | ignored | Tank owns the durable user row. Provider echoes must not enter the transcript. |
 | `source=SYSTEM` history/context steps | ignored | Injected context is not a user-visible transcript item. |
-| `source=SYSTEM`, `type=ERROR_MESSAGE` | `item.failed` | agy uses this shape as the terminal result for invalid provider tool calls, such as disabled MCP tools or invalid artifact paths. It must close the matching pending tool item; dropping it leaves stale pending state and causes later tool results to attach to the wrong title. |
-| `source=MODEL`, `type=PLANNER_RESPONSE`, `tool_calls[]` | `item.started` | Each tool call opens a tool item. Provider item ids include the agy conversation id when available because one root turn can append subagent transcript files with duplicate `step_index` values. |
-| `source=MODEL` tool result step with non-error status | `item.completed` | Completes the matching pending tool item in the same agy conversation. |
 | `source=MODEL` tool result step with `status=ERROR` | `item.failed` | Tool execution failure is item-scoped and does not fail the whole session. |
 | `source=MODEL`, `type=PLANNER_RESPONSE` prose without tool calls | `item.completed` | Assistant message item; the latest such message is the final-answer candidate for `turn.completed`. |
-| agy process success | `turn.completed` | Include usage when loadCodeAssist reports it. |
-| agy process failure | `turn.failed` | Provider/process failure, not a user interrupt. |
 | User interrupt / runner shutdown | `turn.interrupted` | Distinct from provider failure. |
 
 ## Backend API Sketch
@@ -728,7 +724,6 @@ by the launch-time create boundary, so this endpoint writes `turn.submitted`
 only.
 Command ack happens only after the corresponding durable terminal event is
 published. Provider self-scheduled wakeups are backend-owned durable state:
-the Claude runner extracts `ScheduleWakeup` tool_use calls and the Antigravity
 runner extracts `schedule` tool calls, then registers them through
 `POST /api/internal/sessions/{session_id}/scheduled-wakeups` with the provider
 item id as the idempotency key. The orchestrator claims due rows from
@@ -767,8 +762,9 @@ session is no longer `Active`; otherwise it writes a normal `turn.submitted`
 boundary event without a synthetic `user_message.created` prompt and publishes
 `submit_turn` with `source=background-task`. The `turn.submitted` event remains
 `source=tank` per the event schema and carries `payload.source=background-task`
-as provenance plus `payload.prompt` as the existing system-user wake text for
-Turn activity projection. The wake turn is a continuation mechanic inside the
+as provenance plus `payload.prompt` as the existing system-authored wake text
+for Turn activity projection and Turn-page prompt context. The wake turn is a
+continuation mechanic inside the
 simulated turn: its activity shell stays in the Turns view, not the settled main
 transcript, and its wake prompt is folded into the originating Turn activity as
 an `authorKind=system` user-side message. The earlier turn that parked on the still
@@ -1113,11 +1109,16 @@ do not sit open forever in the first place.
 
 - **Claude**: the runner exposes a Tank-owned SDK MCP server named `tank` and
   aliases provider `AskUserQuestion` calls to `mcp__tank__AskUserQuestion`.
-  The MCP handler publishes `turn.awaiting_input` and keeps that tool call
-  pending. When `input_reply` arrives, the runner resolves the MCP call with
-  the user's answers so the provider turn continues. Claude SDK permissions run
-  in bypass mode; AskUserQuestion is not implemented through permission
-  interception.
+  The MCP tool input accepts either the canonical `questions` array or a
+  top-level `{question, options, ...}` shorthand for a single question. The
+  runner normalizes both forms into the durable Tank conversation protocol's
+  `questions[]` payload. The MCP handler publishes `turn.awaiting_input` and
+  keeps that tool call pending. When `input_reply` arrives, the runner resolves
+  the MCP call with the user's answers so the provider turn continues; any image
+  the user attached to the answer is read from `/workspace` and returned as an
+  inline image content block on that tool result (see `display_attachments`
+  below). Claude SDK permissions run in bypass mode; AskUserQuestion is not
+  implemented through permission interception.
 - **Codex** (`codex_gui`): on the App Server's `item/tool/requestUserInput`,
   the runner publishes `turn.awaiting_input`, keeps the JSON-RPC request
   pending, then responds with the submitted answers when `input_reply` arrives.
@@ -1140,7 +1141,11 @@ Body:
   "provider_item_id": "toolu_...",
   "timeline_id": "item_...",
   "answers": { "Which auth method should we use?": ["OAuth"] },
-  "annotations": { "Which auth method should we use?": { "notes": "matches the existing IdP" } }
+  "annotations": { "Which auth method should we use?": { "notes": "matches the existing IdP" } },
+  "display_attachments": [
+    { "label": "Screenshot 1", "name": "screenshot.png", "kind": "image",
+      "path": "screenshots/3.png", "abs_path": "/workspace/screenshots/3.png", "size": 40213 }
+  ]
 }
 ```
 
@@ -1164,6 +1169,22 @@ page's answered state is derived durably — the projection
 marks it answered by finding a later `turn.input_answered` event whose
 `payload.question_timeline_id` matches the question — never from browser-local
 optimism.
+
+`display_attachments` is optional and carries any files the user attached to
+the answer (a pasted screenshot is the main case), the same shape and upload
+plumbing as a normal turn's `display_attachments` — the SPA uploads bytes to
+`/files/upload` (landing at `/workspace/screenshots/…`) and posts only the
+attachment metadata here. The handler normalizes it and threads it into all
+three answer sinks: the durable `turn.input_answered` payload (`attachments`),
+the Tank-visible `user_message.created` continuation turn (so the transcript
+renders the attachment chip on the answer bubble), and the `input_reply`
+command's `attachments`. The bytes never travel the bus — only path metadata
+does, and the runner reads the file from the shared `/workspace` at delivery.
+The Claude runner returns an image as an inline image content block in the
+resolved AskUserQuestion tool result (a non-image as a path line, a
+missing/oversize/unreadable image as a visible note) so the screenshot is in
+the model's context, not silently dropped. `tank_runner_input_reply_attachment_total{kind,result}`
+counts the outcome.
 
 Tank-canonical AskUserQuestion question shape:
 

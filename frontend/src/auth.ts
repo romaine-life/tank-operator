@@ -129,6 +129,7 @@ async function refreshStoredToken(): Promise<string | null> {
 export type StreamTicketRequest =
   | { stream: "session-list"; sessionScope?: string }
   | { stream: "session-events"; sessionId: string; sessionScope?: string }
+  | { stream: "orchestration-events"; sessionId: string; sessionScope?: string }
   | { stream: "pinned-repos"; sessionScope?: string };
 
 type BrowserNativeTicketRequest =
@@ -145,7 +146,9 @@ async function authedBrowserNativeURL(
     body: JSON.stringify({
       stream: request.stream,
       ...(request.sessionScope ? { session_scope: request.sessionScope } : {}),
-      ...(request.stream === "session-events" || request.stream === "file-raw"
+      ...(request.stream === "session-events" ||
+      request.stream === "orchestration-events" ||
+      request.stream === "file-raw"
         ? { session_id: request.sessionId }
         : {}),
       ...(request.stream === "file-raw" ? { path: request.path } : {}),
@@ -231,9 +234,7 @@ export async function bootstrapAuth(): Promise<SessionUser | null> {
 export async function startLogin(): Promise<void> {
   const config = await fetchConfig();
   const current = new URL(window.location.href);
-  const callbackTarget = current.searchParams.has("github_install_state")
-    ? `${current.origin}${current.pathname}${current.search}`
-    : `${current.origin}${current.pathname}`;
+  const callbackTarget = `${current.origin}${current.pathname}${current.search}`;
   const callbackURL = encodeURIComponent(callbackTarget);
   window.location.href = `${config.auth_url}/sign-in/microsoft?callbackURL=${callbackURL}`;
 }

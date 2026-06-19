@@ -41,7 +41,7 @@ type SessionImageOverrides interface {
 	// set" (the caller falls back to the configured image). A non-nil error
 	// means the lookup failed; the caller also falls back rather than failing
 	// session creation.
-	Get(ctx context.Context, scope string) (claudeImage, codexImage, antigravityImage string, ok bool, err error)
+	Get(ctx context.Context, scope string) (claudeImage, codexImage string, ok bool, err error)
 }
 
 // SessionRegistry is a write-capable registry interface.
@@ -51,12 +51,16 @@ type SessionRegistry interface {
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
 	SetOpenTarget(ctx context.Context, email, sessionID, target string) error
+	SetRunConfig(ctx context.Context, email, sessionID, model, effort string) error
 	SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error
 	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
+	SetSpokeConfig(ctx context.Context, email, sessionID string, config map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
+	AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
+	SetParentSession(ctx context.Context, email, sessionID, parentID string) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
@@ -99,7 +103,6 @@ type Manager struct {
 	apiProxyIP                string
 	claudeSecondaryAPIProxyIP string
 	codexAPIProxyIP           string
-	antigravityAPIProxyIP     string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -112,10 +115,6 @@ type ManagerOptions struct {
 	APIProxyHost                string
 	ClaudeSecondaryAPIProxyHost string
 	CodexAPIProxyHost           string
-	// AntigravityAPIProxyHost is the in-cluster antigravity-api-proxy Service
-	// (fronts cloudcode-pa.googleapis.com). agy_gui pods host-alias the Google
-	// data-plane host to this proxy so the refresh token stays in the proxy.
-	AntigravityAPIProxyHost string
 	// ImageOverrides, when non-nil, lets the orchestrator repoint NEW session
 	// pods at a branch-built session image for its (test-slot) scope. Left nil
 	// in production. OnImageOverrideApplied is an optional metrics/log hook
@@ -154,9 +153,6 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	if opts.CodexAPIProxyHost != "" {
 		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
 	}
-	if opts.AntigravityAPIProxyHost != "" {
-		m.antigravityAPIProxyIP = resolveIP(opts.AntigravityAPIProxyHost)
-	}
 	return m
 }
 
@@ -173,17 +169,17 @@ func resolveIP(host string) string {
 // session-image override when one is set for this orchestrator's scope. This is
 // the test-slot "point the slot at a branch session image" mechanism
 // (docs/testing.md): newly-created sessions boot the override image the same way
-// production boots its chart-pinned image — no runtime overlay, no fidelity gap.
+// production boots its chart-pinned image — no runtime overlay, no accuracy gap.
 //
 // It is a deliberate no-op when no resolver is wired (production never wires
 // one) or for the production scope, so prod always stamps the configured
-// SESSION_IMAGE / CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE. A lookup
+// SESSION_IMAGE / CODEX_SESSION_IMAGE. A lookup
 // error falls back to the pinned image rather than failing session creation.
 func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.ManifestOptions, mode string) {
 	if m.imageOverrides == nil || m.scope == "" || m.scope == defaultSessionScope {
 		return
 	}
-	claudeImage, codexImage, antigravityImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
+	claudeImage, codexImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
 	if err != nil {
 		slog.Warn("session image override lookup failed; using pinned image",
 			"scope", m.scope, "mode", mode, "error", err)
@@ -193,13 +189,7 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 		return
 	}
 	kind := ""
-	if sessionmodel.IsAntigravityMode(mode) {
-		if antigravityImage != "" {
-			opts.AntigravitySessionImage = antigravityImage
-			opts.AntigravitySessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
-			kind = "antigravity"
-		}
-	} else if sessionmodel.IsCodexMode(mode) {
+	if sessionmodel.IsCodexMode(mode) {
 		if codexImage != "" {
 			opts.CodexSessionImage = codexImage
 			opts.CodexSessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
@@ -248,6 +238,9 @@ type CreateOptions struct {
 	// the registry row and threads them into the pod manifest for the
 	// repo-cloner init container.
 	Repos []string
+	// RepoBases optionally overrides the PR base branch per repo slug. It is
+	// threaded to repo-cloner for orchestration integration-target phases.
+	RepoBases map[string]string
 	// Name is the optional display title supplied by the workspace title
 	// bar before the create request is sent. It is normalized once here
 	// and becomes part of the initial durable sessions row.
@@ -275,6 +268,11 @@ type CreateOptions struct {
 	// pod stays terminal; this is a new session lifecycle, not a revival. See
 	// docs/session-transcript-capture.md.
 	ResurrectSourceSessionID string
+	// ParentSessionID is the origin session that spawned this one (the
+	// X-Tank-Origin-Session-Id on the spawning MCP call). Persisted on the
+	// child row at create so the sidebar nests it under its origin from the
+	// first snapshot/row-update — no reflow. Empty for human/splash creates.
+	ParentSessionID string
 }
 
 // Create creates a new session pod and registers it in the registry.
@@ -293,6 +291,10 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if repos == nil {
 		repos = []string{}
 	}
+	repoBases := opts.RepoBases
+	if repoBases == nil {
+		repoBases = map[string]string{}
+	}
 	capabilities := opts.Capabilities
 	if capabilities == nil {
 		capabilities = []string{}
@@ -304,6 +306,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 	model := opts.Model
 	effort := opts.Effort
+	parentSessionID := strings.TrimSpace(opts.ParentSessionID)
 	// normalizedName is the optional user-supplied title (nil/empty when the
 	// user gave none). storedName is the resolved NON-NULL value persisted on
 	// the row/Info — assigned the canonical SessionDisplayName default below
@@ -323,9 +326,6 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 	if m.codexAPIProxyIP == "" {
 		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
-	}
-	if m.antigravityAPIProxyIP == "" {
-		m.antigravityAPIProxyIP = resolveIP(os.Getenv("ANTIGRAVITY_API_PROXY_HOST"))
 	}
 
 	sessionID, err := m.nextSessionID(ctx)
@@ -351,9 +351,9 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.ClaudeSecondaryAPIProxyIP = m.claudeSecondaryAPIProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
-	manifestOpts.AntigravityAPIProxyIP = m.antigravityAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
+	manifestOpts.RepoBases = repoBases
 	manifestOpts.Name = &storedName
 	manifestOpts.Capabilities = capabilities
 	manifestOpts.Model = model
@@ -417,6 +417,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Effort:               effort,
 			AgentAvatarID:        assignment.AgentAvatarID,
 			SystemAvatarID:       assignment.SystemAvatarID,
+			ParentSessionID:      parentSessionID,
 		}); regErr != nil {
 			// Abort BEFORE the pod exists. The lifecycle contract is
 			// "Create produces a durable session row before user-visible
@@ -483,6 +484,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		Effort:               effort,
 		AgentAvatarID:        assignment.AgentAvatarID,
 		SystemAvatarID:       assignment.SystemAvatarID,
+		ParentSessionID:      parentSessionID,
 	}
 
 	// Refresh the registry row with the K8s-assigned created_at so the
@@ -507,6 +509,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Effort:               effort,
 			AgentAvatarID:        assignment.AgentAvatarID,
 			SystemAvatarID:       assignment.SystemAvatarID,
+			ParentSessionID:      parentSessionID,
 		}); regErr != nil {
 			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -541,6 +544,29 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 			slog.Warn("delete registry mark-deleted failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return nil
+}
+
+// ReapPod deletes a session's pod to STOP it — e.g. a crash-looping runner that
+// reported provider-fatal — without marking the registry row deleted. Unlike
+// Delete, the session stays visible as Failed (its durable terminal state); only
+// the kubelet-restarting pod is removed so the crash-loop ends. Idempotent: a
+// missing pod is success.
+func (m *Manager) ReapPod(ctx context.Context, owner, sessionID string) error {
+	pod, err := m.findPodBySessionID(ctx, owner, sessionID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if pod == nil {
+		return nil
+	}
+	if delErr := m.client.CoreV1().Pods(m.namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); delErr != nil && !k8serrors.IsNotFound(delErr) {
+		return fmt.Errorf("reap pod: %w", delErr)
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return nil
@@ -597,6 +623,28 @@ func (m *Manager) SetOpenTarget(ctx context.Context, owner, sessionID, target st
 	if m.registry != nil {
 		if regErr := m.registry.SetOpenTarget(ctx, owner, sessionID, target); regErr != nil {
 			slog.Warn("set-open-target registry update failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// SetRunConfig persists a mid-session change to the user-chosen model/effort
+// for an SDK chat session. Like SetOpenTarget it is registry-only durable
+// state — no pod annotation is patched. The next submit_turn carries the new
+// values (the turn handler overrides from the registered config) and the
+// runner re-pins on the next turn at an idle boundary. Validation lives in the
+// HTTP handler; the manager persists, publishes the row, and returns refreshed
+// Info the same way SetOpenTarget's tail does.
+func (m *Manager) SetRunConfig(ctx context.Context, owner, sessionID, model, effort string) (Info, error) {
+	if m.registry != nil {
+		if regErr := m.registry.SetRunConfig(ctx, owner, sessionID, model, effort); regErr != nil {
+			slog.Warn("set-run-config registry update failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}
@@ -741,6 +789,20 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 		})
 }
 
+// SetSpokeConfig replaces the sessions.spoke_config payload persisted by the
+// orchestrate endpoint and publishes the updated row to the sidebar stream.
+// It does not patch pod annotations: spoke_config is hub-side only, read
+// from the durable row. Returns a refreshed Info the same way SetCloneState does.
+func (m *Manager) SetSpokeConfig(ctx context.Context, owner, sessionID string, config map[string]any) (Info, error) {
+	if m.registry != nil {
+		if err := m.registry.SetSpokeConfig(ctx, owner, sessionID, config); err != nil {
+			return Info{}, err
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
 // SetCloneState replaces the sessions.clone_state payload written by
 // the repo-cloner init container and publishes the updated row to the
 // sidebar stream. It does not patch pod annotations: clone_state is a
@@ -755,12 +817,38 @@ func (m *Manager) SetCloneState(ctx context.Context, owner, sessionID string, st
 	return m.GetByOwner(ctx, owner, sessionID)
 }
 
+// AppendSpawnedSession records that parentSessionID (owned by owner)
+// spawned the session described by ref, for the parent's session-bar
+// "spawned sessions" chip. Append-only and id-deduped at the registry so a
+// spawn retry is idempotent. Republishes the parent row so an open sidebar
+// updates live; this is best-effort — the durable column is the source of
+// truth and the SPA's next SSE reconnect catch-up re-reads it. Unlike the
+// Set*State mutators it patches no pod annotation: lineage is a durable UI
+// surface, never runtime input for the parent's container. The registry
+// matches the parent on its full (email, session_scope, session_id) key, so
+// lineage lands for same-scope spawns (spawn_run_session); cross-scope
+// test-slot lineage needs the origin scope plumbed through (a follow-up).
+func (m *Manager) AppendSpawnedSession(ctx context.Context, owner, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error {
+	if m.registry == nil {
+		return nil
+	}
+	if err := m.registry.AppendSpawnedSession(ctx, owner, parentSessionID, ref); err != nil {
+		return err
+	}
+	m.publishRow(ctx, owner, parentSessionID)
+	return nil
+}
+
 type runtimeConfigRegistry interface {
 	SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error
 }
 
 type runtimeContextWindowRegistry interface {
 	SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error
+}
+
+type runtimeProviderSessionRegistry interface {
+	SetRuntimeProviderSessionID(ctx context.Context, email, sessionID, providerSessionID string) error
 }
 
 type providerRateLimitRegistry interface {
@@ -832,6 +920,21 @@ func (m *Manager) SetRuntimeContextWindow(ctx context.Context, owner, sessionID 
 	return m.GetRegisteredByOwner(ctx, owner, sessionID)
 }
 
+// SetRuntimeProviderSessionID records the provider-native conversation id the
+// runner observed. Claude runners feed this id back into explicit resume on a
+// future process start, so the value must survive pod-local JSONL loss.
+func (m *Manager) SetRuntimeProviderSessionID(ctx context.Context, owner, sessionID, providerSessionID string) (Info, error) {
+	registry, ok := m.registry.(runtimeProviderSessionRegistry)
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	if err := registry.SetRuntimeProviderSessionID(ctx, owner, sessionID, providerSessionID); err != nil {
+		return Info{}, err
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetRegisteredByOwner(ctx, owner, sessionID)
+}
+
 // SetProviderRateLimitInfo records provider-specific rate-limit metadata
 // reported by the session runner and publishes the updated session row.
 func (m *Manager) SetProviderRateLimitInfo(ctx context.Context, owner, sessionID string, info map[string]any) (Info, error) {
@@ -861,6 +964,100 @@ func (m *Manager) ReorderSessions(ctx context.Context, owner string, orderedIDs 
 		m.publishRow(ctx, owner, id)
 	}
 	return nil
+}
+
+// SetParentSession sets or clears a session's durable parent_session_id — the
+// child→parent edge the sidebar nests on (see arrangeSessionTree and
+// docs/features/session-bar/capabilities.md). This is the explicit user-driven
+// mutation behind drag-to-nest and the "Un-nest" menu action; it is distinct
+// from the write-once stamp Create applies for agent-spawned children. An empty
+// parentID clears nesting (un-nest) and returns the row to the top level.
+//
+// The durable tree is kept acyclic on write even though the renderer tolerates
+// cycles: the parent must be a different, owner-visible, same-scope session, and
+// the session being nested must not appear in the parent's ancestor chain. Depth
+// is deliberately NOT clamped here — the stored edge stays the literal direct
+// parent, and arrangeSessionTree clamps deeper lineage to a single tier exactly
+// as it already does for an agent sub-session that spawns its own children. The
+// parent-side spawned_sessions chip is untouched; manual nesting is organization,
+// not spawn lineage.
+func (m *Manager) SetParentSession(ctx context.Context, owner, sessionID, parentID string) (Info, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	parentID = strings.TrimSpace(parentID)
+	if sessionID == "" {
+		return Info{}, ErrNotFound
+	}
+	// The child must exist, be owned, and be sidebar-visible.
+	if _, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err != nil {
+		return Info{}, err
+	}
+	if parentID != "" {
+		if parentID == sessionID {
+			return Info{}, ErrInvalidParent
+		}
+		// The parent must be a visible, owned, same-scope session. A cross-scope
+		// or missing target simply isn't found within this owner/scope and is
+		// rejected rather than persisted as a dangling edge.
+		if _, err := m.GetRegisteredByOwner(ctx, owner, parentID); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return Info{}, ErrInvalidParent
+			}
+			return Info{}, err
+		}
+		cyclic, err := m.parentChainContains(ctx, owner, parentID, sessionID)
+		if err != nil {
+			return Info{}, err
+		}
+		if cyclic {
+			return Info{}, ErrInvalidParent
+		}
+	}
+	if m.registry != nil {
+		if regErr := m.registry.SetParentSession(ctx, owner, sessionID, parentID); regErr != nil {
+			return Info{}, regErr
+		}
+	}
+	// Republish so every open session list converges on the new nesting over the
+	// row-update stream without a manual refresh (session-bar contract).
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// parentChainContains walks upward from startID following parent_session_id and
+// reports whether targetID appears in the chain. Used to reject a manual nest
+// that would close a cycle. Durable lineage is at most a couple of hops, and a
+// visited set defends against any pre-existing cyclic data so the walk always
+// terminates. Stub registries without a getter cannot walk and conservatively
+// report no cycle (they have no durable graph to corrupt).
+func (m *Manager) parentChainContains(ctx context.Context, owner, startID, targetID string) (bool, error) {
+	getter, ok := m.registry.(sessionRegistryGetter)
+	if !ok {
+		return false, nil
+	}
+	visited := map[string]struct{}{}
+	cur := strings.TrimSpace(startID)
+	for cur != "" {
+		if cur == targetID {
+			return true, nil
+		}
+		if _, seen := visited[cur]; seen {
+			return false, nil
+		}
+		visited[cur] = struct{}{}
+		record, found, err := getter.Get(ctx, owner, cur)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, nil
+		}
+		cur = strings.TrimSpace(record.ParentSessionID)
+	}
+	return false, nil
 }
 
 func (m *Manager) patchStateAnnotations(

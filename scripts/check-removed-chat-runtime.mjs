@@ -4,6 +4,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  collectTestSlotProvisioningFailures,
+  TEST_SLOT_PROVISIONING_FAILURE_HINT,
+} from "./check-removed-test-slot-agent-provisioning.mjs";
+import {
+  collectHotSwapGateFailures,
+  HOT_SWAP_GATE_FAILURE_HINT,
+} from "./check-removed-hot-swap-verify-gate.mjs";
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const ignoredDirs = new Set([
@@ -47,17 +56,6 @@ const ignoredRelativePaths = new Set([
   // confirmation that the route is gone). Excluded so the migration
   // guard doesn't fire on its own enforcement.
   "backend-go/cmd/tank-operator/observability_test.go",
-  // Negative tests that assert the retired Gemini modes no longer have
-  // workspace/repo support. The guard below blocks live-code reintroduction.
-  "backend-go/cmd/tank-operator/handlers_repos_test.go",
-  "frontend/src/repos.test.ts",
-  "frontend/src/sessionWorkspace.test.ts",
-  // Antigravity uses the Gemini CLI skill directory as its current agent-native
-  // skill install target. These files test/route that sanctioned Antigravity
-  // skill scope; they do not reopen the retired raw Gemini provider/session
-  // surface guarded below.
-  "backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go",
-  "k8s/session-config/install-tank-skills.sh",
   // The session-list redesign plan names the retired packages as
   // migration targets — it is documentation of the deletion, not a
   // resurrection. Same exemption shape as docs/tank-conversation-protocol.md.
@@ -97,12 +95,6 @@ const ignoredRelativePaths = new Set([
   // runbook understands what was retired and why.
   "k8s/templates/observability.yaml",
   "k8s/templates/grafana-dashboard.yaml",
-  // The session-lifecycle capability ledger names the retired antigravity
-  // credential-mount surface (ANTIGRAVITY_CRED_FILE, /var/run/antigravity-cred,
-  // AntigravityCredentialsSecret) in its "Evidence" prose so a future agent can
-  // audit/trace the deletion. Prose-not-code, same exemption shape as
-  // docs/tank-conversation-protocol.md; the guard blocks live-code reintroduction.
-  "docs/features/session-lifecycle/capabilities.md",
 ]);
 
 const blocked = [
@@ -135,7 +127,22 @@ const blocked = [
   { name: "retired Tank order key storage name", pattern: /\btank_order_key\b/ },
   { name: "retired Tank event sequence storage name", pattern: /\btank_event_seq\b/ },
   { name: "retired frontend activity poll interval", pattern: /\bPOLL_INTERVAL_MS\b/ },
+  // Mid-session model/effort re-pin replaced the pod-lifetime seal that
+  // silently ignored later model/effort changes. The claude-runner now tears
+  // down + rebuilds query() with provider-session resume; codex re-resumes its
+  // thread. Block the retired "ignore the override" metric/identifier so a
+  // future change cannot quietly restore the silent-divergence path. See
+  // docs/features/agent-runners/contract.md.
+  {
+    name: "retired pod-lifetime model seal (silent override-ignore)",
+    pattern: /optionsOverrideIgnoredTotal|tank_runner_options_override_ignored_total/,
+  },
   { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
+  // PR-lane approval requests were moved into the existing shield approval menu
+  // in #1285. The old standalone panel lived in composerAbove and opened just
+  // above the chat composer; keep that separate above-composer popup retired.
+  { name: "retired above-composer PR-lane approval popup", pattern: /\bPRLaneApprovalIndicator\b/ },
+  { name: "retired above-composer PR-lane approval CSS", pattern: /\.pr-lane-approval\b/ },
   // tank-operator#83 — sidebar session-list moved from wake-and-refetch
   // polling onto a durable typed-event ledger + cursor-resumable SSE.
   // Block reintroduction of every name that participated in the prior
@@ -175,6 +182,12 @@ const blocked = [
   // builders use `turns/` + slash and are intentionally not matched).
   { name: "retired array-position turn label", pattern: /`Turn \$\{[^}]*\bindex\b[^}]*\}`/ },
   { name: "retired turn_<uuid> public route segment", pattern: /\/turns\$\{turnId/ },
+  // The Turns selector must source its turn set from the durable turn directory
+  // (turnDirectoryEntries via /turns/directory), never from the bounded
+  // transcript window. buildTurnViewItems(renderedEntries, …) was the window
+  // derivation that hid every turn older than the ~24-row tail; the cutover
+  // feeds it turnViewSourceEntries (directory-owned set, live-overlaid).
+  { name: "window-derived Turns selector", pattern: /buildTurnViewItems\(\s*renderedEntries\b/ },
   { name: "retired runner Cosmos event module", pattern: /\b(?:agent|codex)-runner\/src\/cosmos\.ts\b/ },
   { name: "retired runner Cosmos tests", pattern: /\bcosmos\.test\.ts\b/ },
   { name: "retired session Azure config secret", pattern: /\bSESSION_AZURE_CONFIG_SECRET\b/ },
@@ -353,11 +366,18 @@ const blocked = [
   // tank-operator#1128 stage 3: GUI session runner sidecars authenticate
   // to NATS through auth_callout with NATS_USER=<storage key> and
   // NATS_PASSWORD_FILE=<projected auth.romaine.life SA token>. The shared
-  // tank-nats-auth token remains only for orchestrator/callout bootstrap and
-  // pre-stage-3 pods aging out through the callout's transition grant.
+  // tank-nats-auth remains only as the orchestrator static-user password.
   {
     name: "removed shared NATS token injection into session runner env",
-    pattern: /(runnerEnv|codexRunnerEnv|antigravityRunnerEnv)[\s\S]{0,600}"name":\s*"NATS_TOKEN"/,
+    pattern: /(runnerEnv|codexRunnerEnv)[\s\S]{0,600}"name":\s*"NATS_TOKEN"/,
+  },
+  {
+    name: "removed NATS callout shared-token grant env",
+    pattern: /\bNATS_CALLOUT_LEGACY_TOKEN\b/,
+  },
+  {
+    name: "removed NATS callout unrestricted shared-token user",
+    pattern: /\blegacy-shared-token\b/,
   },
   // Turn-complete sound was per-pane (declared inside ChatPane in
   // App.tsx) before the cutover that moved it onto the always-on
@@ -856,47 +876,6 @@ const blocked = [
     name: "retired Hermes bridge metrics",
     pattern: /\btank_hermes_[a-z0-9_]+\b/,
   },
-  // Gemini retirement: removed because its billing system is not usable for
-  // Tank's hosted-session economics. Block every live path that could recreate
-  // the provider surface: session modes, runner package/artifact names,
-  // Helm/API-proxy resources, credential env/secret names, Google model/API
-  // hosts, frontend provider labels, and npm packages.
-  {
-    name: "retired Gemini session mode",
-    pattern: /\bgemini_(?:gui|config|test)\b/,
-  },
-  {
-    name: "retired Gemini runner path",
-    pattern: /\bgemini-runner\b|\bgemini_runner\b/,
-  },
-  {
-    name: "retired Gemini API proxy resource",
-    pattern: /\bgemini-api-proxy\b|\bgeminiApiProxy\b/,
-  },
-  {
-    name: "retired Gemini credential wiring",
-    pattern: /\bGEMINI_[A-Z0-9_]+\b|\bgemini-credentials\b|\bgeminiCredentials\b/,
-  },
-  {
-    name: "retired Gemini provider source",
-    pattern: /["']gemini["']|["']Gemini["']/,
-  },
-  {
-    // The retired raw-Gemini-API provider fronted generativelanguage /
-    // aiplatform; those stay blocked. cloudcode-pa.googleapis.com was removed
-    // from this set once the LIVE Antigravity product (agy / Gemini-Ultra
-    // subscription — a distinct, sanctioned provider) began fronting it through
-    // the antigravity-api-proxy for the credential-boundary fix. The retired
-    // provider's distinctive surface (gemini-api-proxy, GEMINI_* creds,
-    // gemini_gui mode, @google/genai) remains blocked by the rules around this
-    // one, so this narrowing does not reopen the retired path.
-    name: "retired Gemini Google API host",
-    pattern: /\bgenerativelanguage\.googleapis\.com\b|\baiplatform\.googleapis\.com\b/,
-  },
-  {
-    name: "retired Gemini npm package",
-    pattern: /@google\/(?:genai|gemini-cli)\b/,
-  },
   // Pi agent retirement: block reintroduction of the Pi runtime modes,
   // image tags, and build settings.
   {
@@ -919,28 +898,6 @@ const blocked = [
     name: "retired pi-container image identifier",
     pattern: /\bpi-container\b/,
   },
-  // Antigravity credential-boundary fix: the real Google OAuth blob used to be
-  // mounted into the model/tool-capable antigravity-runner container (the
-  // `antigravity-cred` Secret volume at /var/run/antigravity-cred, read via the
-  // ANTIGRAVITY_CRED_FILE env, copied into agy's home by the launch script).
-  // That refresh-token-on-the-model-filesystem path was the bug; agy now gets a
-  // placeholder + antigravity-api-proxy injection (docs/api-proxy-auth.md).
-  // Block every name from the old mount so a refactor can't quietly remount the
-  // real Secret into the session pod. These patterns are precise enough not to
-  // match the live `antigravity-credentials` Secret (proxy-side only) or the
-  // ManifestOptions image fields.
-  {
-    name: "retired ANTIGRAVITY_CRED_FILE session-pod env",
-    pattern: /\bANTIGRAVITY_CRED_FILE\b/,
-  },
-  {
-    name: "retired /var/run/antigravity-cred Secret mount path",
-    pattern: /\/var\/run\/antigravity-cred\b/,
-  },
-  {
-    name: "retired AntigravityCredentialsSecret manifest option",
-    pattern: /\bAntigravityCredentialsSecret\b/,
-  },
 ];
 
 const failures = [];
@@ -959,52 +916,20 @@ for await (const filePath of walk(repoRoot)) {
   }
 }
 
-// Enforce that the antigravity-runner MUST use the PTY wrapper to run the agy binary.
-try {
-  const runnerMainPath = path.join(repoRoot, "backend-go/cmd/antigravity-runner/main.go");
-  const runnerMainText = await fs.readFile(runnerMainPath, "utf8");
-  if (!runnerMainText.includes("pty.Start(")) {
-    failures.push("backend-go/cmd/antigravity-runner/main.go: Architecture violation: antigravity-runner must use pty.Start() to wrap the agy binary in a pseudo-terminal (PTY) to prevent hangs.");
-  }
+// Retired agent-facing test-slot *provisioning* steps (the rewritten /test
+// skill + testing docs). Scoped scan lives in its own module; merged here so it
+// rides this guard's CI wiring (k8s/**, docs/**, scripts/**) without a separate
+// workflow step.
+for (const failure of await collectTestSlotProvisioningFailures()) {
+  failures.push(`${failure} — ${TEST_SLOT_PROVISIONING_FAILURE_HINT}`);
+}
 
-  // Enforce the long-running-agent harness contract: the antigravity-runner must
-  // NOT own or fire a Tank clock for agy. agy self-continues; the runner relays via
-  // /agent-continuation. Reintroducing a scheduled-wakeup / background-task-wake
-  // registration FROM THE RUNNER is the puppeteer regression that cost ~20 prior
-  // attempts. This check is scoped to the runner's main.go — /scheduled-wakeups and
-  // /background-task-wakes are legitimate orchestrator endpoints elsewhere — and the
-  // wake endpoints are matched as quoted string literals so the runner's prose
-  // comments (which name the retired path) do not trip it. See
-  // backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
-  const forbiddenRunnerWakeContract = [
-    { name: "registerScheduledWakeup inject function", pattern: /\bregisterScheduledWakeup\b/ },
-    { name: "registerBackgroundTaskWake inject function", pattern: /\bregisterBackgroundTaskWake\b/ },
-    { name: "maybeRegisterScheduleWakeup timer inject", pattern: /\bmaybeRegisterScheduleWakeup\b/ },
-    { name: "scheduled-wakeups registration endpoint literal", pattern: /["'`][^"'`]*\/scheduled-wakeups\b/ },
-    { name: "background-task-wakes registration endpoint literal", pattern: /["'`][^"'`]*\/background-task-wakes\b/ },
-  ];
-  for (const rule of forbiddenRunnerWakeContract) {
-    const match = rule.pattern.exec(runnerMainText);
-    if (!match) continue;
-    const { line, column } = lineAndColumn(runnerMainText, match.index);
-    failures.push(`backend-go/cmd/antigravity-runner/main.go:${line}:${column} antigravity self-continuation contract: ${rule.name} — agy self-continues; relay via /agent-continuation, never a Tank-owned wake (ARCHITECTURE.md).`);
-  }
-  if (!runnerMainText.includes("/agent-continuation")) {
-    failures.push("backend-go/cmd/antigravity-runner/main.go: antigravity self-continuation contract: the runner must POST /agent-continuation to relay agy's idle self-continuation (ARCHITECTURE.md).");
-  }
-
-  // Retired ToS auto-accept: the runner must not sniff PTY stdout for
-  // consent screens and replay keystrokes (it raced real turn input and
-  // broke on TUI copy changes). Onboarding/consent state is seeded by
-  // antigravity-container/antigravity-runner-launch.sh into both agy config
-  // dirs; extend the seeded config files instead of scripting the TUI.
-  for (const signature of ["Terms of Service", "\\x1b["]) {
-    if (runnerMainText.includes(signature)) {
-      failures.push(`backend-go/cmd/antigravity-runner/main.go: Architecture violation: retired TUI keystroke scripting reintroduced (${JSON.stringify(signature)}); seed onboarding state in antigravity-runner-launch.sh instead.`);
-    }
-  }
-} catch (err) {
-  failures.push(`backend-go/cmd/antigravity-runner/main.go: Could not read runner main file: ${err.message}`);
+// Retired governed-merge gate names (the renamed hot-swap verify endpoint and
+// its handler/types/funcs/proxy caller). Scoped scan lives in its own module;
+// merged here so it rides this guard's CI wiring (backend-go/**,
+// claude-container/**, docs/**, scripts/**) without a separate workflow step.
+for (const failure of await collectHotSwapGateFailures()) {
+  failures.push(`${failure} — ${HOT_SWAP_GATE_FAILURE_HINT}`);
 }
 
 if (failures.length > 0) {
