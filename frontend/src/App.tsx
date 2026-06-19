@@ -351,6 +351,7 @@ import {
 } from "./sessionStore";
 import { arrangeSessionTree } from "./sessionTree";
 import { useSessionDrag, type DropDecision } from "./sessionDrag";
+import { reportDragStep } from "./dragTelemetry";
 import {
   decideFollowupSubmit,
   describeRunBlock,
@@ -27291,9 +27292,11 @@ function AuthenticatedApp() {
     setSessions(ordered);
     sessionsRef.current = ordered;
     if (plan.parentChanged) {
+      reportDragStep("persist", "parent");
       void persistSessionParent(plan.movedId, plan.newParentId);
     }
     if (plan.orderChanged) {
+      reportDragStep("persist", "order");
       void persistSessionOrder(plan.nextOrder);
     }
   };
@@ -30011,6 +30014,14 @@ function AuthenticatedApp() {
                   data-depth={depth}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${depth > 0 ? " is-nested" : ""}${depth > 0 && isLastChild ? " is-nested-last" : ""}${sessionDrag.draggingSessionId === s.id ? " is-dragging" : ""}${sessionDrag.dragOverSessionId === s.id && sessionDrag.draggingSessionId !== s.id ? ` is-drag-over is-drag-${sessionDrag.dragIntent ?? "nest"}` : ""}`}
                   draggable={!isClosing && !rowReadOnly && canDragSessions}
+                  onMouseDown={() =>
+                    reportDragStep(
+                      "mousedown",
+                      !isClosing && !rowReadOnly && canDragSessions
+                        ? "draggable"
+                        : "blocked",
+                    )
+                  }
                   {...sessionDrag.rowHandlers(s.id)}
                   onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={

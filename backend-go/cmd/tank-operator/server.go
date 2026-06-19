@@ -413,6 +413,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// responding") with a correlation label tying each block to the
 	// most-recent tank-event / session-switch / scroll the SPA saw.
 	mux.HandleFunc("POST /api/client-metrics/long-tasks", s.handleLongTaskMetrics)
+	// Browser-side sidebar-drag lifecycle beacon. Records each step
+	// (mousedown→dragstart→dragover→drop→persist) on
+	// tank_session_drag_step_total so "the drag does nothing" is diagnosable
+	// from metrics rather than the user's DevTools.
+	mux.HandleFunc("POST /api/client-metrics/session-drag-step", s.handleSessionDragStepMetric)
 
 	// Avatar assets. Reads are authenticated so uploaded backing photos
 	// are not exposed as static public files; writes are admin-only.
