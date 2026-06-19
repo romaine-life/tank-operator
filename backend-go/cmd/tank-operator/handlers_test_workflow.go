@@ -429,22 +429,61 @@ func (s *appServer) emitTestProvisionRecord(ctx context.Context, req provisionTe
 		return
 	}
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, req.SessionID)
-	event := conversation.TestProvisionUpdatedEventMap(conversation.TestProvisionUpdatedArgs{
+	clientNonce := "test-provision-" + runID
+	persist := func(event map[string]any) {
+		if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
+			slog.Warn("interactive test workflow notice-turn persist failed",
+				"session", req.SessionID, "phase", phase, "error", err)
+		}
+	}
+	// The provision thread is authored as one backend "notice turn" — a real,
+	// turn-anchored entry the user can land on, rendered by the standard turn
+	// renderer (not an orphan role:system record with no turn_id). It is
+	// emitted ATOMICALLY on the terminal phase (open + body + turn.completed in
+	// one shot) so it can never strand: there is never an open turn awaiting a
+	// close, and a reconcile re-drive that uses a fresh runID still emits
+	// exactly one complete turn (a run that died pre-terminal emitted nothing).
+	// No submit_turn command is published, so the SDK runner never wakes.
+	// Interim phases (creating/validating/waiting) are not emitted here — the
+	// test-state pill carries in-flight status. Live per-phase streaming is a
+	// follow-up; it needs a durable per-attempt turn id to stay strand-safe.
+	if phase != "ready" && phase != "error" {
+		return
+	}
+	_, openEvents, err := conversation.NoticeTurnOpenEventMaps(conversation.NoticeTurnOpenArgs{
 		SessionID:         req.SessionID,
 		SessionStorageKey: storageKey,
 		Email:             req.OwnerEmail,
-		RunID:             runID,
-		Phase:             phase,
-		Severity:          severity,
-		Text:              text,
-		Repo:              req.RepoOwner + "/" + req.RepoName,
-		Branch:            req.Branch,
-		URL:               url,
+		ClientNonce:       clientNonce,
+		OpenerText:        "Creating test slot.",
 	})
-	if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
-		slog.Warn("interactive test workflow provision record persist failed",
-			"session", req.SessionID, "phase", phase, "error", err)
+	if err != nil {
+		slog.Warn("interactive test workflow notice-turn open failed",
+			"session", req.SessionID, "error", err)
+		return
 	}
+	for _, event := range openEvents {
+		persist(event)
+	}
+	turnID := conversation.TurnIDForClientNonce(clientNonce)
+	bodyTimelineID := turnID + ":notice:" + phase
+	persist(conversation.AssistantNoticeEventMap(conversation.AssistantNoticeArgs{
+		SessionID:         req.SessionID,
+		SessionStorageKey: storageKey,
+		Email:             req.OwnerEmail,
+		TurnID:            turnID,
+		TimelineID:        bodyTimelineID,
+		Text:              text,
+	}))
+	persist(conversation.NoticeTurnCompletedEventMap(conversation.NoticeTurnCompletedArgs{
+		SessionID:         req.SessionID,
+		SessionStorageKey: storageKey,
+		Email:             req.OwnerEmail,
+		TurnID:            turnID,
+		FinalTimelineIDs:  []string{bodyTimelineID},
+	}))
+	_ = severity
+	_ = url
 }
 
 // sessionGovernedBranch is the Tank-owned session branch the governed Git flow
