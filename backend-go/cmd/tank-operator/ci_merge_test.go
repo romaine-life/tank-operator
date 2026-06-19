@@ -25,6 +25,8 @@ type fakeMCPGitHub struct {
 	resolveOpenPRCalls int
 	mergeCalls         int
 	mergeWithHeadSHA   string
+	markReadySessionID string
+	mergeSessionID     string
 	createBranchCalls  []string
 	createPRCalls      []string
 	createPRNumber     int
@@ -35,18 +37,21 @@ func (f *fakeMCPGitHub) ListRepos(_ context.Context, _ string) ([]mcpgithub.Repo
 	return nil, nil
 }
 
-func (f *fakeMCPGitHub) MarkPRReady(_ context.Context, _, _, _ string, _ int) error {
+func (f *fakeMCPGitHub) MarkPRReady(_ context.Context, _, _, _ string, _ int, governedSessionID string) error {
+	f.markReadySessionID = governedSessionID
 	return f.markReadyErr
 }
 
-func (f *fakeMCPGitHub) MergePR(_ context.Context, _, _, _ string, _ int, _ string) (string, error) {
+func (f *fakeMCPGitHub) MergePR(_ context.Context, _, _, _ string, _ int, _, governedSessionID string) (string, error) {
 	f.mergeCalls++
+	f.mergeSessionID = governedSessionID
 	return f.mergeCommit, f.mergeErr
 }
 
-func (f *fakeMCPGitHub) MergePRWithHead(_ context.Context, _, _, _ string, _ int, _ string, expectedHeadSHA string) (string, error) {
+func (f *fakeMCPGitHub) MergePRWithHead(_ context.Context, _, _, _ string, _ int, _, expectedHeadSHA, governedSessionID string) (string, error) {
 	f.mergeCalls++
 	f.mergeWithHeadSHA = expectedHeadSHA
+	f.mergeSessionID = governedSessionID
 	return f.mergeCommit, f.mergeErr
 }
 
@@ -150,6 +155,12 @@ func TestHandleMergeSessionPRMerges(t *testing.T) {
 	}
 	if len(watches.markMergedCalls) != 1 {
 		t.Fatalf("watch not marked merged: %+v", watches.markMergedCalls)
+	}
+	// The owning session id is threaded to mcp-github so the governed-merge
+	// control-action audit lands on this session's ledger, not the orchestrator's.
+	if gh.markReadySessionID != "47" || gh.mergeSessionID != "47" {
+		t.Fatalf("governed session id not threaded to mcp-github: markReady=%q merge=%q, want 47",
+			gh.markReadySessionID, gh.mergeSessionID)
 	}
 }
 

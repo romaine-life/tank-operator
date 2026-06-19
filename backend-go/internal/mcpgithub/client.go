@@ -191,7 +191,13 @@ func (c *Client) ListRepos(ctx context.Context, userEmail string) ([]Repo, error
 
 // MarkPRReady converts a draft PR to ready-for-review on-behalf-of userEmail.
 // GitHub rejects merging a draft, so the human-merge path marks ready first.
-func (c *Client) MarkPRReady(ctx context.Context, userEmail, owner, name string, number int) error {
+//
+// governedSessionID names the session that owns the target PR. mcp-github keys
+// its control-action audit record to that session (not the calling principal's
+// own session), so an orchestrator-mediated mark-ready lands on the owning
+// session's ledger exactly as the in-pod agent path does. Pass "" for a
+// non-governed PR; mcp-github then falls back to the caller's own session.
+func (c *Client) MarkPRReady(ctx context.Context, userEmail, owner, name string, number int, governedSessionID string) error {
 	if c == nil {
 		return errors.New("mcpgithub: client unavailable")
 	}
@@ -203,24 +209,27 @@ func (c *Client) MarkPRReady(ctx context.Context, userEmail, owner, name string,
 	if err != nil {
 		return fmt.Errorf("mint on-behalf-of token: %w", err)
 	}
-	_, err = c.callTool(ctx, token, "mark_pull_request_ready_for_review", map[string]any{
-		"owner": owner, "name": name, "number": number,
-	})
+	args := map[string]any{"owner": owner, "name": name, "number": number}
+	if governedSessionID = strings.TrimSpace(governedSessionID); governedSessionID != "" {
+		args["governed_session_id"] = governedSessionID
+	}
+	_, err = c.callTool(ctx, token, "mark_pull_request_ready_for_review", args)
 	return err
 }
 
 // MergePR merges a PR via mcp-github's merge_pull_request on-behalf-of
 // userEmail. GitHub itself enforces the green/mergeable gate (an unmergeable PR
 // is rejected), so this is the authoritative merge. Returns the merge commit
-// SHA when available.
-func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod string) (string, error) {
-	return c.MergePRWithHead(ctx, userEmail, owner, name, number, mergeMethod, "")
+// SHA when available. governedSessionID names the session that owns the PR for
+// the control-action audit (see MarkPRReady); pass "" for a non-governed PR.
+func (c *Client) MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, governedSessionID string) (string, error) {
+	return c.MergePRWithHead(ctx, userEmail, owner, name, number, mergeMethod, "", governedSessionID)
 }
 
 // MergePRWithHead is MergePR plus mcp-github's expected_head_sha guard. The
 // tool reads the live PR head and refuses to merge if it moved since the CI
 // watch was registered.
-func (c *Client) MergePRWithHead(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, expectedHeadSHA string) (string, error) {
+func (c *Client) MergePRWithHead(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, expectedHeadSHA, governedSessionID string) (string, error) {
 	if c == nil {
 		return "", errors.New("mcpgithub: client unavailable")
 	}
@@ -240,6 +249,9 @@ func (c *Client) MergePRWithHead(ctx context.Context, userEmail, owner, name str
 	}
 	if expectedHeadSHA = strings.TrimSpace(expectedHeadSHA); expectedHeadSHA != "" {
 		args["expected_head_sha"] = expectedHeadSHA
+	}
+	if governedSessionID = strings.TrimSpace(governedSessionID); governedSessionID != "" {
+		args["governed_session_id"] = governedSessionID
 	}
 	res, err := c.callTool(ctx, token, "merge_pull_request", args)
 	if err != nil {

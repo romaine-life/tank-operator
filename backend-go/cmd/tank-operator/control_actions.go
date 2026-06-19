@@ -139,11 +139,14 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 		writeError(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
+	writer := controlActionWriterClass(user.Sub)
 	if !s.internalCallerMatchesSession(user, sessionID) {
+		recordControlActionInternalWrite(writer, "forbidden")
 		recordControlActionEvent("", "", "", "", "forbidden")
-		writeError(w, http.StatusForbidden, "control action writes require caller session identity to match the target session")
+		writeError(w, http.StatusForbidden, "control action writes require a session pod writing its own session or the orchestrator control plane")
 		return
 	}
+	recordControlActionInternalWrite(writer, "authorized")
 	var body controlActionEventJSON
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
 	if err := dec.Decode(&body); err != nil {
@@ -177,8 +180,61 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 // subject, and requiring one stranded every already-running session pod (the #1207
 // regression that silently froze the control-action ledger on 2026-06-16).
 func (s *appServer) internalCallerMatchesSession(user *auth.User, sessionID string) bool {
-	return user != nil && s.serviceSubjectMatchesSession(user.Sub, sessionID)
+	if user == nil {
+		return false
+	}
+	// A session-pod principal is confined to its own session's ledger (#1207):
+	// its verified per-session subject must encode this exact session on this
+	// backend's scope.
+	if s.serviceSubjectMatchesSession(user.Sub, sessionID) {
+		return true
+	}
+	// The orchestrator control plane performs governed PR mutations (mark-ready,
+	// merge) on a human's behalf and on green, then audits the result. Its
+	// verified subject is the pod-stable `tank-operator` auth consumer
+	// (svc:tank-operator:<id>) -- a disjoint string-prefix from the per-session
+	// `tank` consumer -- so it may append the control action for ANY session
+	// without widening session-pod authority or colliding with session ids. This
+	// is an IdP-signed subject, never a caller-asserted header (the #1207
+	// invariant), and it is the authorized writer for the orchestrator-mediated
+	// "Merge in Tank" / auto-merge paths (docs/event-driven-rollout.md §E).
+	return serviceSubjectIsControlPlane(user.Sub)
 }
+
+// serviceSubjectIsControlPlane reports whether a verified service-principal
+// subject is the orchestrator control plane (any svc:tank-operator:<id>). Only
+// consulted after requireServicePrincipal has proven role=service + actor_email.
+func serviceSubjectIsControlPlane(sub string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(sub), controlPlaneSubjectPrefix)
+	return ok && strings.TrimSpace(rest) != ""
+}
+
+// controlActionWriterClass maps a verified service-principal subject to its
+// bounded writer class for the tank_control_action_internal_write_total metric.
+func controlActionWriterClass(sub string) string {
+	switch {
+	case serviceSubjectIsControlPlane(sub):
+		return "control_plane"
+	case strings.HasPrefix(strings.TrimSpace(sub), sessionServiceSubjectPrefix):
+		return "session_pod"
+	default:
+		return "other"
+	}
+}
+
+const (
+	// sessionServiceSubjectPrefix is the auth.romaine.life subject prefix for a
+	// per-session pod (the `tank` consumer: svc:tank:<id> in prod,
+	// svc:tank:slot-<n>-session-<id> in a test slot).
+	sessionServiceSubjectPrefix = "svc:tank:"
+	// controlPlaneSubjectPrefix is the subject prefix for the orchestrator
+	// control plane (the pod-stable `tank-operator` consumer: svc:tank-operator:
+	// <id>, used by prod and every test slot orchestrator). It is a disjoint
+	// string-prefix from sessionServiceSubjectPrefix -- "svc:tank-operator:" does
+	// not start with "svc:tank:" -- so a session pod is never classified as the
+	// control plane and vice versa.
+	controlPlaneSubjectPrefix = "svc:tank-operator:"
+)
 
 // serviceSubjectMatchesSession reports whether the verified service-principal subject
 // is this session's own identity *on this backend's scope*. Production sessions carry
@@ -191,8 +247,7 @@ func (s *appServer) serviceSubjectMatchesSession(sub, sessionID string) bool {
 	if sessionID == "" {
 		return false
 	}
-	const subjectPrefix = "svc:tank:"
-	value, ok := strings.CutPrefix(strings.TrimSpace(sub), subjectPrefix)
+	value, ok := strings.CutPrefix(strings.TrimSpace(sub), sessionServiceSubjectPrefix)
 	if !ok {
 		return false
 	}

@@ -467,9 +467,9 @@ func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 // Production wires *mcpgithub.Client directly via main.go.
 type AppServerMCPGitHub interface {
 	ListRepos(ctx context.Context, userEmail string) ([]mcpgithub.Repo, error)
-	MarkPRReady(ctx context.Context, userEmail, owner, name string, number int) error
-	MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod string) (string, error)
-	MergePRWithHead(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, expectedHeadSHA string) (string, error)
+	MarkPRReady(ctx context.Context, userEmail, owner, name string, number int, governedSessionID string) error
+	MergePR(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, governedSessionID string) (string, error)
+	MergePRWithHead(ctx context.Context, userEmail, owner, name string, number int, mergeMethod, expectedHeadSHA, governedSessionID string) (string, error)
 	CreateBranch(ctx context.Context, userEmail, owner, name, branch, base string) error
 	CreatePullRequest(ctx context.Context, userEmail, owner, name, title, head, base, body string, draft bool) (mcpgithub.PullRequest, error)
 	ResolvePullRequestState(ctx context.Context, userEmail, owner, name string, number int) (mcpgithub.PullRequestState, error)

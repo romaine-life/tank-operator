@@ -860,6 +860,46 @@ var controlActionEventTotal = promauto.NewCounterVec(
 	[]string{"source_service", "source_tool", "action", "status", "result"},
 )
 
+// controlActionInternalWriteTotal records which authorized writer class reached
+// the internal session-scoped control-action write endpoint and whether it was
+// authorized. The two legitimate writers are a session pod writing its own
+// ledger (svc:tank:<id>) and the orchestrator control plane writing on behalf of
+// a governed merge (svc:tank-operator:<id>; docs/event-driven-rollout.md §E). A
+// rise in control_plane/forbidden is the signature of the governed-merge audit
+// regression this counter exists to surface.
+var controlActionInternalWriteTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_control_action_internal_write_total",
+		Help: "Internal session-scoped control-action ledger writes by authorized writer class and authorization outcome.",
+	},
+	[]string{"writer", "result"},
+)
+
+func recordControlActionInternalWrite(writer, result string) {
+	controlActionInternalWriteTotal.WithLabelValues(
+		controlActionWriterLabel(writer),
+		controlActionInternalWriteResultLabel(result),
+	).Inc()
+}
+
+func controlActionWriterLabel(writer string) string {
+	switch writer {
+	case "session_pod", "control_plane", "other":
+		return writer
+	default:
+		return "other"
+	}
+}
+
+func controlActionInternalWriteResultLabel(result string) string {
+	switch result {
+	case "authorized", "forbidden":
+		return result
+	default:
+		return "other"
+	}
+}
+
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
