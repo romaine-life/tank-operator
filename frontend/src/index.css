@@ -1791,6 +1791,14 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  /* Spawned-sub-session nesting (one indent tier). --nest-indent is the gutter
+     the nested tab's left edge steps in by; the connector is painted into it.
+     --nest-line-x is the vertical guide's x inside that gutter; --nest-gap-bridge
+     overshoots the 2px flex gap so the guide reads continuous across rows. */
+  --nest-indent: 22px;
+  --nest-line-x: 9px;
+  --nest-line-color: rgba(255, 255, 255, 0.22);
+  --nest-gap-bridge: 4px;
 }
 
 /* Chat-row geometry from ChatItem.svelte:448 — px-[11px] py-[6px], rounded-xl.
@@ -1888,6 +1896,101 @@ button:disabled {
 .sessions li.is-skill-rollout.is-open:not(.is-closing) {
   background: #7e532b2e;
   box-shadow: inset 2px 0 0 var(--accent-fg), inset 0 0 0 1px #d6a16b3d;
+}
+
+/* Nested sub-session rows ---------------------------------------------------- *
+ * A session spawned by another session (spawn_run_session) renders as one
+ * indented tier directly under its origin so a running sub-session is never
+ * lost in the flat list. The tab keeps its RIGHT edge pinned and steps its
+ * LEFT edge in (margin-left) — "right-aligned, indented" — and is slightly
+ * smaller (compact height + smaller avatar/name) so it reads as subordinate.
+ * A ├─/└─ connector in the gutter ties it to the origin above. Exactly one
+ * level: deeper lineage is clamped by arrangeSessionTree() (sessionTree.ts).
+ * See the "nested-spawned-sessions" capability. */
+.sessions li.is-nested {
+  margin-left: var(--nest-indent);
+  min-height: 30px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.sessions li.is-nested .session-avatar {
+  width: 34px;
+  height: 34px;
+}
+
+.sessions li.is-nested .session-row-top,
+.sessions li.is-nested .session-row-bottom {
+  /* 11px avatar inset + 34px avatar + ~8px gap. */
+  padding-left: 53px;
+}
+
+.sessions li.is-nested .session-open {
+  font-size: 12px;
+}
+
+/* The connector is painted into the indent gutter (the margin to the left of
+   the row card). ::before is the vertical guide; ::after is the horizontal tick
+   pointing at the row. The last child (is-nested-last) cuts the vertical at the
+   tick so it reads as an elbow (└); earlier children keep a full-height vertical
+   (tee, ├). The vertical overshoots the row box by --nest-gap-bridge top (and,
+   for non-last rows, the box already reaches the next row) so the guide looks
+   continuous down the group. */
+.session-nest-connector {
+  position: absolute;
+  left: calc(-1 * var(--nest-indent));
+  top: 0;
+  bottom: 0;
+  width: var(--nest-indent);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.session-nest-connector::before {
+  content: "";
+  position: absolute;
+  left: var(--nest-line-x);
+  top: calc(-1 * var(--nest-gap-bridge));
+  width: 1.5px;
+  height: calc(100% + var(--nest-gap-bridge));
+  background: var(--nest-line-color);
+  border-radius: 1px;
+}
+
+.sessions li.is-nested-last .session-nest-connector::before {
+  height: calc(50% + var(--nest-gap-bridge));
+}
+
+.session-nest-connector::after {
+  content: "";
+  position: absolute;
+  left: var(--nest-line-x);
+  top: 50%;
+  width: calc(var(--nest-indent) - var(--nest-line-x) - 2px);
+  height: 1.5px;
+  background: var(--nest-line-color);
+  border-radius: 1px;
+}
+
+/* Collapsed sidebar is an icon rail — no room for an indent tier or guides.
+   Drop the indent, hide the connector, and restore the collapsed icon size
+   (the nested avatar rule above otherwise out-specifies the collapsed sizing). */
+.sidebar.is-collapsed .sessions li.is-nested {
+  margin-left: 0;
+}
+
+.sidebar.is-collapsed .sessions li.is-nested .session-avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.sidebar.is-collapsed .sessions li.is-nested .session-row-top,
+.sidebar.is-collapsed .sessions li.is-nested .session-row-bottom {
+  padding-left: 0;
+}
+
+.sidebar.is-collapsed .session-nest-connector {
+  display: none;
 }
 
 /* .session-open is the session-name label inside each sidebar row.
