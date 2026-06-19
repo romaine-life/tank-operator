@@ -116,7 +116,7 @@ func readUserFacingTurnEventsWithChain(ctx context.Context, eventStore store.Ses
 	}
 	candidates := []string{turnID}
 	noteObserved(turnID, events)
-	if askingTurnID, _ := askUserQuestionAskingTurnFinalAnswer(turnID, events); askingTurnID != "" {
+	if askingTurnID := askUserQuestionAskingTurnID(turnID, events); askingTurnID != "" {
 		askingEvents, err := readAllTurnEvents(ctx, eventStore, sessionID, askingTurnID)
 		if err != nil {
 			return nil, nil, nil, err
@@ -124,6 +124,10 @@ func readUserFacingTurnEventsWithChain(ctx context.Context, eventStore store.Ses
 		candidates = append(candidates, askingTurnID)
 		noteObserved(askingTurnID, askingEvents)
 		events = append(events, askingTurnFinalAnswerContextEvents(turnID, events, askingEvents)...)
+		// Carry the asking turn's triggering user prompt onto the question turn so
+		// Q2+ pages can render it under a "continued from previous turn" header,
+		// keeping the question fused to the context that produced it.
+		events = append(events, askingTurnPromptContextEvents(turnID, askingEvents)...)
 	}
 	// Transitively pull the entire background-wake continuation chain rooted at
 	// turnID. A wake turn can itself launch a background task whose terminal
@@ -174,6 +178,31 @@ func askUserQuestionAskingTurnFinalAnswer(questionTurnID string, events []map[st
 	return "", nil
 }
 
+// askUserQuestionAskingTurnID resolves the turn that asked the question for a
+// question-only turn, independent of whether a durable final-answer snapshot was
+// captured. askUserQuestionAskingTurnFinalAnswer requires final-answer timeline
+// ids (it drives the answer-candidate copy); the prompt-context copy only needs
+// the asking turn id, so it has its own resolver.
+func askUserQuestionAskingTurnID(questionTurnID string, events []map[string]any) string {
+	if questionTurnID == "" {
+		return ""
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if !isQuestionOnlyAwaitingInputEvent(event) {
+			continue
+		}
+		payload := transcriptPayload(event)
+		if transcriptMapString(payload, "question_turn_id") != questionTurnID {
+			continue
+		}
+		askingTurnID := transcriptMapString(payload, "asking_turn_id")
+		if askingTurnID != "" && askingTurnID != questionTurnID {
+			return askingTurnID
+		}
+	}
+	return ""
+}
+
 func finalAnswerTimelineIDsFromPayload(payload map[string]any, field string) map[string]bool {
 	raw, _ := payload[field].(map[string]any)
 	rawIDs, _ := raw["timeline_ids"].([]any)
@@ -221,6 +250,37 @@ func eventIsQuestionFinalAnswerContextForTurn(event map[string]any, turnID strin
 	return turnID != "" && transcriptString(event, questionFinalAnswerContextForTurnField) == turnID
 }
 
+// questionPromptContextForTurnField tags a clone of the asking turn's triggering
+// user_message.created so it rides into the question turn's event window. Like
+// the final-answer-context tag, ownTurnPageEvents strips it from the page bodies
+// and projectQuestionPromptContextEntry surfaces it as the question turn's prompt
+// context (under a "continued from previous turn" header on Q2+ pages).
+const questionPromptContextForTurnField = "_tank_question_prompt_context_for_turn"
+
+// askingTurnPromptContextEvents copies the asking turn's triggering user message
+// into the question turn's window, tagged for question turnID. It returns at most
+// one event (the first user_message.created of the asking turn). A background-wake
+// asking turn has no user_message.created and yields nothing — the question page
+// then falls back to the "Question N of M" heading.
+func askingTurnPromptContextEvents(questionTurnID string, askingEvents []map[string]any) []map[string]any {
+	if questionTurnID == "" {
+		return nil
+	}
+	for _, event := range orderedTranscriptEvents(askingEvents) {
+		if transcriptString(event, "type") != "user_message.created" {
+			continue
+		}
+		context := cloneAnyMap(event)
+		context[questionPromptContextForTurnField] = questionTurnID
+		return []map[string]any{context}
+	}
+	return nil
+}
+
+func eventIsQuestionPromptContextForTurn(event map[string]any, turnID string) bool {
+	return turnID != "" && transcriptString(event, questionPromptContextForTurnField) == turnID
+}
+
 func ownTurnPageEvents(events []map[string]any, turnID string) []map[string]any {
 	if len(events) == 0 {
 		return nil
@@ -230,9 +290,38 @@ func ownTurnPageEvents(events []map[string]any, turnID string) []map[string]any 
 		if eventIsQuestionFinalAnswerContextForTurn(event, turnID) {
 			continue
 		}
+		if eventIsQuestionPromptContextForTurn(event, turnID) {
+			continue
+		}
 		out = append(out, event)
 	}
 	return out
+}
+
+// projectQuestionPromptContextEntry builds the question turn's prompt-context
+// entry from the tagged copy of the asking turn's triggering user message. It
+// runs against the FULL event set (before ownTurnPageEvents strips the tag) and
+// marks the entry turnContextContinued so the Turns view labels it "Question
+// prompt continued from previous turn".
+func projectQuestionPromptContextEntry(turnID string, events []map[string]any) map[string]any {
+	if strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if !eventIsQuestionPromptContextForTurn(event, turnID) {
+			continue
+		}
+		entry := projectUserMessageEvent(event)
+		if entry == nil {
+			return nil
+		}
+		entry = cloneAnyMap(entry)
+		entry["id"] = transcriptMapString(entry, "id") + ":question_prompt_context"
+		entry["turnContext"] = true
+		entry["turnContextContinued"] = true
+		return entry
+	}
+	return nil
 }
 
 func projectQuestionFinalAnswerContextEntries(turnID string, events []map[string]any) []map[string]any {
@@ -683,6 +772,14 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	pageSlices := splitTurnEventsIntoSemanticPages(ownEvents)
 	wakeParents := backgroundWakeParentTurnsFromEvents(ownEvents)
 	turnContext := projectTurnContextEntry(turnID, ownEvents)
+	if turnContext == nil {
+		// A question-only turn has no user_message.created of its own (the agent
+		// started it by invoking AskUserQuestion). Surface the asking turn's
+		// triggering prompt as the question turn's context so Q2+ pages render it
+		// under the "continued from previous turn" header instead of only the
+		// "Question N of M" heading.
+		turnContext = projectQuestionPromptContextEntry(turnID, events)
+	}
 	finalAnswerIDs := finalAnswerIDsFromTurnEvents(ownEvents)
 
 	// Terminal-correct shell from the COMPLETE event set: the full projection
@@ -701,8 +798,9 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	// turn.completed (the answer rotates execution onto a separate continuation
 	// turn), so the turn.completed.final_answer path above yields nothing and the
 	// Turns view would render "No turn activity". Its hand-off IS its final
-	// answer: the agent's preamble prose plus the AskUserQuestion card carrying
-	// the shortcut to the question turn.
+	// answer: the agent's preamble prose plus the AskUserQuestion card. The
+	// question widget renders inline in the main transcript; there is no longer a
+	// navigate-to-question-turn shortcut.
 	if len(finalAnswerEntries) == 0 && activityBody.Summary["awaitingInputHandoff"] == true {
 		finalAnswerEntries = awaitingInputHandoffFinalAnswerEntries(activityBody.Entries, turnID, askingTurnHandoffPreambleIDs(ownEvents, turnID))
 	}

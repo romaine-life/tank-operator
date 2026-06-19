@@ -291,6 +291,12 @@ yanking the viewport away from a user reading history.
   last output page. Multiple questions from one AskUserQuestion invocation stay
   in one answer set but render as adjacent semantic `question_set` pages, and
   the surrounding activity pages remain reachable through the page selector.
+- The first question (Q1) of a pending set also renders inline in the main
+  chat transcript (the question turn's activity group is emitted inline), so the
+  common single-question case is answered without leaving chat. Advancing past
+  Q1 from chat navigates to Q2's dedicated question page in the Turns view (the
+  same page navigation used today); paging back returns to Q1. Q2+ pages stay
+  deep-linkable, and the inline surface never flips a later question in place.
 - The Turns view always shows the dedicated Page dropdown for a selected turn: a
   single-page turn renders it disabled ("Page 1 of 1"); a multi-page turn lists
   Page 1..N and selecting one re-reads that page via `?page=N`. The control is

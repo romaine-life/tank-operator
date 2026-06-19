@@ -277,7 +277,7 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
         )).toBe(true);
 });
 
-test("AskUserQuestion questions are the assistant message and the answer form is owned by Turns", () => {
+test("AskUserQuestion renders the question widget inline in the main transcript", () => {
   const messagesMatch = appSource.match(
     /export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/,
   );
@@ -302,15 +302,30 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   expect(appSource.includes("function RunAwaitingInputNotice")).toBe(false);
   expect(appSource.includes("function RunNeedsInputAnnouncement")).toBe(false);
   expect(appSource.includes('data-kind="needs-input-announcement"')).toBe(false);
-  expect(appSource.includes("Answer in Turns")).toBe(true);
-  expect(appSource.includes("run-msg-question-action")).toBe(true);
   expect(appSource.includes('data-variant="assistant"')).toBe(true);
   expect(appSource.includes("<SessionAvatarIcon avatar={avatar}")).toBe(true);
-  expect(appSource.includes(
-          'onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true })',
-        )).toBe(true);
+  // The navigate-to-Turns question shortcuts are retired: the question widget
+  // renders inline in the main transcript, so the assistant-message
+  // "Answer in Turns"/"View questions" button, its handler, and its CSS are
+  // gone (the general TurnViewButton stays).
+  expect(appSource.includes("run-msg-question-action")).toBe(false);
+  expect(
+    appSource.includes(
+      'onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true })',
+    ),
+  ).toBe(false);
   expect(indexCssSource.includes(".run-needs-input-announcement-copy")).toBe(false);
-  expect(indexCssSource.includes(".run-msg-question-action")).toBe(true);
+  expect(indexCssSource.includes(".run-msg-question-action")).toBe(false);
+  // The pending question's activity group is emitted into the main transcript
+  // (not condensed to an "Answer requested" pointer) so RunTurnActivityGroup
+  // renders the inline question widget; advancing past Q1 leaves for Turns.
+  expect(
+    appSource.includes(
+      "// Surface the pending question inline in the main transcript",
+    ),
+  ).toBe(true);
+  expect(appSource.includes('className="run-turn-activity-question"')).toBe(true);
+  expect(appSource.includes("const inlineQuestionEntry")).toBe(true);
   expect(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}')).toBe(true);
   expect(indexCssSource.includes(".run-turn-view {\n  display: flex;")).toBe(true);
   expect(indexCssSource.includes('.run-turn-view-body[data-page-kind="question"]')).toBe(true);
@@ -339,6 +354,22 @@ test("AskUserQuestion questions are the assistant message and the answer form is
     /data-variant="system"\s+data-role="system"\s+data-kind="question-heading"/,
   );
   expect(appSource.includes("${questionIndex} of ${questionCount}")).toBe(true);
+  // The "Open question page" tool-target shortcut and its helpers are retired
+  // along with the navigate-to-Turns model.
+  expect(appSource.includes("Open question page")).toBe(false);
+  expect(appSource.includes("AskUserQuestionToolTargetButton")).toBe(false);
+  expect(appSource.includes("askUserQuestionTargetHref")).toBe(false);
+  expect(appSource.includes("run-tool-question-target")).toBe(false);
+  expect(indexCssSource.includes(".run-tool-question-target")).toBe(false);
+  // Q2+ pages carry the asking turn's triggering prompt under a "continued from
+  // previous turn" header so the question stays fused to what produced it.
+  expect(appSource.includes("Question prompt continued from previous turn")).toBe(
+    true,
+  );
+  expect(appSource.includes("turnContextContinued")).toBe(true);
+  expect(indexCssSource.includes(".run-turn-view-context-continued-label")).toBe(
+    true,
+  );
 });
 
 test("background wake prompts stay hidden from chat but visible in Turns activity", () => {
@@ -655,20 +686,22 @@ test("server-projected active turn activity shells own thinking row active state
           "turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)",
         )).toBe(true);
   expect(appSource.includes("function turnActivityGroupNeedsInput")).toBe(true);
-  expect(appSource.includes("function turnActivityGroupIsNeedsInputTarget")).toBe(true);
+  // needs_input turns no longer condense to an "Answer requested" thinking-row
+  // pointer into Turns — their activity group is emitted inline so the question
+  // widget renders in the main transcript. The needs-input-target helper and the
+  // needs_input thinking-group creation are retired; the active-turn thinking
+  // row stays for in-progress (non-needs-input) turns.
+  expect(appSource.includes("function turnActivityGroupIsNeedsInputTarget")).toBe(false);
   expect(appSource.includes("function insertActiveTurnTailGroups")).toBe(false);
   expect(appSource.includes("const pendingNeedsInputGroups")).toBe(false);
   expect(appSource.includes(
           "pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)",
         )).toBe(false);
-  expect(appSource).toMatch(/group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/);
-  expect(appSource.includes('turnThinkingGroup(group.turnId, entry, "needs_input")')).toBe(true);
+  expect(appSource).toMatch(/group\.active &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/);
+  expect(appSource.includes('turnThinkingGroup(group.turnId, entry, "needs_input")')).toBe(false);
   expect(appSource.includes("data-status={status}")).toBe(true);
-  expect(appSource.includes("Answer requested")).toBe(true);
-  expect(indexCssSource.includes(
-          '[data-kind="turn-thinking"][data-status="needs_input"]',
-        )).toBe(true);
-  expect(appSource.includes("groups.push(group);")).toBe(false);
+  // needs_input turns push their activity group inline rather than a thinking row.
+  expect(appSource.includes("groups.push(group);")).toBe(true);
   expect(appSource.includes(
           "turnActivityShellIsDurablyActive(group.shell.activity)",
         )).toBe(true);
@@ -862,9 +895,6 @@ test("turn view entry points open at the turn bottom", () => {
   expect(appSource.includes(
           'onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" })',
         )).toBe(true);
-  // AskUserQuestion uses the same turn navigation path, but with resetPage so
-  // the server default opens the pending question page.
-  expect(appSource.includes('{ anchor: "top", resetPage: true }')).toBe(true);
   expect(appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })')).toBe(true);
   expect(appSource.includes('(variant === "assistant" || variant === "user")')).toBe(true);
   expect(appSource.includes("function TurnViewButton")).toBe(true);

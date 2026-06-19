@@ -17,8 +17,10 @@ export type SessionRouteTab =
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
+  | "test-slot"
   | "files"
-  | "background";
+  | "background"
+  | "orchestrate";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help" | "cluster";
 
@@ -338,10 +340,42 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       ...defaultSettingsRoute,
     };
   }
+  if (parts[2] === "test-slot" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "test-slot",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
   if (parts[2] === "background" && parts.length === 3) {
     return {
       sessionId: parts[1],
       tab: "background",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      breakGlassRequestId: null,
+      testSlotModelRequestId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "orchestrate" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "orchestrate",
       turnNumber: null,
       turnSegmentPresent: false,
       pageNumber: null,
@@ -427,8 +461,12 @@ export function buildSessionRouteUrl(
         ? `/${routedFilePath}${fileLine != null ? `:${fileLine}` : ""}`
         : ""
     }`;
+  } else if (tab === "test-slot") {
+    suffix = "/test-slot";
   } else if (tab === "background") {
     suffix = "/background";
+  } else if (tab === "orchestrate") {
+    suffix = "/orchestrate";
   }
   url.pathname = `/sessions/${encodedId}${suffix}`;
   url.search = "";

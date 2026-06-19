@@ -799,3 +799,71 @@ Evidence:
   `test_handle_query_tank_db_tool_runs_read_query`).
 - `backend-go/cmd/tank-operator/handlers_db_read_query_test.go`
   (`TestDBReadQuery_RestrictedRefused`, `TestDBReadQuery_NonRestrictedRequiresPool`).
+
+## Orchestrate Hub Launch (Self-Grant + Durable Spoke Config)
+
+Status: in progress
+
+Intent:
+Let a user turn their own GUI chat session into the hub of a spoke fleet: one
+confirm persists the fleet's run config, grants the hub full git authority, and
+kicks off the `/orchestrate` skill — so the session can delegate task slices to
+fresh spoke sessions that report back to the hub instead of the user. See the
+Orchestrate feature folder and `app-chrome` for the surface that drives it.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- New durable `sessions.spoke_config jsonb` column (migration `0180`) threaded
+  through the registry write/read, `SessionRecord`, `Info`, the `RowPublisher`
+  snapshot, and the session-list-events read — the same full path
+  `rollout_state`/`spawned_sessions` ride, so the hub flag survives reload and
+  rides SSE. It is NULL until the launch endpoint sets it; there is no
+  pod-annotation source (hub state is server-owned, not runtime-reported).
+- `POST /api/sessions/{id}/orchestrate` is the launch endpoint. Gating is the
+  **human session owner only**: service principals are rejected outright (`403`
+  — this is a human-initiated full-power git grant, not a service path), and
+  ownership is the write-class per-owner `GetByOwner` gate, **not** the
+  admin-liftable read gate, so an admin cannot launch orchestrate on another
+  user's session. The hub must itself be an SDK chat (GUI) session so a spoke's
+  `send_prompt` ping-back wakes it as a new turn.
+- The spoke config (`provider` / `surface` (gui|cli) / `model` / `effort`, no
+  repo) is validated through the same provider allowlists as session create —
+  rejections increment `tank_session_run_config_rejected_total{surface="orchestrate"}`.
+  `provider`+`surface` derive the concrete spoke session mode the hub passes to
+  `spawn_run_session`.
+- On confirm the endpoint, in order: persists `spoke_config`; **self-grants git
+  break-glass with no approval round-trip** — `all_repos` / `unlimited` branch /
+  full ops (`mint_full_git_token`+`push_current_head`+`workflows`+`full_github_api`)
+  / 24h — reusing `appendGitBreakGlassGrant` with a `source: "orchestrate-self-grant"`
+  audit marker on the durable `github.break_glass.grant` control-action event;
+  and enqueues the `/orchestrate` kickoff turn (spoke config, the hub's own id
+  for ping-backs, break-glass status + expiry, plan-first reminder) over the
+  exact `enqueueSDKTurn` path a spoke ping-back later uses.
+- The 24h grant ceiling is hard (the break-glass writer clamps to 86400s): a run
+  longer than 24h needs a human re-confirm (re-POST), which appends a fresh
+  grant — orchestrate invents no renewal model. `all_repos` full-API suspends the
+  governed PR flow for the grant's life; the confirm surface states that blast
+  radius.
+
+Evidence:
+- `backend-go/cmd/tank-operator/handlers_orchestrate.go` (handler + spoke-config
+  validation + kickoff prompt) with
+  `backend-go/cmd/tank-operator/orchestrate_launch_test.go` covering the
+  service-reject, non-owner `404`, non-GUI-hub reject, invalid-spoke-config,
+  the full-power grant shape + `orchestrate-self-grant` marker + persisted
+  spoke_config + single kickoff command, and re-confirm-appends-grant paths.
+- Column threading: `backend-go/internal/pgstore/migrations.go` (`0180`),
+  `internal/sessionmodel/sessionmodel.go`, `internal/sessionregistry/registry.go`
+  + `write.go` (`SetSpokeConfig`), `internal/sessions/sessions.go` + `manager.go`,
+  `internal/sessioncontroller/row_publisher.go`, and
+  `cmd/tank-operator/handlers_session_list_events.go`, with
+  `internal/sessionmodel/spoke_config_test.go`.
+- The skill the kickoff turn loads:
+  `k8s/session-config/skills/common/orchestrate/SKILL.md`.
+- Metrics: `tank_orchestrate_launch_total{result}` (launch outcomes) and the
+  reused `tank_control_action_events_total` (the self-grant) +
+  `tank_session_run_config_rejected_total{surface="orchestrate"}`.

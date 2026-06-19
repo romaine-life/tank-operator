@@ -147,6 +147,26 @@ const forbidden = [
     name: "removed AskUserQuestion permission-callback parking",
     pattern: /permission callback[\s\S]{0,500}(pending|parked)|pending[\s\S]{0,500}permission callback/,
   },
+
+  // The question widget renders inline in the main transcript; the
+  // navigate-to-Turns question shortcuts are retired. The general TurnViewButton
+  // (per-message "Open turn in Turns") is a separate, still-live affordance.
+  {
+    name: "removed run-msg-question-action assistant-message shortcut",
+    pattern: /run-msg-question-action/,
+  },
+  {
+    name: "removed AskUserQuestionToolTargetButton tool-row shortcut",
+    pattern: /\bAskUserQuestionToolTargetButton\b/,
+  },
+  {
+    name: "removed askUserQuestionTargetHref helper",
+    pattern: /\baskUserQuestionTargetHref\b/,
+  },
+  {
+    name: "removed run-tool-question-target shortcut",
+    pattern: /run-tool-question-target/,
+  },
 ];
 
 const required = [
@@ -361,8 +381,33 @@ const required = [
   },
   {
     file: "frontend/src/App.tsx",
-    name: "assistant question message carries the answer affordance",
-    pattern: /run-msg-question-action[\s\S]{0,400}Answer in Turns/,
+    name: "pending question is resolved as an inline entry",
+    pattern: /const inlineQuestionEntry/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "inline question widget renders in the main transcript",
+    pattern: /run-turn-activity-question/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "needs_input activity group is emitted inline (not condensed to a pointer)",
+    pattern: /if \(needsInput\) \{[\s\S]{0,400}groups\.push\(group\)/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/turn_pages.go",
+    name: "asking turn's triggering prompt is projected onto the question turn",
+    pattern: /projectQuestionPromptContextEntry/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/turn_pages.go",
+    name: "continued prompt context marked turnContextContinued",
+    pattern: /turnContextContinued/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "Q2+ pages label the carried prompt as continued",
+    pattern: /Question prompt continued from previous turn/,
   },
   {
     file: "frontend/src/App.tsx",
