@@ -67,6 +67,7 @@ import {
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
 import { OrchestrationsDashboard } from "./OrchestrationsDashboard";
+import { AdminDataBrowser } from "./AdminDataBrowser";
 import { OrchestratePanel } from "./OrchestratePanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
@@ -132,6 +133,7 @@ import {
   Code2Icon,
   CoinsIcon,
   CopyIcon,
+  DatabaseIcon,
   EllipsisVerticalIcon,
   FileDiffIcon,
   FileIcon,
@@ -9778,6 +9780,7 @@ function SessionTabMenu({
   readOnly,
   nested,
   onClose,
+  onResurrect,
   onUnnest,
   onSaveCredentials,
   saveDisabled,
@@ -9787,6 +9790,7 @@ function SessionTabMenu({
   readOnly: boolean;
   nested?: boolean;
   onClose: () => void;
+  onResurrect?: () => void;
   onUnnest?: () => void;
   onSaveCredentials?: () => void;
   saveDisabled?: boolean;
@@ -9840,6 +9844,15 @@ function SessionTabMenu({
           >
             <SaveIcon className="run-tab-more-item-icon" />
             <span>Save credentials</span>
+          </DropdownMenuItem>
+        )}
+        {onResurrect && session.status !== "Active" && (
+          <DropdownMenuItem
+            className="run-tab-more-item"
+            onSelect={onResurrect}
+            title="create a new session that resumes this conversation on a fresh pod"
+          >
+            <span>Resurrect session</span>
           </DropdownMenuItem>
         )}
         {nested && onUnnest && (
@@ -10318,10 +10331,12 @@ function SessionDataTestSlotDetails({
 // tone classes the session-data cards use, so the test-slot page reads native.
 function testSlotVerdictTone(
   verdict: string,
-): "good" | "warning" | "danger" | "info" {
+): "good" | "warning" | "danger" | "info" | "merged" {
   switch (verdict) {
     case "ready":
       return "good";
+    case "merged":
+      return "merged";
     case "failed":
     case "error":
       return "danger";
@@ -10342,7 +10357,7 @@ function testSlotVerdictLabel(verdict: string): string {
     case "conflict":
       return "Needs rebase";
     case "merged":
-      return "Already merged";
+      return "Merged";
     case "watching":
       return "Checks running";
     case "no_pr":
@@ -10355,12 +10370,12 @@ function testSlotVerdictLabel(verdict: string): string {
 }
 
 // testSlotReadiness collapses a status snapshot into the readiness view the page
-// renders. The durable watch row is the PRIMARY source for verdict/mergeable
-// state — it is event-driven (GitHub webhooks), so it converges merged/ready/
-// failed without a manual refresh (the page's background poll picks it up). The
-// live preflight (present only right after a live read) is the fallback when no
-// watch row exists yet; the failing/pending check NAMES it carries are surfaced
-// separately. Null when neither source is known yet.
+// renders. It PREFERS the live preflight: the durable watch row can be stale —
+// it freezes at its first terminal verdict, so a 'ready' watch never flips to
+// 'merged' (the merge webhook skips non-'watching' rows). A present preflight is
+// therefore the authoritative current state; the durable watch is the instant
+// paint + the fallback when no live read is available yet. Null when neither
+// source is known.
 function testSlotReadiness(status: TestSlotStatus | null): {
   verdict: string;
   hasOpenPR: boolean;
@@ -10377,17 +10392,31 @@ function testSlotReadiness(status: TestSlotStatus | null): {
   const w: TestSlotWatch | null = status.watch;
   const p: TestSlotPreflight | null = status.preflight;
   if (!w && !p) return null;
+  if (p) {
+    return {
+      verdict: p.verdict,
+      hasOpenPR: p.has_open_pr,
+      detail: p.detail || w?.detail || "",
+      prUrl: p.pr_url || w?.pr_url || "",
+      prNumber: p.pr_number || w?.pr_number || 0,
+      mergeableState: p.mergeable_state || w?.mergeable_state || "",
+      checkState: p.check_state || w?.check_state || "",
+      headSha: p.head_sha || w?.head_sha || "",
+      asOf: null,
+      live: true,
+    };
+  }
   return {
-    verdict: w ? w.status : p!.verdict,
-    hasOpenPR: w ? w.has_open_pr : p!.has_open_pr,
-    detail: w?.detail || p?.detail || "",
-    prUrl: w?.pr_url || p?.pr_url || "",
-    prNumber: w?.pr_number || p?.pr_number || 0,
-    mergeableState: w?.mergeable_state || p?.mergeable_state || "",
-    checkState: w?.check_state || p?.check_state || "",
-    headSha: w?.head_sha || p?.head_sha || "",
-    asOf: w?.last_event_at ?? null,
-    live: !w && !!p,
+    verdict: w!.status,
+    hasOpenPR: w!.has_open_pr,
+    detail: w!.detail || "",
+    prUrl: w!.pr_url || "",
+    prNumber: w!.pr_number || 0,
+    mergeableState: w!.mergeable_state || "",
+    checkState: w!.check_state || "",
+    headSha: w!.head_sha || "",
+    asOf: w!.last_event_at ?? null,
+    live: false,
   };
 }
 
@@ -10514,7 +10543,14 @@ function TestSlotScreen({
         const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
           refresh,
         });
-        setStatus(next);
+        // A durable (non-refresh) read carries no preflight; preserve the last
+        // live one so the authoritative verdict doesn't flicker back to the
+        // (possibly stale) durable watch between live reads.
+        setStatus((prev) =>
+          refresh
+            ? next
+            : { ...next, preflight: prev?.preflight ?? next.preflight ?? null },
+        );
         if (refresh && next.preflight) {
           setLiveChecks({
             failing: next.preflight.failing_checks ?? [],
@@ -10547,25 +10583,29 @@ function TestSlotScreen({
     void load(false, true);
   }, [load, testState?.active, testState?.url]);
 
-  // Background convergence: a cheap durable poll (no GitHub call) so a
-  // webhook-driven transition — most importantly mergeable → merged — reflects
-  // without a manual refresh. Paused when the tab is hidden.
+  // Background convergence: a live poll (the durable watch row freezes at its
+  // first terminal verdict, so only a live read catches a mergeable → merged
+  // transition that happens while the page is open). Paused when the tab is
+  // hidden to bound GitHub reads to active viewing.
   useEffect(() => {
     const id = window.setInterval(() => {
-      if (document.visibilityState === "visible") void load(false, true);
-    }, 12000);
+      if (document.visibilityState === "visible") void load(true, true);
+    }, 20000);
     return () => window.clearInterval(id);
   }, [load]);
 
   const readiness = testSlotReadiness(status);
-  const active = Boolean(testState?.active);
   const readyUrl = testState?.url?.trim() || "";
+  // A real running environment requires BOTH the active flag AND a URL. An
+  // `active:true` with no URL is an optimistic/stale flag (e.g. set at "test"
+  // session-create before any slot existed) — it is NOT a running environment.
+  const slotActive = Boolean(testState?.active) && Boolean(readyUrl);
   const repoSlug = status?.repo?.slug || "";
   const branch = status?.repo?.branch || "";
   const repoBlocked = Boolean(status) && !status?.repo;
   const hasOpenPR = readiness ? readiness.hasOpenPR : true;
   const canCreate =
-    !disabled && !readOnly && !active && !repoBlocked && hasOpenPR;
+    !disabled && !readOnly && !slotActive && !repoBlocked && hasOpenPR;
 
   const verdict = readiness?.verdict ?? "";
   const tone = verdict ? testSlotVerdictTone(verdict) : "info";
@@ -10573,7 +10613,7 @@ function TestSlotScreen({
   const currentSha = readiness?.headSha || "";
   const deployedSha = status?.provision?.head_sha || "";
   const stale = Boolean(
-    active && deployedSha && currentSha && deployedSha !== currentSha,
+    slotActive && deployedSha && currentSha && deployedSha !== currentSha,
   );
 
   // Live check names only apply to the current head; otherwise they describe a
@@ -10711,7 +10751,7 @@ function TestSlotScreen({
         ) : (
           <div className="run-session-data-page-list" aria-label="Test slot">
             {/* Active environment — what slot is obtained, its URL, what's on it */}
-            {active && (
+            {slotActive && (
               <div className="run-session-data-card is-good">
                 <div className="run-session-data-card-top">
                   <span className="run-session-data-card-icon" aria-hidden="true">
@@ -10900,7 +10940,7 @@ function TestSlotScreen({
             </div>
 
             {/* Create controls (only when no slot is up) */}
-            {!active && (
+            {!slotActive && (
               <div className="run-session-data-card is-info">
                 <div className="run-session-data-card-top">
                   <span className="run-session-data-card-icon" aria-hidden="true">
@@ -17464,7 +17504,8 @@ function RunSettingsPanel({
       adminView === "orchestrations" ||
       adminView === "report" ||
       adminView === "hidden-transcripts" ||
-      adminView === "observability")
+      adminView === "observability" ||
+      adminView === "data")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
   const adminObservabilityAttention = observabilityAttentionStatus(
@@ -17653,6 +17694,23 @@ function RunSettingsPanel({
               onRefresh={adminControls.onRefreshVersion}
             />
           </>
+        ) : adminView === "data" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Database</h2>
+              </div>
+            </section>
+            <AdminDataBrowser />
+          </>
         ) : (
           <>
             <section className="run-settings-section">
@@ -17706,6 +17764,20 @@ function RunSettingsPanel({
                   {adminControls.observability.summary?.status ??
                     (adminControls.observability.error ? "error" : "Open")}
                 </span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "data")}
+              >
+                <span className="run-settings-link-label">
+                  <DatabaseIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Database</span>
+                </span>
+                <span className="run-settings-scope-value">Browse</span>
               </button>
               <button
                 type="button"
@@ -29556,6 +29628,30 @@ function AuthenticatedApp() {
     }
   }
 
+  async function resurrectSession(id: string) {
+    setError(null);
+    try {
+      const res = await authedFetch(`/api/sessions/${id}/resurrect`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        let detail = `resurrect failed: ${res.status}`;
+        try {
+          const body = (await res.json()) as { detail?: string };
+          if (body?.detail) detail = body.detail;
+        } catch {
+          /* non-JSON error body */
+        }
+        throw new Error(detail);
+      }
+      const data = (await res.json()) as { session_id?: string };
+      await refresh();
+      if (data.session_id) setActive(data.session_id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function saveCredentials(id: string) {
     setBusy(true);
     setError(null);
@@ -29958,6 +30054,7 @@ function AuthenticatedApp() {
                       readOnly={rowReadOnly}
                       nested={depth > 0}
                       onClose={() => deleteSession(s.id)}
+                      onResurrect={() => resurrectSession(s.id)}
                       onUnnest={() => unnestSession(s.id)}
                       onSaveCredentials={
                         CONFIG_MODES.has(s.mode)

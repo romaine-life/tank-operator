@@ -3,16 +3,16 @@ image:
   # Fingerprint-pinned. The build workflow rewrites this line on every push
   # to main via a `[skip ci]` follow-up commit, so the cluster reconciles to
   # the exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-7303178f09b604f33f5138c2ad8feeedf0d5f8ab6dc16b63dec6d969ca623d21"
+  tag: "app-2c43680b4e5253eb033fbd116bfb481d56a4988b694d1b31afe6dd33e5b3009c"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-19T09:45:05Z"
-    git_sha: "59651f1b68bb975ae9f5ef2e365422a150e81954"
+    built_at: "2026-06-19T15:29:39Z"
+    git_sha: "23afc4ed3e76726c448986d7a67a267a640c5880"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/59651f1b68bb975ae9f5ef2e365422a150e81954"
-    pr_number: "1349"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1349"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27818187292"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/23afc4ed3e76726c448986d7a67a267a640c5880"
+    pr_number: "1355"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1355"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27834581397"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
@@ -72,29 +72,29 @@ orchestrator:
 session:
   # Fingerprint-pinned. claude-container-build.yml rewrites these tag
   # suffixes on every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-2039ea313f8c345841a3ca5262fa044dbbdfcec94fc9a721720eeed93c6cd04c"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-195ac5460ba2edd9cf4778008f215c569cc8c3077aa49a81bc551a49c723b628"
+  image: "romainecr.azurecr.io/claude-container:claude-ce7f77355f27c345abd2c671cecaf2e91c5e3f00575a2925cf9fa3741e707501"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-f2d2b33673606005824c1827e874318e41c524010d59457251983730a3f7850e"
   imageMetadata:
     claude:
-      built_at: "2026-06-19T04:31:55Z"
-      git_sha: "88904a5f0ab2e08b306914f92b7e96ca342cb472"
+      built_at: "2026-06-19T10:50:37Z"
+      git_sha: "47490c5228de033b27038b36cc0d27dcc884d2e8"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/88904a5f0ab2e08b306914f92b7e96ca342cb472"
-      pr_number: "1329"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1329"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27805445951"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/47490c5228de033b27038b36cc0d27dcc884d2e8"
+      pr_number: "1351"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1351"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27821276637"
       repository: "romaine-life/tank-operator"
-      actor: "tank-operator-host[bot]"
+      actor: "nelsong6"
     codex:
-      built_at: "2026-06-19T04:31:55Z"
-      git_sha: "88904a5f0ab2e08b306914f92b7e96ca342cb472"
+      built_at: "2026-06-19T10:50:37Z"
+      git_sha: "47490c5228de033b27038b36cc0d27dcc884d2e8"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/88904a5f0ab2e08b306914f92b7e96ca342cb472"
-      pr_number: "1329"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1329"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27805445951"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/47490c5228de033b27038b36cc0d27dcc884d2e8"
+      pr_number: "1351"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1351"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27821276637"
       repository: "romaine-life/tank-operator"
-      actor: "tank-operator-host[bot]"
+      actor: "nelsong6"
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -270,6 +270,17 @@ avatarAssets:
   # /api/avatars/{id}/image|backing routes.
   blobAccountURL: "https://romainetankavatars.blob.core.windows.net"
   blobContainer: avatar-assets
+
+# Durable session transcript storage (docs/session-transcript-capture.md).
+# Private Azure Blob container provisioned by infra/transcript_storage.tf,
+# written by the orchestrator via the same workload identity. The pod-side
+# claude-runner ships whole-file JSONL snapshots so a session's conversation
+# can be resurrected onto a fresh pod after pod death. When this block is
+# absent the orchestrator runs degraded (env vars unset) and capture is
+# disabled — the snapshot endpoint answers 503 and runners simply retry.
+transcriptStorage:
+  blobAccountURL: "https://romainetanktranscripts.blob.core.windows.net"
+  blobContainer: session-transcripts
 
 sessionBus:
   stream: TANK_SESSION_BUS

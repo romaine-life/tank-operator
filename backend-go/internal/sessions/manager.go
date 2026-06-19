@@ -262,6 +262,12 @@ type CreateOptions struct {
 	// BugLabels is the plural create-time form. BugLabel remains populated for
 	// compatibility with clients and row projections that read one label.
 	BugLabels []*sessionmodel.SessionBugLabel
+	// ResurrectSourceSessionID, when set, marks this create as a conversation
+	// resurrection: the new pod is stamped with the dead session's id so its
+	// runner fetches that source's captured transcript and resumes it. The dead
+	// pod stays terminal; this is a new session lifecycle, not a revival. See
+	// docs/session-transcript-capture.md.
+	ResurrectSourceSessionID string
 	// ParentSessionID is the origin session that spawned this one (the
 	// X-Tank-Origin-Session-Id on the spawning MCP call). Persisted on the
 	// child row at create so the sidebar nests it under its origin from the
@@ -352,6 +358,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.Capabilities = capabilities
 	manifestOpts.Model = model
 	manifestOpts.Effort = effort
+	manifestOpts.ResurrectSourceSessionID = strings.TrimSpace(opts.ResurrectSourceSessionID)
 	m.applyImageOverride(ctx, &manifestOpts, mode)
 	sessionImage := sessionmodel.ResolvedSessionImage(mode, manifestOpts)
 	sessionImageMetadata := sessionmodel.ResolvedSessionImageMetadata(mode, manifestOpts)

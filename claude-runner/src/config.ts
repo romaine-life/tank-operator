@@ -17,6 +17,12 @@ export interface Config {
   operatorTokenPath: string;
   workspace: string;
   mcpConfig: string;
+  // Set on resurrected pods (env TANK_RESURRECT_SOURCE_SESSION_ID): the dead
+  // session this pod is resurrecting. Presence gates the resume bootstrap.
+  resurrectSourceSessionId?: string;
+  // Filled at runtime by the resume bootstrap after the source transcript is
+  // materialized on disk: the SDK session id to `resume` instead of `continue`.
+  resumeSessionId?: string;
 }
 
 export function loadConfig(): Config {
@@ -44,5 +50,7 @@ export function loadConfig(): Config {
     operatorTokenPath: process.env.TANK_OPERATOR_TOKEN_PATH?.trim() || "",
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
     mcpConfig: process.env.MCP_CONFIG?.trim() || "/workspace/.mcp.json",
+    resurrectSourceSessionId:
+      process.env.TANK_RESURRECT_SOURCE_SESSION_ID?.trim() || undefined,
   };
 }

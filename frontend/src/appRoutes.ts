@@ -7,6 +7,7 @@ export type AdminView =
   | "orchestrations"
   | "hidden-transcripts"
   | "observability"
+  | "data"
   | "version";
 export type SessionRouteTab =
   | "turns"
@@ -110,6 +111,7 @@ function parseAdminView(value: string | undefined): AdminView {
     case "report":
     case "hidden-transcripts":
     case "observability":
+    case "data":
     case "version":
       return value;
     default:

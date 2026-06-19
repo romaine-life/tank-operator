@@ -239,6 +239,28 @@ func TestHandleGitHubWebhookSuccessCanReadyStoredGreenWatch(t *testing.T) {
 	}
 }
 
+// TestHandleGitHubWebhookMergedMarksReadyWatch proves a merged-PR webhook marks
+// the watch 'merged' even when it already reached the terminal 'ready' (green +
+// mergeable) state. Without this the not-watching coalescing guard drops the
+// merge and the row is stuck 'ready' forever — which the test-slot page renders
+// as "green & mergeable" after the PR is actually merged.
+func TestHandleGitHubWebhookMergedMarksReadyWatch(t *testing.T) {
+	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",
+		PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 100,
+		HeadSHA: "h1", Status: pgstore.CIWatchReady,
+		MergeableState: "clean", CheckState: "success",
+	}}
+	app := webhookTestApp(t, fake)
+	rec := postWebhook(t, app, "pull_request", mergedPRBody, signWebhook("topsecret", mergedPRBody))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fake.markMergedCalls) != 1 {
+		t.Fatalf("merged webhook on a ready watch must mark it merged; markMergedCalls=%+v", fake.markMergedCalls)
+	}
+}
+
 func TestHandleGitHubWebhookPullRequestSynchronizeMovesWatchedHead(t *testing.T) {
 	fake := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
 		WatchID: "cw1", SessionID: "47", OwnerEmail: "owner@example.test",

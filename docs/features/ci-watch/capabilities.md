@@ -69,6 +69,29 @@ and [../README.md](../README.md) for how capability ledgers are used.
   durable `session_ci_watches` readiness row plus live reducer output from GitHub PR
   state.
 
+## governed-merge-control-action-audit
+
+- **Status:** shipped
+- **Intent:** Every governed PR mutation (`mark_pull_request_ready_for_review`,
+  `merge_pull_request`) records its `control_action_events` audit on the **owning
+  session's** ledger, regardless of which principal performed the merge. The agent
+  in-pod path and the two orchestrator-mediated paths — the in-app "Merge in Tank"
+  button (`handleMergeSessionPR`) and the green-path auto-merge
+  (`autoMergeOrchestrationPhasePR`) — produce an identical ledger row keyed to the
+  PR's session (event-driven-rollout.md §E).
+- **Durable source / mechanism:** mcp-github keys the audit to a `governed_session_id`
+  the orchestrator passes (the owning session), falling back to the caller's own
+  session for the in-pod agent path. Tank's internal write endpoint
+  (`internalCallerMatchesSession`) authorizes **two** verified-IdP writers: a session
+  pod for its *own* session (`svc:tank:<id>`, the #1207 rule) and the orchestrator
+  control plane (`svc:tank-operator:<id>`) for *any* session. Neither is a
+  caller-asserted header.
+- **Failure signature:** if the control-plane writer is not recognized, the audit
+  `started` write is rejected `403`, the mcp-github tool fails closed *before* the
+  GitHub merge, the PR stays an unmerged draft, and the human sees `merge failed:
+  mcp-github tool error: Error executing tool merge_pull_request: …`. Watched by
+  `tank_control_action_internal_write_total{writer="control_plane",result="forbidden"}`.
+
 ## gated-test-slot-provisioning
 
 - **Status:** shipped (shared server-side gate + orchestration-review path + interactive
@@ -225,6 +248,24 @@ and [../README.md](../README.md) for how capability ledgers are used.
   tab is hidden) converges the `mergeable → merged` transition without a manual
   refresh; the live preflight (mount + Refresh) supplies the check names. Backend:
   `pr_number` + `pending_checks` added to the preflight view.
+- **Fixes (2026-06-19, follow-up):**
+  - **Merged showed as "Green & mergeable".** The durable CI-watch row freezes at
+    its first terminal verdict — a `ready` watch never flips to `merged` because
+    the merge webhook handler skipped any non-`watching` row. Fixed two ways: the
+    page now **prefers the live preflight verdict** (the watch is the instant
+    paint + fallback) with a **live 20s poll** so a merge while-viewing converges;
+    and the merge webhook now **marks even a `ready`/terminal watch `merged`**
+    (`github_webhook.go`, before the not-watching coalescing guard). A distinct
+    **purple `is-merged`** tone + "Merged" label render it. The read-only status
+    endpoint resolves the preflight against the durable watch's **PR by number**
+    (not the open PR by branch) so a merged PR is detected as `merged` rather than
+    `no_pr` — a merged PR has no *open* PR for the branch, and the watch row may be
+    stuck `ready`; the by-number live read sees `merged=true` either way.
+  - **Falsely showed "Test environment — running".** An `active:true` `test_state`
+    with no URL (the optimistic flag set at "test" session-create) was rendered as
+    a running env. The page now requires a real **URL** to show "running"; and the
+    provision double-trigger guard (`handleStartTestWorkflow`) requires
+    `active && url` so the empty flag no longer 409s a genuine Create.
 
 ## pending-provision-backstop
 

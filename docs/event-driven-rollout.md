@@ -281,7 +281,17 @@ orchestrator** that reuses the existing governance gates:
 - `PUT /repos/{o}/{r}/pulls/{n}/merge` with a `tank-operator-host` installation token
   (minted through the existing mcp-github path),
 - record the `merge_current_session_pr` control-action event exactly as the agent path
-  does, so the ledger is identical regardless of who merged.
+  does, so the ledger is identical regardless of who merged. The orchestrator runs the
+  merge under its own service principal (`svc:tank-operator:<id>`), not a per-session
+  `svc:tank:<id>` subject, so two things make the audit land on the *owning* session's
+  ledger rather than the orchestrator's: (a) the orchestrator passes the owning session
+  id to mcp-github (`governed_session_id`), which keys the control-action record to that
+  session; and (b) Tank's internal control-action write endpoint authorizes the verified
+  orchestrator control-plane subject as a writer for any session, alongside the
+  session-pod-writes-its-own-ledger rule. Both are IdP-signed subjects, not caller
+  headers (the #1207 invariant). Without (b) the merge's `started` audit is rejected
+  `403` and the tool fails closed *before* the GitHub merge — the PR stays an unmerged
+  draft and the human sees `merge failed: mcp-github tool error: …`.
 
 **Completion record (the "synthetic UI turn").** This is a display-only conversation
 event — it renders in the turns view and rings the notification, but **does not invoke

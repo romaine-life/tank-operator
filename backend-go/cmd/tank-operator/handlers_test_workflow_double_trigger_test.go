@@ -96,7 +96,8 @@ func TestStartTestWorkflow_ActiveTestStateRefused(t *testing.T) {
 	gh := &provisionFakeGitHub{}
 	glim := &fakeGlimmungClient{}
 	record := testWorkflowSessionRecord("romaine-life/tank-operator")
-	record.TestState = map[string]any{"active": true}
+	// A real running environment: active AND a slot URL.
+	record.TestState = map[string]any{"active": true, "url": "https://slot-1.example.test"}
 	app, _, _, launched := testWorkflowApp(t, record, gh, glim)
 	store := newFakePendingProvisionStore()
 	app.pendingTestProvisions = store
@@ -111,6 +112,28 @@ func TestStartTestWorkflow_ActiveTestStateRefused(t *testing.T) {
 	}
 	if store.registerCalls != 0 {
 		t.Fatalf("active-test-state guard must short-circuit before Register; register calls=%d", store.registerCalls)
+	}
+}
+
+// TestStartTestWorkflow_OptimisticActiveFlagDoesNotBlock proves an `active:true`
+// with NO slot URL — the optimistic/stale flag set at "test" session-create
+// before any slot exists — does NOT 409 a genuine provision. It is not a running
+// environment, so Create proceeds.
+func TestStartTestWorkflow_OptimisticActiveFlagDoesNotBlock(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	record := testWorkflowSessionRecord("romaine-life/tank-operator")
+	record.TestState = map[string]any{"active": true} // no url → not a real env
+	app, _, _, launched := testWorkflowApp(t, record, gh, glim)
+	app.pendingTestProvisions = newFakePendingProvisionStore()
+
+	rec := httptest.NewRecorder()
+	app.handleStartTestWorkflow(rec, startTestWorkflowRequest(t))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202 — a urless active flag must not block Create", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 1 {
+		t.Fatalf("urless active flag should not block the gate; launched=%d, want 1", len(*launched))
 	}
 }
 

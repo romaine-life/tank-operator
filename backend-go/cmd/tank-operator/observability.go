@@ -53,6 +53,43 @@ var (
 	)
 )
 
+// --- Transcript capture (docs/session-transcript-capture.md, Stage 1) ---
+
+var (
+	// transcriptUploadTotal counts transcript-snapshot uploads received from
+	// session pods. result is a bounded set: ok, bad_request, forbidden,
+	// not_configured, read_error, error. No session/email labels (cardinality
+	// rule); the snapshot is keyed in blob storage, not in the metric.
+	transcriptUploadTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_transcript_upload_total",
+			Help: "Transcript JSONL snapshot uploads received from session pods, by result.",
+		},
+		[]string{"result"},
+	)
+)
+
+func recordTranscriptUpload(result string) {
+	transcriptUploadTotal.WithLabelValues(result).Inc()
+}
+
+var (
+	// sessionResurrectTotal counts conversation-resurrection requests by
+	// result: ok, bad_request, not_found, unsupported_mode, create_failed,
+	// unavailable. Bounded; no session/email labels.
+	sessionResurrectTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_session_resurrect_total",
+			Help: "Session conversation-resurrection requests, by result.",
+		},
+		[]string{"result"},
+	)
+)
+
+func recordSessionResurrect(result string) {
+	sessionResurrectTotal.WithLabelValues(result).Inc()
+}
+
 // --- Session-event stream metrics (the names match what the prior
 // counter surface exposed, so dashboards reading the old series keep
 // rendering against the new collectors). ---
@@ -891,6 +928,46 @@ var controlActionEventTotal = promauto.NewCounterVec(
 	},
 	[]string{"source_service", "source_tool", "action", "status", "result"},
 )
+
+// controlActionInternalWriteTotal records which authorized writer class reached
+// the internal session-scoped control-action write endpoint and whether it was
+// authorized. The two legitimate writers are a session pod writing its own
+// ledger (svc:tank:<id>) and the orchestrator control plane writing on behalf of
+// a governed merge (svc:tank-operator:<id>; docs/event-driven-rollout.md §E). A
+// rise in control_plane/forbidden is the signature of the governed-merge audit
+// regression this counter exists to surface.
+var controlActionInternalWriteTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_control_action_internal_write_total",
+		Help: "Internal session-scoped control-action ledger writes by authorized writer class and authorization outcome.",
+	},
+	[]string{"writer", "result"},
+)
+
+func recordControlActionInternalWrite(writer, result string) {
+	controlActionInternalWriteTotal.WithLabelValues(
+		controlActionWriterLabel(writer),
+		controlActionInternalWriteResultLabel(result),
+	).Inc()
+}
+
+func controlActionWriterLabel(writer string) string {
+	switch writer {
+	case "session_pod", "control_plane", "other":
+		return writer
+	default:
+		return "other"
+	}
+}
+
+func controlActionInternalWriteResultLabel(result string) string {
+	switch result {
+	case "authorized", "forbidden":
+		return result
+	default:
+		return "other"
+	}
+}
 
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
@@ -1850,6 +1927,20 @@ var (
 		[]string{"result"},
 	)
 
+	// adminDataBrowserReadsTotal is the volume + outcome signal for the
+	// admin-only read-only database browser (GET /api/admin/data/...).
+	// `surface` is table_list|rows; `result` is a bounded outcome. The
+	// browsed table name is deliberately NOT a label — it already rides the
+	// per-call audit slog line, and keeping it off the metric pins
+	// cardinality at surface×result.
+	adminDataBrowserReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_data_browser_reads_total",
+			Help: "Admin reads of the read-only data browser, labeled by bounded surface and result.",
+		},
+		[]string{"surface", "result"},
+	)
+
 	// conversationReadCursorStagnantTotal is the durable cross-check
 	// for the transcript navigation latch failure mode. Increments
 	// once per sample pass for every (session_mode, scope) tuple where
@@ -1914,6 +2005,31 @@ func recordDebugSessionEventLedgerRead(result string) {
 func debugSessionEventLedgerResultLabel(result string) string {
 	switch result {
 	case "ok", "empty", "bad_request", "forbidden", "store_error", "not_configured":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func recordAdminDataBrowserRead(surface, result string) {
+	adminDataBrowserReadsTotal.WithLabelValues(
+		adminDataBrowserSurfaceLabel(surface),
+		adminDataBrowserResultLabel(result),
+	).Inc()
+}
+
+func adminDataBrowserSurfaceLabel(surface string) string {
+	switch surface {
+	case "table_list", "rows":
+		return surface
+	default:
+		return "other"
+	}
+}
+
+func adminDataBrowserResultLabel(result string) string {
+	switch result {
+	case "ok", "empty", "bad_request", "forbidden", "not_found", "error", "not_configured":
 		return result
 	default:
 		return "other"

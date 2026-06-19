@@ -170,6 +170,14 @@ All metric names are prefixed `tank_`. The full namespace:
   `forbidden`, `store_error`, `not_configured`. `empty` is its own
   label so a wave of misdirected lookups (wrong scope, wrong id) is
   visible without grepping the audit slog line.
+- `tank_admin_data_browser_reads_total{surface,result}` — admin reads of
+  the read-only database browser (`GET /api/admin/data/tables` and
+  `/api/admin/data/tables/{table}/rows` — the in-app, SQL-free counterpart to
+  the service-principal diagnostic SQL path). `surface` is `table_list` |
+  `rows`; bounded `result` labels: `ok`, `empty`, `bad_request`, `forbidden`,
+  `not_found`, `error`, `not_configured`. The browsed table name is kept off
+  the metric label (cardinality) and on the per-call audit slog line so
+  who-read-what stays answerable without bloating series.
 - `tank_admin_debug_conversation_read_state_reads_total{result}` —
   admin reads of `GET /api/debug/conversation-read-state` (the
   per-session, per-owner read-cursor + activity-summary diagnostic
@@ -469,6 +477,21 @@ All metric names are prefixed `tank_`. The full namespace:
   subagent authority regression is a nonzero
   `{agent_kind="subagent",tool_family="mcp",server="<configured server>"}`
   series while the parent can use that server.
+  `tank_runner_transcript_capture_total{result}` counts whole-file SDK
+  transcript snapshot uploads from the in-process capture sink
+  (docs/session-transcript-capture.md); `result` is a closed set `ok`,
+  `skipped` (storage unconfigured — best-effort, retried), `error` (read or
+  upload failed). `tank_runner_transcript_capture_lag_ms` gauges the age of the
+  captured file at upload time. `tank_runner_transcript_resume_total{outcome}`
+  counts resume-bootstrap outcomes on resurrected pods
+  (materialized|not_found|version_mismatch|error). Capture is additive and
+  read-only; a sustained nonzero `result="error"` rate is a capture
+  regression, not a turn-loop fault. The orchestrator counterparts are
+  `tank_transcript_upload_total{result}` and `tank_session_resurrect_total{result}`.
+- `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
+  This runner has its own namespace because it drives the native `agy` binary
+  rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`
+  is the red signal for failed agy turns. `reason="skill_missing"` means the
   backend accepted a skill turn but the runner could not find
   executor terminal error such as `UNKNOWN (code 500)` or
   `PlannerResponse without ModifiedResponse`; `reason="provider_no_final_answer"`
@@ -999,6 +1022,22 @@ Each invocation writes immutable events sharing one `invocation_id`:
 - `succeeded` after the external system accepts the mutation.
 - `failed` when the external system rejects the mutation.
 
+The internal write endpoint (`POST /api/internal/sessions/{id}/control-actions`)
+has two authorized writers, both authenticated by their **verified** IdP
+subject, never a caller-asserted header: a **session pod** (`svc:tank:<id>`)
+writing its *own* session's ledger, and the **orchestrator control plane**
+(`svc:tank-operator:<id>`) writing *any* session's ledger. The second writer is
+what lets the orchestrator-mediated governed merges — the in-app "Merge in Tank"
+button (`handleMergeSessionPR`) and the green-path auto-merge
+(`autoMergeOrchestrationPhasePR`) — record their `github.pull_request.merge`
+audit on the **owning session's** ledger rather than the orchestrator's: the
+orchestrator passes the owning session id to mcp-github (`governed_session_id`),
+so the ledger is identical regardless of who merged
+(docs/event-driven-rollout.md §E). Before this writer was recognized, every
+orchestrator-mediated merge `started` write was rejected `403`, which fails the
+tool closed and surfaced to the user as `merge failed: mcp-github tool error:
+Error executing tool merge_pull_request: …`.
+
 The browser reads the per-session ledger through:
 
 ```
@@ -1015,6 +1054,12 @@ Prometheus counters:
 - `tank_control_action_events_total{source_service,source_tool,action,status,result}`
   counts accepted/rejected Tank ledger writes. Labels are deliberately bounded;
   PR numbers, emails, session ids, and SHAs live in Postgres, not metrics.
+- `tank_control_action_internal_write_total{writer,result}` counts internal
+  session-scoped ledger writes by authorized writer class
+  (`session_pod` | `control_plane` | `other`) and authorization outcome
+  (`authorized` | `forbidden`). A rise in `control_plane`/`forbidden` is the
+  signature of the orchestrator-mediated governed-merge regression: the merge
+  button stops working because the control-plane writer is no longer accepted.
 - MCP servers may expose their own action counters. For `mcp-github`, use
   `mcp_github_control_action_total{tool,action,status,result}` and
   `mcp_github_control_action_audit_append_total{status,result}`.

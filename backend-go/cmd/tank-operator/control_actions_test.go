@@ -315,9 +315,9 @@ func TestHandleInternalAppendControlActionRejectsSlotSubjectOnProductionScope(t 
 	}
 }
 
-func TestHandleInternalAppendControlActionRejectsNonSessionPrincipal(t *testing.T) {
+func TestHandleInternalAppendControlActionAcceptsOrchestratorControlPlane(t *testing.T) {
 	store := &fakeControlActionStore{}
-	app := controlActionTestServer(t, store)
+	app := controlActionTestServer(t, store) // slot-3 backend
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(`{
 		"event_id": "ctrl_1_started",
 		"invocation_id": "ctrl_1",
@@ -326,19 +326,34 @@ func TestHandleInternalAppendControlActionRejectsNonSessionPrincipal(t *testing.
 		"action": "github.pull_request.merge",
 		"status": "started",
 		"target_kind": "github_pull_request",
-		"target_ref": "https://github.com/romaine-life/tank-operator/pull/857"
+		"target_ref": "https://github.com/romaine-life/tank-operator/pull/857",
+		"pr_number": 857
 	}`))
 	req.SetPathValue("session_id", "47")
+	// The orchestrator control plane (pod-stable `tank-operator` consumer) merges a
+	// session's PR on its behalf and audits the result. Its subject is NOT session
+	// 47's own `tank` subject, yet it is an authorized writer for that session's
+	// ledger (docs/event-driven-rollout.md §E). This is the "Merge in Tank" /
+	// auto-merge path that 403'd before the control-plane writer was recognized.
 	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank-operator:orchestrator-slot-3"))
 	rec := httptest.NewRecorder()
 
 	app.handleInternalAppendControlAction(rec, req)
 
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(store.appendCalls) != 0 {
-		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	// The audit lands on the *target* session's ledger (47) on this backend's
+	// scope, not a synthetic orchestrator session -- identical to the agent path.
+	got := store.appendCalls[0]
+	if got.SessionID != "47" || got.SessionScope != "tank-operator-slot-3" {
+		t.Fatalf("audit session/scope = (%q,%q), want (47, tank-operator-slot-3)", got.SessionID, got.SessionScope)
+	}
+	if got.OwnerEmail != "owner@example.test" {
+		t.Fatalf("audit owner = %q, want owner@example.test (from actor_email)", got.OwnerEmail)
 	}
 }
 
@@ -369,6 +384,44 @@ func TestHandleInternalAppendControlActionRejectsMismatchedSessionSubject(t *tes
 	}
 }
 
+func TestServiceSubjectIsControlPlane(t *testing.T) {
+	cases := []struct {
+		sub  string
+		want bool
+	}{
+		{"svc:tank-operator:orchestrator", true},        // prod orchestrator
+		{"svc:tank-operator:orchestrator-slot-3", true}, // slot orchestrator
+		{" svc:tank-operator:orchestrator ", true},      // tolerates surrounding whitespace
+		{"svc:tank:47", false},                          // production session pod
+		{"svc:tank:slot-3-session-47", false},           // slot session pod
+		{"svc:mcp-glimmung:pod-7", false},               // a different MCP's principal
+		{"svc:tank-operator:", false},                   // empty stable id
+		{"svc:tank-operatorX:orchestrator", false},      // not the tank-operator consumer
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := serviceSubjectIsControlPlane(tc.sub); got != tc.want {
+			t.Errorf("serviceSubjectIsControlPlane(%q) = %v, want %v", tc.sub, got, tc.want)
+		}
+	}
+}
+
+func TestControlActionWriterClass(t *testing.T) {
+	cases := []struct{ sub, want string }{
+		{"svc:tank:47", "session_pod"},
+		{"svc:tank:slot-3-session-47", "session_pod"},
+		{"svc:tank-operator:orchestrator", "control_plane"},
+		{"svc:tank-operator:orchestrator-slot-3", "control_plane"},
+		{"svc:mcp-glimmung:pod-7", "other"},
+		{"", "other"},
+	}
+	for _, tc := range cases {
+		if got := controlActionWriterClass(tc.sub); got != tc.want {
+			t.Errorf("controlActionWriterClass(%q) = %q, want %q", tc.sub, got, tc.want)
+		}
+	}
+}
+
 func TestHandleInternalAppendControlActionIgnoresSpoofedCallerHeaders(t *testing.T) {
 	store := &fakeControlActionStore{}
 	app := controlActionTestServer(t, store)
@@ -383,8 +436,11 @@ func TestHandleInternalAppendControlActionIgnoresSpoofedCallerHeaders(t *testing
 		"target_ref": "https://github.com/romaine-life/tank-operator/pull/857"
 	}`))
 	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank-operator:orchestrator-slot-3"))
-	// Spoofed caller headers must not grant access — they are not an authz input.
+	// A service principal that is neither session 47's own `tank` subject nor the
+	// orchestrator control plane (`tank-operator` consumer) -- here a different
+	// MCP's principal -- is not an authorized ledger writer, and spoofed caller
+	// headers must not change that: headers are not an authz input.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:mcp-glimmung:pod-7"))
 	req.Header.Set("X-Tank-Caller-Session-Id", "47")
 	req.Header.Set("X-Tank-Caller-Session-Scope", "tank-operator-slot-3")
 	rec := httptest.NewRecorder()

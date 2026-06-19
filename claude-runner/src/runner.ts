@@ -1487,14 +1487,21 @@ export class Runner {
         [TANK_ASK_USER_QUESTION_TOOL]: TANK_ASK_USER_QUESTION_TOOL_ALIAS,
         [TANK_EXIT_PLAN_MODE_TOOL]: TANK_EXIT_PLAN_MODE_TOOL_ALIAS,
       },
+      // Resume precedence:
+      //  1. providerSessionID — an in-pod re-pin (mid-session model/effort
+      //     change) rebuilding query() against the live provider session.
+      //  2. cfg.resumeSessionId — a resurrected pod's FIRST boot: the resume
+      //     bootstrap materialized the dead session's transcript at its exact
+      //     path and pinned its SDK session id, so we `resume` it (cross-pod
+      //     conversation resurrection).
+      //  3. continue: true — resume an on-disk JSONL from a prior process life
+      //     (claude-runner restart within the same pod). First boot, no JSONL:
+      //     no-op. Non-resurrect pods take this path, unchanged.
       ...(providerSessionID
         ? { resume: providerSessionID }
-        : {
-            // Resume an on-disk JSONL if one exists from a prior process
-            // life (e.g., claude-runner restart within the same pod).
-            // First boot with no JSONL: no-op.
-            continue: true,
-          }),
+        : this.cfg.resumeSessionId
+          ? { resume: this.cfg.resumeSessionId }
+          : { continue: true }),
       // include_partial_messages keeps the typewriter effect — the SPA
       // renders stream_event deltas live and snapshots to the canonical
       // assistant message when it arrives.
