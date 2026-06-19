@@ -199,9 +199,26 @@ func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
-	// Only an actively-watching row is actionable. This also coalesces
-	// duplicate/late deliveries: after the first transition the row is no longer
-	// 'watching', so further events for the same PR no-op.
+	// A merge is terminal and must land even on a row that already reached a
+	// different terminal state. In particular a 'ready' (green + mergeable) watch
+	// never returns to 'watching', so the not-watching coalescing guard below
+	// would otherwise drop the merge and leave the row stuck 'ready' forever
+	// (which the test-slot page then renders as "green & mergeable" after the PR
+	// is actually merged). Apply it before the guard; skip an already-'merged'
+	// row so a duplicate delivery is a no-op.
+	if sig.kind == "merged" {
+		if watch.Status == pgstore.CIWatchMerged {
+			recordCIWebhook(eventType, "not_watching")
+		} else {
+			recordCIWebhook(eventType, "acted")
+			s.applyCIWebhookSignal(ctx, watch, sig)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	// Non-merge signals: only an actively-watching row is actionable. This also
+	// coalesces duplicate/late deliveries: after the first transition the row is
+	// no longer 'watching', so further events for the same PR no-op.
 	if watch.Status != pgstore.CIWatchWatching {
 		recordCIWebhook(eventType, "not_watching")
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -216,9 +233,7 @@ func (s *appServer) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	recordCIWebhook(eventType, "acted")
-	if sig.kind == "merged" {
-		s.applyCIWebhookSignal(ctx, watch, sig)
-	} else if _, err := s.reconcileAndApplyCIWatch(ctx, watch, ciWatchReconcileWebhook); err != nil {
+	if _, err := s.reconcileAndApplyCIWatch(ctx, watch, ciWatchReconcileWebhook); err != nil {
 		recordCIWebhook(eventType, "reconcile_error")
 		slog.Warn("ci watch webhook reconcile failed", "watch_id", watch.WatchID, "event", eventType, "error", err)
 	}

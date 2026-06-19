@@ -225,6 +225,20 @@ and [../README.md](../README.md) for how capability ledgers are used.
   tab is hidden) converges the `mergeable → merged` transition without a manual
   refresh; the live preflight (mount + Refresh) supplies the check names. Backend:
   `pr_number` + `pending_checks` added to the preflight view.
+- **Fixes (2026-06-19, follow-up):**
+  - **Merged showed as "Green & mergeable".** The durable CI-watch row freezes at
+    its first terminal verdict — a `ready` watch never flips to `merged` because
+    the merge webhook handler skipped any non-`watching` row. Fixed two ways: the
+    page now **prefers the live preflight verdict** (the watch is the instant
+    paint + fallback) with a **live 20s poll** so a merge while-viewing converges;
+    and the merge webhook now **marks even a `ready`/terminal watch `merged`**
+    (`github_webhook.go`, before the not-watching coalescing guard). A distinct
+    **purple `is-merged`** tone + "Merged" label render it.
+  - **Falsely showed "Test environment — running".** An `active:true` `test_state`
+    with no URL (the optimistic flag set at "test" session-create) was rendered as
+    a running env. The page now requires a real **URL** to show "running"; and the
+    provision double-trigger guard (`handleStartTestWorkflow`) requires
+    `active && url` so the empty flag no longer 409s a genuine Create.
 
 ## pending-provision-backstop
 
