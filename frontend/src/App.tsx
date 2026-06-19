@@ -248,9 +248,9 @@ import {
   type ScheduledWakeupStatus,
 } from "./scheduledWakeups";
 import {
+  breakGlassRequestFromControlAction,
   controlActionRowsToEntries,
   controlActionStatusLabel,
-  pendingBreakGlassRequests,
   pendingPRLaneRequests,
   type BreakGlassRequest,
   type ControlActionRow,
@@ -18550,6 +18550,8 @@ function ChatPane({
   const [focusedBreakGlassRows, setFocusedBreakGlassRows] = useState<
     ControlActionRow[]
   >([]);
+  const [sessionBreakGlassRequestItems, setSessionBreakGlassRequestItems] =
+    useState<AdminBreakGlassListItem[]>([]);
   const [focusedTestSlotModelRows, setFocusedTestSlotModelRows] = useState<
     ControlActionRow[]
   >([]);
@@ -18733,6 +18735,30 @@ function ChatPane({
     scopedSessionPathForPane,
     session.id,
   ]);
+  const fetchSessionBreakGlassRequests = useCallback(async () => {
+    if (publicView || readOnly) {
+      setSessionBreakGlassRequestItems([]);
+      return;
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests?status=pending`,
+      ),
+    );
+    if (!res.ok) {
+      setSessionBreakGlassRequestItems([]);
+      return;
+    }
+    const body = (await res.json()) as AdminBreakGlassListBody;
+    setSessionBreakGlassRequestItems(
+      (body.requests ?? []).filter((item) => item.pending !== false),
+    );
+  }, [
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const fetchFocusedTestSlotModelRequest = useCallback(async () => {
     if (publicView || readOnly || !activeTestSlotModelRequestId) {
       setFocusedTestSlotModelRows([]);
@@ -18772,8 +18798,13 @@ function ChatPane({
     [controlActionRows],
   );
   const breakGlassRequests = useMemo(
-    () => pendingBreakGlassRequests(breakGlassActionRows),
-    [breakGlassActionRows],
+    () =>
+      sessionBreakGlassRequestItems.flatMap((item) => {
+        if (item.pending === false) return [];
+        const request = breakGlassRequestFromControlAction(item.request);
+        return request ? [request] : [];
+      }),
+    [sessionBreakGlassRequestItems],
   );
   const breakGlassApprovalMenuItems = useMemo(
     () =>
@@ -18862,6 +18893,7 @@ function ChatPane({
           if (turnId) setPendingApprovalTurnOpenId(turnId);
         }
         await fetchControlActionEntries();
+        await fetchSessionBreakGlassRequests();
         await fetchFocusedBreakGlassRequest();
       } finally {
         setBreakGlassApprovalBusyId(null);
@@ -18870,6 +18902,7 @@ function ChatPane({
     [
       fetchControlActionEntries,
       fetchFocusedBreakGlassRequest,
+      fetchSessionBreakGlassRequests,
       publicView,
       readOnly,
       scopedSessionPathForPane,
@@ -18899,6 +18932,7 @@ function ChatPane({
         const turnId = approvalNotificationTurnId(responseBody);
         if (turnId) setPendingApprovalTurnOpenId(turnId);
         await fetchControlActionEntries();
+        await fetchSessionBreakGlassRequests();
         await fetchFocusedBreakGlassRequest();
       } finally {
         setBreakGlassApprovalBusyId(null);
@@ -18907,6 +18941,7 @@ function ChatPane({
     [
       fetchControlActionEntries,
       fetchFocusedBreakGlassRequest,
+      fetchSessionBreakGlassRequests,
       publicView,
       readOnly,
       scopedSessionPathForPane,
@@ -23099,6 +23134,7 @@ function ChatPane({
       setControlActionEntries([]);
       setControlActionRows([]);
       setFocusedBreakGlassRows([]);
+      setSessionBreakGlassRequestItems([]);
       setFocusedTestSlotModelRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
@@ -23113,6 +23149,9 @@ function ChatPane({
       });
       void fetchFocusedBreakGlassRequest().catch(() => {
         if (!cancelled) setFocusedBreakGlassRows([]);
+      });
+      void fetchSessionBreakGlassRequests().catch(() => {
+        if (!cancelled) setSessionBreakGlassRequestItems([]);
       });
       void fetchFocusedTestSlotModelRequest().catch(() => {
         if (!cancelled) setFocusedTestSlotModelRows([]);
@@ -23131,6 +23170,7 @@ function ChatPane({
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
     fetchFocusedBreakGlassRequest,
+    fetchSessionBreakGlassRequests,
     fetchFocusedTestSlotModelRequest,
     publicView,
     readOnly,
