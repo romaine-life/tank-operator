@@ -243,23 +243,23 @@ func TestRunInteractiveTestWorkflow_ReadyProvisionsAndAnnounces(t *testing.T) {
 	if active, _ := rec.TestState["active"].(bool); !active {
 		t.Fatalf("ready verdict should mark test-state active: %#v", rec.TestState)
 	}
-	phases := testProvisionPhases(events)
-	if len(phases) == 0 || phases[0] != "creating" {
-		t.Fatalf("first provision record should be the 'creating' opener, got %v", phases)
+	if opener := noticeTurnOpener(events); opener != "Creating test slot." {
+		t.Fatalf("notice-turn opener=%q, want 'Creating test slot.'", opener)
 	}
-	terminal := latestTestProvision(events)
-	if got, _ := terminal["phase"].(string); got != "ready" {
-		t.Fatalf("terminal provision phase=%q, want ready (all phases: %v)", got, phases)
+	body := noticeTurnBody(events)
+	if !strings.Contains(body, "ready") {
+		t.Fatalf("notice-turn body=%q, want it to announce the environment is ready", body)
 	}
-	if got, _ := terminal["url"].(string); got == "" {
-		t.Fatalf("ready record should carry the test-environment URL, got payload %#v", terminal)
+	if !strings.Contains(body, "://") {
+		t.Fatalf("ready body should carry the test-environment URL, got %q", body)
 	}
-	if got, _ := terminal["text"].(string); !strings.Contains(got, "ready") {
-		t.Fatalf("ready text=%q, want it to announce the environment is ready", got)
+	if !noticeTurnClosed(events) {
+		t.Fatalf("ready notice turn must be closed with turn.completed (no strand)")
 	}
-	// All records share the run id so they thread under one system avatar.
-	if !testProvisionSingleRun(events) {
-		t.Fatalf("all provision records of one run must share a run_id: %v", testProvisionEvents(events))
+	// Opener + body + close share one turn_id, so it renders as a single turn
+	// the user can land on — not an orphan role:system record.
+	if !noticeTurnSingleTurn(events) {
+		t.Fatalf("all notice-turn events must share a turn_id: %v", noticeTurnEvents(events))
 	}
 }
 
@@ -291,20 +291,18 @@ func TestRunInteractiveTestWorkflow_RefusalSurfacesReason(t *testing.T) {
 	if glim.checkoutCalls != 0 || glim.deployCalls != 0 {
 		t.Fatalf("refusal must not touch glimmung; checkout=%d deploy=%d", glim.checkoutCalls, glim.deployCalls)
 	}
-	phases := testProvisionPhases(events)
-	if len(phases) == 0 || phases[0] != "creating" {
-		t.Fatalf("first provision record should be the 'creating' opener, got %v", phases)
+	if opener := noticeTurnOpener(events); opener != "Creating test slot." {
+		t.Fatalf("notice-turn opener=%q, want 'Creating test slot.'", opener)
 	}
-	terminal := latestTestProvision(events)
-	if got, _ := terminal["phase"].(string); got != "error" {
-		t.Fatalf("refusal terminal phase=%q, want error", got)
+	detail := noticeTurnBody(events)
+	if !strings.Contains(detail, "Couldn't create test slot") {
+		t.Fatalf("refusal body=%q, want it to surface the refusal", detail)
 	}
-	if got, _ := terminal["severity"].(string); got != "error" {
-		t.Fatalf("refusal terminal severity=%q, want error", got)
-	}
-	detail, _ := terminal["text"].(string)
 	if !strings.Contains(detail, "build") || !strings.Contains(detail, "lint") {
-		t.Fatalf("refusal text should list failing checks, got %q", detail)
+		t.Fatalf("refusal body should list failing checks, got %q", detail)
+	}
+	if !noticeTurnClosed(events) {
+		t.Fatalf("refusal notice turn must be closed with turn.completed (no strand)")
 	}
 	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
 	if !ok {
@@ -363,16 +361,16 @@ func TestRunInteractiveTestWorkflow_DriveReadyWakesAgent(t *testing.T) {
 		t.Fatalf("drive+ready should wake the agent exactly once, got %d wakes", len(*wakes))
 	}
 	wake := (*wakes)[0]
-	terminalURL, _ := latestTestProvision(events)["url"].(string)
-	if wake.url == "" || wake.url != terminalURL {
-		t.Fatalf("wake url=%q, want the ready slot URL %q", wake.url, terminalURL)
+	if wake.url == "" {
+		t.Fatalf("drive wake must carry the ready slot URL, got empty")
 	}
 	if wake.req.Branch != "tank/session/77/tank-operator" {
 		t.Fatalf("wake req branch=%q, want the governed branch", wake.req.Branch)
 	}
-	// The visible provision thread is identical to the plain button: ready terminal.
-	if got, _ := latestTestProvision(events)["phase"].(string); got != "ready" {
-		t.Fatalf("terminal phase=%q, want ready", got)
+	// The visible thread is identical to the plain button: a ready notice turn
+	// announcing the same URL the wake used.
+	if body := noticeTurnBody(events); !strings.Contains(body, "ready") || !strings.Contains(body, wake.url) {
+		t.Fatalf("ready notice body=%q, want it to announce ready at %q", body, wake.url)
 	}
 }
 
@@ -397,8 +395,8 @@ func TestRunInteractiveTestWorkflow_DriveRefusalDoesNotWake(t *testing.T) {
 	if len(*wakes) != 0 {
 		t.Fatalf("drive+refusal must NOT wake the agent, got %d wakes", len(*wakes))
 	}
-	if got, _ := latestTestProvision(events)["phase"].(string); got != "error" {
-		t.Fatalf("refusal terminal phase=%q, want error", got)
+	if body := noticeTurnBody(events); !strings.Contains(body, "Couldn't create test slot") {
+		t.Fatalf("refusal notice body=%q, want it to surface the refusal", body)
 	}
 }
 
@@ -416,8 +414,8 @@ func TestRunInteractiveTestWorkflow_PlainReadyDoesNotWake(t *testing.T) {
 	if len(*wakes) != 0 {
 		t.Fatalf("plain (drive=false) ready must NOT wake the agent, got %d wakes", len(*wakes))
 	}
-	if got, _ := latestTestProvision(events)["phase"].(string); got != "ready" {
-		t.Fatalf("terminal phase=%q, want ready", got)
+	if body := noticeTurnBody(events); !strings.Contains(body, "ready") {
+		t.Fatalf("ready notice body=%q, want it to announce ready", body)
 	}
 }
 
@@ -504,53 +502,76 @@ func TestSessionGlimmungProjectMapping(t *testing.T) {
 	}
 }
 
-// testProvisionEvents returns the payloads of every persisted
-// test_provision.updated event, in emission order.
-func testProvisionEvents(events *recordingSessionEventStore) []map[string]any {
+// noticeTurnEvents returns the persisted events of the test-slot notice turn —
+// the system-authored opener (user_message.created), the assistant body line
+// (assistant_message.created), and the close (turn.completed) — in emission
+// order. All share one turn_id.
+func noticeTurnEvents(events *recordingSessionEventStore) []map[string]any {
 	var out []map[string]any
 	for _, ev := range events.upserts {
-		if t, _ := ev["type"].(string); t != "test_provision.updated" {
-			continue
-		}
-		if payload, ok := ev["payload"].(map[string]any); ok {
-			out = append(out, payload)
+		switch t, _ := ev["type"].(string); t {
+		case "user_message.created", "assistant_message.created", "turn.completed":
+			out = append(out, ev)
 		}
 	}
 	return out
 }
 
-// testProvisionPhases returns the ordered phase names of the provision thread.
-func testProvisionPhases(events *recordingSessionEventStore) []string {
-	payloads := testProvisionEvents(events)
-	phases := make([]string, 0, len(payloads))
-	for _, p := range payloads {
-		phase, _ := p["phase"].(string)
-		phases = append(phases, phase)
-	}
-	return phases
-}
-
-// latestTestProvision returns the payload of the most-recent provision record.
-func latestTestProvision(events *recordingSessionEventStore) map[string]any {
-	payloads := testProvisionEvents(events)
-	if len(payloads) == 0 {
-		return nil
-	}
-	return payloads[len(payloads)-1]
-}
-
-// testProvisionSingleRun reports whether every provision record shares one run_id.
-func testProvisionSingleRun(events *recordingSessionEventStore) bool {
-	runID := ""
-	for _, p := range testProvisionEvents(events) {
-		id, _ := p["run_id"].(string)
-		if runID == "" {
-			runID = id
+// noticeTurnOpener returns the system-authored opener text ("Creating test
+// slot."), or "" if no opener was emitted.
+func noticeTurnOpener(events *recordingSessionEventStore) string {
+	for _, ev := range events.upserts {
+		if t, _ := ev["type"].(string); t != "user_message.created" {
 			continue
 		}
-		if id != runID {
+		if payload, ok := ev["payload"].(map[string]any); ok {
+			text, _ := payload["text"].(string)
+			return text
+		}
+	}
+	return ""
+}
+
+// noticeTurnBody returns the assistant body text of the notice turn — the
+// outcome line ("Test environment ready at <url>" / "Couldn't create test
+// slot: ..."), or "" if none.
+func noticeTurnBody(events *recordingSessionEventStore) string {
+	for _, ev := range events.upserts {
+		if t, _ := ev["type"].(string); t != "assistant_message.created" {
+			continue
+		}
+		if payload, ok := ev["payload"].(map[string]any); ok {
+			text, _ := payload["text"].(string)
+			return text
+		}
+	}
+	return ""
+}
+
+// noticeTurnClosed reports whether the notice turn was closed (turn.completed),
+// i.e. it cannot strand.
+func noticeTurnClosed(events *recordingSessionEventStore) bool {
+	for _, ev := range events.upserts {
+		if t, _ := ev["type"].(string); t == "turn.completed" {
+			return true
+		}
+	}
+	return false
+}
+
+// noticeTurnSingleTurn reports whether every notice-turn event shares one
+// turn_id, so it renders as a single turn the user can land on.
+func noticeTurnSingleTurn(events *recordingSessionEventStore) bool {
+	turnID := ""
+	for _, ev := range noticeTurnEvents(events) {
+		id, _ := ev["turn_id"].(string)
+		if turnID == "" {
+			turnID = id
+			continue
+		}
+		if id != turnID {
 			return false
 		}
 	}
-	return runID != ""
+	return turnID != ""
 }
