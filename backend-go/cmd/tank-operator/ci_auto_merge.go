@@ -28,11 +28,6 @@ func (s *appServer) handleGreenCIWatch(ctx context.Context, watch pgstore.CIWatc
 		}
 		return
 	}
-	// Capture the pre-transition status: the user is pinged only on the
-	// watching -> ready EDGE. handleGreenCIWatch is re-entered by webhook +
-	// reconcile on an already-ready watch; re-pinging on every re-entry would
-	// re-summon the user for a PR they already saw go green.
-	wasAlreadyReady := watch.Status == pgstore.CIWatchReady
 	readyWatch, err := s.ciWatches.UpdateStatus(ctx, watch.WatchID, pgstore.CIWatchReady, detail)
 	if err == nil {
 		watch = readyWatch
@@ -47,7 +42,7 @@ func (s *appServer) handleGreenCIWatch(ctx context.Context, watch pgstore.CIWatc
 	// pr_ready.notified ping renders inline AND trips the needs_input sidebar
 	// attention. The orchestration auto-merge path above keeps emitting
 	// ci_status.updated "merged"/"failed" — those state values stay live.
-	s.emitPRReadyPing(ctx, watch, detail, wasAlreadyReady)
+	s.emitPRReadyPing(ctx, watch, detail)
 }
 
 // emitPRReadyPing posts the backend-side "your governed PR is green and
@@ -55,16 +50,18 @@ func (s *appServer) handleGreenCIWatch(ctx context.Context, watch pgstore.CIWatc
 // standalone system notice (no turn, no submit_turn command), so it cannot be
 // processed by the runner and cannot be swept by the stranded-turn sweeps.
 //
-// Idempotent on the transition: a re-entry on an already-ready watch
-// short-circuits before the durable write. The deterministic head-keyed
-// event_id is the durable backstop — concurrent reconcile/webhook drivers that
-// both observe the watching -> ready edge collapse to one row at the
-// session_events_event_identity unique index.
-func (s *appServer) emitPRReadyPing(ctx context.Context, watch pgstore.CIWatch, detail string, wasAlreadyReady bool) {
-	if wasAlreadyReady {
-		recordCIReadyPing("already_ready")
-		return
-	}
+// Once-per-ready-head idempotency is the deterministic head-keyed event_id
+// (pr-ready:<repo>:<pr>:ready:<head>), NOT a watch.Status guard: by the time
+// handleGreenCIWatch runs, the watching -> ready transition has already been
+// applied upstream (the reconcile/webhook path's atomic conditional
+// UpdateObservation is winner-only; the pr-readiness handoff path registers a
+// fresh watch), so watch.Status is no longer a reliable "is this the edge"
+// signal. Instead the durable session_events_event_identity unique index
+// (migration 0151) collapses every re-fire of the same ready head to one row —
+// the same mechanism the repeated-interrupt and replica-raced-sweep writers
+// rely on. A genuinely new head that goes green again carries a new event_id and
+// pings again. The fold is idempotent, so a collapsed re-fire re-summons nobody.
+func (s *appServer) emitPRReadyPing(ctx context.Context, watch pgstore.CIWatch, detail string) {
 	storageKey := watch.TankSessionID
 	if storageKey == "" {
 		storageKey = sessionmodel.SessionStorageKey(watch.SessionScope, watch.SessionID)

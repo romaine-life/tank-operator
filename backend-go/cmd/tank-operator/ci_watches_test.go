@@ -481,23 +481,48 @@ func TestHandleGreenCIWatchPingsUserOnReadyTransition(t *testing.T) {
 	}
 }
 
-// TestHandleGreenCIWatchDoesNotRepingOnReentry pins idempotency: a re-entry on
-// an ALREADY-ready watch (webhook + reconcile double-drive) does not re-ping the
-// user.
-func TestHandleGreenCIWatchDoesNotRepingOnReentry(t *testing.T) {
+// TestHandleGreenCIWatchPingIsIdempotentByEventID pins once-per-ready-head
+// idempotency: re-firing handleGreenCIWatch for the SAME ready head (a
+// webhook + reconcile double-drive, or a replica race) emits a pr_ready.notified
+// with the SAME deterministic event_id, so the durable
+// session_events_event_identity unique index collapses both to one row and the
+// user is summoned once. A status-based guard cannot do this — by the time
+// handleGreenCIWatch runs the watching->ready transition is already applied
+// upstream — so the deterministic event_id is the mechanism.
+func TestHandleGreenCIWatchPingIsIdempotentByEventID(t *testing.T) {
 	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
 		WatchID: "cw1", SessionID: "47", SessionScope: "tank-operator-slot-3",
 		OwnerEmail: "owner@example.test", PROwner: fakePROwner, PRName: fakePRName,
 		PRNumber: 1234, HeadSHA: "h1", PRURL: "https://github.com/o/r/pull/1234",
-		Status: pgstore.CIWatchReady,
+		Status: pgstore.CIWatchWatching,
 	}}
 	app := ciWatchTestServer(t, store)
 
-	watch := store.getByPRResult // already ready
+	watch := store.getByPRResult
+	app.handleGreenCIWatch(context.Background(), watch, "All required checks passed.")
 	app.handleGreenCIWatch(context.Background(), watch, "All required checks passed.")
 
-	if pings := prReadyUpserts(t, app); len(pings) != 0 {
-		t.Fatalf("pr_ready.notified pings on re-entry = %d, want 0 (idempotent on transition)", len(pings))
+	pings := prReadyUpserts(t, app)
+	if len(pings) < 2 {
+		t.Fatalf("expected both re-fires to emit (the production unique index dedups), got %d", len(pings))
+	}
+	id0, _ := pings[0]["event_id"].(string)
+	id1, _ := pings[1]["event_id"].(string)
+	if id0 == "" || id0 != id1 {
+		t.Fatalf("re-fire event_ids must be identical for durable dedup: %q vs %q", id0, id1)
+	}
+	if want := "pr-ready:" + fakePROwner + "/" + fakePRName + ":1234:ready:h1"; id0 != want {
+		t.Fatalf("event_id = %q, want deterministic head-keyed %q", id0, want)
+	}
+	// A NEW head that goes green again is a NEW ping (distinct event_id). The
+	// fake's UpdateStatus echoes getByPRResult, so move the durable head there.
+	store.getByPRResult.HeadSHA = "h2"
+	watch2 := store.getByPRResult
+	app.handleGreenCIWatch(context.Background(), watch2, "All required checks passed.")
+	pings = prReadyUpserts(t, app)
+	last, _ := pings[len(pings)-1]["event_id"].(string)
+	if last == id0 {
+		t.Fatalf("a new head must produce a new event_id, got the same %q", last)
 	}
 }
 

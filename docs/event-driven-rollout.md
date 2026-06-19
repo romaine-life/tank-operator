@@ -412,11 +412,12 @@ Per `CLAUDE.md`, observability is a completion requirement, not a follow-up. New
 - `tank_ci_terminal_total{state}` — `green|red|conflict`
 - `tank_ci_automerge_total{result}` — `merged|verify_failed|merge_conflict|error`
 - `tank_ci_wake_total{source}` — `ci-failure|ci-conflict` (the AGENT wake on red/conflict)
-- `tank_ci_ready_ping_total{result}` — `emitted|already_ready|persist_failed`. The USER
-  ping on a green+mergeable PR (the non-orchestration ready transition), distinct from
+- `tank_ci_ready_ping_total{result}` — `emitted|persist_failed`. The USER ping on a
+  green+mergeable PR (the non-orchestration ready transition), distinct from
   `tank_ci_wake_total`: this pings the user via a `pr_ready.notified` system notice and
-  **never wakes the agent**. `already_ready` counts the idempotent skip when
-  `handleGreenCIWatch` is re-entered on an already-ready watch.
+  **never wakes the agent**. Once-per-ready-head idempotency is the deterministic
+  head-keyed `event_id` collapsing at the `session_events_event_identity` unique index,
+  so a re-fire for the same head is a durable no-op rather than a second summon.
 - `tank_ci_watch_age_seconds` (histogram) — registration→terminal; surfaces stalls the
   deferred backstop would otherwise catch.
 

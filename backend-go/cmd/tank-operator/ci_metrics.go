@@ -25,8 +25,10 @@ var (
 	// The CI-watch ready USER ping (pr_ready.notified). Distinct from
 	// tank_ci_wake_total, which is the agent wake on red/conflict: this ping
 	// summons the user on a green+mergeable PR and never wakes the agent.
-	// result: "emitted" (durable ping written), "already_ready" (re-entry on an
-	// already-ready watch — idempotent skip), "persist_failed".
+	// result: "emitted" (durable ping write attempted) or "persist_failed".
+	// Once-per-ready-head idempotency is the deterministic head-keyed event_id
+	// collapsing at the session_events_event_identity unique index, so a
+	// re-fire for the same head is a durable no-op rather than a second summon.
 	ciReadyPingTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_ci_ready_ping_total",
 		Help: "CI-watch ready user pings (pr_ready.notified), by result. Never wakes the agent.",

@@ -216,12 +216,17 @@ and [../README.md](../README.md) for how capability ledgers are used.
   `turn_id`. The `needs_input` fold is guarded to NOT clobber a live agent turn (if
   CI goes green mid-turn the active turn owns the status); the attention is cleared
   by the next `turn.*` lifecycle event, so it never sticks past the user engaging.
-- **Idempotent on the transition:** pinged once per watching→ready edge. A re-entry
-  on an already-ready watch (webhook + reconcile double-drive) short-circuits before
-  the durable write; the deterministic head-keyed `event_id`
-  (`pr-ready:<repo>:<pr>:ready:<head>`) is the durable backstop that collapses
-  concurrent drivers at the `session_events_event_identity` unique index. A
-  genuinely new head that goes green again pings again.
+- **Idempotent — once per ready head:** the deterministic head-keyed `event_id`
+  (`pr-ready:<repo>:<pr>:ready:<head>`) collapses every re-fire of the same ready
+  head to one durable row at the `session_events_event_identity` unique index
+  (migration 0151) — the same mechanism the repeated-interrupt and
+  replica-raced-sweep writers use. This is deliberately NOT a `watch.Status` guard:
+  by the time `handleGreenCIWatch` runs, the watching→ready transition is already
+  applied upstream (the reconcile/webhook path's atomic conditional
+  `UpdateObservation` is winner-only; the pr-readiness handoff registers a fresh
+  watch), so `watch.Status` is no longer a reliable "is this the edge" signal. The
+  activity fold is idempotent, so a collapsed re-fire re-summons nobody. A
+  genuinely new head that goes green again carries a new `event_id` and pings again.
 - **Durable source:** `pr_ready.notified` event on the `session_events` ledger; the
   `session_ci_watches` row drives the watching→ready transition. Observable via
   `tank_ci_ready_ping_total{result}` (`emitted|already_ready|persist_failed`).
