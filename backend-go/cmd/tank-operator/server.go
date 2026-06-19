@@ -308,6 +308,7 @@ type ciWatchStore interface {
 	Get(context.Context, string) (pgstore.CIWatch, error)
 	GetByPR(context.Context, string, string, int) (pgstore.CIWatch, error)
 	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)
+	ListForSession(context.Context, string, string) ([]pgstore.CIWatch, error)
 	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
 	HasActiveForSession(context.Context, string, string) (bool, error)
 	ListStaleWatching(context.Context, time.Duration, int) ([]pgstore.CIWatch, error)

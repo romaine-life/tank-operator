@@ -310,6 +310,7 @@ import {
   type TestSlotStatus,
   type TestSlotPreflight,
   type TestSlotWatch,
+  type TestSlotPR,
 } from "./testWorkflow";
 import {
   readHomeDismissedRecentRepos,
@@ -10506,8 +10507,8 @@ function TestSlotScreen({
   authedFetch: (input: string, init?: RequestInit) => Promise<Response>;
   disabled?: boolean;
   readOnly?: boolean;
-  onCreateHold: () => void;
-  onCreateDrive: () => void;
+  onCreateHold: (pr?: number) => void;
+  onCreateDrive: (pr?: number) => void;
   onReturnTestSlot?: () => Promise<void>;
   onOpenReady: () => void;
   onOpenTranscript: () => void;
@@ -10526,10 +10527,14 @@ function TestSlotScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [returning, setReturning] = useState(false);
-  // Keep the latest authedFetch without making it an effect dependency (it may
-  // be re-created each render; depending on it would re-fire the load loop).
+  // Which branch/PR the user picked to provision (null = the default, newest).
+  const [selectedPR, setSelectedPR] = useState<number | null>(null);
+  // Keep the latest authedFetch / selection out of the load callback's deps (so
+  // it isn't re-created every render and re-firing the load loop).
   const fetchRef = useRef(authedFetch);
   fetchRef.current = authedFetch;
+  const selectedPRRef = useRef(selectedPR);
+  selectedPRRef.current = selectedPR;
 
   const load = useCallback(
     async (refresh: boolean, silent: boolean) => {
@@ -10541,6 +10546,7 @@ function TestSlotScreen({
       try {
         const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
           refresh,
+          pr: selectedPRRef.current ?? undefined,
         });
         // A durable (non-refresh) read carries no preflight; preserve the last
         // live one so the authoritative verdict doesn't flicker back to the
@@ -10642,6 +10648,17 @@ function TestSlotScreen({
   const prUrl = readiness?.prUrl || "";
   const prNumber = readiness?.prNumber || 0;
   const slotLabel = testSlotSlotLabel(testState);
+
+  // The branches/PRs the agent has worked on, and which one is effectively
+  // selected (explicit pick, else the newest). Create acts on this PR.
+  const prs: TestSlotPR[] = status?.prs ?? [];
+  const activePR = selectedPR ?? prs[0]?.pr_number ?? 0;
+  const selectPR = (n: number) => {
+    // Set the ref synchronously so the immediate live reload reads the new pick.
+    selectedPRRef.current = n;
+    setSelectedPR(n);
+    void load(true, false);
+  };
 
   const doReturn = async () => {
     if (!onReturnTestSlot || returning) return;
@@ -10865,6 +10882,56 @@ function TestSlotScreen({
               </div>
             )}
 
+            {/* Branch/PR picker — the branches the agent has worked on. */}
+            {prs.length > 1 && (
+              <div className="run-session-data-card is-info">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <GitPullRequestIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      Which branch to test
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      This session has {prs.length} pull requests — pick which one
+                      to provision.
+                    </span>
+                  </span>
+                </div>
+                <div className="run-session-data-actions">
+                  {prs.map((p) => {
+                    const sel = activePR === p.pr_number;
+                    return (
+                      <button
+                        key={p.pr_number}
+                        type="button"
+                        className="run-session-data-action"
+                        aria-pressed={sel}
+                        onClick={() => selectPR(p.pr_number)}
+                        title={p.pr_url || undefined}
+                      >
+                        {sel ? (
+                          <CheckIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <GitPullRequestIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span>
+                          PR #{p.pr_number} · {testSlotVerdictLabel(p.status)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* PR readiness */}
             <div className={`run-session-data-card is-${tone}`}>
               <div className="run-session-data-card-top">
@@ -10963,7 +11030,7 @@ function TestSlotScreen({
                     type="button"
                     className="run-session-data-action"
                     disabled={!canCreate}
-                    onClick={onCreateHold}
+                    onClick={() => onCreateHold(activePR || undefined)}
                     title={
                       canCreate
                         ? "Provision a test slot for this branch"
@@ -10984,7 +11051,7 @@ function TestSlotScreen({
                     type="button"
                     className="run-session-data-action"
                     disabled={!canCreate}
-                    onClick={onCreateDrive}
+                    onClick={() => onCreateDrive(activePR || undefined)}
                     title={
                       canCreate
                         ? "Provision a slot, then have the agent validate it"
@@ -22649,9 +22716,9 @@ function ChatPane({
   // phantom-active pill. The only client-side surface is the immediate
   // pre-gate refusal (e.g. 409 already-active, ambiguous repo), which the
   // backend rejects synchronously and therefore emits no thread for.
-  function startInteractiveTestWorkflow(drive = false) {
+  function startInteractiveTestWorkflow(drive = false, pr?: number) {
     if (session.status !== "Active") return;
-    void startTestWorkflow(session.id, authedFetch, { drive })
+    void startTestWorkflow(session.id, authedFetch, { drive, pr })
       .then((result) => {
         if (!result.ok) {
           setEntries((prev) =>
@@ -25473,8 +25540,8 @@ function ChatPane({
                 authedFetch={authedFetch}
                 disabled={!ready}
                 readOnly={readOnly}
-                onCreateHold={() => startInteractiveTestWorkflow(false)}
-                onCreateDrive={() => startInteractiveTestWorkflow(true)}
+                onCreateHold={(pr) => startInteractiveTestWorkflow(false, pr)}
+                onCreateDrive={(pr) => startInteractiveTestWorkflow(true, pr)}
                 onReturnTestSlot={readOnly ? undefined : returnTestSlot}
                 onOpenReady={() => {
                   if (testState)

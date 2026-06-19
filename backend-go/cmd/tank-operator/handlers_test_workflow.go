@@ -70,6 +70,11 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 	var body struct {
 		Repo  string `json:"repo"`
 		Drive bool   `json:"drive"`
+		// PR optionally selects which of the session's branches/PRs to provision
+		// (the page's picker). When set, the gate validates that PR by number and
+		// deploys its head branch; when 0 it falls back to the session's governed
+		// branch ("latest pushed").
+		PR int `json:"pr"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -81,6 +86,9 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	req.drive = body.Drive
+	if body.PR > 0 {
+		req.PRNumber = body.PR
+	}
 
 	// Double-trigger guard (Slice-5). A rapid double-click must not start two
 	// gate runs / two glimmung checkouts. Refuse when a test environment is

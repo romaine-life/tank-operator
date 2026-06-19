@@ -126,6 +126,41 @@ func TestGetTestSlotStatus_RefreshDetectsMergedFromWatchPR(t *testing.T) {
 	}
 }
 
+// TestGetTestSlotStatus_ListsSessionPRs proves the page gets the full set of
+// branches/PRs the session has worked on (newest first), each with its durable
+// status, so it can render the picker — and that ?pr=<n> is accepted as the
+// preflight selection.
+func TestGetTestSlotStatus_ListsSessionPRs(t *testing.T) {
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-x"), readyState("sha-y")}}
+	app, _, _, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, &fakeGlimmungClient{})
+	app.ciWatches = &fakeCIWatchStore{listForSessionResult: []pgstore.CIWatch{
+		{WatchID: "w1", SessionID: "77", PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 200, Status: pgstore.CIWatchWatching},
+		{WatchID: "w2", SessionID: "77", PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 100, Status: pgstore.CIWatchMerged},
+	}}
+
+	rec, resp := getTestSlotStatus(t, app, provisionTestOwner, "?refresh=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(resp.PRs) != 2 {
+		t.Fatalf("expected 2 PRs in the picker list, got %d: %+v", len(resp.PRs), resp.PRs)
+	}
+	if resp.PRs[0].PRNumber != 200 || resp.PRs[1].PRNumber != 100 {
+		t.Fatalf("PR list order = %d,%d, want 200,100 (newest first)", resp.PRs[0].PRNumber, resp.PRs[1].PRNumber)
+	}
+	if !resp.PRs[0].HasOpenPR || resp.PRs[1].HasOpenPR {
+		t.Fatalf("has_open_pr wrong: watching=%v merged=%v", resp.PRs[0].HasOpenPR, resp.PRs[1].HasOpenPR)
+	}
+	if resp.Watch == nil || resp.Watch.PRNumber != 200 {
+		t.Fatalf("default watch should be the newest PR (200), got %+v", resp.Watch)
+	}
+	// An explicit selection is accepted and still produces a live preflight.
+	rec2, resp2 := getTestSlotStatus(t, app, provisionTestOwner, "?refresh=1&pr=100")
+	if rec2.Code != http.StatusOK || resp2.Preflight == nil {
+		t.Fatalf("?pr=100 should return 200 with a preflight; code=%d preflight=%v", rec2.Code, resp2.Preflight)
+	}
+}
+
 func TestGetTestSlotStatus_RefreshNoOpenPR(t *testing.T) {
 	// A branch with no open PR is a first-class no_pr verdict, not an error, so
 	// the page can say "publish a PR to test" and grey out Create.

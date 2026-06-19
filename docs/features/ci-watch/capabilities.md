@@ -266,6 +266,27 @@ and [../README.md](../README.md) for how capability ledgers are used.
     a running env. The page now requires a real **URL** to show "running"; and the
     provision double-trigger guard (`handleStartTestWorkflow`) requires
     `active && url` so the empty flag no longer 409s a genuine Create.
+- **Branch/PR picker (2026-06-19, follow-up):** the page lists **every branch/PR
+  this session has worked on** and lets the user pick which one to provision
+  instead of silently assuming the session's bare branch. Tank already hooks
+  every governed commit, so each PR head it has watched is a `session_ci_watches`
+  row; the picker reads them. Backend: `ListForSession` (`pgstore`,
+  newest-first) feeds a `prs[]` array on the status response (`testSlotPRViewFrom`,
+  each row carrying `pr_number`/`pr_url`/durable `status`/`has_open_pr`); a
+  `?pr=<n>` query selects which watch the `?refresh=1` preflight reads and which
+  the `pickWatch` default falls back to (newest when unset). The interactive
+  trigger (`POST .../test-workflow/start`) accepts `{"pr":N}`, so Create
+  provisions the **selected PR's head branch** — `provisionSlotAfterReady`
+  deploys `state.PR.Head.Ref` (the resolved head), not always the bare branch.
+  The page renders the picker only when the session has **more than one** PR;
+  single-PR sessions are visually unchanged and keep provisioning their one
+  branch. **Affected contracts:** ci-watch (the picker rows are the durable
+  watches, never a parallel store), session-lifecycle (the gate still re-reads
+  the selected PR live before provisioning). **Evidence:**
+  `TestGetTestSlotStatus_ListsSessionPRs` (list order newest-first, per-row
+  `has_open_pr`, default-watch = newest, `?pr=` selection still yields a live
+  preflight), `TestGetTestSlotStatus_RefreshDetectsMergedFromWatchPR` (selected
+  watch read by number), frontend `tsc` + `vitest` + `vite build`.
 
 ## pending-provision-backstop
 
@@ -359,5 +380,3 @@ and [../README.md](../README.md) for how capability ledgers are used.
   a hung run. Per-replica idempotent — every effect is a guarded write.
 - **Durable source:** `orchestrations` (state `approved`/`running`) +
   `orchestration_phases`; `runOrchestrationReconcileLoop`.
-
-<!-- test-slot end-to-end smoke test PR (break-glass); safe to revert -->
