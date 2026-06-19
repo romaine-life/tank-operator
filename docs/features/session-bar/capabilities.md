@@ -405,15 +405,28 @@ Named behaviors in the session-bar surface. See
   target's level; dropping onto the **middle band** nests it under the target.
   This is the manual counterpart to spawn-driven nesting — organization the user
   controls, not lineage.
-- **Gesture / zones:** `frontend/src/dragNest.ts` is the DOM-free decision layer.
-  `dropIntentForRow(clientY, rowTop, rowHeight)` maps the pointer to
-  `reorder-before | reorder-after | nest` (top/bottom `NEST_EDGE_FRACTION`=0.25
-  reorder, middle nests); `placeSessionRelative` computes the new id order. The
-  decision is recomputed from the drop position (not stale hover state). Rows
-  render the live affordance via `is-drag-nest` (row glows as the new parent) or
-  `is-drag-reorder-before/after` (a top/bottom insertion line) in `index.css`.
-  Desktop-only: rows are `draggable` only when `!isCompact` (no dead touch
-  gesture; guarded by `mobileShell.test.ts`).
+- **Gesture / zones:** `frontend/src/dragNest.ts` is the DOM-free decision layer
+  (`dropIntentForRow`, `placeSessionRelative`). The drag *orchestration* — state +
+  per-row DOM handlers + the `planSessionDrop` decision — lives in
+  `frontend/src/sessionDrag.ts` (`useSessionDrag`), extracted from App so the
+  event→decision→persist flow is tested (`sessionDrag.test.tsx` fires real
+  `dragstart/dragover/drop`), not buried untested inline. `dropIntentForRow` maps
+  the pointer to `reorder-before | reorder-after | nest` (top/bottom
+  `NEST_EDGE_FRACTION`=0.25 reorder, middle nests), recomputed from the drop
+  position (not stale hover state). Rows render the live affordance via
+  `is-drag-nest` (row glows) or `is-drag-reorder-before/after` (edge insertion
+  line) in `index.css`.
+- **Drag gate — pointer capability, not viewport width.** Rows are `draggable`
+  only when `canDragSessions` = `useFinePointer()` (`(any-pointer: fine)`), i.e.
+  the device has a mouse-like pointer — true on any desktop/laptop including a
+  *narrow window, a side-docked DevTools, or a zoomed page*, false only on
+  coarse-pointer-only touch devices. This replaced the prior `!isCompact`
+  (≤768px width) gate, which conflated "narrow viewport" with "touch device" and
+  silently killed mouse-drag whenever the window dropped below 768px (e.g. with
+  DevTools docked) — a real "the click-and-drag is broken" report. The
+  "no dead gesture on touch" boundary is preserved (touch = coarse pointer = no
+  drag) and pinned by `mobileShell.test.ts`. `isCompact` still drives the shell
+  layout; only the drag gate moved to the pointer primitive.
 - **Durable model — two single-purpose writes, orchestrated per drop:**
   - **Reorder** persists the complete visible permutation to
     `sessions.sidebar_position` via `PUT /api/sessions/order`
