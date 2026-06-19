@@ -359,3 +359,5 @@ and [../README.md](../README.md) for how capability ledgers are used.
   a hung run. Per-replica idempotent — every effect is a guarded write.
 - **Durable source:** `orchestrations` (state `approved`/`running`) +
   `orchestration_phases`; `runOrchestrationReconcileLoop`.
+
+<!-- test-slot end-to-end smoke test PR (break-glass); safe to revert -->
