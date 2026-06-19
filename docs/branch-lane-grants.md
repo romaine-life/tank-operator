@@ -48,13 +48,17 @@ whether the branch exists yet is Tank's problem, not the agent's.**
 One grant covers the whole life of that branch's work:
 
 - create the branch,
-- push / force-push it,
+- push it (fast-forward — force-push needs an `unlimited` grant),
 - open its draft PR and own that PR (edit title/body, mark ready, comment),
 
 through review. **Scope (`named` / `count` / `unlimited`) bounds *which*
-branches; it never bounds *whether the grant works*.** `unlimited` is simply the
-widest version — the whole-repo / full-GitHub-API escape hatch — not a different
-mechanism and not a precondition for basic branch work.
+branches; the one capability it gates is history rewrite — `named`/`count` grants
+push *fast-forward only*, while `unlimited` (a native token) can force-push. Push
+and PR-open work at every scope.** `unlimited` is the widest version — the
+whole-repo / full-GitHub-API escape hatch — not a precondition for basic branch
+work. Scoped grants don't need force-push in practice: with squash-merge, branch
+history is disposable, so forward-fix (a new commit) and `git merge` replace
+amend/rebase.
 
 Merge-to-base stays the separate, CI-gated step (`merge_current_session_pr` /
 the existing governed merge). A branch lane gets work *to* review, not *through*
@@ -70,7 +74,9 @@ approved.
 
 The resolution is unchanged and correct: **Tank brokers the writes server-side
 and enforces the branch scope itself**, never exposing a raw token for a scoped
-grant. What this redesign deletes is not that enforcement — it is the agent
+grant. A consequence of brokering server-side is that a scoped push is
+**fast-forward only** — rewriting history (force-push) needs the native token an
+`unlimited` grant mints. What this redesign deletes is not that enforcement — it is the agent
 having to *see* it, *choose* between `push_current_head` / `publish_current_head`
 / `create_pr_lane` / raw git, and *guess* a scope that secretly decides whether
 anything works.

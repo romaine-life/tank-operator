@@ -503,7 +503,7 @@ Open hardening:
 
   **Unified by Branch Lane Grants (see that capability below).** The branch-lane
   unification makes a single `request_git_break_glass` grant cover the whole life
-  of a branch's work — push/force-push **and** open + own its draft PR
+  of a branch's work — push (fast-forward) **and** open + own its draft PR
   (`gh pr create|edit|ready|comment`) — for the scoped branches, brokered
   server-side. The agent asks once and a human approves once; after approval
   plain `git push` and `gh pr …` just work for the granted branches. The prior
@@ -545,10 +545,10 @@ Unify the two parallel governed-write mechanisms a restricted
 (`TANK_RESTRICTED_GIT=true`) session used to expose — break-glass git
 (`request_git_break_glass` → push) and PR lanes (`request_pr_lane` →
 `create_pr_lane`) — into **one** grant. A break-glass git grant is permission to
-do work on a branch (existing or not): create + push/force-push it **and** open &
+do work on a branch (existing or not): create + push (fast-forward) it **and** open &
 own its draft PR (edit title/body, mark ready, comment) through review. The
 agent asks once (`request_git_break_glass`), a human approves once, and then
-plain `git push` (incl. `--force`) and `gh pr create|edit|ready|comment` just
+plain `git push` and `gh pr create|edit|ready|comment` just
 work for the scoped branches — brokered server-side, scope-enforced, audited.
 This closes the core defect of the old split: a branch-scoped break-glass grant
 could push a branch but not open its PR (the PR half lived only in the separate
@@ -576,13 +576,17 @@ Contract impact:
 - GitHub installation tokens are scoped by repo+permission, never by branch, so a
   branch-scoped grant cannot be honored by handing a raw token to the shell
   (that token would push every branch and edit every PR). Tank **brokers** the
-  writes server-side and enforces the branch scope itself: `git push` /
-  `git push --force` go through a governed push (create-if-absent) for in-scope
+  writes server-side and enforces the branch scope itself: `git push` goes
+  through a governed push (create-if-absent, **fast-forward only**) for in-scope
   branches; `gh pr create|edit|ready|comment` route through a governed PR-write
   endpoint that resolves the PR to its head branch, verifies head ∈ lane scope,
   performs the write with Tank's credential, and audits it. No raw token and no
-  denylist wall for the scoped case. `unlimited` grants additionally surface the
-  whole-repo GitHub API (the `full_github_api` / full-maintainer escape hatch).
+  denylist wall for the scoped case. **Force-push / history rewrite is not
+  available on a scoped grant** (the brokered push is fast-forward only) — it
+  requires an `unlimited` grant (native token); with squash-merge, scoped work
+  forward-fixes or merges instead of rewriting. `unlimited` grants additionally
+  surface the whole-repo GitHub API (the `full_github_api` / full-maintainer
+  escape hatch).
 - The control-action audit ledger is **kept**; every brokered operation records a
   `github.break_glass.*` event (`request` / `grant` / `push` / `pr_write`, plus
   `github.pull_request.open` for opens), with `operations` as the explicit
@@ -793,8 +797,8 @@ Contract impact:
   **Retired by Branch Lane Grants (see below):** the description that a
   *branch-scoped* grant stays read-only for raw `git`/`gh` and only an
   unlimited-branch grant lets a session push or run `gh pr edit|ready` no longer
-  holds. Under the unified branch lane, a branch-scoped grant pushes (incl.
-  force-push) and opens + owns its PR for the granted branches through Tank's
+  holds. Under the unified branch lane, a branch-scoped grant pushes
+  (fast-forward) and opens + owns its PR for the granted branches through Tank's
   server-side brokering — no raw token required for the scoped case. `unlimited`
   is reserved for the whole-repo / full raw GitHub API need, not as the
   precondition for branch work. With no grant at all, restricted sessions remain

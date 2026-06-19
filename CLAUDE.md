@@ -113,18 +113,21 @@ the whole life of a branch's work. Pick the row that matches what you need:
   (`rename_current_session_pr` / `update_current_session_pr_body` /
   `merge_current_session_pr`) — do **not** break-glass just to edit the PR body.
 
-- **Need to work on a branch — push it (including force-push) and open or edit
-  its PR** → call the Tank MCP `request_git_break_glass` tool **once**. It
+- **Need to work on a branch — push it and open or edit its PR** → call the Tank
+  MCP `request_git_break_glass` tool **once**. It
   records the request and returns a Tank approval URL
   (`/sessions/{id}?break_glass_request={event_id}`) for an admin to approve in
   the Tank UI; auth.romaine.life only authenticates that admin. **After the
-  human approves once, plain `git push` (and `git push --force`) and
+  human approves once, plain `git push` and
   `gh pr create|edit|ready|comment` just work for the granted branches** — Tank
   provisions the branch + draft PR on approval and brokers the writes
   server-side, scope-enforced and audited. There is no second `request_*` call,
   no MCP-registry reload, and no choice to make between `push_current_head` /
   `publish_current_head` / a separate PR-lane tool: the scope you were granted
   bounds *which* branches you may touch, never *whether* push and PR-open work.
+  Scoped (`named`/`count`) pushes are fast-forward-only; to rewrite history
+  (rebase/amend) request `unlimited`, or just forward-fix with a new commit — the
+  PR is squash-merged, so branch history is disposable.
 
 - **Genuinely need the whole repo / the full GitHub API** (operate as a full
   maintainer: arbitrary branches, merges, issues, raw API writes) → request the
