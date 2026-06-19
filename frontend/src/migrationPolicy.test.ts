@@ -1085,15 +1085,19 @@ test("home splash test action stays disabled on the splash page", () => {
 
 test("break-glass composer action owns approval links and quick approval", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
-  // The PR control is a self-contained popup menu, not a single hard-coded link.
+  // The PR chip is a single-click shortcut to the dedicated /pull-requests page,
+  // NOT a popover menu: clicking the chip opens the page directly.
   expect(appSource).toMatch(/function PullRequestMenuButton\(/);
   expect(appSource).toMatch(/<PullRequestMenuButton \{\.\.\.pullRequest\} \/>/);
+  expect(appSource).toMatch(/onClick=\{\(\) => onOpenPage\?\.\(\)\}/);
   expect(appSource).toMatch(/function BreakGlassApprovalMenuButton\(/);
   expect(appSource).toMatch(/<BreakGlassApprovalMenuButton \{\.\.\.breakGlass\} \/>/);
-  // Latest PR and the linked PR are computed as distinct menu entries.
+  // Merge in Tank moved off the composer popover onto the /pull-requests page.
   expect(appSource).toMatch(
-    /const latestPullRequestURL = agentGitActivity\.pullRequests\[0\]\?\.href \?\? "";/,
+    /\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/merge-pr/,
   );
+  expect(appSource).toMatch(/Merge in Tank/);
+  // The linked (test/rollout) PR is still computed and surfaced on the page.
   expect(appSource).toMatch(
     /const linkedPullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \?\? "";/,
   );
