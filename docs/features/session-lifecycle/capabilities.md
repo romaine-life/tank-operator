@@ -609,6 +609,20 @@ Contract impact:
   the endpoint returns `{"active": false}` and the wrappers keep the read-only
   default unchanged. See "Break-glass full GitHub API elevation (unlimited
   grants)" below.
+- **Fail loud, never silent (elevation).** The wrappers treat only a clean
+  `{"active": true, "token": …}` (elevate) or `{"active": false}` over HTTP 200
+  (quiet, expected no-grant) as recognized answers. Any other shape — a JSON-RPC
+  error such as `{"error": {"code": -32600, "message": "invalid MCP request"}}`
+  (what the `:9999` MCP catch-all returns when the `mcp-auth-proxy` sidecar
+  predates the `/mint-git-token` route, i.e. an image/version skew), an HTTP
+  error, a timeout, or any unrecognized body — is reported to **stderr** before
+  the read-only fallback, instead of being silently collapsed to read-only. A
+  silent downgrade here is what made the sidecar-skew regression undiagnosable
+  (an active grant produced a read-only token with no signal, so `gh pr close`
+  failed with `Resource not accessible by integration`); the silent collapse is
+  treated as part of the bug, not an acceptable fallback. The break-glass
+  curl also uses a timeout with headroom (`-m 8`) so the cold full-mint path
+  (Tank grant lookup + GitHub App mint) is not misread as "no grant".
 - `install-agent-git-template.sh` installs the credential helper in **both**
   modes; the elevated cluster kubeconfig stays non-restricted-only.
 - `repo-cloner.sh` no longer writes an empty local `credential.helper` in
@@ -634,6 +648,13 @@ Evidence:
   assert the read-only request shape in restricted mode;
   `TestInstallAgentGitTemplateScriptRunsUnderSh` asserts the helper installs in
   restricted mode).
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestGitCredentialTankHelperBreakGlassElevation`,
+  `TestGhTankWrapperBreakGlassElevation`) cover all three elevation cases against
+  a live mock break-glass server: active grant → full token (no read-only
+  fallback), no grant → quiet read-only fallback, and `error mint response fails
+  loud and falls back to read-only` (the JSON-RPC `invalid MCP request` shape →
+  stderr diagnostic + read-only fallback, the fail-loud guard).
 
 ## Break-glass full GitHub API elevation (unlimited grants)
 
