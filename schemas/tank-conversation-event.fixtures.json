@@ -874,6 +874,37 @@
           "url": "https://tank-operator-slot-1.tank.dev.romaine.life/"
         }
       }
+    },
+    {
+      "name": "pr ready notified",
+      "event": {
+        "event_id": "pr-ready:romaine-life/tank-operator:7:ready:abc1234",
+        "uuid": "pr-ready:romaine-life/tank-operator:7:ready:abc1234",
+        "order_key": "1768179865000-00000017-pr-ready:romaine-life/tank-operator:7",
+        "sequence": 17,
+        "conversation_id": "63",
+        "session_id": "63",
+        "timeline_id": "pr-ready:romaine-life/tank-operator:7",
+        "client_nonce": "pr-ready-pr-ready:romaine-life/tank-operator:7",
+        "actor": "system",
+        "source": "tank",
+        "type": "pr_ready.notified",
+        "created_at": "2026-05-12T00:00:25.000Z",
+        "written_at": "2026-05-12T00:00:25.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "claude"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "pr_ready",
+          "repo": "romaine-life/tank-operator",
+          "pr_number": 7,
+          "pr_url": "https://github.com/romaine-life/tank-operator/pull/7",
+          "head_sha": "abc1234",
+          "text": "✅ PR #7 is green and mergeable — ready to merge.\nhttps://github.com/romaine-life/tank-operator/pull/7"
+        }
+      }
     }
   ]
 }

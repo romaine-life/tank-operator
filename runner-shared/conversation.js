@@ -44,6 +44,7 @@ export const TANK_EVENT_TYPES = [
   "scheduled_wakeup.updated",
   "ci_status.updated",
   "test_provision.updated",
+  "pr_ready.notified",
   "turn.awaiting_input",
   "turn.awaiting_input.invocation",
 ];
@@ -199,6 +200,13 @@ function isValidEventByType(event) {
         event.source === "tank" &&
         hasStrings(event, ["timeline_id", "client_nonce"]) &&
         isTestProvisionPayload(event.payload)
+      );
+    case "pr_ready.notified":
+      return (
+        event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["timeline_id", "client_nonce"]) &&
+        isPRReadyPayload(event.payload)
       );
     case "turn.awaiting_input":
       return (
@@ -433,6 +441,18 @@ function isTestProvisionPayload(payload) {
     ["creating", "validating", "waiting", "ready", "error"].includes(
       payload.phase,
     ) &&
+    typeof payload.text === "string" &&
+    payload.text.length > 0
+  );
+}
+
+function isPRReadyPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    payload.kind === "pr_ready" &&
+    typeof payload.pr_url === "string" &&
+    payload.pr_url.length > 0 &&
     typeof payload.text === "string" &&
     payload.text.length > 0
   );

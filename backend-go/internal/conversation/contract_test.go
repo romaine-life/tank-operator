@@ -211,6 +211,63 @@ func TestValidateEventMapAcceptsTestProvisionUpdated(t *testing.T) {
 	}
 }
 
+func TestValidateEventMapAcceptsPRReadyNotified(t *testing.T) {
+	event := PRReadyNotifiedEventMap(PRReadyNotifiedArgs{
+		SessionID:         "77",
+		SessionStorageKey: "77",
+		Email:             "human@example.com",
+		Runtime:           "claude",
+		Repo:              "romaine-life/tank-operator",
+		PRNumber:          12,
+		PRURL:             "https://github.com/romaine-life/tank-operator/pull/12",
+		HeadSHA:           "abc1234",
+		Text:              "✅ PR #12 is green and mergeable — ready to merge.",
+		Now:               time.Date(2026, 6, 18, 15, 20, 0, 0, time.UTC),
+	})
+
+	if err := ValidateEventMap(event); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := event["type"].(string); got != "pr_ready.notified" {
+		t.Fatalf("event type = %q, want pr_ready.notified", got)
+	}
+	if got, _ := event["timeline_id"].(string); got != "pr-ready:romaine-life/tank-operator:12" {
+		t.Fatalf("timeline_id = %q, want pr-ready:romaine-life/tank-operator:12", got)
+	}
+	// Deterministic, head-keyed event_id is the once-per-ready-head idempotency
+	// key: a webhook + reconcile double-drive collapses at the unique index.
+	if got, _ := event["event_id"].(string); got != "pr-ready:romaine-life/tank-operator:12:ready:abc1234" {
+		t.Fatalf("event_id = %q, want deterministic head-keyed id", got)
+	}
+	if got, _ := event["actor"].(string); got != string(ActorSystem) {
+		t.Fatalf("actor = %q, want system", got)
+	}
+	if got, _ := event["source"].(string); got != string(SourceTank) {
+		t.Fatalf("source = %q, want tank", got)
+	}
+	// pr_ready.notified is NOT a turn: it must never carry a turn_id (it is not a
+	// submit_turn, never invokes the agent, and must not be a stranded-turn-sweep
+	// candidate).
+	if _, ok := event["turn_id"]; ok {
+		t.Fatal("pr_ready.notified must not carry a turn_id")
+	}
+}
+
+func TestValidateEventMapRejectsEmptyPRReadyText(t *testing.T) {
+	event := PRReadyNotifiedEventMap(PRReadyNotifiedArgs{
+		SessionID: "77",
+		Repo:      "romaine-life/tank-operator",
+		PRNumber:  12,
+		PRURL:     "https://github.com/romaine-life/tank-operator/pull/12",
+		HeadSHA:   "abc1234",
+		Text:      "",
+		Now:       time.Date(2026, 6, 18, 15, 20, 0, 0, time.UTC),
+	})
+	if err := ValidateEventMap(event); err == nil {
+		t.Fatal("ValidateEventMap accepted an empty pr_ready text")
+	}
+}
+
 func TestValidateEventMapRejectsInvalidTestProvisionPhase(t *testing.T) {
 	event := TestProvisionUpdatedEventMap(TestProvisionUpdatedArgs{
 		SessionID: "77",

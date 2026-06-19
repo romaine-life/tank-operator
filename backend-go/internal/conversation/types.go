@@ -103,6 +103,7 @@ const (
 	EventScheduledWakeupUpdated      EventType = "scheduled_wakeup.updated"
 	EventCIStatusUpdated             EventType = "ci_status.updated"
 	EventTestProvisionUpdated        EventType = "test_provision.updated"
+	EventPRReadyNotified             EventType = "pr_ready.notified"
 	EventTurnAwaitingInput           EventType = "turn.awaiting_input"
 	EventTurnAwaitingInputInvocation EventType = "turn.awaiting_input.invocation"
 )
@@ -317,6 +318,14 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("test_provision.updated must be actor=system source=tank")
 		}
 		return validateTestProvisionPayload(event)
+	case EventPRReadyNotified:
+		if err := requireFields(event, "timeline_id", "client_nonce"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("pr_ready.notified must be actor=system source=tank")
+		}
+		return validatePRReadyPayload(event)
 	case EventTurnAwaitingInput:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -776,6 +785,30 @@ func validateCIStatusPayload(event map[string]any) error {
 	return nil
 }
 
+// validatePRReadyPayload enforces the pr_ready.notified payload: the
+// display-only "your governed PR is green and mergeable" notice the CI-watch
+// non-orchestration ready branch posts. It is projected to a role:system
+// message AND trips the needs_input sidebar attention (see
+// sessionactivity.DeriveActivitySummary). Like ci_status.updated it is NOT a
+// submit_turn — it never invokes the agent and never enters the model's
+// replayed context.
+func validatePRReadyPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "kind") != "pr_ready" {
+		return fmt.Errorf("payload.kind must be pr_ready for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "pr_url") == "" {
+		return fmt.Errorf("payload.pr_url is required for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "text") == "" {
+		return fmt.Errorf("payload.text is required for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 // validateTestProvisionPayload enforces the test_provision.updated payload: a
 // display-only progress record for the deterministic interactive test-slot
 // workflow. Each record is one phase of one provision run (grouped by run_id),
@@ -978,6 +1011,7 @@ func validEventType(eventType EventType) bool {
 		EventScheduledWakeupUpdated,
 		EventCIStatusUpdated,
 		EventTestProvisionUpdated,
+		EventPRReadyNotified,
 		EventTurnAwaitingInput,
 		EventTurnAwaitingInputInvocation:
 		return true

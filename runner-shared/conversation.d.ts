@@ -41,6 +41,7 @@ export const TANK_EVENT_TYPES: readonly [
   "scheduled_wakeup.updated",
   "ci_status.updated",
   "test_provision.updated",
+  "pr_ready.notified",
   "turn.awaiting_input",
   "turn.awaiting_input.invocation",
 ];

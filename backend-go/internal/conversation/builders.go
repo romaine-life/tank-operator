@@ -426,6 +426,85 @@ func CIStatusUpdatedEventMap(args CIStatusUpdatedArgs) map[string]any {
 	return event
 }
 
+type PRReadyNotifiedArgs struct {
+	SessionID         string
+	SessionStorageKey string
+	Email             string
+	Runtime           string
+	Repo              string
+	PRNumber          int
+	PRURL             string
+	HeadSHA           string
+	// Text is the user-visible notice body, e.g.
+	// "✅ PR #12 is green and mergeable — ready to merge".
+	Text string
+	Now  time.Time
+}
+
+// PRReadyNotifiedEventMap builds a display-only pr_ready.notified event
+// (actor=system, source=tank). It is the dedicated "ping the user, never the
+// agent" primitive for the CI-watch non-orchestration ready transition: it
+// renders inline as a role:system message AND trips the needs_input sidebar
+// attention (sessionactivity folds it like a hand-off back to the user).
+//
+// It is deliberately NOT a turn (no turn_id, no turn.submitted, no submit_turn
+// command), so it never invokes the agent, never enters the model's replayed
+// context, and is never a stranded-turn-sweep candidate.
+//
+// The event_id is deterministic in (repo, pr_number, head_sha): a webhook +
+// reconcile double-drive of the same ready head collapses to one durable row at
+// the session_events_event_identity unique index, so the user is pinged exactly
+// once per ready head. A genuinely new head that goes green again pings again.
+func PRReadyNotifiedEventMap(args PRReadyNotifiedArgs) map[string]any {
+	createdAt := args.Now
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	repo := strings.TrimSpace(args.Repo)
+	headSHA := strings.TrimSpace(args.HeadSHA)
+	timelineID := fmt.Sprintf("pr-ready:%s:%d", repo, args.PRNumber)
+	clientNonce := "pr-ready-" + timelineID
+	producer := map[string]any{"name": "tank-operator"}
+	if args.Runtime != "" {
+		producer["runtime"] = args.Runtime
+	}
+	payload := map[string]any{
+		"kind":      "pr_ready",
+		"repo":      repo,
+		"pr_number": args.PRNumber,
+		"pr_url":    strings.TrimSpace(args.PRURL),
+		"head_sha":  headSHA,
+		"text":      strings.TrimSpace(args.Text),
+	}
+	event := StampEventMap(map[string]any{
+		"event_id":        timelineID + ":ready:" + headSHA,
+		"conversation_id": args.SessionID,
+		"session_id":      args.SessionID,
+		"timeline_id":     timelineID,
+		"client_nonce":    clientNonce,
+		"actor":           string(ActorSystem),
+		"source":          string(SourceTank),
+		"type":            string(EventPRReadyNotified),
+		"created_at":      createdAt.Format(time.RFC3339Nano),
+		"producer":        producer,
+		"visibility":      string(VisibilityDurable),
+		"payload":         payload,
+	})
+	if args.SessionStorageKey != "" {
+		event["tank_session_id"] = args.SessionStorageKey
+	}
+	if args.SessionID != "" {
+		event["tank_public_session_id"] = args.SessionID
+	}
+	if args.Email != "" {
+		event["email"] = args.Email
+	}
+	if args.Runtime != "" {
+		event["runtime"] = args.Runtime
+	}
+	return event
+}
+
 type TestProvisionUpdatedArgs struct {
 	SessionID         string
 	SessionStorageKey string

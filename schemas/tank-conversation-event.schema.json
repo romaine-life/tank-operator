@@ -131,6 +131,7 @@
         "scheduled_wakeup.updated",
         "ci_status.updated",
         "test_provision.updated",
+        "pr_ready.notified",
         "turn.awaiting_input",
         "turn.awaiting_input.invocation"
       ]
@@ -723,6 +724,23 @@
             "properties": {
               "kind": { "const": "test_provision" },
               "phase": { "enum": ["creating", "validating", "waiting", "ready", "error"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "pr_ready.notified" } }, "required": ["type"] },
+      "then": {
+        "required": ["timeline_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" },
+          "payload": {
+            "type": "object",
+            "required": ["kind", "pr_url", "text"],
+            "properties": {
+              "kind": { "const": "pr_ready" }
             }
           }
         }
