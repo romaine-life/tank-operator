@@ -193,6 +193,16 @@ spec:
               value: {{ .Values.avatarAssets.blobAccountURL | quote }}
             - name: AVATAR_BLOB_CONTAINER
               value: {{ .Values.avatarAssets.blobContainer | quote }}
+            {{- if .Values.transcriptStorage }}
+            # Durable session transcript snapshots for conversation
+            # resurrection (docs/session-transcript-capture.md). Same workload
+            # identity as avatar/Postgres. Unset = capture disabled (the
+            # snapshot endpoint answers 503 and runners retry).
+            - name: TRANSCRIPT_BLOB_ACCOUNT_URL
+              value: {{ .Values.transcriptStorage.blobAccountURL | quote }}
+            - name: TRANSCRIPT_BLOB_CONTAINER
+              value: {{ .Values.transcriptStorage.blobContainer | quote }}
+            {{- end }}
             - name: NATS_URL
               value: {{ .Values.sessionBus.url | quote }}
             - name: NATS_STREAM

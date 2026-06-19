@@ -447,6 +447,15 @@ All metric names are prefixed `tank_`. The full namespace:
   subagent authority regression is a nonzero
   `{agent_kind="subagent",tool_family="mcp",server="<configured server>"}`
   series while the parent can use that server.
+  `tank_runner_transcript_capture_total{result}` counts whole-file SDK
+  transcript snapshot uploads from the in-process capture sink
+  (docs/session-transcript-capture.md); `result` is a closed set `ok`,
+  `skipped` (storage unconfigured — best-effort, retried), `error` (read or
+  upload failed). `tank_runner_transcript_capture_lag_ms` gauges the age of the
+  captured file at upload time. Capture is additive and read-only; a sustained
+  nonzero `result="error"` rate is a capture regression, not a turn-loop fault.
+  The orchestrator counterpart is `tank_transcript_upload_total{result}`
+  (`ok|bad_request|forbidden|not_configured|read_error|error`).
 - `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
   This runner has its own namespace because it drives the native `agy` binary
   rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`

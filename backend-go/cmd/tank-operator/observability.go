@@ -53,6 +53,26 @@ var (
 	)
 )
 
+// --- Transcript capture (docs/session-transcript-capture.md, Stage 1) ---
+
+var (
+	// transcriptUploadTotal counts transcript-snapshot uploads received from
+	// session pods. result is a bounded set: ok, bad_request, forbidden,
+	// not_configured, read_error, error. No session/email labels (cardinality
+	// rule); the snapshot is keyed in blob storage, not in the metric.
+	transcriptUploadTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_transcript_upload_total",
+			Help: "Transcript JSONL snapshot uploads received from session pods, by result.",
+		},
+		[]string{"result"},
+	)
+)
+
+func recordTranscriptUpload(result string) {
+	transcriptUploadTotal.WithLabelValues(result).Inc()
+}
+
 // --- Session-event stream metrics (the names match what the prior
 // counter surface exposed, so dashboards reading the old series keep
 // rendering against the new collectors). ---

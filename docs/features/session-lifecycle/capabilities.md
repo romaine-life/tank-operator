@@ -310,3 +310,59 @@ touches) into the reap predicate. Browser disconnects are explicitly
 inside the durability boundary, so presence can never be evidence of
 abandonment. If reap latency ever matters, lower the interval, not the
 evidence bar.
+
+## Conversation resurrection (transcript capture)
+
+Status: in progress (Stage 1 — capture — implemented; Stage 2 — restore — not
+yet built)
+
+Intent:
+Make a session's *conversation* survivable across pod death. Session pods are
+`emptyDir`-backed; a node drain (AKS node-image upgrade, eviction) destroys the
+pod and the Claude SDK's on-disk JSONL transcript — the only resume-faithful
+record, because it carries `thinking`/`redacted_thinking` blocks + signatures
+that `session_events` deliberately drops. The owner accepts losing the
+`/workspace` filesystem (uncommitted edits) but not the conversation. Full
+design: [docs/session-transcript-capture.md](../../session-transcript-capture.md).
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- Stage 1 is additive and changes no existing behavior: the claude-runner runs
+  an in-process, read-only, crash-isolated snapshotter that ships whole-file
+  JSONL snapshots to a new orchestrator-internal endpoint, which stores them in
+  a private Azure Blob container. `session_events` remains the display
+  projection; the transcript blob is the separate resume-faithful record. This
+  closes the Agent Runners gap where the resume-faithful record lived ONLY on
+  the pod.
+- Capture is best-effort: when transcript storage is unconfigured the endpoint
+  answers `503` and the runner counts a skip and retries — never an error, never
+  a turn-loop fault.
+- Stage 2 (not yet built) will amend the Session Lifecycle Contract's
+  "without pretending a dead pod can be resurrected" wording: pod death stays
+  terminal for the running session; resurrection is a NEW explicit lifecycle
+  (new session row, `resurrected_from` lineage, re-cloned repos, transcript
+  materialized + `resume`) — not silent continuation, and the workspace is still
+  gone.
+
+Evidence:
+- `claude-runner/src/transcriptCapture.test.ts` covers the scan/dedup core:
+  new-file upload + snapshot fields, no-reupload-when-unchanged,
+  reupload-on-change, skip-without-advancing-cursor (storage unconfigured),
+  error-counted-and-retried-never-thrown, and multi-file/multi-subdir capture.
+- `backend-go/internal/transcriptstore/store_test.go` covers the store
+  round-trip, caller-buffer isolation, and last-write-wins semantics.
+- `backend-go/cmd/tank-operator/handlers_internal_transcript_test.go` covers
+  the SDK-session-id path-traversal guard, blob-key/segment sanitization,
+  metadata ASCII sanitization, and header decode.
+- Auth reuses `requireInternalSessionPodCaller` (SA TokenReview + live pod
+  lookup), the same gate as the runtime-config endpoint.
+- Infra: `infra/transcript_storage.tf` (private container + container-scoped
+  `Storage Blob Data Contributor` for the orchestrator UAMI). Chart wiring:
+  `k8s/values.yaml` `transcriptStorage` + `k8s/templates/deployment.yaml` env.
+- Metrics: `tank_runner_transcript_capture_total{result}` +
+  `tank_runner_transcript_capture_lag_ms` (runner);
+  `tank_transcript_upload_total{result}` (orchestrator).

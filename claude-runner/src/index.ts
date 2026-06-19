@@ -2,10 +2,32 @@
 // @anthropic-ai/claude-agent-sdk for one session pod's lifetime and publishes
 // canonical transcript events to the session bus.
 
+import { createRequire } from "node:module";
+import { join } from "node:path";
+
 import { readClaudeCliVersion } from "./cliVersion.js";
 import { loadConfig } from "./config.js";
-import { startMetricsServer } from "./metrics.js";
+import {
+  startMetricsServer,
+  transcriptCaptureLagMs,
+  transcriptCaptureTotal,
+} from "./metrics.js";
 import { Runner } from "./runner.js";
+import { TranscriptCapture } from "./transcriptCapture.js";
+import { uploadTranscriptSnapshot } from "../../runner-shared/transcriptUpload.js";
+
+// Best-effort read of the Claude Agent SDK version, captured alongside each
+// transcript snapshot so Stage-2 restore can gate resume on SDK-format
+// compatibility. Never fatal — package.json may not be exported.
+function readClaudeSdkVersion(): string {
+  try {
+    const req = createRequire(import.meta.url);
+    const pkg = req("@anthropic-ai/claude-agent-sdk/package.json") as { version?: string };
+    return String(pkg.version ?? "");
+  } catch {
+    return "";
+  }
+}
 
 // Metrics listen port. Bound to a separate listener from any other
 // pod-internal HTTP surface so the kube-prometheus-stack PodMonitor
@@ -43,6 +65,25 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+
+  // Transcript capture runs in-process as a read-only sink. It is fully
+  // crash-isolated: a failure to set it up must never stop the runner from
+  // driving turns. See docs/session-transcript-capture.md.
+  try {
+    const home = process.env.HOME?.trim() || "/home/node";
+    const capture = new TranscriptCapture({
+      projectsRoot: join(home, ".claude", "projects"),
+      homeDir: home,
+      sdkVersion: readClaudeSdkVersion(),
+      upload: (snap) => uploadTranscriptSnapshot(cfg, snap),
+      onResult: (result) => transcriptCaptureTotal.labels(result).inc(),
+      setLagMs: (ms) => transcriptCaptureLagMs.set(ms),
+    });
+    capture.start(ctrl.signal);
+    console.log(JSON.stringify({ msg: "transcript capture started", projects_root: join(home, ".claude", "projects") }));
+  } catch (err) {
+    console.warn("transcript capture setup failed (continuing):", err);
+  }
 
   const runner = new Runner(cfg);
   try {

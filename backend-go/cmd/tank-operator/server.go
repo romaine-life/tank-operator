@@ -28,6 +28,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/transcriptstore"
 )
 
 const designSelectionConfigMapName = "tank-design-selection"
@@ -49,6 +50,7 @@ type appServer struct {
 	avatars             avatarassets.Store
 	avatarImages        avatarassets.ImageStore
 	avatarUploads       avataruploads.Store
+	transcripts         transcriptstore.Store
 	pgPool              *pgxpool.Pool
 	sessionBus          sessionCommandBus
 	// rowWriter is the shared session-row transition writer (same instance
@@ -479,6 +481,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/timeline", s.handleInternalSessionTimeline)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/transcript-snapshot", s.handleInternalSessionTranscriptSnapshot)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes/cancel", s.handleInternalCancelBackgroundTaskWake)
