@@ -554,6 +554,10 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // row in the main transcript.
   turnOnly?: boolean;
   wakePrompt?: boolean;
+  // turnContextContinued marks a question turn's prompt context as a copy of the
+  // asking turn's triggering message. The Turns view labels it "Question prompt
+  // continued from previous turn" so the question stays fused to what produced it.
+  turnContextContinued?: boolean;
   questionFinalAnswerContext?: boolean;
   backendTurnId?: string;
   turnDetailRole?: "final_answer";
@@ -597,12 +601,6 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     dismissed?: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
-  };
-  questionTarget?: {
-    turnId?: string;
-    turnNumber?: number;
-    page?: number;
-    timelineId?: string;
   };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
@@ -6735,7 +6733,6 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
           usageObservation: entry.usageObservation,
-          questionTarget: entry.questionTarget,
         };
       }
       if (entry.kind === "reasoning") {
@@ -7197,15 +7194,6 @@ function turnActivityGroupNeedsInput(
   return group.shell?.activity?.status === "needs_input";
 }
 
-function turnActivityGroupIsNeedsInputTarget(
-  group: Extract<EntryGroup, { kind: "activity" }>,
-  activeTurnId: string | null,
-): boolean {
-  if (!turnActivityGroupNeedsInput(group)) return false;
-  const active = activeTurnId?.trim() ?? "";
-  return active !== "" && group.turnId === active;
-}
-
 function flushTranscriptToolBucket(
   groups: EntryGroup[],
   bucket: { entries: TranscriptEntry[] },
@@ -7369,21 +7357,17 @@ function groupTranscriptEntries(
           for (const id of group.compactedEntryIds)
             activityHiddenEntryIds.add(id);
           const needsInput = turnActivityGroupNeedsInput(group);
-          if (
+          if (needsInput) {
+            // Surface the pending question inline in the main transcript: emit
+            // the activity group so RunTurnActivityGroup renders the question
+            // widget beneath the agent's preamble, instead of an "Answer
+            // requested" pointer the reader has to follow into the Turns view.
+            groups.push(group);
+          } else if (
             group.active &&
-            !needsInput &&
             !insertedThinkingTurnIds.has(group.turnId)
           ) {
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
-            pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
-            insertedThinkingTurnIds.add(group.turnId);
-          } else if (
-            turnActivityGroupIsNeedsInputTarget(group, activeTurnId) &&
-            !insertedThinkingTurnIds.has(group.turnId)
-          ) {
-            pendingThinkingGroups.push(
-              turnThinkingGroup(group.turnId, entry, "needs_input"),
-            );
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
           }
@@ -8700,12 +8684,6 @@ function RunMessageBubble({
       ? splitLegacyAttachmentDisplayText(text)
       : null;
   const visibleText = legacyAttachmentParts?.text ?? text;
-  const awaitingInput = entry.awaitingInput;
-  const questionTurnId = awaitingInput?.questionTurnId || "";
-  const openQuestionTurn = (): void => {
-    if (!questionTurnId) return;
-    onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true });
-  };
   const visibleAttachments =
     explicitAttachments.length > 0
       ? explicitAttachments
@@ -8880,20 +8858,6 @@ function RunMessageBubble({
               >
                 {messageActionLabel}
               </a>
-            )}
-          {variant === "assistant" &&
-            awaitingInput &&
-            questionTurnId &&
-            onOpenTurn && (
-              <button
-                type="button"
-                className="run-msg-question-action"
-                onClick={openQuestionTurn}
-              >
-                {awaitingInput.answered || awaitingInput.dismissed
-                  ? "View questions"
-                  : "Answer in Turns"}
-              </button>
             )}
         </div>
         {variant === "user" && visibleAttachments.length > 0 && (
@@ -12249,124 +12213,20 @@ function ToolDefaultBody({
   );
 }
 
-export type AskUserQuestionTarget = {
-  turnId: string;
-  turnNumber?: number;
-  page: number;
-};
-
-function askUserQuestionToolTarget(
-  entry: TranscriptEntry,
-): AskUserQuestionTarget | null {
-  if (!isAskUserQuestionTool(entry)) return null;
-  const raw = entry.questionTarget;
-  const turnId = raw?.turnId?.trim() ?? "";
-  if (!turnId) return null;
-  const page =
-    typeof raw?.page === "number" && Number.isSafeInteger(raw.page) && raw.page > 0
-      ? raw.page
-      : 1;
-  const turnNumber =
-    typeof raw?.turnNumber === "number" &&
-    Number.isSafeInteger(raw.turnNumber) &&
-    raw.turnNumber > 0
-      ? raw.turnNumber
-      : undefined;
-  return { turnId, turnNumber, page };
-}
-
-export function askUserQuestionTargetHref(
-  currentHref: string,
-  sessionId: string,
-  target: AskUserQuestionTarget,
-): string | undefined {
-  if (!target.turnNumber) return undefined;
-  return buildSessionRouteUrl(
-    currentHref,
-    sessionId,
-    "turns",
-    target.turnNumber,
-    null,
-    target.page,
-  );
-}
-
-function AskUserQuestionToolTargetButton({
-  sessionId,
-  target,
-  onOpenTurn,
-  compact = false,
-}: {
-  sessionId: string;
-  target: AskUserQuestionTarget;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
-  compact?: boolean;
-}) {
-  const label = "Open question page";
-  const href = askUserQuestionTargetHref(window.location.href, sessionId, target);
-  const className = `run-tool-question-target${compact ? " run-tool-question-target-compact" : ""}`;
-  const open = () =>
-    onOpenTurn?.(target.turnId, { anchor: "top", page: target.page });
-  if (href) {
-    return (
-      <a
-        className={className}
-        href={href}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (
-            e.button !== 0 ||
-            e.metaKey ||
-            e.ctrlKey ||
-            e.shiftKey ||
-            e.altKey ||
-            !onOpenTurn
-          )
-            return;
-          e.preventDefault();
-          open();
-        }}
-      >
-        <MessageSquareIcon size={13} aria-hidden="true" />
-        <span>{label}</span>
-      </a>
-    );
-  }
-  if (!onOpenTurn) return null;
-  return (
-    <button
-      type="button"
-      className={className}
-      onClick={(e) => {
-        e.stopPropagation();
-        open();
-      }}
-    >
-      <MessageSquareIcon size={13} aria-hidden="true" />
-      <span>{label}</span>
-    </button>
-  );
-}
-
 function RunToolItem({
   entry,
   showTimestamps,
   expanded,
   onExpandedChange,
-  sessionId,
-  onOpenTurn,
 }: {
   entry: TranscriptEntry;
   showTimestamps: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  sessionId: string;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
-  const questionTarget = askUserQuestionToolTarget(entry);
   return (
     <div
       className="run-transcript-tool"
@@ -12381,10 +12241,7 @@ function RunToolItem({
         <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
-        <div
-          className="run-transcript-tool-header-row"
-          data-has-question-target={questionTarget ? "true" : undefined}
-        >
+        <div className="run-transcript-tool-header-row">
           <button
             type="button"
             className="run-transcript-tool-header"
@@ -12444,14 +12301,6 @@ function RunToolItem({
               )}
             </span>
           </button>
-          {questionTarget && (
-            <AskUserQuestionToolTargetButton
-              sessionId={sessionId}
-              target={questionTarget}
-              onOpenTurn={onOpenTurn}
-              compact
-            />
-          )}
         </div>
         {expanded && (
           <ToolBody entry={entry} />
@@ -12469,8 +12318,6 @@ function RunToolGroup({
   onOpenChange,
   toolExpansionOverrides,
   onToolExpandedChange,
-  sessionId,
-  onOpenTurn,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
@@ -12479,8 +12326,6 @@ function RunToolGroup({
   onOpenChange: (open: boolean) => void;
   toolExpansionOverrides: Record<string, boolean>;
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
-  sessionId: string;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   if (entries.length === 0) return null;
   if (entries.length === 1) {
@@ -12494,8 +12339,6 @@ function RunToolGroup({
           onExpandedChange={(expanded) =>
             onToolExpandedChange(entry.id, expanded)
           }
-          sessionId={sessionId}
-          onOpenTurn={onOpenTurn}
         />
       </div>
     );
@@ -12578,8 +12421,6 @@ function RunToolGroup({
               onExpandedChange={(expanded) =>
                 onToolExpandedChange(e.id, expanded)
               }
-              sessionId={sessionId}
-              onOpenTurn={onOpenTurn}
             />
           ))}
         </div>
@@ -13891,7 +13732,6 @@ function RunTurnActivityGroup({
   highlightedEntryId,
   onQuote,
   onFork,
-  onOpenTurn,
   onOpenBackgroundTask,
   loading,
   pageInfo,
@@ -13915,7 +13755,6 @@ function RunTurnActivityGroup({
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
   pageInfo?: TurnActivityPageInfo;
@@ -13954,6 +13793,27 @@ function RunTurnActivityGroup({
   // Always-present pager state: a single-page turn renders a disabled
   // "page 1 of 1" rather than vanishing, so the affordance never looks absent.
   const pagerState = turnActivityPagerState(pageInfo);
+  // Inline question surface: the pending question's widget renders directly in
+  // the main transcript beneath the agent's preamble. The single-question case
+  // (the common one) is fully inline; for a multi-question set only Q1 is inline
+  // and Q2+ stay on their dedicated pages, so the inline card never flips in
+  // place — advancing leaves this surface for the Turns view.
+  const inlineQuestionEntry = useMemo(() => {
+    if (!needsInput) return null;
+    if (pageInfo && pageInfo.kind === "question") {
+      const count = pageInfo.questionCount ?? 1;
+      const index = pageInfo.questionIndex ?? 1;
+      if (count > 1 && index !== 1) return null;
+    }
+    return (
+      group.entries.find(
+        (entry) =>
+          entry.metaKind === "awaiting_input" &&
+          entry.awaitingInput &&
+          !(entry.awaitingInput.answered || entry.awaitingInput.dismissed),
+      ) ?? null
+    );
+  }, [group.entries, needsInput, pageInfo]);
   return (
     <div
       className="run-turn-activity"
@@ -14037,16 +13897,10 @@ function RunTurnActivityGroup({
                 )}
               </span>
             </button>
-            {needsInput && onOpenTurn && (
-              <button
-                type="button"
-                className="run-turn-activity-action"
-                onClick={() =>
-                  onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
-                }
-              >
-                Answer questions
-              </button>
+            {inlineQuestionEntry && (
+              <div className="run-turn-activity-question">
+                <RunAwaitingInputCard entry={inlineQuestionEntry} />
+              </div>
             )}
             {open && (
               <div className="run-turn-activity-body">
@@ -14097,8 +13951,6 @@ function RunTurnActivityGroup({
                           }
                           toolExpansionOverrides={toolExpansionOverrides}
                           onToolExpandedChange={onToolExpandedChange}
-                          sessionId={sessionId}
-                          onOpenTurn={onOpenTurn}
                         />
                       );
                     }
@@ -14113,6 +13965,11 @@ function RunTurnActivityGroup({
                     }
                     if (child.kind === "meta") {
                       if (child.entry.metaKind === "awaiting_input") {
+                        // The pending question renders inline above the activity
+                        // body; don't duplicate it inside the expanded body.
+                        if (inlineQuestionEntry?.id === child.entry.id) {
+                          return null;
+                        }
                         return (
                           <RunAwaitingInputCard
                             key={child.entry.id}
@@ -14648,8 +14505,6 @@ function RunTurnActivityScreen({
           onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
           toolExpansionOverrides={toolExpansionOverrides}
           onToolExpandedChange={setToolExpanded}
-          sessionId={sessionId}
-          onOpenTurn={onOpenTurn}
         />
       );
     }
@@ -14841,21 +14696,31 @@ function RunTurnActivityScreen({
                     truncated text) instead of hiding the body, so the prompt
                     stays recognizable in the Turns view. */}
                 {selectedTurnContext ? (
-                  <RunMessageBubble
-                    entry={selectedTurnContext}
-                    avatar={avatar}
-                    systemAvatar={systemAvatar}
-                    originSessionAvatarByID={originSessionAvatarByID}
-                    sessionId={sessionId}
-                    highlighted={false}
-                    showTimestamps={showTimestamps}
-                    showDuration={showDuration}
-                    canonicalMessage={false}
-                    ownedByTurnActivity
-                    compact={selectedTurnContextCollapsed}
-                    transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
-                    onOpenTranscriptMessage={onOpenTranscriptMessage}
-                  />
+                  <>
+                    {selectedTurnContext.turnContextContinued &&
+                      !selectedTurnContextCollapsed && (
+                        <p className="run-turn-view-context-continued-label">
+                          Question prompt continued from previous turn
+                        </p>
+                      )}
+                    <RunMessageBubble
+                      entry={selectedTurnContext}
+                      avatar={avatar}
+                      systemAvatar={systemAvatar}
+                      originSessionAvatarByID={originSessionAvatarByID}
+                      sessionId={sessionId}
+                      highlighted={false}
+                      showTimestamps={showTimestamps}
+                      showDuration={showDuration}
+                      canonicalMessage={false}
+                      ownedByTurnActivity
+                      compact={selectedTurnContextCollapsed}
+                      transcriptHref={transcriptHrefForEntry?.(
+                        selectedTurnContext,
+                      )}
+                      onOpenTranscriptMessage={onOpenTranscriptMessage}
+                    />
+                  </>
                 ) : selectedPageInfo?.kind === "question" ? (
                   // No user message started this turn — the agent did, by
                   // invoking AskUserQuestion / ExitPlanMode. The "Question N of M"
@@ -15578,8 +15443,6 @@ export function RunMessages({
             onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
             toolExpansionOverrides={toolExpansionOverrides}
             onToolExpandedChange={setToolExpanded}
-            sessionId={sessionId}
-            onOpenTurn={onOpenTurn}
           />
         );
       }
@@ -15665,7 +15528,6 @@ export function RunMessages({
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
             onFork={onFork}
-            onOpenTurn={onOpenTurn}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
             pageInfo={turnActivityPageInfo[g.turnId]}
@@ -22996,6 +22858,24 @@ function ChatPane({
     ensureTurnActivityLoaded,
     turnActivityLoadsByTurn,
   ]);
+  // Answering runs through the run composer, which only enters answer mode once
+  // the pending question turn's activity is loaded (answeringContext reads its
+  // snapshot). The reconciler above only loads while the Turns tab is active,
+  // which is why the question used to be reachable only from Turns. Load the
+  // pending needs_input turn regardless of tab so its question widget renders
+  // inline in the main transcript and the composer can answer it right there.
+  const pendingNeedsInputTurnId = useMemo(() => {
+    if (publicView || readOnly) return null;
+    return (
+      turnViewItems.find(
+        (turn) => turn.shell?.activity?.status === "needs_input",
+      )?.turnId ?? null
+    );
+  }, [publicView, readOnly, turnViewItems]);
+  useEffect(() => {
+    if (!pendingNeedsInputTurnId) return;
+    ensureTurnActivityLoaded(pendingNeedsInputTurnId);
+  }, [pendingNeedsInputTurnId, ensureTurnActivityLoaded]);
   // Behavior-free watchdog (telemetry only): report when the selected turn's
   // activity body stays on "Loading activity..." past the threshold. It emits a
   // bounded session-event-stream metric and does NOT start a load, touch the
@@ -23869,6 +23749,40 @@ function ChatPane({
     };
   }, [publicView, readOnly, turnActivityLoadsByTurn, turnViewItems]);
 
+  // Observability for the inline-question surface: once the pending turn's
+  // activity has loaded, answeringContext is non-null exactly when a question is
+  // surfaced (the inline widget renders it and the composer can answer it). A
+  // loaded pending turn with no answeringContext means the question is invisible
+  // — the user-trust failure this surface could introduce. Fire once per turn so
+  // a stuck state doesn't spam the metric.
+  const noInlineCardReportedTurnRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingNeedsInputTurnId) {
+      noInlineCardReportedTurnRef.current = null;
+      return;
+    }
+    const snapshot = turnActivityLoadVisibleSnapshot(
+      turnActivityLoadsByTurn[pendingNeedsInputTurnId],
+    );
+    if (!snapshot) return; // still loading — not yet a miss
+    if (answeringContext) {
+      if (noInlineCardReportedTurnRef.current === pendingNeedsInputTurnId) {
+        noInlineCardReportedTurnRef.current = null;
+      }
+      return;
+    }
+    if (noInlineCardReportedTurnRef.current === pendingNeedsInputTurnId) return;
+    noInlineCardReportedTurnRef.current = pendingNeedsInputTurnId;
+    logSessionEventStreamEvent("turn_activity_needs_input_no_inline_card", {
+      sessionMode: session.mode,
+    });
+  }, [
+    answeringContext,
+    pendingNeedsInputTurnId,
+    turnActivityLoadsByTurn,
+    session.mode,
+  ]);
+
   // Refs to the latest composer text + drafts so the page-change effect below
   // reads current values without re-running on every keystroke.
   const composerTextRef = useRef(composerText);
@@ -23997,6 +23911,13 @@ function ChatPane({
   function advanceToNextQuestion(): void {
     const ctx = answeringContext;
     if (!ctx || !ctx.hasNextPage) return;
+    // Q1 answers inline in the main transcript; Q2+ live on their dedicated
+    // question pages. Advancing from chat therefore leaves the inline surface
+    // for the Turns view rather than flipping the inline card in place (which
+    // the design explicitly rules out). From Turns, advancing just pages.
+    if (activeTab === "chat") {
+      setActiveTab("turns");
+    }
     // Navigation only — the page-change effect above persists the current
     // question's text and restores the next one's, so this button and the
     // header page arrows behave identically.

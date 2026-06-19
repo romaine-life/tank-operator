@@ -210,6 +210,71 @@ export function StyleguideQuestionHeading() {
             </div>
           </div>
         </section>
+
+        <section style={sectionStyle}>
+          <p style={{ ...captionStyle, maxWidth: "72ch" }}>
+            Inline question surface (main transcript): the agent&rsquo;s preamble
+            followed by the question widget rendered in place beneath it
+            (.run-turn-activity-question), so the common single-question case is
+            answered without leaving the transcript. The composer is the answer
+            input; there is no navigate-to-Turns shortcut.
+          </p>
+          <div style={showcaseFrameStyle}>
+            <div className="run-transcript run-transcript-claude">
+              <MockAssistantMessage />
+              <div className="run-turn-activity-question">
+                <MockQuestionCard />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section style={sectionStyle}>
+          <p style={{ ...captionStyle, maxWidth: "72ch" }}>
+            Q2+ dedicated page: the asking turn&rsquo;s triggering prompt is
+            carried onto the page under a &ldquo;Question prompt continued from
+            previous turn&rdquo; header so the question stays fused to what
+            produced it.
+          </p>
+          <div style={showcaseFrameStyle}>
+            <div className="run-transcript run-transcript-claude">
+              <div className="run-turn-view-prompt-section">
+                <div
+                  className="run-turn-view-context"
+                  data-collapsed="false"
+                  data-context-loaded="true"
+                >
+                  <p className="run-turn-view-context-continued-label">
+                    Question prompt continued from previous turn
+                  </p>
+                  <MockContinuedUserPrompt />
+                </div>
+              </div>
+              <MockQuestionCard />
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function MockContinuedUserPrompt() {
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="user"
+      data-role="user"
+      data-owner="activity"
+    >
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <div className="run-transcript-message-text" data-slot="message-text">
+          <p>Write me something about Santa Claus.</p>
+        </div>
       </div>
     </div>
   );
