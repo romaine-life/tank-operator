@@ -75,6 +75,25 @@ test("a real stored selection is returned verbatim by the effective reader", () 
   ).toEqual(["Yes"]);
 });
 
+test("a question can opt out of the default 'Something else' selection", () => {
+  expect(
+    effectiveAskUserQuestionSelection({}, "Approve this plan?", null),
+  ).toEqual([]);
+  expect(
+    buildAskUserQuestionAnswerPayload(
+      [
+        {
+          question: "Approve this plan?",
+          options: [{ label: "Approve" }, { label: "Request changes" }],
+          defaultSelectionLabel: null,
+        },
+      ],
+      {},
+      {},
+    ),
+  ).toEqual({ answers: {}, annotations: {} });
+});
+
 test("multi-select 'Something else' is mutually exclusive with real picks", () => {
   // Selecting a real option while only the sentinel is selected drops the
   // sentinel.
@@ -155,6 +174,27 @@ test("typed text with no option picked becomes the 'Something else' answer", () 
   expect(payload.answers).toEqual({ "Which DB?": [SOMETHING_ELSE_LABEL] });
   expect(payload.annotations).toEqual({
     "Which DB?": { notes: "actually, DynamoDB" },
+  });
+});
+
+test("plan approval feedback maps to Request changes, not 'Something else'", () => {
+  const payload = buildAskUserQuestionAnswerPayload(
+    [
+      {
+        question: "Approve this plan?",
+        options: [{ label: "Approve" }, { label: "Request changes" }],
+        defaultSelectionLabel: null,
+        freeFormSelectionLabel: "Request changes",
+      },
+    ],
+    {},
+    { "Approve this plan?": "Please narrow the rollout first." },
+  );
+  expect(payload.answers).toEqual({
+    "Approve this plan?": ["Request changes"],
+  });
+  expect(payload.annotations).toEqual({
+    "Approve this plan?": { notes: "Please narrow the rollout first." },
   });
 });
 
