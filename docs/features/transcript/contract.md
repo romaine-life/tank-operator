@@ -215,6 +215,37 @@ answer; it must not visibly move a rendered row from one surface to the other.
   synthetic question turn's copy stays a page-context copy (above) and never
   becomes that turn's final answer. The promotion projects existing durable rows;
   it must not add an activity page or change either turn's event counts.
+- AskUserQuestion answer input never traps the user. A pending question is a
+  conversation the user steers, not a form that must be satisfied before the UI
+  releases them. Four invariants hold for every question regardless of what the
+  agent sent:
+  - No nothing-selected state. Every question carries a synthetic "Something
+    else" choice, selected by default; the answer reader
+    (`effectiveAskUserQuestionSelection`) resolves an empty stored selection to
+    "Something else", so Submit is always live and Enter always advances or
+    submits. An agent's option list is a set of shortcuts, never a fence.
+  - Companion text is a valid answer on ANY selection. The composer free-form
+    text is never gated on `allowFreeForm` and never silently dropped: it rides
+    as `annotations.notes` whether the selection is a real option or "Something
+    else" (where it becomes the whole answer). The agent may hint that it
+    expects a pick; it cannot revoke the user's ability to answer outside the
+    menu.
+  - An empty pass is acceptable. Submitting with nothing typed and nothing
+    picked sends "Something else" with no elaboration — an honest "I'm not
+    answering this", not a forced choice and not a blocked Submit. On the wire
+    that is `answers:{question:["Something else"]}`, which satisfies the
+    backend's >=1-non-empty-label gate by construction; the backend does not
+    validate answer labels against the question's offered options.
+  - A visible exit is always present. The Stop control (also bound to Esc)
+    renders ALONGSIDE the answer Submit while a question is pending, never
+    swapped out for it. Stopping the turn is the durable dismiss path
+    (`turn.interrupt_requested` -> `turn.interrupted` -> card `dismissed`); it is
+    the emergency hatch, not the primary flow, and Esc is advertised rather than
+    the only way out.
+  In a multi-question set, Enter (or the button) advances to the next question
+  mid-set and submits on the last page; per-question free-form text is persisted
+  on page change and restored on return, so advancing never discards a typed
+  answer.
 - The authenticated Turns view is a chat-capable continuation surface. Its
   composer uses the same `POST /api/sessions/{session_id}/turns` durable
   boundary as the main transcript composer; it does not create a second submit
@@ -301,6 +332,18 @@ answer; it must not visibly move a rendered row from one surface to the other.
   turn's final-answer candidate above the answer card when the awaiting-input
   payload names one, keeps the page kind as `question`, and invalidates the
   cached page when the asking turn's durable high-water mark changes.
+- A pending AskUserQuestion renders a visible Stop/cancel control in the
+  composer alongside Submit; the exit is not removed while a question is active.
+- An AskUserQuestion with no option picked and nothing typed is submittable and
+  posts `answers:{question:["Something else"]}` (an honest pass), not a blocked
+  Submit.
+- Free-form composer text is included as the answer note for any selection —
+  including a real-option pick and an options-only (`allowFreeForm:false`)
+  question — and is never discarded on submit or on multi-question page change.
+- `frontend/src/askUserQuestionSelection.test.ts` proves the never-empty default
+  ("Something else"), the sentinel's mutual exclusion with real options, and the
+  answer-payload builder's empty-pass + companion-text-on-any-selection
+  invariants.
 - A stopped or dismissed synthetic AskUserQuestion / ExitPlanMode turn keeps
   exactly one `question` page per question: the Stop sequence
   (`turn.interrupt_requested` followed by the dismissing `turn.interrupted`) and
