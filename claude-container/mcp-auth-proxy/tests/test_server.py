@@ -1172,6 +1172,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
         "merge_current_session_pr",
         "rename_current_session_pr",
         "update_current_session_pr_body",
+        "provision_test_slot",
         "request_git_break_glass",
     ]
     publish = augmented["result"]["tools"][1]
@@ -1196,7 +1197,15 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert update_body["inputSchema"]["required"] == ["body"]
     assert "body" in update_body["inputSchema"]["properties"]
     assert "Feature Contracts" in update_body["description"]
-    break_glass = augmented["result"]["tools"][8]
+    provision_test_slot = augmented["result"]["tools"][8]
+    # Optional disambiguation/selection knobs, none required (the backend resolves
+    # the governed coordinates from durable session state).
+    assert provision_test_slot["inputSchema"].get("required", []) == []
+    assert provision_test_slot["inputSchema"]["properties"]["repo"]["type"] == "string"
+    assert provision_test_slot["inputSchema"]["properties"]["pr"]["type"] == "integer"
+    assert provision_test_slot["inputSchema"]["properties"]["drive"]["type"] == "boolean"
+    assert "test slot" in provision_test_slot["description"].lower()
+    break_glass = augmented["result"]["tools"][9]
     assert "approval URL" in break_glass["description"]
     assert break_glass["inputSchema"]["required"] == ["repo_scope", "branch_scope", "reason"]
     assert "token" not in break_glass["inputSchema"]["properties"]

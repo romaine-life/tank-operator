@@ -104,6 +104,7 @@ _TANK_MERGE_TOOL = "merge_current_session_pr"
 _TANK_RENAME_PR_TOOL = "rename_current_session_pr"
 _TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
 _TANK_WATCH_PR_TOOL = "watch_current_session_pr"
+_TANK_PROVISION_TEST_SLOT_TOOL = "provision_test_slot"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
 # azure-personal is absent from the default session .mcp.json (locked by
@@ -519,6 +520,9 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     has_rename_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_RENAME_PR_TOOL for tool in tools)
     has_update_pr_body = any(isinstance(tool, dict) and tool.get("name") == _TANK_UPDATE_PR_BODY_TOOL for tool in tools)
     has_watch_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_WATCH_PR_TOOL for tool in tools)
+    has_provision_test_slot = any(
+        isinstance(tool, dict) and tool.get("name") == _TANK_PROVISION_TEST_SLOT_TOOL for tool in tools
+    )
     changed = False
     if not has_publish:
         tools.append(
@@ -780,6 +784,39 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         },
                     },
                     "required": ["body"],
+                    "additionalProperties": False,
+                },
+            }
+        )
+        changed = True
+    if not has_provision_test_slot:
+        tools.append(
+            {
+                "name": _TANK_PROVISION_TEST_SLOT_TOOL,
+                "description": (
+                    "Provision a deterministic Tank test slot for THIS session and "
+                    "deploy the session's governed branch into it (the same zero-LLM "
+                    "validate-wait-provision gate the test-slot page's button runs). "
+                    "Returns immediately; the slot URL appears on the session's "
+                    "test-slot page when the gate finishes. Pass drive=true to have "
+                    "Tank wake the agent to validate the running slot once it is ready."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {
+                            "type": "string",
+                            "description": "Optional GitHub slug (for example romaine-life/tank-operator) to disambiguate a multi-repo session.",
+                        },
+                        "pr": {
+                            "type": "integer",
+                            "description": "Optional PR number whose head branch to provision; defaults to the session's governed branch (latest pushed).",
+                        },
+                        "drive": {
+                            "type": "boolean",
+                            "description": "Provision and then validate: on a ready slot Tank wakes the agent to exercise the running app. Defaults to false (provision only).",
+                        },
+                    },
                     "additionalProperties": False,
                 },
             }
@@ -2568,6 +2605,90 @@ async def _handle_tank_publish_tool(
             -32011,
             str(exc),
             {"tool": _TANK_PUBLISH_TOOL, "invocation_id": invocation_id},
+        )
+
+
+async def _handle_tank_provision_test_slot(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    arguments: dict,
+) -> web.Response:
+    # Drive the deterministic test-slot provision for THIS session via the
+    # service-principal internal trigger. This is the automation mirror of the
+    # test-slot page's button: tank-operator resolves the session's governed-PR
+    # coordinates from durable state and runs the same zero-LLM
+    # validate-wait-provision gate. The handler only kicks it off (202); the gate
+    # runs in the background and the slot URL lands on the session's test-slot
+    # page. Authorization is the same per-session service identity every other
+    # _post_tank_* call uses (the IdP-signed subject the backend confines to its
+    # own session), forwarded via _tank_caller_session_headers.
+    invocation_id = f"tank-provision-test-slot-{uuid4().hex}"
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for Tank test-slot provision")
+        # Build the request body from the optional arguments, including only the
+        # fields the caller actually set so the backend applies its own defaults
+        # (single-repo disambiguation, governed branch / latest-pushed, provision
+        # only) for anything omitted — mirroring the browser POST body shape.
+        body: dict[str, object] = {}
+        repo = str(arguments.get("repo") or "").strip()
+        if repo:
+            body["repo"] = repo
+        if arguments.get("pr") is not None:
+            try:
+                pr_number = int(arguments["pr"])
+            except (TypeError, ValueError):
+                raise ValueError("pr must be an integer")
+            if pr_number > 0:
+                body["pr"] = pr_number
+        if arguments.get("drive") is not None:
+            body["drive"] = bool(arguments["drive"])
+
+        service_token = await auth_romaine_provider.token()
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        headers.update(_tank_caller_session_headers())
+        url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/test-workflow/start"
+        async with http.post(url, headers=headers, json=body) as resp:
+            body_text = await resp.text()
+            if resp.status >= 300:
+                raise RuntimeError(
+                    f"could not start test-slot provision: HTTP {resp.status}: {body_text[:300]}"
+                )
+        try:
+            started = json.loads(body_text) if body_text else {}
+        except Exception:
+            started = {}
+        provisioned_repo = str(started.get("repo") or repo or "")
+        branch = str(started.get("branch") or "")
+        target = "/".join(part for part in (provisioned_repo, branch) if part) or "this session"
+        text = (
+            f"Test-slot provision started for {target}.\n"
+            "Tank is running the deterministic validate-wait-provision gate; "
+            "watch the session's test-slot page (and the slot pill) for the slot "
+            "URL when it is ready."
+        )
+        if body.get("drive"):
+            text += " The agent will be woken to validate the running slot once it comes up."
+        return _mcp_result_response(
+            request_id,
+            {
+                "content": [{"type": "text", "text": text}],
+                "structuredContent": {
+                    "status": str(started.get("status") or "started"),
+                    "repo": provisioned_repo,
+                    "branch": branch,
+                    "drive": bool(body.get("drive")),
+                },
+            },
+        )
+    except Exception as exc:
+        log.warning("Tank provision_test_slot failed", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32011,
+            str(exc),
+            {"tool": _TANK_PROVISION_TEST_SLOT_TOOL, "invocation_id": invocation_id},
         )
 
 
@@ -5026,6 +5147,7 @@ def _make_handler(
                 _TANK_RENAME_PR_TOOL,
                 _TANK_UPDATE_PR_BODY_TOOL,
                 _TANK_WATCH_PR_TOOL,
+                _TANK_PROVISION_TEST_SLOT_TOOL,
             }:
                 arguments = params.get("arguments") or {}
                 if not isinstance(arguments, dict):
@@ -5033,6 +5155,8 @@ def _make_handler(
                 record_proxy_request(mcp_label, 200)
                 if params.get("name") == _TANK_PUBLISH_TOOL:
                     return await _handle_tank_publish_tool(http, tank_publish_provider, request_id, arguments)
+                if params.get("name") == _TANK_PROVISION_TEST_SLOT_TOOL:
+                    return await _handle_tank_provision_test_slot(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_BREAK_GLASS_TOOL:
                     return await _handle_tank_break_glass_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_CREATE_PR_LANE_TOOL:
