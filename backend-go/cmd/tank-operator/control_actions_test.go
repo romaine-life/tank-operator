@@ -13,6 +13,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
@@ -524,6 +525,86 @@ func TestHandleInternalAppendControlActionRejectsRetiredPRLaneActions(t *testing
 				t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
 			}
 		})
+	}
+}
+
+// TestHandleInternalAppendControlActionRetiredPRLaneIncrementsCounter pins the
+// observability half of the retirement: a rejected github.pr_lane.* write must
+// increment tank_break_glass_retired_path_total so TankBranchLaneRetiredPathUsed
+// can fire. Without the counter the deleted path could be exercised silently.
+func TestHandleInternalAppendControlActionRetiredPRLaneIncrementsCounter(t *testing.T) {
+	before := testutil.ToFloat64(breakGlassRetiredPathTotal)
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	body := `{
+		"event_id": "retired_counter_1",
+		"invocation_id": "retired_counter_invocation_1",
+		"source_service": "mcp-github",
+		"source_tool": "create_pull_request",
+		"action": "github.pr_lane.create",
+		"status": "succeeded",
+		"target_kind": "github_repository",
+		"target_ref": "https://github.com/romaine-life/tank-operator",
+		"repo_owner": "romaine-life",
+		"repo_name": "tank-operator"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+	if after := testutil.ToFloat64(breakGlassRetiredPathTotal); after != before+1 {
+		t.Fatalf("tank_break_glass_retired_path_total = %v, want %v", after, before+1)
+	}
+}
+
+// TestHandleInternalAppendControlActionAcceptsBreakGlassPRWrite proves the
+// ledger admits the brokered PR-own audit action. The mcp-auth-proxy /pr-write
+// route records action=github.break_glass.pr_write for every gh pr
+// edit/ready/comment; if the accept-list omits it the audit is silently dropped
+// (the proxy logs and continues on a 4xx), breaking the audit guarantee the
+// branch-lane design relies on.
+func TestHandleInternalAppendControlActionAcceptsBreakGlassPRWrite(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	body := `{
+		"event_id": "bg_pr_write_1",
+		"invocation_id": "bg_pr_write_invocation_1",
+		"source_service": "tank-git-break-glass",
+		"source_tool": "pr_write",
+		"action": "github.break_glass.pr_write",
+		"status": "succeeded",
+		"target_kind": "github_repository",
+		"target_ref": "https://github.com/romaine-life/tank-operator",
+		"repo_owner": "romaine-life",
+		"repo_name": "tank-operator",
+		"pr_number": 1356,
+		"payload": {"pr_action": "comment", "branch": "tank/session/1145/tank-operator"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.SourceService != "tank-git-break-glass" || got.SourceTool != "pr_write" || got.Action != "github.break_glass.pr_write" || got.Status != "succeeded" {
+		t.Fatalf("audit action fields = %#v", got)
 	}
 }
 

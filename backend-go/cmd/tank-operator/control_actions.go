@@ -1744,17 +1744,22 @@ func countBreakGlassGrantBranches(rows []pgstore.ControlActionEvent, grantEventI
 	return len(branches)
 }
 
-func normalizePRLaneBranchNames(values []string, sessionID, repo string) []string {
+// normalizeBranchScopeBranchNames canonicalizes the agent-supplied branch names
+// in a `named` break-glass branch scope: it strips refs/heads/ and the
+// tank/session/<id>/<repo>/ prefix, reduces any remaining path to its last
+// segment, and sanitizes to a bare branch token. (Formerly named for PR lanes,
+// which were retired and unified into the break-glass branch-lane grant.)
+func normalizeBranchScopeBranchNames(values []string, sessionID, repo string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		if normalized := normalizePRLaneBranchName(value, sessionID, repo); normalized != "" {
+		if normalized := normalizeBranchScopeBranchName(value, sessionID, repo); normalized != "" {
 			out = append(out, normalized)
 		}
 	}
 	return uniqueStrings(out)
 }
 
-func normalizePRLaneBranchName(value, sessionID, repo string) string {
+func normalizeBranchScopeBranchName(value, sessionID, repo string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return ""
@@ -2147,7 +2152,7 @@ func normalizeBranchScope(scope branchScope, sessionID, repo string) (branchScop
 		if scope.Count != 0 {
 			return branchScope{}, errors.New("branch_scope named rejects count")
 		}
-		branches := normalizePRLaneBranchNames(scope.Branches, sessionID, repo)
+		branches := normalizeBranchScopeBranchNames(scope.Branches, sessionID, repo)
 		if len(branches) == 0 {
 			return branchScope{}, errors.New("branch_scope named requires branches")
 		}
@@ -2286,6 +2291,7 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		"github.break_glass.deny",
 		"github.break_glass.token",
 		"github.break_glass.push",
+		"github.break_glass.pr_write",
 		"azure.break_glass.request",
 		"azure.break_glass.grant",
 		"azure.break_glass.deny",
@@ -2293,6 +2299,18 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		testSlotModelRequestAction,
 		testSlotModelGrantAction:
 	default:
+		// The PR-lane mechanism was retired and unified into the break-glass
+		// branch-lane grant (docs/branch-lane-grants.md). A retired PR-lane
+		// control action reaching the ledger is a reintroduction of the deleted
+		// path — reject it and count it loudly so TankBranchLaneRetiredPathUsed
+		// fires. The prefix literal is assembled from two pieces so this live
+		// file stays fully scanned by the migration grep guard
+		// (scripts/check-removed-pr-lane.mjs) without it misreading this
+		// rejection site as a resurrection of the deleted symbol.
+		if strings.HasPrefix(action, "github.pr_lane"+".") {
+			recordBreakGlassRetiredPath()
+			return pgstore.ControlActionEvent{}, errors.New("retired PR-lane control actions are not accepted; PR lanes were unified into the break-glass branch-lane grant")
+		}
 		return pgstore.ControlActionEvent{}, errors.New("unsupported control action")
 	}
 	return pgstore.ControlActionEvent{

@@ -1,13 +1,15 @@
 # Branch Lane Grants — unifying break-glass git and PR lanes
 
-Status: Stage 2 (atomic cutover) landing. Stages 0 (plan) and 1 (unified model +
-server-side brokering primitives) are complete. This commit is the cutover: the
-governed `/push-head` + `/pr-write` routes go live through the pre-push hook and
-`gh` wrapper, and the PR-lane mechanism (`request_pr_lane` / `create_pr_lane` /
-`github.pr_lane.*`) is retired end-to-end with a reintroduction guard. Stage 3
-(Prometheus counters + alerts for the brokered paths) is the remaining required
-hardening — the durable `github.break_glass.*` audit ledger already records
-every brokered op in the meantime.
+Status: complete (Stages 0–3). Stage 0 (plan) and Stage 1 (unified model +
+server-side brokering primitives) landed first; Stage 2 was the atomic cutover —
+the governed `/push-head` + `/pr-write` routes go live through the pre-push hook
+and `gh` wrapper, and the PR-lane mechanism (`request_pr_lane` / `create_pr_lane`
+/ `github.pr_lane.*`) is retired end-to-end with a reintroduction guard. Stage 3
+completes the observability: per-result counters for the brokered paths, a
+retired-path guard counter, the `tank-operator.branch-lane` alerts, and dashboard
+panels — on top of the durable `github.break_glass.*` audit ledger that records
+every brokered op (its accept-list admits `github.break_glass.pr_write`, so PR-own
+audits land rather than being silently dropped).
 
 ## Problem
 
@@ -191,14 +193,40 @@ Per `docs/migration-policy.md`: the old path is deleted, not wrapped.
   path used again" alert.
 - Final hardening pass; cost/scale note for the brokered-PR path.
 
-## Observability
+## Observability (as built)
 
-- `tank_break_glass_grant_total{result}`
-- `tank_break_glass_push_total{result}`
-- `tank_break_glass_pr_open_total{result}`
-- `tank_break_glass_pr_write_total{result}`
+Brokered-path counters, emitted by the mcp-auth-proxy sidecar (the whole family
+is named `tank_break_glass_*` regardless of emitting service so it dashboards and
+alerts together):
+
+- `tank_break_glass_push_total{result}` — `/push-head` governed push.
+- `tank_break_glass_pr_open_total{result}` — `/pr-write` draft-PR open.
+- `tank_break_glass_pr_write_total{result}` — `/pr-write` PR-own write
+  (edit/ready/comment).
+
+`result` is `succeeded`, `error` (a genuine 500 broker fault), or a bounded
+refusal reason (`no_grant`, `branch_out_of_scope`, `dirty`, …). Because a refusal
+writes **no** control-action ledger row, these counters are the only signal for
+the scope boundary firing (`branch_out_of_scope`) and the no-grant wall.
+
+Orchestrator counter:
+
 - `tank_break_glass_retired_path_total` — guard counter; any increment means a
-  retired `pr_lane` path was exercised and is a counted bug.
+  retired `github.pr_lane.*` action reached the durable ledger and is a counted
+  migration bug. Label-less (the rejected action string is caller-controlled, so
+  it must never become a metric label).
+
+Grant lifecycle is observed through the **existing**
+`tank_control_action_events_total{action="github.break_glass.grant|request|deny",status}`;
+the original sketch's dedicated `tank_break_glass_grant_total` was dropped because
+it would only duplicate that series (the repo's metric discipline rejects
+redundant counters).
+
+Alerts (`tank-operator.branch-lane`): `TankBranchLaneRetiredPathUsed` (critical)
+and `TankBranchLaneBrokerErrors` (warning). Grafana: a "Branch-lane brokered
+push/PR outcomes" panel and a "Branch-lane grants & retired-path guard" panel.
+Full taxonomy + cost/scale note live in `docs/observability.md` → "Branch-lane
+grants".
 
 ## Contract impact
 

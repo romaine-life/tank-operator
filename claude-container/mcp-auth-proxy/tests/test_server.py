@@ -10,6 +10,14 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from aiohttp import ClientSession, ClientTimeout, web
 from aiohttp.test_utils import TestClient, TestServer
+from prometheus_client import REGISTRY
+
+
+def _bg_metric(name: str, result: str) -> float:
+    """Current value of a branch-lane brokered-path counter sample, 0.0 if the
+    series has not been observed yet. Counters persist across tests in-process,
+    so assertions use before/after deltas."""
+    return REGISTRY.get_sample_value(name, {"result": result}) or 0.0
 
 from mcp_auth_proxy.server import (
     LISTENERS,
@@ -1670,6 +1678,7 @@ def test_break_glass_push_head_route_pushes_in_scope_branch(monkeypatch, tmp_pat
     monkeypatch.setattr("mcp_auth_proxy.server._record_break_glass_use", fake_record)
     monkeypatch.setattr("mcp_auth_proxy.server.asyncio.create_task", lambda coro: tasks.append(coro))
 
+    before = _bg_metric("tank_break_glass_push_total", "succeeded")
     try:
         response = asyncio.run(
             _handle_break_glass_push_head_route(
@@ -1690,6 +1699,7 @@ def test_break_glass_push_head_route_pushes_in_scope_branch(monkeypatch, tmp_pat
     assert audits[0]["status"] == "succeeded"
     assert audits[0]["payload"]["branch"] == "feature/work"
     assert len(tasks) == 1  # CI watch started
+    assert _bg_metric("tank_break_glass_push_total", "succeeded") == before + 1
 
 
 def test_break_glass_push_head_route_refuses_branch_out_of_scope(monkeypatch, tmp_path) -> None:
@@ -1717,6 +1727,7 @@ def test_break_glass_push_head_route_refuses_branch_out_of_scope(monkeypatch, tm
     monkeypatch.setattr("mcp_auth_proxy.server._push_head_with_token", fake_push)
     monkeypatch.setattr("mcp_auth_proxy.server._record_break_glass_use", fake_record)
 
+    before = _bg_metric("tank_break_glass_push_total", "branch_out_of_scope")
     response = asyncio.run(
         _handle_break_glass_push_head_route(
             _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
@@ -1729,6 +1740,9 @@ def test_break_glass_push_head_route_refuses_branch_out_of_scope(monkeypatch, tm
     assert payload["ok"] is False
     assert payload["reason"] == "branch_out_of_scope"
     assert "feature/not-granted" in payload["detail"]
+    # The scope boundary firing must be observable even though it writes no
+    # control-action ledger row — the counter is its only signal.
+    assert _bg_metric("tank_break_glass_push_total", "branch_out_of_scope") == before + 1
 
 
 def test_break_glass_push_head_route_refuses_without_grant(monkeypatch, tmp_path) -> None:
@@ -1764,6 +1778,7 @@ def test_break_glass_pr_write_route_opens_in_scope_pr(monkeypatch) -> None:
     # action=open with the head branch inside the grant scope brokers a draft PR
     # and audits both github.break_glass.pr_write and github.pull_request.open.
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+    before_open = _bg_metric("tank_break_glass_pr_open_total", "succeeded")
 
     github_calls: list[dict] = []
     audits: list[dict] = []
@@ -1827,6 +1842,7 @@ def test_break_glass_pr_write_route_opens_in_scope_pr(monkeypatch) -> None:
     assert [c["action"] for c in control_actions] == ["github.pull_request.open"]
     assert control_actions[0]["pr_number"] == 321
     assert control_actions[0]["source_tool"] == _BREAK_GLASS_PR_WRITE_TOOL
+    assert _bg_metric("tank_break_glass_pr_open_total", "succeeded") == before_open + 1
 
 
 def test_break_glass_pr_write_route_refuses_open_out_of_scope(monkeypatch) -> None:
@@ -1904,6 +1920,7 @@ def test_break_glass_pr_write_route_marks_ready_in_scope(monkeypatch) -> None:
     # action=ready resolves the PR head, confirms it is in scope, then brokers
     # mark_pull_request_ready_for_review with {owner, name, number}.
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+    before_ready = _bg_metric("tank_break_glass_pr_write_total", "succeeded")
 
     github_calls: list[dict] = []
     audits: list[dict] = []
@@ -1949,6 +1966,7 @@ def test_break_glass_pr_write_route_marks_ready_in_scope(monkeypatch) -> None:
     ]
     assert [a["action"] for a in audits] == ["github.break_glass.pr_write"]
     assert audits[0]["payload"]["pr_action"] == "ready"
+    assert _bg_metric("tank_break_glass_pr_write_total", "succeeded") == before_ready + 1
 
 
 def test_break_glass_pr_write_route_refuses_without_grant(monkeypatch) -> None:

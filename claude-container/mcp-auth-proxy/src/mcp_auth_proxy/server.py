@@ -56,6 +56,9 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from .metrics import (
     record_auth_romaine_exchange,
+    record_break_glass_pr_open,
+    record_break_glass_pr_write,
+    record_break_glass_push,
     record_github_write_tool_decision,
     record_proxy_request,
     record_proxy_retry,
@@ -3853,6 +3856,14 @@ async def _handle_break_glass_push_head_route(
     /mint-git-token, authorizes off the durable grant without the agent-facing
     activation marker.
     """
+
+    def _refuse(reason: str, detail: str = "", *, status: int = 200) -> web.Response:
+        # Every non-success exit records its reason so a scope boundary firing
+        # (branch_out_of_scope) or agents tripping on the no-grant wall is
+        # visible — refusals write no control-action ledger row.
+        record_break_glass_push(reason)
+        return _pr_write_refusal(reason, detail, status=status)
+
     try:
         raw_body = await request.read()
         try:
@@ -3864,34 +3875,34 @@ async def _handle_break_glass_push_head_route(
         try:
             repo_path = _repo_path_from_arguments(payload)
         except Exception as exc:
-            return _pr_write_refusal("bad_repo_path", str(exc))
+            return _refuse("bad_repo_path", str(exc))
         branch = await _git_output(repo_path, "branch", "--show-current")
         if not branch:
-            return _pr_write_refusal("detached", "current repo is detached; checkout a branch before pushing")
+            return _refuse("detached", "current repo is detached; checkout a branch before pushing")
         if not bool(payload.get("allow_dirty")):
             rc, stdout, stderr = await _run_git(repo_path, "status", "--porcelain")
             if rc != 0:
-                return _pr_write_refusal("error", stderr or stdout or "git status failed", status=500)
+                return _refuse("error", stderr or stdout or "git status failed", status=500)
             if stdout.strip():
-                return _pr_write_refusal("dirty", "worktree has uncommitted changes; commit or pass allow_dirty=true before pushing HEAD")
+                return _refuse("dirty", "worktree has uncommitted changes; commit or pass allow_dirty=true before pushing HEAD")
         sha = await _git_output(repo_path, "rev-parse", "HEAD")
         remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
         slug = _repo_slug_from_remote(remote_url)
         if slug is None:
-            return _pr_write_refusal("bad_origin", f"origin remote is not a GitHub URL: {remote_url}")
+            return _refuse("bad_origin", f"origin remote is not a GitHub URL: {remote_url}")
         repo_slug = f"{slug[0]}/{slug[1]}"
         requested_repo = str(payload.get("repo") or "").strip()
         if requested_repo and requested_repo != repo_slug:
-            return _pr_write_refusal("repo_mismatch", f"repo argument {requested_repo!r} does not match origin {repo_slug}")
+            return _refuse("repo_mismatch", f"repo argument {requested_repo!r} does not match origin {repo_slug}")
         service_token = await auth_romaine_provider.token()
         grant = await _active_break_glass_grant_cached(http, service_token, repo_slug)
         if not _grant_allows(grant, _BREAK_GLASS_PUSH_HEAD_TOOL):
-            return _pr_write_refusal("no_grant", f"no active break-glass grant allows push for {repo_slug}")
+            return _refuse("no_grant", f"no active break-glass grant allows push for {repo_slug}")
         # SECURITY BOUNDARY: the grant's branch scope bounds WHICH branches this
         # token may push. A scoped grant cannot hand the shell a branch-scoped
         # token, so Tank enforces the branch scope here before the push.
         if not _grant_branch_allows(grant, branch):
-            return _pr_write_refusal("branch_out_of_scope", f"active break-glass grant does not allow branch {branch}")
+            return _refuse("branch_out_of_scope", f"active break-glass grant does not allow branch {branch}")
         try:
             token = await _mint_github_installation_token(http, service_token, repo_slug)
             await _push_head_with_token(repo_path, branch, token)
@@ -3908,7 +3919,7 @@ async def _handle_break_glass_push_head_route(
                 payload={"grant_event_id": grant.get("event_id"), "branch": branch, "repo_path": str(repo_path), "channel": "wrapper"},
             )
             log.warning("break-glass push-head route failed", exc_info=True)
-            return _pr_write_refusal("error", str(exc), status=500)
+            return _refuse("error", str(exc), status=500)
         await _record_break_glass_use(
             http,
             service_token,
@@ -3937,10 +3948,11 @@ async def _handle_break_glass_push_head_route(
                 source_tool=_BREAK_GLASS_PUSH_HEAD_TOOL,
             )
         )
+        record_break_glass_push("succeeded")
         return web.json_response({"ok": True, "branch": branch, "sha": sha, "repo": repo_slug})
     except Exception as exc:
         log.warning("break-glass push-head route failed", exc_info=True)
-        return _pr_write_refusal("error", str(exc), status=500)
+        return _refuse("error", str(exc), status=500)
 
 
 async def _handle_break_glass_pr_write_route(
@@ -3959,6 +3971,19 @@ async def _handle_break_glass_pr_write_route(
     credential (never a raw token in the shell) and every brokered op is audited.
     Like /mint-git-token this authorizes off the durable grant, not the marker.
     """
+    action = ""
+
+    def _refuse(reason: str, detail: str = "", *, status: int = 200) -> web.Response:
+        # Route to the open vs own-write counter by the action under way; the two
+        # pre-action refusals (bad_repo, bad_action) fall to pr_write. Refusals
+        # write no control-action ledger row, so this counter is their only
+        # signal — including branch_out_of_scope, the PR scope boundary firing.
+        if action == "open":
+            record_break_glass_pr_open(reason)
+        else:
+            record_break_glass_pr_write(reason)
+        return _pr_write_refusal(reason, detail, status=status)
+
     try:
         raw_body = await request.read()
         try:
@@ -3969,11 +3994,11 @@ async def _handle_break_glass_pr_write_route(
             payload = {}
         repo_slug = str(payload.get("repo") or "").strip()
         if "/" not in repo_slug:
-            return _pr_write_refusal("bad_repo", "repo must be a GitHub slug like owner/name")
+            return _refuse("bad_repo", "repo must be a GitHub slug like owner/name")
         owner, repo = repo_slug.split("/", 1)
         action = str(payload.get("action") or "").strip()
         if action not in {"open", "edit", "ready", "comment"}:
-            return _pr_write_refusal("bad_action", f"action must be one of open|edit|ready|comment, got {action!r}")
+            return _refuse("bad_action", f"action must be one of open|edit|ready|comment, got {action!r}")
 
         service_token = await auth_romaine_provider.token()
         grant = await _active_break_glass_grant(http, service_token, repo_slug)
@@ -3981,24 +4006,24 @@ async def _handle_break_glass_pr_write_route(
         # (every break-glass grant carries push_current_head). No grant -> refuse
         # with a precise reason rather than letting the scope check do it.
         if not _grant_allows(grant, _BREAK_GLASS_PUSH_HEAD_TOOL):
-            return _pr_write_refusal("no_grant", f"no active break-glass grant for {repo_slug}")
+            return _refuse("no_grant", f"no active break-glass grant for {repo_slug}")
 
         pr_number_raw = payload.get("pr_number")
         try:
             pr_number = int(pr_number_raw) if pr_number_raw is not None else None
         except (TypeError, ValueError):
-            return _pr_write_refusal("bad_pr_number", "pr_number must be an integer")
+            return _refuse("bad_pr_number", "pr_number must be an integer")
 
         # SECURITY BOUNDARY — resolve the branch this write targets and require it
         # be inside the grant's branch scope before performing any write.
         if action == "open":
             head = str(payload.get("head") or "").strip()
             if not head:
-                return _pr_write_refusal("missing_head", "head branch is required to open a PR")
+                return _refuse("missing_head", "head branch is required to open a PR")
             scope_branch = head
         else:
             if pr_number is None:
-                return _pr_write_refusal("missing_pr_number", f"pr_number is required for action {action}")
+                return _refuse("missing_pr_number", f"pr_number is required for action {action}")
             try:
                 resolve_token = await _mint_github_installation_token(http, service_token, repo_slug)
                 status, pr_body = await _github_api_json(
@@ -4009,17 +4034,17 @@ async def _handle_break_glass_pr_write_route(
                 )
             except Exception as exc:
                 log.warning("break-glass pr-write PR resolve failed", exc_info=True)
-                return _pr_write_refusal("error", f"failed to resolve PR head: {exc}", status=500)
+                return _refuse("error", f"failed to resolve PR head: {exc}", status=500)
             if status >= 400 or not isinstance(pr_body, dict):
-                return _pr_write_refusal("pr_not_found", f"could not read PR #{pr_number} (HTTP {status})", status=500)
+                return _refuse("pr_not_found", f"could not read PR #{pr_number} (HTTP {status})", status=500)
             pr_head = pr_body.get("head")
             head_ref = str((pr_head.get("ref") if isinstance(pr_head, dict) else "") or "").strip()
             if not head_ref:
-                return _pr_write_refusal("error", f"PR #{pr_number} head ref missing from GitHub response", status=500)
+                return _refuse("error", f"PR #{pr_number} head ref missing from GitHub response", status=500)
             scope_branch = head_ref
 
         if not _grant_branch_allows(grant, scope_branch):
-            return _pr_write_refusal("branch_out_of_scope", f"active break-glass grant does not allow branch {scope_branch}")
+            return _refuse("branch_out_of_scope", f"active break-glass grant does not allow branch {scope_branch}")
 
         headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
         try:
@@ -4057,7 +4082,7 @@ async def _handle_break_glass_pr_write_route(
             elif action == "comment":
                 comment = str(payload.get("comment") or "")
                 if not comment.strip():
-                    return _pr_write_refusal("missing_comment", "comment is required for action comment")
+                    return _refuse("missing_comment", "comment is required for action comment")
                 await _call_mcp_github_tool(
                     http,
                     service_token,
@@ -4072,7 +4097,7 @@ async def _handle_break_glass_pr_write_route(
                 if payload.get("body") is not None:
                     patch["body"] = str(payload.get("body") or "")
                 if not patch:
-                    return _pr_write_refusal("nothing_to_edit", "edit requires at least one of title or body")
+                    return _refuse("nothing_to_edit", "edit requires at least one of title or body")
                 edit_token = await _mint_github_installation_token(http, service_token, repo_slug)
                 status, edit_body = await _github_api_json(
                     http,
@@ -4105,7 +4130,7 @@ async def _handle_break_glass_pr_write_route(
                 },
             )
             log.warning("break-glass pr-write route failed", exc_info=True)
-            return _pr_write_refusal("error", str(exc), status=500)
+            return _refuse("error", str(exc), status=500)
 
         await _record_break_glass_use(
             http,
@@ -4149,10 +4174,14 @@ async def _handle_break_glass_pr_write_route(
                     },
                 },
             )
+        if action == "open":
+            record_break_glass_pr_open("succeeded")
+        else:
+            record_break_glass_pr_write("succeeded")
         return web.json_response({"ok": True, "pr_number": result_pr_number, "pr_url": pr_url, "action": action})
     except Exception as exc:
         log.warning("break-glass pr-write route failed", exc_info=True)
-        return _pr_write_refusal("error", str(exc), status=500)
+        return _refuse("error", str(exc), status=500)
 
 
 async def _handle_break_glass_mcp(
