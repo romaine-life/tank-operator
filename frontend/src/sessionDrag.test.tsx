@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
@@ -9,6 +11,30 @@ import {
 } from "./sessionDrag";
 
 afterEach(cleanup);
+
+// Regression guard for the real-browser drag bug the #1358 telemetry caught:
+// `dragstart` fired but `dragover` never did, because the onDragOver guard read
+// `draggingSessionId` (React state) which isn't flushed before the next native
+// dragover under concurrent rendering, so it bailed before preventDefault. jsdom
+// flushes state between fireEvent calls, so a behavioral test can't reproduce
+// the staleness — this pins the fix at the source: the guard must read the
+// synchronous ref, never the state.
+test("onDragOver guards on the synchronous draggingIdRef, not React state", () => {
+  const src = readFileSync(join(import.meta.dirname, "sessionDrag.ts"), "utf8");
+  // Slice the actual handler (its `(event) => {` body), not the interface decl.
+  const onDragOver = src.slice(
+    src.indexOf("onDragOver: (event) => {"),
+    src.indexOf("onDrop: (event) => {"),
+  );
+  expect(
+    onDragOver,
+    "onDragOver must gate on draggingIdRef.current (survives an unflushed dragstart state update)",
+  ).toMatch(/draggingIdRef\.current/);
+  expect(
+    onDragOver.includes("draggingSessionId"),
+    "onDragOver must not gate on the draggingSessionId state (the stale-closure bug)",
+  ).toBe(false);
+});
 
 // ---- pure decision ---------------------------------------------------------
 

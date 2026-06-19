@@ -125,10 +125,19 @@ export function useSessionDrag(
     null,
   );
   const [dragIntent, setDragIntent] = useState<DragIntentKind | null>(null);
+  // The dragging id lives in a ref, not just state: a native `dragover` can fire
+  // before React (concurrent mode) flushes the `setDraggingSessionId` from
+  // `dragstart`, so a state-based guard reads null and bails before
+  // `preventDefault` — the row never becomes a drop target and `drop` never
+  // fires (the real-browser bug the drag telemetry caught: dragstart with no
+  // dragover). The ref updates synchronously, so the guard is always correct.
+  // State stays for the className affordances only.
+  const draggingIdRef = useRef<string | null>(null);
   // Emit the "dragover" telemetry beacon once per drag, not on every move.
   const overReportedRef = useRef(false);
 
   const end = () => {
+    draggingIdRef.current = null;
     setDraggingSessionId(null);
     setDragOverSessionId(null);
     setDragIntent(null);
@@ -139,6 +148,7 @@ export function useSessionDrag(
     onDragStart: (event) => {
       if (opts.readOnly) return;
       reportDragStep("dragstart");
+      draggingIdRef.current = id;
       overReportedRef.current = false;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", id);
@@ -147,7 +157,8 @@ export function useSessionDrag(
     },
     onDragOver: (event) => {
       if (opts.readOnly) return;
-      if (!draggingSessionId || draggingSessionId === id) return;
+      const dragging = draggingIdRef.current;
+      if (!dragging || dragging === id) return;
       // Calling preventDefault on dragover is what makes the row a valid drop
       // target; without it the browser never fires drop.
       event.preventDefault();
@@ -167,7 +178,7 @@ export function useSessionDrag(
       const rect = event.currentTarget.getBoundingClientRect();
       const intent = dropIntentForRow(event.clientY, rect.top, rect.height);
       const movedId =
-        event.dataTransfer.getData("text/plain") || draggingSessionId || "";
+        event.dataTransfer.getData("text/plain") || draggingIdRef.current || "";
       end();
       if (opts.readOnly || !opts.enabled || !movedId) {
         reportDragStep("drop", "noplan");
