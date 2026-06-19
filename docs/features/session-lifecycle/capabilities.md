@@ -516,12 +516,14 @@ Open hardening:
   admin can approve another user's request without relying on the owner's
   control-action list. Approve/deny POST to
   `/api/sessions/{id}/break-glass-requests/{event_id}/{approve|deny}`. The
-  same popup also surfaces the pull requests this session touched: a primary
-  "View all N PRs" entry that opens the dedicated `/pull-requests` page (the
-  complete, durable list — see "Durable session pull-request projection" below),
-  the latest PR the agent opened, and the PR explicitly linked via
-  `set_pull_request_link`. The popover is portaled to `<body>` with fixed
-  positioning so the composer input-group's `overflow: hidden` cannot clip it.
+  break-glass popover is portaled to `<body>` with fixed positioning so the
+  composer input-group's `overflow: hidden` cannot clip it. The composer git
+  chip, separately, is a single-click shortcut to the dedicated
+  `/pull-requests` page (the complete, durable list — see "Durable session
+  pull-request projection" below): one click opens the page — there is no PR
+  popover — and the page is where Merge in Tank lives and where a PR explicitly
+  linked via `set_pull_request_link` (test/rollout) is surfaced when it isn't in
+  the session's own durable list.
 
 ## Durable session pull-request projection (git chip + /pull-requests page)
 
@@ -570,8 +572,9 @@ Open hardening:
     `recordSessionPullRequestSighting` hook
     (`control_actions_pull_requests_test.go`).
   - frontend `normalizeSessionPullRequests` (`pullRequests.test.ts`),
-    `pullRequestsFromDurable`, and the `PullRequestMenuButton` "View all N PRs"
-    entry wired to the `/pull-requests` page.
+    `pullRequestsFromDurable`, and the single-click `PullRequestMenuButton`
+    shortcut to the `/pull-requests` page (`AgentGitActivityScreen`, which also
+    hosts Merge in Tank).
 - **Non-goal:** PR *write* authority (opening/merging PRs) is unrelated — that is
   the governed publish path / break-glass surface above. This projection is
   read-side display only.
