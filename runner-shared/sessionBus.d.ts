@@ -14,6 +14,8 @@ export interface SessionBusConfig {
   natsToken?: string;
   natsStream: string;
   operatorInternalURL: string;
+  authRomaineTokenPath?: string;
+  authRomaineExchangeURL?: string;
   operatorTokenPath: string;
 }
 

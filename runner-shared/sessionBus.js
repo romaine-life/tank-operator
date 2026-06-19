@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { hasInternalAuthConfig, internalBearerToken } from "./internalAuth.js";
 
 export const SESSION_COMMAND_ACK_MS = parsePositiveInt(process.env.SESSION_COMMAND_ACK_MS, 120_000);
 export const SESSION_COMMAND_MAX_DELIVER = parsePositiveInt(process.env.SESSION_COMMAND_MAX_DELIVER, 20);
@@ -240,9 +241,8 @@ export class SharedSessionBus {
     }
     async findTurnTerminal(turnID) {
         const baseURL = trimTrailingSlashes(this.cfg.operatorInternalURL || "");
-        const tokenPath = this.cfg.operatorTokenPath || "";
-        if (!baseURL || !tokenPath || !turnID) return null;
-        const token = (await readFile(tokenPath, "utf8")).trim();
+        if (!baseURL || !hasInternalAuthConfig(this.cfg) || !turnID) return null;
+        const token = await internalBearerToken(this.cfg);
         const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(this.cfg.sessionId)}/turns/${encodeURIComponent(turnID)}/terminal`;
         const response = await fetch(url, {
             headers: { Authorization: `Bearer ${token}` },
