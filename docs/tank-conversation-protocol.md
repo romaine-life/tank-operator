@@ -70,6 +70,36 @@ the new source. The unwritten invariant "every turn is user-anchored" lived
 only in read-side assumptions; this section exists so the next new turn shape
 fails loudly at review time instead.
 
+### Consumer audit: `pr_ready.notified` (2026-06-19)
+
+The CI-watch ready USER ping. A non-turn, display-only system notice that also
+drives `needs_input` attention. Read-side consumers:
+
+- **Transcript projection** (`transcript_projection.go` `applyPRReadyNotice`):
+  CONSUMES — promotes a top-level role:system message with a *View PR* action.
+- **Frontend reducer** (`conversationReducer.ts` `applyPRReadyMessage`):
+  CONSUMES — same role:system message; also reflects the `needs_input` companion
+  run-status, guarded to not clobber a live turn.
+- **Frontend projection filter** (`conversationProjection.ts`): CONSUMES — the
+  `pr-ready:` timeline is allowlisted so the notice renders.
+- **Activity fold** (`sessionactivity.DeriveActivitySummary` +
+  `store.LifecycleEventTypes`): CONSUMES — folds to `needs_input` when the
+  session is idle (no-clobber guard for active turns); cleared by the next
+  `turn.*` lifecycle event. Added to the `session_events_lifecycle` partial index
+  (migration 0178) so the literal-list lifecycle query still matches the index.
+- **Stranded-turn sweeps** (`FindStrandedTurns` / `FindStrandedLaunchTurns`):
+  INERT by construction — `pr_ready.notified` carries no `turn_id` and is not a
+  `turn.submitted`, so it is never a sweep candidate and no false
+  `turn.command_failed` can be written.
+- **Turn pager, Background-activity screen, deep links, read-state cursors,
+  unread-output counts** (`store.UnreadOutputItemTypes`/`UnreadOutputTurnTypes`):
+  INERT — it is not a turn, not item output, and not a question; it is a
+  standalone notice keyed by its own timeline id.
+- **`turn.input_answered` / answer endpoint**: INERT — there is no question set,
+  no answerable card (`metaKind:awaiting_input`), and no paused runner; the ping
+  is purely projection-driven, so nothing strands trying to deliver an
+  `input_reply`.
+
 ## Borrowed Constraints
 
 Re-checked on 2026-05-12:
@@ -235,6 +265,20 @@ AskUserQuestion handoff/answer:
 
 - `turn.awaiting_input`
 - `turn.input_answered`
+
+Backend-side system notices (actor=system, source=tank; display-only, never a
+`submit_turn`, never invoke the agent, never enter the model's replayed context):
+
+- `scheduled_wakeup.updated`
+- `ci_status.updated`
+- `test_provision.updated`
+- `pr_ready.notified`
+
+`pr_ready.notified` is the CI-watch ready USER ping: it renders inline as a
+role:system notice AND, uniquely among these notices, joins the activity
+lifecycle fold so it trips the `needs_input` sidebar attention (a green+mergeable
+PR is a hand-off back to the user). It carries no `turn_id`. See the consumer
+audit below.
 
 Session activity is computed server-side by the lifecycle emitter as
 sessions evolve and published as `session.activity_changed` rows in the

@@ -194,21 +194,58 @@ and [../README.md](../README.md) for how capability ledgers are used.
   `TankTestSlotProvisionStuck` alert fires on the gauge, mirroring
   `TankCIWatchStalled`.
 
+## ci-ready-user-ping
+
+- **Status:** shipped
+- **Intent:** When a watched governed PR goes green **and** mergeable on the
+  **non-orchestration** ready branch of `handleGreenCIWatch` (after
+  `autoMergeOrchestrationPhasePR` returns handled=false), the **USER** is pinged —
+  the agent is **never** woken. The ping is a durable `pr_ready.notified` system
+  notice (actor=system, source=tank) that (a) renders inline as a top-level
+  role:system message carrying a *View PR* click-through and (b) trips the
+  `needs_input` sidebar attention the AskUserQuestion hand-off uses, via the
+  `sessionactivity` activity fold. It is informational — the existing governed-merge
+  surface handles merging, so there is no Merge button on the notice. This is the
+  sibling of `ci-watch-wake` (agent wake on red/conflict): success summons the
+  human, failure summons the agent.
+- **Mechanism — no runner, no turn:** the orchestrator writes the event
+  backend-side via `persistBackendEvent` (the same path `emitCIStatusRecord` /
+  `test_provision.updated` / `scheduled_wakeup.updated` use); it is **not** a
+  `turn.submitted` / `submit_turn`, so the runner never processes it, the agent is
+  never invoked, and it is not a stranded-turn-sweep candidate. It carries no
+  `turn_id`. The `needs_input` fold is guarded to NOT clobber a live agent turn (if
+  CI goes green mid-turn the active turn owns the status); the attention is cleared
+  by the next `turn.*` lifecycle event, so it never sticks past the user engaging.
+- **Idempotent on the transition:** pinged once per watching→ready edge. A re-entry
+  on an already-ready watch (webhook + reconcile double-drive) short-circuits before
+  the durable write; the deterministic head-keyed `event_id`
+  (`pr-ready:<repo>:<pr>:ready:<head>`) is the durable backstop that collapses
+  concurrent drivers at the `session_events_event_identity` unique index. A
+  genuinely new head that goes green again pings again.
+- **Durable source:** `pr_ready.notified` event on the `session_events` ledger; the
+  `session_ci_watches` row drives the watching→ready transition. Observable via
+  `tank_ci_ready_ping_total{result}` (`emitted|already_ready|persist_failed`).
+
 ## ci-status-record
 
-- **Status:** event + webhook merge path shipped; **inline rendering NOT implemented**
+- **Status:** event + webhook merge path shipped; **inline rendering NOT implemented for the merged/failed states**
 - **Intent:** A merge is recorded as a display-only `ci_status.updated` event that never
   invokes the agent and never enters the model's replayed context. External merges are
   recorded via the `pull_request` closed/merged webhook.
-- **Known gap (corrected 2026-06-18):** `ci_status.updated` does **not** render inline.
-  There is no `ci_status` projection case in `cmd/tank-operator/transcript_projection.go`
-  and no handler in `frontend/src/conversationReducer.ts`, so these records are durable but
-  invisible in the turns view. The earlier claim that a merge "renders (and will ring) in
-  the turns view" was aspirational, not implemented. The interactive test-workflow outcome,
-  which previously rode this invisible event, now uses the dedicated, projected
-  `test_provision.updated` thread instead (see interactive-test-workflow above). A future
-  slice that wants merges visible inline must add the projection + reducer cases (the
-  `test_provision.updated` path is the worked example).
+- **Update (2026-06-19):** the `ci_status.updated` **"ready"** record on the
+  non-orchestration branch of `handleGreenCIWatch` was **replaced** by the
+  `pr_ready.notified` ping (see ci-ready-user-ping above) — there is no dead parallel
+  path, per `docs/migration-policy.md`. The `ci_status.updated` event type and its
+  `"ready"` state value **remain live**: orchestration phase readiness
+  (`orchestration_handlers.go`) still emits `ci_status.updated` "ready" and the
+  orchestration dashboard SSE consumes it. `merged`/`failed`/`conflict`/`out_of_band`
+  states are unchanged.
+- **Known gap (corrected 2026-06-18):** `ci_status.updated` `merged`/`failed` records still do
+  **not** render inline in the turns view — there is no `ci_status` projection case in
+  `cmd/tank-operator/transcript_projection.go` and no handler in
+  `frontend/src/conversationReducer.ts`. A future slice that wants merges visible inline must
+  add the projection + reducer cases (the `pr_ready.notified` / `test_provision.updated`
+  paths are the worked examples).
 - **Durable source:** `ci_status.updated` event (actor=system, source=tank).
 
 ## orchestration-advance
