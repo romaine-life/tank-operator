@@ -260,6 +260,11 @@ type CreateOptions struct {
 	// BugLabels is the plural create-time form. BugLabel remains populated for
 	// compatibility with clients and row projections that read one label.
 	BugLabels []*sessionmodel.SessionBugLabel
+	// ParentSessionID is the origin session that spawned this one (the
+	// X-Tank-Origin-Session-Id on the spawning MCP call). Persisted on the
+	// child row at create so the sidebar nests it under its origin from the
+	// first snapshot/row-update — no reflow. Empty for human/splash creates.
+	ParentSessionID string
 }
 
 // Create creates a new session pod and registers it in the registry.
@@ -293,6 +298,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 	model := opts.Model
 	effort := opts.Effort
+	parentSessionID := strings.TrimSpace(opts.ParentSessionID)
 	// normalizedName is the optional user-supplied title (nil/empty when the
 	// user gave none). storedName is the resolved NON-NULL value persisted on
 	// the row/Info — assigned the canonical SessionDisplayName default below
@@ -402,6 +408,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Effort:               effort,
 			AgentAvatarID:        assignment.AgentAvatarID,
 			SystemAvatarID:       assignment.SystemAvatarID,
+			ParentSessionID:      parentSessionID,
 		}); regErr != nil {
 			// Abort BEFORE the pod exists. The lifecycle contract is
 			// "Create produces a durable session row before user-visible
@@ -468,6 +475,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		Effort:               effort,
 		AgentAvatarID:        assignment.AgentAvatarID,
 		SystemAvatarID:       assignment.SystemAvatarID,
+		ParentSessionID:      parentSessionID,
 	}
 
 	// Refresh the registry row with the K8s-assigned created_at so the
@@ -492,6 +500,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Effort:               effort,
 			AgentAvatarID:        assignment.AgentAvatarID,
 			SystemAvatarID:       assignment.SystemAvatarID,
+			ParentSessionID:      parentSessionID,
 		}); regErr != nil {
 			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)

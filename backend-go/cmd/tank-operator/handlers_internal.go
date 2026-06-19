@@ -249,6 +249,14 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		launchTurnAt = time.Now().UTC()
 		requestedAt = launchTurnAt.Add(2 * time.Millisecond).Format(time.RFC3339Nano)
 	}
+	// originSessionID is the spawning (origin) session from the
+	// X-Tank-Origin-Session-Id header the MCP proxy stamps on spawn_run_session
+	// /spawn_test_slot_session. Resolved BEFORE Create so it is stamped on the
+	// child row in the same create write (ParentSessionID below) — that is what
+	// lets the sidebar nest the child under its origin from the first
+	// snapshot/row-update instead of reflowing once the parent's
+	// spawned_sessions append lands. Empty for human/splash creates (no origin).
+	originSessionID := originSessionIDFromRequest(r, "")
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:           user.ActorEmail,
 		Mode:            mode,
@@ -259,6 +267,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		Model:           runConfig.Model,
 		Effort:          runConfig.Effort,
 		RequestedAt:     requestedAt,
+		ParentSessionID: originSessionID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -266,7 +275,6 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	}
 	var turnResp map[string]any
 	if body.InitialTurn != nil {
-		originSessionID := originSessionIDFromRequest(r, "")
 		originSessionAvatarID := originSessionAvatarIDFromRequest(r, "")
 		turnResp, status, detail = s.enqueueSDKTurn(r.Context(), user.ActorEmail, info.ID, sdkTurnRequest{
 			ClientNonce:           initialTurn.ClientNonce,
@@ -298,8 +306,10 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	// the child is already durably created, so a failed edge write must not
 	// fail the spawn. Gated on the origin header, so human/splash-page
 	// creates (no origin) record nothing. Covers spawn_run_session and
-	// spawn_test_slot_session — both land on this canonical create path.
-	if originSessionID := originSessionIDFromRequest(r, ""); originSessionID != "" {
+	// spawn_test_slot_session — both land on this canonical create path. This
+	// is the parent-side, names+url chip lineage; the child-side nesting
+	// pointer was already stamped on the child row above (ParentSessionID).
+	if originSessionID != "" {
 		tankUIHost := strings.TrimRight(envDefault("TANK_UI_HOST", "https://tank.romaine.life"), "/")
 		ref := sessionmodel.SpawnedSessionRef{
 			ID:    info.ID,

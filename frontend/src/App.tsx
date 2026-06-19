@@ -896,6 +896,11 @@ interface Session {
   // "spawned sessions" chip lists (sessions this one spawned via
   // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
   spawned_sessions?: SpawnedSessionRef[];
+  // parent_session_id is the child→parent (origin) pointer that drives sidebar
+  // nesting: the id of the session that spawned this one, stamped on the child
+  // row at create. Absent when this session was not spawned. arrangeSessionTree
+  // reads this (not the parent's spawned_sessions) so a child is born nested.
+  parent_session_id?: string;
   // Activity is the chat-derived sidebar indicator block. Backend
   // hydrates this from the latest session.activity_changed lifecycle
   // event in GET /api/sessions; the session-list SSE stream then keeps the
@@ -27247,6 +27252,7 @@ function AuthenticatedApp() {
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
       spawned_sessions: row.spawned_sessions,
+      parent_session_id: row.parent_session_id,
       sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],

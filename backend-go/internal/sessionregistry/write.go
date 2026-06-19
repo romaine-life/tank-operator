@@ -102,12 +102,14 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			mode, pod_name, name, visible, session_image, session_image_metadata,
 			requested_at, created_at, updated_at,
 			status, ready_at,
-			repos, capabilities, model, effort, agent_avatar_id, system_avatar_id, sidebar_position
+			repos, capabilities, model, effort, agent_avatar_id, system_avatar_id, sidebar_position,
+			parent_session_id
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, COALESCE($11, now()), $12,
 			COALESCE(NULLIF($13, ''), 'Pending'), $14,
-			$15, $16, $17, $18, NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, 0), nextval('sessions_row_version_seq'))
+			$15, $16, $17, $18, NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, 0), nextval('sessions_row_version_seq')),
+			NULLIF($22, '')
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -147,6 +149,11 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		strings.TrimSpace(record.AgentAvatarID),
 		strings.TrimSpace(record.SystemAvatarID),
 		sidebarPosition,
+		// parent_session_id is write-once: set on the create INSERT, absent from
+		// the ON CONFLICT DO UPDATE set above, so later status/created_at
+		// re-upserts (the only other Upsert caller is Create's own refresh)
+		// preserve the origin pointer stamped at birth.
+		strings.TrimSpace(record.ParentSessionID),
 	)
 	return err
 }
@@ -537,6 +544,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.test_state,
 			sessions.rollout_state,
 			sessions.spawned_sessions,
+			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
 			COALESCE(sessions.capabilities, '{}'::text[]),
@@ -595,6 +603,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		sessionImageMetadata                                           []byte
 		activitySummary, testState, rolloutState, cloneState           []byte
 		spawnedSessions                                                []byte
+		parentSessionID                                                string
 		providerRateLimitInfo                                          []byte
 		repos, capabilities                                            []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt          string
@@ -615,6 +624,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
 		&spawnedSessions,
+		&parentSessionID,
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
@@ -660,6 +670,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		TestState:                        unmarshalJSONB(testState),
 		RolloutState:                     unmarshalJSONB(rolloutState),
 		SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
+		ParentSessionID:                  parentSessionID,
 		Repos:                            repos,
 		CloneState:                       unmarshalJSONB(cloneState),
 		Capabilities:                     capabilities,

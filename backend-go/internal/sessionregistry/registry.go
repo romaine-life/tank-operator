@@ -62,6 +62,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sessions.test_state,
 			sessions.rollout_state,
 			sessions.spawned_sessions,
+			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
 			COALESCE(sessions.capabilities, '{}'::text[]),
@@ -129,6 +130,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sessionImageMetadata                                                      []byte
 			activitySummary, testState, rolloutState, cloneState                      []byte
 			spawnedSessions                                                           []byte
+			parentSessionID                                                           string
 			providerRateLimitInfo                                                     []byte
 			repos, capabilities                                                       []string
 			model, effort, runtimeModel, runtimeEffort, runtimeAt                     string
@@ -150,6 +152,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
 			&spawnedSessions,
+			&parentSessionID,
 			&repos, &cloneState, &capabilities, &model, &effort,
 			&runtimeModel, &runtimeEffort, &runtimeAt,
 			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowObservedAt,
@@ -191,6 +194,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			TestState:                        unmarshalJSONB(testState),
 			RolloutState:                     unmarshalJSONB(rolloutState),
 			SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
+			ParentSessionID:                  parentSessionID,
 			Repos:                            repos,
 			CloneState:                       unmarshalJSONB(cloneState),
 			Capabilities:                     capabilities,

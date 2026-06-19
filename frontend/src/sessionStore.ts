@@ -86,6 +86,12 @@ export interface SessionRow {
   // "spawned sessions" chip lists. Omitted/empty when this session spawned
   // nothing. Normalized to clean refs at the store boundary.
   spawned_sessions?: SpawnedSessionRef[];
+  // parent_session_id is the child→parent (origin) pointer that drives sidebar
+  // nesting: the id of the session that spawned this one, stamped on the child
+  // row at create. Omitted/empty when this session was not spawned. Because it
+  // lands with the child row itself, the sidebar nests the child on arrival
+  // without waiting for the parent's spawned_sessions append.
+  parent_session_id?: string;
   // repos is the durable owner/name slug list the user picked at
   // session creation. Always present on the wire (empty array when
   // none picked); the splash chips and the per-session detail view
@@ -545,6 +551,11 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
         ? (rowRaw.rollout_state as Record<string, unknown>)
         : undefined,
       spawned_sessions: normalizeSpawnedSessions(rowRaw.spawned_sessions),
+      parent_session_id:
+        typeof rowRaw.parent_session_id === "string" &&
+        rowRaw.parent_session_id !== ""
+          ? rowRaw.parent_session_id
+          : undefined,
       repos: Array.isArray(rowRaw.repos)
         ? (rowRaw.repos as unknown[]).filter(
             (entry): entry is string => typeof entry === "string",

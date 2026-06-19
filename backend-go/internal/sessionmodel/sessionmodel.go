@@ -228,6 +228,17 @@ type SessionRecord struct {
 	// relationship from the event ledger. jsonb array column.
 	SpawnedSessions []SpawnedSessionRef
 
+	// ParentSessionID is the inverse, child-side edge: the id of the origin
+	// session that spawned THIS one, stamped in the same INSERT that creates
+	// the child (from the X-Tank-Origin-Session-Id header). It is the durable
+	// source for sidebar nesting — the SPA groups a child directly under its
+	// origin from this field, so the child is "born nested" with no reflow
+	// (unlike inferring from the parent's later spawned_sessions append). Empty
+	// for human/splash creates and pre-column sessions. Same per-scope id space
+	// as ID; nesting only applies when the parent is present in the same
+	// (email, scope) list. parent_session_id text column.
+	ParentSessionID string
+
 	// Repos is the list of "owner/name" slugs selected at session
 	// creation. Empty slice is the steady-state "no auto-cloning"
 	// shape; a non-empty slice is read by the repo-cloner init
