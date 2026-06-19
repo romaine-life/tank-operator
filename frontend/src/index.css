@@ -11477,12 +11477,16 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-muted);
 }
 
-/* Inline question surface: the pending question's widget renders directly in
-   the main transcript beneath the agent's preamble. Indented to align with the
-   activity content column and tinted to read as the needs-input affordance. */
-.run-turn-activity-question {
-  margin: 0 var(--space-3) var(--space-2) calc(var(--space-3) + 1.75rem);
+/* Inline question surface: the pending question's widget renders on the asking
+   turn (RunInlineAskUserQuestion) as the agent's message — avatar gutter +
+   content column — so it reads as a continuation of the agent's preamble above
+   it. The card (.run-tool-ask) sits in the message content column. */
+.run-inline-question .run-transcript-message-content {
   min-width: 0;
+}
+
+.run-inline-question .run-tool-ask {
+  margin-top: 0.15rem;
 }
 
 .run-turn-activity-body {

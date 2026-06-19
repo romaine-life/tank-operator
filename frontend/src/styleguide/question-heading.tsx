@@ -214,16 +214,29 @@ export function StyleguideQuestionHeading() {
         <section style={sectionStyle}>
           <p style={{ ...captionStyle, maxWidth: "72ch" }}>
             Inline question surface (main transcript): the agent&rsquo;s preamble
-            followed by the question widget rendered in place beneath it
-            (.run-turn-activity-question), so the common single-question case is
-            answered without leaving the transcript. The composer is the answer
-            input; there is no navigate-to-Turns shortcut.
+            followed by the question widget rendered inline on the asking turn
+            (RunInlineAskUserQuestion — the widget in place of the old summary
+            message), so the common single-question case is answered without
+            leaving the transcript. The composer is the answer input; there is no
+            navigate-to-Turns shortcut.
           </p>
           <div style={showcaseFrameStyle}>
             <div className="run-transcript run-transcript-claude">
               <MockAssistantMessage />
-              <div className="run-turn-activity-question">
-                <MockQuestionCard />
+              <div
+                className="run-transcript-message run-inline-question"
+                data-slot="message"
+                data-variant="assistant"
+                data-role="assistant"
+                data-kind="inline-question"
+              >
+                <span className="run-msg-ai-avatar" aria-hidden="true" />
+                <div
+                  className="run-transcript-message-content"
+                  data-slot="message-content"
+                >
+                  <MockQuestionCard />
+                </div>
               </div>
             </div>
           </div>
