@@ -2659,25 +2659,28 @@ function PullRequestMenuButton({
   // The composer git chip is a single-click shortcut to the dedicated
   // /pull-requests page (AgentGitActivityScreen): one click opens the complete,
   // durable PR list, which is also where Merge in Tank lives. It is intentionally
-  // NOT a popover menu. The chip stays live whenever the session has touched a PR
-  // (count) or carries a linked test/rollout PR the page surfaces.
+  // NOT a popover menu. As a navigation control it is ALWAYS clickable whenever
+  // the page is reachable (onOpenPage) — even with zero PRs it opens the page
+  // (which shows its own empty state) rather than dead-ending as a greyed icon.
+  // The "is-ready" highlight still reflects whether the session has touched a PR.
   const linked = linkedUrl?.trim() ?? "";
   const prCount = typeof count === "number" ? count : 0;
-  const hasPage = Boolean(onOpenPage && (prCount > 0 || linked));
-  const title = !hasPage
-    ? "No pull request yet"
-    : prCount > 1
+  const hasPrs = prCount > 0 || Boolean(linked);
+  const title =
+    prCount > 1
       ? `View ${prCount} pull requests`
-      : "View pull request";
+      : hasPrs
+        ? "View pull request"
+        : "Pull requests";
   return (
     <button
       type="button"
       className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${
-        hasPage ? " is-ready" : ""
+        hasPrs ? " is-ready" : ""
       }`}
       aria-label={title}
       title={title}
-      disabled={!hasPage}
+      disabled={!onOpenPage}
       onClick={() => onOpenPage?.()}
     >
       <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
