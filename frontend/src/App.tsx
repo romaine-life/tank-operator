@@ -251,11 +251,9 @@ import {
   controlActionRowsToEntries,
   controlActionStatusLabel,
   pendingBreakGlassRequests,
-  pendingPRLaneRequests,
   type BreakGlassRequest,
   type ControlActionRow,
   type ControlActionStatus,
-  type PRLaneRequest,
 } from "./controlActions";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
@@ -1796,7 +1794,7 @@ interface AdminBreakGlassListBody {
   requests?: AdminBreakGlassListItem[];
 }
 
-type BreakGlassApprovalMenuKind = "github" | "azure" | "model" | "pr-lane";
+type BreakGlassApprovalMenuKind = "github" | "azure" | "model";
 const BREAK_GLASS_BATCH_BUSY_ID = "__break_glass_batch__";
 
 interface BreakGlassApprovalMenuItem {
@@ -1807,7 +1805,6 @@ interface BreakGlassApprovalMenuItem {
   target: string;
   reason?: string;
   createdAt?: string;
-  prLaneRequest?: PRLaneRequest;
 }
 
 interface TestSlotSessionDefaults {
@@ -2602,11 +2599,6 @@ interface ComposerToolButtonsProps {
     approvingId?: string | null;
     onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
     onQuickApproveMany?: (items: BreakGlassApprovalMenuItem[]) => void;
-    onApprovePRLane?: (
-      request: PRLaneRequest,
-      override?: "listed" | "count" | "unlimited",
-    ) => void;
-    onDenyPRLane?: (request: PRLaneRequest) => void;
   };
   pullRequest: {
     latestUrl?: string;
@@ -2835,12 +2827,7 @@ function PullRequestMenuButton({
 }
 
 function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
-  const Icon =
-    kind === "model"
-      ? FlaskConicalIcon
-      : kind === "pr-lane"
-        ? GitBranchIcon
-        : ShieldAlertIcon;
+  const Icon = kind === "model" ? FlaskConicalIcon : ShieldAlertIcon;
   return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
 }
 
@@ -2853,8 +2840,6 @@ function BreakGlassApprovalMenuButton({
   approvingId,
   onQuickApprove,
   onQuickApproveMany,
-  onApprovePRLane,
-  onDenyPRLane,
 }: ComposerToolButtonsProps["breakGlass"]) {
   const [open, setOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -3032,7 +3017,6 @@ function BreakGlassApprovalMenuButton({
               </div>
             )}
             {items.map((item) => {
-              const prLane = item.prLaneRequest;
               const isBatchable = isBatchableBreakGlassMenuItem(item);
               const busy = approvingId === item.id || batchBusy;
               const selected = selectedIds.has(item.id);
@@ -3072,100 +3056,34 @@ function BreakGlassApprovalMenuButton({
                       </span>
                     </span>
                   </span>
-                  {item.kind === "pr-lane" && prLane ? (
-                    <span className="run-pr-menu-actions">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="run-pr-menu-action-btn"
-                        disabled={!onApprovePRLane || busy}
-                        onClick={() => onApprovePRLane?.(prLane)}
-                      >
-                        <CheckIcon aria-hidden="true" />
-                        <span>
-                          {busy
-                            ? "Approving"
-                            : prLane.allocationRequest
-                              ? "Approve request"
-                              : "Approve"}
-                        </span>
-                      </button>
-                      {prLane.allocationRequest &&
-                        (prLane.laneNames?.length ||
-                        prLane.proposedBranches?.length ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="run-pr-menu-action-btn"
-                            disabled={!onApprovePRLane || busy}
-                            onClick={() => onApprovePRLane?.(prLane, "listed")}
-                          >
-                            Listed only
-                          </button>
-                        ) : null)}
-                      {prLane.allocationRequest && (
-                        <>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="run-pr-menu-action-btn"
-                            disabled={!onApprovePRLane || busy}
-                            onClick={() => onApprovePRLane?.(prLane, "count")}
-                          >
-                            10
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="run-pr-menu-action-btn"
-                            disabled={!onApprovePRLane || busy}
-                            onClick={() => onApprovePRLane?.(prLane, "unlimited")}
-                          >
-                            Unlimited
-                          </button>
-                        </>
-                      )}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="run-pr-menu-action-btn"
-                        disabled={!onDenyPRLane || busy}
-                        onClick={() => onDenyPRLane?.(prLane)}
-                      >
-                        <XIcon aria-hidden="true" />
-                        <span>Deny</span>
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="run-pr-menu-actions">
-                      <a
-                        role="menuitem"
-                        className="run-pr-menu-action-link"
-                        href={item.href}
-                        onClick={(event) => {
-                          if (!isPlainLeftClick(event)) {
-                            setOpen(false);
-                            return;
-                          }
-                          event.preventDefault();
+                  <span className="run-pr-menu-actions">
+                    <a
+                      role="menuitem"
+                      className="run-pr-menu-action-link"
+                      href={item.href}
+                      onClick={(event) => {
+                        if (!isPlainLeftClick(event)) {
                           setOpen(false);
-                          navigateToSessionRoute(new URL(item.href, window.location.href).href);
-                        }}
-                      >
-                        Details
-                      </a>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="run-pr-menu-action-btn"
-                        disabled={!onQuickApprove || busy}
-                        onClick={() => onQuickApprove?.(item)}
-                      >
-                        <CheckIcon aria-hidden="true" />
-                        <span>{busy ? "Approving" : "Quick approve"}</span>
-                      </button>
-                    </span>
-                  )}
+                          return;
+                        }
+                        event.preventDefault();
+                        setOpen(false);
+                        navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                      }}
+                    >
+                      Details
+                    </a>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="run-pr-menu-action-btn"
+                      disabled={!onQuickApprove || busy}
+                      onClick={() => onQuickApprove?.(item)}
+                    >
+                      <CheckIcon aria-hidden="true" />
+                      <span>{busy ? "Approving" : "Quick approve"}</span>
+                    </button>
+                  </span>
                 </div>
               );
             })}
@@ -11736,61 +11654,10 @@ function pendingTestSlotModelApprovalMenuItems(
     });
 }
 
-function prLaneRepoScopeLabel(request: PRLaneRequest): string {
-  if (request.allRepos) return "all repos";
-  if (request.repos && request.repos.length > 0) {
-    return request.repos.join(", ");
-  }
-  return request.repo ?? "current repo";
-}
-
-function prLaneBranchScopeLabel(request: PRLaneRequest): string {
-  if (!request.allocationRequest) return request.laneName;
-  if (request.unlimited) return "unlimited governed lanes";
-  if (request.requestedCount) {
-    return `${request.requestedCount} governed lane${
-      request.requestedCount === 1 ? "" : "s"
-    }`;
-  }
-  const namedCount =
-    request.laneNames?.length || request.proposedBranches?.length || 0;
-  return `${namedCount} named lane${namedCount === 1 ? "" : "s"}`;
-}
-
-function prLaneApprovalMenuItems(
-  sessionId: string,
-  requests: PRLaneRequest[],
-): BreakGlassApprovalMenuItem[] {
-  return requests.map((request) => {
-    const branchScope = prLaneBranchScopeLabel(request);
-    const meta = [
-      request.allocationRequest ? branchScope : request.relationship,
-      request.base ? `from ${request.base}` : "",
-      prLaneRepoScopeLabel(request),
-      request.scope,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return {
-      id: request.eventId,
-      kind: "pr-lane" as const,
-      href: sessionUrl(sessionId),
-      label: request.allocationRequest ? "PR lane allocation" : "PR lane",
-      target: request.allocationRequest
-        ? meta
-        : `${request.laneName}${meta ? ` · ${meta}` : ""}`,
-      reason: request.reason,
-      createdAt: request.createdAt,
-      prLaneRequest: request,
-    };
-  });
-}
-
 function breakGlassApprovalMenuItemsForSession(
   sessionId: string,
   breakGlassRequests: BreakGlassRequest[],
   testSlotModelRows: ControlActionRow[],
-  prLaneRequests: PRLaneRequest[],
 ): BreakGlassApprovalMenuItem[] {
   const breakGlassItems = breakGlassRequests.map((request) => ({
     id: request.eventId,
@@ -11807,7 +11674,6 @@ function breakGlassApprovalMenuItemsForSession(
   return [
     ...breakGlassItems,
     ...pendingTestSlotModelApprovalMenuItems(sessionId, testSlotModelRows),
-    ...prLaneApprovalMenuItems(sessionId, prLaneRequests),
   ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
@@ -18552,9 +18418,6 @@ function ChatPane({
   const [focusedTestSlotModelRows, setFocusedTestSlotModelRows] = useState<
     ControlActionRow[]
   >([]);
-  const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
-    string | null
-  >(null);
   const [breakGlassApprovalBusyId, setBreakGlassApprovalBusyId] = useState<
     string | null
   >(null);
@@ -18766,10 +18629,6 @@ function ChatPane({
     () => [...controlActionRows, ...focusedTestSlotModelRows],
     [controlActionRows, focusedTestSlotModelRows],
   );
-  const prLaneRequests = useMemo(
-    () => pendingPRLaneRequests(controlActionRows),
-    [controlActionRows],
-  );
   const breakGlassRequests = useMemo(
     () => pendingBreakGlassRequests(breakGlassActionRows),
     [breakGlassActionRows],
@@ -18780,61 +18639,8 @@ function ChatPane({
         session.id,
         breakGlassRequests,
         testSlotModelActionRows,
-        prLaneRequests,
       ),
-    [breakGlassRequests, prLaneRequests, session.id, testSlotModelActionRows],
-  );
-  const postPRLaneDecision = useCallback(
-    async (
-      request: PRLaneRequest,
-      decision: "approve" | "deny",
-      override?: "listed" | "count" | "unlimited",
-    ) => {
-      if (publicView || readOnly) return;
-      setPRLaneApprovalBusyId(request.eventId);
-      try {
-        const requestedBranches = [
-          ...(request.laneNames ?? []),
-          ...(request.proposedBranches ?? []),
-        ];
-        const body =
-          decision === "approve" && request.allocationRequest
-            ? {
-                note: override
-                  ? `agent-requested allocation approved with ${override} override`
-                  : "agent-requested allocation approved",
-                branch_scope:
-                  override === "unlimited" || (override === undefined && request.unlimited === true)
-                    ? { kind: "unlimited" }
-                    : override === "count"
-                      ? { kind: "count", count: 10 }
-                      : requestedBranches.length > 0
-                        ? { kind: "named", branches: requestedBranches }
-                        : { kind: "count", count: request.requestedCount ?? 10 },
-              }
-            : {};
-        await authedFetch(
-          scopedSessionPathForPane(
-            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/${decision}`,
-          ),
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          },
-        );
-        await fetchControlActionEntries();
-      } finally {
-        setPRLaneApprovalBusyId(null);
-      }
-    },
-    [
-      fetchControlActionEntries,
-      publicView,
-      readOnly,
-      scopedSessionPathForPane,
-      session.id,
-    ],
+    [breakGlassRequests, session.id, testSlotModelActionRows],
   );
   const postBreakGlassDecision = useCallback(
     async (
@@ -18951,15 +18757,9 @@ function ChatPane({
         void postTestSlotModelApproval({ eventId: item.id }, "");
         return;
       }
-      if (item.kind === "pr-lane") {
-        if (item.prLaneRequest) {
-          void postPRLaneDecision(item.prLaneRequest, "approve");
-        }
-        return;
-      }
       void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
     },
-    [postBreakGlassDecision, postPRLaneDecision, postTestSlotModelApproval],
+    [postBreakGlassDecision, postTestSlotModelApproval],
   );
   const quickApproveBreakGlassMenuItems = useCallback(
     (items: BreakGlassApprovalMenuItem[]) => {
@@ -26197,25 +25997,11 @@ function ChatPane({
                 breakGlass={{
                   items: breakGlassApprovalMenuItems,
                   approvingId:
-                    breakGlassApprovalBusyId ??
-                    testSlotModelApprovalBusyId ??
-                    prLaneApprovalBusyId,
+                    breakGlassApprovalBusyId ?? testSlotModelApprovalBusyId,
                   onQuickApprove:
                     publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
                   onQuickApproveMany:
                     publicView || readOnly ? undefined : quickApproveBreakGlassMenuItems,
-                  onApprovePRLane:
-                    publicView || readOnly
-                      ? undefined
-                      : (request, override) => {
-                          void postPRLaneDecision(request, "approve", override);
-                        },
-                  onDenyPRLane:
-                    publicView || readOnly
-                      ? undefined
-                      : (request) => {
-                          void postPRLaneDecision(request, "deny");
-                        },
                 }}
                 pullRequest={{
                   latestUrl: latestPullRequestURL,

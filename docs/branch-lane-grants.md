@@ -1,6 +1,13 @@
 # Branch Lane Grants — unifying break-glass git and PR lanes
 
-Status: design / staged plan. Stage 0 of the work this document describes.
+Status: Stage 2 (atomic cutover) landing. Stages 0 (plan) and 1 (unified model +
+server-side brokering primitives) are complete. This commit is the cutover: the
+governed `/push-head` + `/pr-write` routes go live through the pre-push hook and
+`gh` wrapper, and the PR-lane mechanism (`request_pr_lane` / `create_pr_lane` /
+`github.pr_lane.*`) is retired end-to-end with a reintroduction guard. Stage 3
+(Prometheus counters + alerts for the brokered paths) is the remaining required
+hardening — the durable `github.break_glass.*` audit ledger already records
+every brokered op in the meantime.
 
 ## Problem
 
@@ -68,25 +75,28 @@ anything works.
 
 ## Durable data model
 
-One event taxonomy replaces two:
+The unified grant rides the **existing `github.break_glass.*` event family**. A
+full rename to a `github.branch_lane.*` taxonomy was considered but deferred:
+renaming the durable action strings is its own ledger migration (it orphans live
+`github.break_glass.grant` rows), and the agent-facing tool stays
+`request_git_break_glass`, so the rename is a clean, separable follow-up rather
+than scope inside this change. The events the brokering uses:
 
-- `github.branch_lane.request` — agent asks to work on a branch (reason, repo
+- `github.break_glass.request` — agent asks to work on a branch (reason, repo
   scope, optional branch hint).
-- `github.branch_lane.grant` — human (or policy) approves; carries
-  `repo_scope`, `branch_scope`, `operations`, TTL, and — once provisioned — the
-  lane's `branch` + `pr_number`.
-- `github.branch_lane.push` — a brokered push (audit).
-- `github.branch_lane.pr_open` — a brokered PR open (audit).
-- `github.branch_lane.pr_write` — a brokered PR edit/ready/comment (audit).
-- `github.branch_lane.deny` — denied request.
+- `github.break_glass.grant` — human (or policy) approves; carries `repo_scope`,
+  `branch_scope`, `operations`, TTL.
+- `github.break_glass.push` — a brokered governed push (audit).
+- `github.break_glass.pr_write` — a brokered PR edit/ready/comment (audit).
+- `github.pull_request.open` — a brokered PR open (audit; existing namespace,
+  shared with the session-branch PR provisioning).
 
-`operations` is the explicit, audited capability set: `push`, `pr_own`, and
-`full_api` (the whole-repo GitHub API write — present **only** on `unlimited`
-grants, exactly as `full_github_api` is today). `repoScope` / `branchScope`
-structs are reused unchanged.
-
-The audit-ledger write pattern is **kept** — every brokered operation records a
-`github.branch_lane.*` control action. Only the event *names* change.
+`operations` is the explicit, audited capability set: `push_current_head`,
+`mint_full_git_token`, and `full_github_api` (the whole-repo GitHub API write —
+present **only** on `unlimited` grants). `repoScope` / `branchScope` structs are
+reused unchanged. The audit-ledger write pattern is **kept** — every brokered
+operation records a `github.break_glass.*` control action; only the *capability*
+(push + PR-own for any scope) widened.
 
 ## Agent surface — one tool, one flow
 
@@ -96,18 +106,20 @@ request_git_break_glass(reason, repo_scope?, branch hint?)   # one call
   → git push / git push -f / gh pr create|edit|ready|comment # just work
 ```
 
-On approval Tank:
+After approval the agent just uses git/gh:
 
-1. **provisions the lane** — creates (or adopts) the branch and opens a draft PR
-   for it, reusing today's `create_pr_lane` branch+PR provisioning;
-2. **writes the activation state directly** (the `.tank/git-break-glass-active`
-   marker + settings) so the privileged tools/registry are live with **no second
-   `request_*` call and no manual MCP reload**.
+- `git push` / `git push -f` for an in-scope branch → the pre-push hook performs
+  a governed push (creating the branch if absent).
+- `gh pr create|edit|ready|comment` → the `gh` wrapper brokers the PR write.
 
-The agent never names `push_current_head`, `publish_current_head`,
-`create_pr_lane`, `mint_full_git_token`, or a branch scope it has to reason
-about. It says *why*; the human decides *how much*; the wrapper/hooks do the
-plumbing.
+There is **no second `request_*` call and no MCP-registry reload**: the
+`/push-head` and `/pr-write` routes authorize off the durable grant directly
+(exactly like `/mint-git-token`), so they go live the instant the grant is
+approved. The branch and its draft PR are created lazily by the agent's own
+first `git push` / `gh pr create` — the agent never names `push_current_head`,
+`publish_current_head`, `create_pr_lane`, `mint_full_git_token`, or a branch
+scope it has to reason about. It says *why*; the human decides *how much*; the
+wrapper/hooks do the plumbing.
 
 ## Server-side enforcement (the brokering)
 
@@ -151,8 +163,9 @@ Per `docs/migration-policy.md`: the old path is deleted, not wrapped.
 **Stage 0 — this document.** The full plan, written first.
 
 **Stage 1 — unified model + brokering primitives, inactive infra.**
-- `github.branch_lane.*` event taxonomy + grant struct in
-  `backend-go/internal/pgstore` + `cmd/tank-operator/control_actions.go`.
+- Extend the existing `github.break_glass.*` grant + add the
+  `github.break_glass.pr_write` audit subtype (no new event taxonomy; the rename
+  to `branch_lane.*` is a deferred follow-up).
 - mcp-auth-proxy: governed PR-write endpoint (resolve PR→head, enforce scope,
   broker, audit) + create-if-absent governed push.
 - Unit tests for the new model and enforcement.
@@ -180,11 +193,11 @@ Per `docs/migration-policy.md`: the old path is deleted, not wrapped.
 
 ## Observability
 
-- `tank_branch_lane_grant_total{result}`
-- `tank_branch_lane_push_total{result}`
-- `tank_branch_lane_pr_open_total{result}`
-- `tank_branch_lane_pr_write_total{result}`
-- `tank_branch_lane_retired_path_total` — guard counter; any increment means a
+- `tank_break_glass_grant_total{result}`
+- `tank_break_glass_push_total{result}`
+- `tank_break_glass_pr_open_total{result}`
+- `tank_break_glass_pr_write_total{result}`
+- `tank_break_glass_retired_path_total` — guard counter; any increment means a
   retired `pr_lane` path was exercised and is a counted bug.
 
 ## Contract impact

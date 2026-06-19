@@ -49,7 +49,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from uuid import uuid4
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
@@ -98,8 +98,6 @@ _TANK_BREAK_GLASS_TOOL = "request_git_break_glass"
 _TANK_AZURE_BREAK_GLASS_TOOL = "request_azure_break_glass"
 # Read-only SQL against the tank-operator DB, for NON-restricted sessions only.
 _TANK_DB_QUERY_TOOL = "query_tank_db"
-_TANK_PR_LANE_TOOL = "request_pr_lane"
-_TANK_CREATE_PR_LANE_TOOL = "create_pr_lane"
 _TANK_MERGE_TOOL = "merge_current_session_pr"
 _TANK_RENAME_PR_TOOL = "rename_current_session_pr"
 _TANK_UPDATE_PR_BODY_TOOL = "update_current_session_pr_body"
@@ -114,6 +112,11 @@ _BREAK_GLASS_MCP_PORT = 9999
 # mcp-azure-personal still re-checks the grant on every call.
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
 _BREAK_GLASS_PUSH_HEAD_TOOL = "push_current_head"
+# The grant-aware HTTP route the in-pod `gh` wrapper calls for PR-own writes
+# (open / edit / ready / comment) under a break-glass grant. It is the PR half
+# of the same grant that authorizes push_current_head: the grant's branch scope
+# bounds WHICH branches' PRs may be written, enforced server-side here.
+_BREAK_GLASS_PR_WRITE_TOOL = "pr_write"
 _BREAK_GLASS_WORKFLOWS_OPERATION = "workflows"
 # An UNLIMITED-branch break-glass grant carries the GitHub App's full permission
 # set (pull_requests, issues, merges — the whole API), not just contents. This
@@ -513,8 +516,6 @@ def _append_tank_publish_tool_to_json(value) -> bool:
     else:
         has_publish = False
     has_break_glass = any(isinstance(tool, dict) and tool.get("name") == _TANK_BREAK_GLASS_TOOL for tool in tools)
-    has_pr_lane = any(isinstance(tool, dict) and tool.get("name") == _TANK_PR_LANE_TOOL for tool in tools)
-    has_create_pr_lane = any(isinstance(tool, dict) and tool.get("name") == _TANK_CREATE_PR_LANE_TOOL for tool in tools)
     has_merge = any(isinstance(tool, dict) and tool.get("name") == _TANK_MERGE_TOOL for tool in tools)
     has_rename_pr = any(isinstance(tool, dict) and tool.get("name") == _TANK_RENAME_PR_TOOL for tool in tools)
     has_update_pr_body = any(isinstance(tool, dict) and tool.get("name") == _TANK_UPDATE_PR_BODY_TOOL for tool in tools)
@@ -581,85 +582,6 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                             "description": "Optional PR number; defaults to the open governed PR for the current session branch.",
                         },
                     },
-                    "additionalProperties": False,
-                },
-            }
-        )
-        changed = True
-    if not has_pr_lane:
-        tools.append(
-            {
-                "name": _TANK_PR_LANE_TOOL,
-                "description": (
-                    "Request an additional Tank-governed PR lane for this session. "
-                    "This records a durable approval request; it does not create a "
-                    "branch or pull request until Tank policy or a human approves it."
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "repo_scope": _repo_scope_schema(
-                            "Choose exactly one repo scope: {\"kind\":\"current_repo\"}, "
-                            "{\"kind\":\"repos\",\"repos\":[\"romaine-life/tank-operator\",\"romaine-life/auth\"]}, "
-                            "or {\"kind\":\"all_repos\"}."
-                        ),
-                        "repo_path": {
-                            "type": "string",
-                            "description": "Optional absolute or /workspace-relative path to the repo.",
-                        },
-                        "lane_name": {
-                            "type": "string",
-                            "description": "Short proposed lane name, for example docs or mcp-proxy.",
-                        },
-                        "branch_scope": _branch_scope_schema(
-                            "Required for allocation requests when lane_name is omitted. Choose exactly one: "
-                            "{\"kind\":\"named\",\"branches\":[\"docs\",\"backend\"]}, "
-                            "{\"kind\":\"count\",\"count\":5}, or {\"kind\":\"unlimited\"}."
-                        ),
-                        "relationship": {
-                            "type": "string",
-                            "description": "parallel, stacked, or followup.",
-                        },
-                        "base": {
-                            "type": "string",
-                            "description": "Base branch or lane name, for example main or tank/session/123/repo.",
-                        },
-                        "scope": {
-                            "type": "string",
-                            "description": "Expected file or contract scope for this PR lane.",
-                        },
-                        "reason": {
-                            "type": "string",
-                            "description": "Why this must be a separate review boundary.",
-                        },
-                    },
-                    "required": ["repo_scope", "reason"],
-                    "additionalProperties": False,
-                },
-            }
-        )
-        changed = True
-    if not has_create_pr_lane:
-        tools.append(
-            {
-                "name": _TANK_CREATE_PR_LANE_TOOL,
-                "description": (
-                    "Create a Tank-governed branch/worktree and draft pull request "
-                    "from an approved PR lane request. Requires request_event_id."
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "request_event_id": {
-                            "type": "string",
-                            "description": "Event id returned by request_pr_lane / shown in Tank approvals.",
-                        },
-                        "repo_path": {
-                            "type": "string",
-                            "description": "Optional existing repo path used as the source worktree.",
-                        },
-                    },
-                    "required": ["request_event_id"],
                     "additionalProperties": False,
                 },
             }
@@ -1114,25 +1036,6 @@ async def _post_tank_governed_merge_verify(http: ClientSession, service_token: s
     return {"allowed": False, "http_status": resp.status, "reasons": [f"Tank governed-merge verification failed with HTTP {resp.status}"]}
 
 
-async def _get_tank_pr_lane_authorization(http: ClientSession, service_token: str, request_event_id: str) -> dict:
-    from urllib.parse import quote
-
-    url = (
-        f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pr-lane-requests/"
-        f"{quote(request_event_id, safe='')}/authorization"
-    )
-    async with http.get(url, headers={"Authorization": f"Bearer {service_token}"}) as resp:
-        text = await resp.text()
-    try:
-        body = json.loads(text) if text else {}
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Tank PR lane authorization returned invalid JSON: {text[:500]}") from exc
-    if isinstance(body, dict):
-        body.setdefault("http_status", resp.status)
-        return body
-    return {"allowed": False, "http_status": resp.status, "reasons": [f"Tank PR lane authorization failed with HTTP {resp.status}"]}
-
-
 async def _call_mcp_github_tool(http: ClientSession, service_token: str, name: str, arguments: dict) -> list[dict]:
     payload = {
         "jsonrpc": "2.0",
@@ -1471,10 +1374,6 @@ def _azure_break_glass_approval_url(session_id: str, request_event_id: str) -> s
     return _break_glass_approval_url(session_id, request_event_id)
 
 
-def _pr_lane_approval_url(session_id: str, request_event_id: str) -> str:
-    return f"{_tank_ui_host()}/?{urlencode({'session': session_id, 'pr_lane_request': request_event_id})}"
-
-
 async def _active_break_glass_grant(http: ClientSession, service_jwt: str, repo_slug: str = "") -> dict | None:
     if not ORIGIN_SESSION_ID:
         return None
@@ -1581,46 +1480,6 @@ async def _active_azure_break_glass_grant(http: ClientSession, service_jwt: str)
     except json.JSONDecodeError as exc:
         log.warning(
             "Tank azure break-glass grant lookup returned invalid JSON; treating as no active grant",
-            exc_info=exc,
-        )
-        return None
-    if isinstance(value, dict) and value.get("active") is True:
-        return value
-    return None
-
-
-async def _active_pr_lane_auto_approval(
-    http: ClientSession,
-    service_jwt: str,
-    repo_slug: str,
-    *,
-    lane_name: str = "",
-    proposed_branch: str = "",
-) -> dict | None:
-    if not ORIGIN_SESSION_ID:
-        return None
-    from urllib.parse import quote
-
-    params = f"?repo={quote(repo_slug, safe='')}"
-    if lane_name:
-        params += f"&lane_name={quote(lane_name, safe='')}"
-    if proposed_branch:
-        params += f"&proposed_branch={quote(proposed_branch, safe='')}"
-    url = (
-        f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/pr-lane-auto-approval"
-        f"{params}"
-    )
-    async with http.get(url, headers={"Authorization": f"Bearer {service_jwt}"}) as resp:
-        body = await resp.text()
-        if resp.status == 204 or not body.strip():
-            return None
-        if resp.status >= 400:
-            raise RuntimeError(f"Tank PR lane auto-approval lookup failed with HTTP {resp.status}: {body[:500]}")
-    try:
-        value = json.loads(body)
-    except json.JSONDecodeError as exc:
-        log.warning(
-            "Tank PR lane auto-approval lookup returned invalid JSON; treating as inactive",
             exc_info=exc,
         )
         return None
@@ -3594,423 +3453,6 @@ def _render_query_tank_db_text(data) -> str:
     return "\n".join(lines)
 
 
-async def _handle_tank_pr_lane_tool(
-    http: ClientSession,
-    auth_romaine_provider,
-    request_id: object,
-    arguments: dict,
-) -> web.Response:
-    invocation_id = f"tank-pr-lane-{uuid4().hex}"
-    try:
-        if not ORIGIN_SESSION_ID:
-            raise ValueError("SESSION_ID is required for Tank PR lane requests")
-        repo_scope, repo_slug, requested_repos, repo_path = await _repo_scope_from_arguments(arguments)
-        lane_name = _sanitize_pr_lane_name(arguments.get("lane_name"))
-        branch_scope = _branch_scope_from_arguments(arguments) if not lane_name else None
-        allocation_request = not lane_name
-        if not lane_name and not allocation_request:
-            raise ValueError("lane_name or branch_scope is required")
-        if not allocation_request and repo_scope.get("kind") != "current_repo":
-            raise ValueError("multi-repo PR lane requests must be allocation requests")
-        if len(lane_name) > 64:
-            lane_name = lane_name[:64].strip("-._")
-        relationship = str(arguments.get("relationship") or ("parallel" if allocation_request else "")).strip().lower()
-        if not allocation_request and relationship not in {"parallel", "stacked", "followup"}:
-            raise ValueError("relationship must be one of parallel, stacked, or followup")
-        if allocation_request and relationship and relationship not in {"parallel", "stacked", "followup"}:
-            raise ValueError("relationship must be one of parallel, stacked, or followup")
-        reason = str(arguments.get("reason") or "").strip()
-        if not reason:
-            raise ValueError("reason is required")
-        if len(reason) > 800:
-            reason = reason[:800]
-        scope = str(arguments.get("scope") or "").strip()
-        if len(scope) > 800:
-            scope = scope[:800]
-        base = str(arguments.get("base") or "main").strip() or "main"
-        if len(base) > 200:
-            base = base[:200]
-
-        owner, repo = repo_slug.split("/", 1) if repo_slug and repo_scope.get("kind") == "current_repo" else ("", "")
-        service_token = await auth_romaine_provider.token()
-        if allocation_request:
-            lane_names = branch_scope.get("branches", []) if branch_scope and branch_scope.get("kind") == "named" else []
-            requested_count = branch_scope.get("count", 0) if branch_scope and branch_scope.get("kind") == "count" else 0
-            unlimited = bool(branch_scope and branch_scope.get("kind") == "unlimited")
-            proposed_branches = (
-                [f"tank/session/{ORIGIN_SESSION_ID}/{repo}/{name}" for name in lane_names]
-                if repo
-                else []
-            )
-            event_id = f"tank-pr-lane-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
-            target_ref = f"https://github.com/{repo_slug}"
-            if repo_scope.get("kind") == "all_repos":
-                target_ref = f"tank://session/{ORIGIN_SESSION_ID}/pr-lanes/all-repos"
-            elif repo_scope.get("kind") == "repos":
-                target_ref = f"tank://session/{ORIGIN_SESSION_ID}/pr-lanes/repos"
-            await _post_tank_control_action(
-                http,
-                {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
-                {
-                    "event_id": event_id,
-                    "invocation_id": invocation_id,
-                    "source_service": "mcp-tank-operator",
-                    "source_tool": _TANK_PR_LANE_TOOL,
-                    "action": "github.pr_lane.request",
-                    "status": "started",
-                    "target_kind": "github_repository",
-                    "target_ref": target_ref,
-                    "repo_owner": owner,
-                    "repo_name": repo,
-                    "payload": {
-                        "allocation_request": True,
-                        "repo_scope": repo_scope,
-                        "branch_scope": branch_scope,
-                        "relationship": relationship,
-                        "base": base,
-                        "scope": scope,
-                        "reason": reason,
-                        "repo_path": str(repo_path) if repo_path is not None else "",
-                    },
-                },
-            )
-            approval_url = _pr_lane_approval_url(ORIGIN_SESSION_ID, event_id)
-            if unlimited:
-                allocation_text = "unlimited governed PR lanes"
-            elif lane_names:
-                allocation_text = f"{len(lane_names)} named governed PR lane{'s' if len(lane_names) != 1 else ''}"
-            else:
-                allocation_text = f"{requested_count} governed PR lane{'s' if requested_count != 1 else ''}"
-            repo_text = "all repos" if repo_scope.get("kind") == "all_repos" else ", ".join(requested_repos)
-            text = (
-                f"PR lane allocation request recorded for {repo_text}: {allocation_text}.\n"
-                f"Approval URL: {approval_url}"
-            )
-            return _mcp_result_response(
-                request_id,
-                {
-                    "content": [{"type": "text", "text": text}],
-                    "structuredContent": {
-                        "request_event_id": event_id,
-                        "repo_scope": repo_scope,
-                        "branch_scope": branch_scope,
-                        "allocation_request": True,
-                        "relationship": relationship,
-                        "base": base,
-                        "scope": scope,
-                        "reason": reason,
-                        "approval_url": approval_url,
-                        "status": "approval_required",
-                    },
-                },
-            )
-
-        proposed_branch = f"tank/session/{ORIGIN_SESSION_ID}/{repo}/{lane_name}"
-        auto_approval = await _active_pr_lane_auto_approval(
-            http,
-            service_token,
-            repo_slug,
-            lane_name=lane_name,
-            proposed_branch=proposed_branch,
-        )
-        auto_approved = auto_approval is not None
-        status = "succeeded" if auto_approved else "started"
-        event_id = f"tank-pr-lane-request-{ORIGIN_SESSION_ID}-{uuid4().hex}"
-        approval_url = _pr_lane_approval_url(ORIGIN_SESSION_ID, event_id)
-        await _post_tank_control_action(
-            http,
-            {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
-            {
-                "event_id": event_id,
-                "invocation_id": invocation_id,
-                "source_service": "mcp-tank-operator",
-                "source_tool": _TANK_PR_LANE_TOOL,
-                "action": "github.pr_lane.request",
-                "status": status,
-                "target_kind": "github_repository",
-                "target_ref": f"https://github.com/{repo_slug}",
-                "repo_owner": owner,
-                "repo_name": repo,
-                "payload": {
-                    "lane_name": lane_name,
-                    "relationship": relationship,
-                    "base": base,
-                    "scope": scope,
-                    "reason": reason,
-                    "proposed_branch": proposed_branch,
-                    "repo_path": str(repo_path) if repo_path is not None else "",
-                    "auto_approved": auto_approved,
-                    "auto_approval_event_id": (auto_approval or {}).get("event_id", ""),
-                },
-            },
-        )
-        if auto_approved:
-            text = (
-                f"PR lane request for {repo_slug}/{lane_name} is auto-approved for this session.\n"
-                f"Proposed branch: {proposed_branch}\n"
-                "This did not create the branch or pull request yet; use the governed lane creation path when available."
-            )
-            structured_status = "approved"
-        else:
-            text = (
-                f"PR lane request recorded for {repo_slug}/{lane_name}.\n"
-                f"Approval URL: {approval_url}"
-            )
-            structured_status = "approval_required"
-        return _mcp_result_response(
-            request_id,
-            {
-                "content": [{"type": "text", "text": text}],
-                "structuredContent": {
-                    "request_event_id": event_id,
-                    "repo": repo_slug,
-                    "lane_name": lane_name,
-                    "relationship": relationship,
-                    "base": base,
-                    "scope": scope,
-                    "reason": reason,
-                    "proposed_branch": proposed_branch,
-                    "approval_url": approval_url,
-                    "status": structured_status,
-                    "auto_approved": auto_approved,
-                    "auto_approval_event_id": (auto_approval or {}).get("event_id", ""),
-                },
-            },
-        )
-    except Exception as exc:
-        log.warning("Tank request_pr_lane failed", exc_info=True)
-        return _mcp_error_response(
-            request_id,
-            -32013,
-            str(exc),
-            {"tool": _TANK_PR_LANE_TOOL, "invocation_id": invocation_id},
-        )
-
-
-async def _handle_tank_create_pr_lane_tool(
-    http: ClientSession,
-    auth_romaine_provider,
-    request_id: object,
-    arguments: dict,
-) -> web.Response:
-    invocation_id = f"tank-pr-lane-create-{uuid4().hex}"
-    service_token = ""
-    repo_slug = ""
-    owner = ""
-    repo = ""
-    branch = ""
-    worktree_path: Path | None = None
-    request_event_id = str(arguments.get("request_event_id") or "").strip()
-    try:
-        if not ORIGIN_SESSION_ID:
-            raise ValueError("SESSION_ID is required for Tank PR lane creation")
-        if not request_event_id:
-            raise ValueError("request_event_id is required")
-        service_token = await auth_romaine_provider.token()
-        authorization = await _get_tank_pr_lane_authorization(http, service_token, request_event_id)
-        if authorization.get("allowed") is not True:
-            reasons = authorization.get("reasons")
-            if isinstance(reasons, list) and reasons:
-                raise ValueError("PR lane request is not approved: " + "; ".join(str(reason) for reason in reasons))
-            raise ValueError("PR lane request is not approved")
-
-        repo_slug = str(authorization.get("repo") or "").strip()
-        if "/" not in repo_slug:
-            raise ValueError("PR lane authorization did not include a GitHub repo slug")
-        owner, repo = repo_slug.split("/", 1)
-        lane_name = str(authorization.get("lane_name") or "").strip()
-        if not lane_name:
-            raise ValueError("PR lane authorization did not include a lane name")
-        branch = str(authorization.get("proposed_branch") or "").strip()
-        expected_prefix = f"tank/session/{ORIGIN_SESSION_ID}/{repo}/"
-        if not branch.startswith(expected_prefix):
-            raise ValueError(f"authorized branch {branch!r} is outside Tank session lane prefix {expected_prefix!r}")
-        base = str(authorization.get("base") or "main").strip() or "main"
-        relationship = str(authorization.get("relationship") or "").strip()
-        scope = str(authorization.get("scope") or "").strip()
-        reason = str(authorization.get("reason") or "").strip()
-        approval_event_id = str(authorization.get("approval_event_id") or "").strip()
-
-        repo_path_args = {"repo": repo_slug}
-        if arguments.get("repo_path"):
-            repo_path_args["repo_path"] = arguments.get("repo_path")
-        source_repo_path = _repo_path_from_arguments(repo_path_args)
-        remote_url = await _git_output(source_repo_path, "config", "--get", "remote.origin.url")
-        slug = _repo_slug_from_remote(remote_url)
-        if slug is None:
-            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
-        if f"{slug[0]}/{slug[1]}" != repo_slug:
-            raise ValueError(f"repo path origin {slug[0]}/{slug[1]} does not match approved repo {repo_slug}")
-
-        worktree_path = _pr_lane_worktree_path(repo_slug, lane_name)
-        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
-        started_payload = {
-            "event_id": f"tank-pr-lane-create-start-{ORIGIN_SESSION_ID}-{uuid4().hex}",
-            "invocation_id": invocation_id,
-            "source_service": "mcp-tank-operator",
-            "source_tool": _TANK_CREATE_PR_LANE_TOOL,
-            "action": "github.pr_lane.create",
-            "status": "started",
-            "target_kind": "github_branch",
-            "target_ref": f"https://github.com/{repo_slug}/tree/{quote(branch, safe='')}",
-            "repo_owner": owner,
-            "repo_name": repo,
-            "payload": {
-                "request_event_id": request_event_id,
-                "approval_event_id": approval_event_id,
-                "lane_name": lane_name,
-                "relationship": relationship,
-                "base": base,
-                "scope": scope,
-                "reason": reason,
-                "branch": branch,
-                "source_repo_path": str(source_repo_path),
-                "worktree_path": str(worktree_path),
-            },
-        }
-        await _post_tank_control_action(http, headers, started_payload)
-
-        await _ensure_pr_lane_worktree(
-            source_repo_path,
-            branch=branch,
-            base=base,
-            lane_name=lane_name,
-            worktree_path=worktree_path,
-        )
-        sha = await _git_output(worktree_path, "rev-parse", "HEAD")
-        github_token = await _mint_github_installation_token(http, service_token, repo_slug)
-        await _push_head_with_token(worktree_path, branch, github_token)
-
-        pr_body_lines = [
-            f"Tank session: {ORIGIN_SESSION_ID}",
-            f"Lane: {lane_name}",
-            f"Relationship: {relationship or 'unspecified'}",
-            f"Scope: {scope or 'unspecified'}",
-            "",
-            reason or "Additional governed PR lane approved for this session.",
-        ]
-        pr_objects = await _call_mcp_github_tool(
-            http,
-            service_token,
-            "create_pull_request",
-            {
-                "owner": owner,
-                "name": repo,
-                "title": f"Tank session {ORIGIN_SESSION_ID}: {lane_name}",
-                "body": "\n".join(pr_body_lines),
-                "head": branch,
-                "base": base,
-                "draft": True,
-            },
-        )
-        pr = _first_pr_from_response(pr_objects)
-        pr_url = ""
-        pr_number: int | None = None
-        if pr is not None:
-            _pr_owner, _pr_repo, pr_url, pr_number = pr
-            await _post_tank_control_action(
-                http,
-                headers,
-                {
-                    "event_id": f"tank-pr-lane-pr-open-{ORIGIN_SESSION_ID}-{uuid4().hex}",
-                    "invocation_id": invocation_id,
-                    "source_service": "mcp-tank-operator",
-                    "source_tool": _TANK_CREATE_PR_LANE_TOOL,
-                    "action": "github.pull_request.open",
-                    "status": "succeeded",
-                    "target_kind": "github_pull_request",
-                    "target_ref": pr_url,
-                    "repo_owner": owner,
-                    "repo_name": repo,
-                    "pr_number": pr_number,
-                    "result_sha": sha,
-                    "payload": {
-                        "request_event_id": request_event_id,
-                        "lane_name": lane_name,
-                        "branch": branch,
-                        "base": base,
-                        "draft": True,
-                    },
-                },
-            )
-
-        await _post_tank_control_action(
-            http,
-            headers,
-            started_payload
-            | {
-                "event_id": f"tank-pr-lane-create-succeeded-{ORIGIN_SESSION_ID}-{uuid4().hex}",
-                "status": "succeeded",
-                "target_kind": "github_pull_request" if pr_url else "github_branch",
-                "target_ref": pr_url or f"https://github.com/{repo_slug}/tree/{quote(branch, safe='')}",
-                "pr_number": pr_number,
-                "result_sha": sha,
-            },
-        )
-        asyncio.create_task(_watch_published_commit(http, auth_romaine_provider, owner, repo, branch, sha, invocation_id, source_tool=_TANK_CREATE_PR_LANE_TOOL))
-
-        text = (
-            f"Created governed PR lane {repo_slug}/{lane_name}.\n"
-            f"Worktree: {worktree_path}\n"
-            f"Branch: {branch}\n"
-            + (f"Draft PR: {pr_url}\n" if pr_url else "Draft PR: not returned by mcp-github\n")
-            + _CI_ENFORCEMENT_TEXT
-        )
-        return _mcp_result_response(
-            request_id,
-            {
-                "content": [{"type": "text", "text": text}],
-                "structuredContent": {
-                    "repo": repo_slug,
-                    "lane_name": lane_name,
-                    "branch": branch,
-                    "base": base,
-                    "worktree_path": str(worktree_path),
-                    "sha": sha,
-                    "pr_url": pr_url,
-                    "pr_number": pr_number,
-                    "request_event_id": request_event_id,
-                    "approval_event_id": approval_event_id,
-                    "ci_watch": "started",
-                },
-            },
-        )
-    except Exception as exc:
-        log.warning("Tank create_pr_lane failed", exc_info=True)
-        if service_token and repo_slug and owner and repo:
-            try:
-                await _post_tank_control_action(
-                    http,
-                    {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
-                    {
-                        "event_id": f"tank-pr-lane-create-failed-{ORIGIN_SESSION_ID}-{uuid4().hex}",
-                        "invocation_id": invocation_id,
-                        "source_service": "mcp-tank-operator",
-                        "source_tool": _TANK_CREATE_PR_LANE_TOOL,
-                        "action": "github.pr_lane.create",
-                        "status": "failed",
-                        "target_kind": "github_branch",
-                        "target_ref": f"https://github.com/{repo_slug}/tree/{quote(branch, safe='')}" if branch else f"https://github.com/{repo_slug}",
-                        "repo_owner": owner,
-                        "repo_name": repo,
-                        "error": str(exc),
-                        "payload": {
-                            "request_event_id": request_event_id,
-                            "branch": branch,
-                            "worktree_path": str(worktree_path) if worktree_path else "",
-                        },
-                    },
-                )
-            except Exception:
-                log.warning("failed to record PR lane creation failure", exc_info=True)
-        return _mcp_error_response(
-            request_id,
-            -32014,
-            str(exc),
-            {"tool": _TANK_CREATE_PR_LANE_TOOL, "invocation_id": invocation_id, "request_event_id": request_event_id},
-        )
-
-
 def _break_glass_tools_result() -> dict:
     return {
         "tools": [
@@ -4378,6 +3820,339 @@ async def _handle_break_glass_wrapper_mint(
         # transient mint/lookup failure should not strip an agent's reads.
         log.warning("break-glass wrapper mint failed", exc_info=True)
         return web.json_response({"active": False, "error": str(exc)})
+
+
+def _pr_write_refusal(reason: str, detail: str = "", *, status: int = 200) -> web.Response:
+    """JSON refusal/error for the grant-aware PR-write and push-head routes.
+
+    Refusals (no_grant, branch_out_of_scope, dirty, detached, bad input) ride a
+    200 — they are a normal protocol answer the `gh`/`git` wrapper acts on.
+    Genuine faults (mint/push/GitHub API failures) use status=500 so they are
+    unmistakably loud rather than a silently swallowed {"ok": false}."""
+    body: dict[str, object] = {"ok": False, "reason": reason}
+    if detail:
+        body["detail"] = detail
+    return web.json_response(body, status=status)
+
+
+async def _handle_break_glass_push_head_route(
+    http: ClientSession,
+    auth_romaine_provider,
+    request: web.Request,
+) -> web.Response:
+    """Grant-aware governed push for the in-pod `git` pre-push wrapper.
+
+    The break-glass grant is permission to do work on a branch — create it, push
+    / force-push it, and own its PR. This route is the push half: it resolves the
+    repo's current branch + HEAD, verifies the durable grant authorizes
+    push_current_head AND that the branch is in the grant's branch scope
+    (server-side, because GitHub installation tokens cannot be branch-scoped),
+    mints an installation token, pushes (creating the remote branch if absent),
+    audits the use, and starts CI/mergeability watching. It is the JSON-returning
+    sibling of the MCP `_handle_break_glass_push_head` tool and, like
+    /mint-git-token, authorizes off the durable grant without the agent-facing
+    activation marker.
+    """
+    try:
+        raw_body = await request.read()
+        try:
+            payload = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            repo_path = _repo_path_from_arguments(payload)
+        except Exception as exc:
+            return _pr_write_refusal("bad_repo_path", str(exc))
+        branch = await _git_output(repo_path, "branch", "--show-current")
+        if not branch:
+            return _pr_write_refusal("detached", "current repo is detached; checkout a branch before pushing")
+        if not bool(payload.get("allow_dirty")):
+            rc, stdout, stderr = await _run_git(repo_path, "status", "--porcelain")
+            if rc != 0:
+                return _pr_write_refusal("error", stderr or stdout or "git status failed", status=500)
+            if stdout.strip():
+                return _pr_write_refusal("dirty", "worktree has uncommitted changes; commit or pass allow_dirty=true before pushing HEAD")
+        sha = await _git_output(repo_path, "rev-parse", "HEAD")
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            return _pr_write_refusal("bad_origin", f"origin remote is not a GitHub URL: {remote_url}")
+        repo_slug = f"{slug[0]}/{slug[1]}"
+        requested_repo = str(payload.get("repo") or "").strip()
+        if requested_repo and requested_repo != repo_slug:
+            return _pr_write_refusal("repo_mismatch", f"repo argument {requested_repo!r} does not match origin {repo_slug}")
+        service_token = await auth_romaine_provider.token()
+        grant = await _active_break_glass_grant_cached(http, service_token, repo_slug)
+        if not _grant_allows(grant, _BREAK_GLASS_PUSH_HEAD_TOOL):
+            return _pr_write_refusal("no_grant", f"no active break-glass grant allows push for {repo_slug}")
+        # SECURITY BOUNDARY: the grant's branch scope bounds WHICH branches this
+        # token may push. A scoped grant cannot hand the shell a branch-scoped
+        # token, so Tank enforces the branch scope here before the push.
+        if not _grant_branch_allows(grant, branch):
+            return _pr_write_refusal("branch_out_of_scope", f"active break-glass grant does not allow branch {branch}")
+        try:
+            token = await _mint_github_installation_token(http, service_token, repo_slug)
+            await _push_head_with_token(repo_path, branch, token)
+        except Exception as exc:
+            await _record_break_glass_use(
+                http,
+                service_token,
+                action="github.break_glass.push",
+                status="failed",
+                tool=_BREAK_GLASS_PUSH_HEAD_TOOL,
+                repo_slug=repo_slug,
+                result_sha=sha,
+                error=str(exc),
+                payload={"grant_event_id": grant.get("event_id"), "branch": branch, "repo_path": str(repo_path), "channel": "wrapper"},
+            )
+            log.warning("break-glass push-head route failed", exc_info=True)
+            return _pr_write_refusal("error", str(exc), status=500)
+        await _record_break_glass_use(
+            http,
+            service_token,
+            action="github.break_glass.push",
+            status="succeeded",
+            tool=_BREAK_GLASS_PUSH_HEAD_TOOL,
+            repo_slug=repo_slug,
+            result_sha=sha,
+            payload={
+                "grant_event_id": grant.get("event_id"),
+                "grant_expires_at": grant.get("expires_at"),
+                "branch": branch,
+                "repo_path": str(repo_path),
+                "channel": "wrapper",
+            },
+        )
+        asyncio.create_task(
+            _watch_published_commit(
+                http,
+                auth_romaine_provider,
+                slug[0],
+                slug[1],
+                branch,
+                sha,
+                f"tank-break-glass-push-{uuid4().hex}",
+                source_tool=_BREAK_GLASS_PUSH_HEAD_TOOL,
+            )
+        )
+        return web.json_response({"ok": True, "branch": branch, "sha": sha, "repo": repo_slug})
+    except Exception as exc:
+        log.warning("break-glass push-head route failed", exc_info=True)
+        return _pr_write_refusal("error", str(exc), status=500)
+
+
+async def _handle_break_glass_pr_write_route(
+    http: ClientSession,
+    auth_romaine_provider,
+    request: web.Request,
+) -> web.Response:
+    """Grant-aware governed PR-own writes for the in-pod `gh` wrapper.
+
+    The PR half of a break-glass grant: open a draft PR for a granted branch and
+    own it (edit title/body, mark ready, comment). The SECURITY BOUNDARY is the
+    branch scope — for `open` the requested head branch must be in scope; for
+    `edit`/`ready`/`comment` the target PR is resolved to its head ref first and
+    that ref must be in scope, so the grant can never be used to touch a PR whose
+    branch was not approved. Writes are brokered server-side with Tank's
+    credential (never a raw token in the shell) and every brokered op is audited.
+    Like /mint-git-token this authorizes off the durable grant, not the marker.
+    """
+    try:
+        raw_body = await request.read()
+        try:
+            payload = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        repo_slug = str(payload.get("repo") or "").strip()
+        if "/" not in repo_slug:
+            return _pr_write_refusal("bad_repo", "repo must be a GitHub slug like owner/name")
+        owner, repo = repo_slug.split("/", 1)
+        action = str(payload.get("action") or "").strip()
+        if action not in {"open", "edit", "ready", "comment"}:
+            return _pr_write_refusal("bad_action", f"action must be one of open|edit|ready|comment, got {action!r}")
+
+        service_token = await auth_romaine_provider.token()
+        grant = await _active_break_glass_grant(http, service_token, repo_slug)
+        # A PR-own write rides the SAME grant that authorizes push for the branch
+        # (every break-glass grant carries push_current_head). No grant -> refuse
+        # with a precise reason rather than letting the scope check do it.
+        if not _grant_allows(grant, _BREAK_GLASS_PUSH_HEAD_TOOL):
+            return _pr_write_refusal("no_grant", f"no active break-glass grant for {repo_slug}")
+
+        pr_number_raw = payload.get("pr_number")
+        try:
+            pr_number = int(pr_number_raw) if pr_number_raw is not None else None
+        except (TypeError, ValueError):
+            return _pr_write_refusal("bad_pr_number", "pr_number must be an integer")
+
+        # SECURITY BOUNDARY — resolve the branch this write targets and require it
+        # be inside the grant's branch scope before performing any write.
+        if action == "open":
+            head = str(payload.get("head") or "").strip()
+            if not head:
+                return _pr_write_refusal("missing_head", "head branch is required to open a PR")
+            scope_branch = head
+        else:
+            if pr_number is None:
+                return _pr_write_refusal("missing_pr_number", f"pr_number is required for action {action}")
+            try:
+                resolve_token = await _mint_github_installation_token(http, service_token, repo_slug)
+                status, pr_body = await _github_api_json(
+                    http,
+                    resolve_token,
+                    "GET",
+                    f"/repos/{owner}/{repo}/pulls/{pr_number}",
+                )
+            except Exception as exc:
+                log.warning("break-glass pr-write PR resolve failed", exc_info=True)
+                return _pr_write_refusal("error", f"failed to resolve PR head: {exc}", status=500)
+            if status >= 400 or not isinstance(pr_body, dict):
+                return _pr_write_refusal("pr_not_found", f"could not read PR #{pr_number} (HTTP {status})", status=500)
+            pr_head = pr_body.get("head")
+            head_ref = str((pr_head.get("ref") if isinstance(pr_head, dict) else "") or "").strip()
+            if not head_ref:
+                return _pr_write_refusal("error", f"PR #{pr_number} head ref missing from GitHub response", status=500)
+            scope_branch = head_ref
+
+        if not _grant_branch_allows(grant, scope_branch):
+            return _pr_write_refusal("branch_out_of_scope", f"active break-glass grant does not allow branch {scope_branch}")
+
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        try:
+            pr_url = ""
+            result_pr_number = pr_number
+            if action == "open":
+                base = str(payload.get("base") or "main").strip() or "main"
+                title = str(payload.get("title") or "").strip()
+                body_text = str(payload.get("body") or "")
+                pr_objects = await _call_mcp_github_tool(
+                    http,
+                    service_token,
+                    "create_pull_request",
+                    {
+                        "owner": owner,
+                        "name": repo,
+                        "title": title,
+                        "body": body_text,
+                        "head": scope_branch,
+                        "base": base,
+                        "draft": True,
+                    },
+                )
+                pr = _first_pr_from_response(pr_objects)
+                if pr is not None:
+                    _pr_owner, _pr_repo, pr_url, result_pr_number = pr
+            elif action == "ready":
+                await _call_mcp_github_tool(
+                    http,
+                    service_token,
+                    "mark_pull_request_ready_for_review",
+                    {"owner": owner, "name": repo, "number": pr_number},
+                )
+                pr_url = f"https://github.com/{repo_slug}/pull/{pr_number}"
+            elif action == "comment":
+                comment = str(payload.get("comment") or "")
+                if not comment.strip():
+                    return _pr_write_refusal("missing_comment", "comment is required for action comment")
+                await _call_mcp_github_tool(
+                    http,
+                    service_token,
+                    "comment_on_issue",
+                    {"owner": owner, "name": repo, "number": pr_number, "body": comment},
+                )
+                pr_url = f"https://github.com/{repo_slug}/pull/{pr_number}"
+            else:  # edit
+                patch: dict[str, object] = {}
+                if payload.get("title") is not None:
+                    patch["title"] = str(payload.get("title") or "")
+                if payload.get("body") is not None:
+                    patch["body"] = str(payload.get("body") or "")
+                if not patch:
+                    return _pr_write_refusal("nothing_to_edit", "edit requires at least one of title or body")
+                edit_token = await _mint_github_installation_token(http, service_token, repo_slug)
+                status, edit_body = await _github_api_json(
+                    http,
+                    edit_token,
+                    "PATCH",
+                    f"/repos/{owner}/{repo}/pulls/{pr_number}",
+                    json_body=patch,
+                )
+                if status >= 400:
+                    raise RuntimeError(f"PR edit failed with HTTP {status}: {str(edit_body)[:300]}")
+                if isinstance(edit_body, dict):
+                    pr_url = str(edit_body.get("html_url") or "")
+                if not pr_url:
+                    pr_url = f"https://github.com/{repo_slug}/pull/{pr_number}"
+        except Exception as exc:
+            await _record_break_glass_use(
+                http,
+                service_token,
+                action="github.break_glass.pr_write",
+                status="failed",
+                tool=_BREAK_GLASS_PR_WRITE_TOOL,
+                repo_slug=repo_slug,
+                error=str(exc),
+                payload={
+                    "grant_event_id": grant.get("event_id"),
+                    "pr_action": action,
+                    "branch": scope_branch,
+                    "pr_number": pr_number,
+                    "channel": "wrapper",
+                },
+            )
+            log.warning("break-glass pr-write route failed", exc_info=True)
+            return _pr_write_refusal("error", str(exc), status=500)
+
+        await _record_break_glass_use(
+            http,
+            service_token,
+            action="github.break_glass.pr_write",
+            status="succeeded",
+            tool=_BREAK_GLASS_PR_WRITE_TOOL,
+            repo_slug=repo_slug,
+            payload={
+                "grant_event_id": grant.get("event_id"),
+                "grant_expires_at": grant.get("expires_at"),
+                "pr_action": action,
+                "branch": scope_branch,
+                "pr_number": result_pr_number,
+                "pr_url": pr_url,
+                "channel": "wrapper",
+            },
+        )
+        if action == "open":
+            await _post_tank_control_action(
+                http,
+                headers,
+                {
+                    "event_id": f"tank-break-glass-pr-open-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                    "invocation_id": f"tank-break-glass-pr-write-{uuid4().hex}",
+                    "source_service": _BREAK_GLASS_MCP_SERVER_NAME,
+                    "source_tool": _BREAK_GLASS_PR_WRITE_TOOL,
+                    "action": "github.pull_request.open",
+                    "status": "succeeded",
+                    "target_kind": "github_pull_request",
+                    "target_ref": pr_url or f"https://github.com/{repo_slug}",
+                    "repo_owner": owner,
+                    "repo_name": repo,
+                    "pr_number": result_pr_number,
+                    "payload": {
+                        "grant_event_id": grant.get("event_id"),
+                        "branch": scope_branch,
+                        "base": str(payload.get("base") or "main").strip() or "main",
+                        "draft": True,
+                        "channel": "wrapper",
+                    },
+                },
+            )
+        return web.json_response({"ok": True, "pr_number": result_pr_number, "pr_url": pr_url, "action": action})
+    except Exception as exc:
+        log.warning("break-glass pr-write route failed", exc_info=True)
+        return _pr_write_refusal("error", str(exc), status=500)
 
 
 async def _handle_break_glass_mcp(
@@ -4831,8 +4606,6 @@ def _make_handler(
             if method == "tools/call" and params.get("name") in {
                 _TANK_PUBLISH_TOOL,
                 _TANK_BREAK_GLASS_TOOL,
-                _TANK_PR_LANE_TOOL,
-                _TANK_CREATE_PR_LANE_TOOL,
                 _TANK_MERGE_TOOL,
                 _TANK_RENAME_PR_TOOL,
                 _TANK_UPDATE_PR_BODY_TOOL,
@@ -4846,17 +4619,13 @@ def _make_handler(
                     return await _handle_tank_publish_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_BREAK_GLASS_TOOL:
                     return await _handle_tank_break_glass_tool(http, tank_publish_provider, request_id, arguments)
-                if params.get("name") == _TANK_CREATE_PR_LANE_TOOL:
-                    return await _handle_tank_create_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_MERGE_TOOL:
                     return await _handle_tank_merge_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_RENAME_PR_TOOL:
                     return await _handle_tank_rename_pr_tool(http, tank_publish_provider, request_id, arguments)
                 if params.get("name") == _TANK_UPDATE_PR_BODY_TOOL:
                     return await _handle_tank_update_pr_body_tool(http, tank_publish_provider, request_id, arguments)
-                if params.get("name") == _TANK_WATCH_PR_TOOL:
-                    return await _handle_tank_watch_pr_tool(http, tank_publish_provider, request_id, arguments)
-                return await _handle_tank_pr_lane_tool(http, tank_publish_provider, request_id, arguments)
+                return await _handle_tank_watch_pr_tool(http, tank_publish_provider, request_id, arguments)
 
         # azure-personal break-glass is independent of restricted-git mode:
         # azure is locked by default for every session, so the request tool is
@@ -5198,13 +4967,28 @@ async def run() -> None:
         for discovery_path in _OAUTH_DISCOVERY_PATHS:
             break_glass_app.router.add_route("GET", discovery_path, _oauth_discovery_not_configured)
         break_glass_app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
-        # Grant-aware mint endpoint for the in-pod gh/git wrappers (registered
-        # before the MCP catch-all so it is not swallowed by it). See
-        # _handle_break_glass_wrapper_mint.
+        # Grant-aware endpoints for the in-pod gh/git wrappers (registered
+        # before the MCP catch-all so they are not swallowed by it). They all
+        # authorize off the durable break-glass grant — NOT the agent-facing
+        # activation marker — exactly like /mint-git-token. /push-head brokers a
+        # governed branch push and /pr-write brokers a governed PR-own write
+        # (open/edit/ready/comment), both scope-enforced server-side. See
+        # _handle_break_glass_wrapper_mint / _handle_break_glass_push_head_route /
+        # _handle_break_glass_pr_write_route.
         break_glass_app.router.add_route(
             "POST",
             "/mint-git-token",
             lambda request: _handle_break_glass_wrapper_mint(http, auth_romaine_provider, request),
+        )
+        break_glass_app.router.add_route(
+            "POST",
+            "/push-head",
+            lambda request: _handle_break_glass_push_head_route(http, auth_romaine_provider, request),
+        )
+        break_glass_app.router.add_route(
+            "POST",
+            "/pr-write",
+            lambda request: _handle_break_glass_pr_write_route(http, auth_romaine_provider, request),
         )
         break_glass_app.router.add_route(
             "*",

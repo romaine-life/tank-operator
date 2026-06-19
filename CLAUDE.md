@@ -93,14 +93,41 @@ The hook templates live at `.githooks/post-commit` and `.githooks/pre-push`.
 The post-commit hook is an auto-publish trigger, not a reminder. The pre-push
 hook intentionally fails direct pushes so GitHub write credentials stay inside
 Tank-controlled MCP/server paths. CI and mergeability failures must be treated
-as unfinished work unless explicitly called out in the final handoff. If the
-governed path is insufficient, call the Tank MCP `request_git_break_glass` tool.
-Normal mode returns a Tank approval URL for an admin to approve in the Tank UI;
-auth.romaine.life only authenticates that admin. After a short-lived grant
-exists, calling the request tool again activates the separate
-`tank-git-break-glass` MCP server for that session/repo; an existing agent may
-need to reload its MCP registry before it sees `mint_full_git_token` or
-`push_current_head`.
+as unfinished work unless explicitly called out in the final handoff.
+
+### Restricted-git decision tree (what to call, once)
+
+There is exactly one git-write escalation in a restricted
+(`TANK_RESTRICTED_GIT=true`) session — the break-glass grant — and it covers
+the whole life of a branch's work. Pick the row that matches what you need:
+
+- **Just committing on this session's branch** → do nothing. The post-commit
+  hook auto-publishes every commit via `publish_current_head`; Tank records the
+  SHA and watches CI/mergeability. Retry a failed auto-publish by calling
+  `publish_current_head` again. The governed PR's title/body/merge are still
+  mutated only through the Tank MCP tools above
+  (`rename_current_session_pr` / `update_current_session_pr_body` /
+  `merge_current_session_pr`) — do **not** break-glass just to edit the PR body.
+
+- **Need to work on a branch — push it (including force-push) and open or edit
+  its PR** → call the Tank MCP `request_git_break_glass` tool **once**. It
+  records the request and returns a Tank approval URL
+  (`/sessions/{id}?break_glass_request={event_id}`) for an admin to approve in
+  the Tank UI; auth.romaine.life only authenticates that admin. **After the
+  human approves once, plain `git push` (and `git push --force`) and
+  `gh pr create|edit|ready|comment` just work for the granted branches** — Tank
+  provisions the branch + draft PR on approval and brokers the writes
+  server-side, scope-enforced and audited. There is no second `request_*` call,
+  no MCP-registry reload, and no choice to make between `push_current_head` /
+  `publish_current_head` / a separate PR-lane tool: the scope you were granted
+  bounds *which* branches you may touch, never *whether* push and PR-open work.
+
+- **Genuinely need the whole repo / the full GitHub API** (operate as a full
+  maintainer: arbitrary branches, merges, issues, raw API writes) → request the
+  `unlimited` scope. This is the wide escape hatch; it additionally mints the
+  App's full permission set and deliberately bypasses the governed PR ledger, so
+  the approving human accepts that blast radius knowingly. Use it only when a
+  branch-scoped grant genuinely cannot express the work.
 
 When adding or substantially changing named product behavior, check whether the
 relevant feature folder needs a `capabilities.md` entry. Capability ledgers are

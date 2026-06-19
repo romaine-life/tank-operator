@@ -11,6 +11,13 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8"]
 
+[tool.pytest.ini_options]
+# Run the suite against the in-tree package under src/ so `python -m pytest`
+# tests the working copy even when mcp-auth-proxy is installed non-editably
+# (e.g. the baked session image). CI installs `-e` so this is a no-op there.
+pythonpath = ["src"]
+testpaths = ["tests"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

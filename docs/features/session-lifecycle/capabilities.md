@@ -467,22 +467,31 @@ Open hardening:
   operation, and `mint_full_git_token(workflows=true)` is refused unless the
   active grant includes it. Branch/count-scoped break-glass git tokens are
   contents(+workflows)-write only, not full App-scope tokens, and stay on the
-  governed push path. An **unlimited-branch** grant is different: it carries the
-  `full_github_api` operation and mints the App's FULL permission set (pull
-  requests, issues, merges) so the agent's `gh`/`git` get full raw GitHub API
-  write automatically — see "Break-glass full GitHub API elevation (unlimited
+  governed (brokered, scope-enforced) write path rather than handing a raw token
+  to the shell. An **unlimited-branch** grant is the wide escape hatch: it
+  carries the `full_github_api` operation and mints the App's FULL permission set
+  (pull requests, issues, merges) so the agent's `gh`/`git` get full raw GitHub
+  API write automatically — see "Break-glass full GitHub API elevation (unlimited
   grants)" below.
-  Once an active grant exists, calling
-  `request_git_break_glass` again activates a separate `tank-git-break-glass`
-  MCP server for the session/repo and writes runtime MCP config for Codex and
-  Claude. That privileged server lists no tools before activation, rechecks the
-  grant on every list/call, and records token/push use as
-  `github.break_glass.token` or `github.break_glass.push`. Tank's browser UI
-  renders the approval panel and writes the grant or denial. auth.romaine.life
-  only authenticates the admin JWT that Tank verifies. When a grant is
-  persisted, Tank starts a system-authored follow-up turn telling the agent the
-  user approved the request and to call `request_git_break_glass` again to
-  activate the privileged MCP server.
+
+  **Unified by Branch Lane Grants (see that capability below).** The branch-lane
+  unification makes a single `request_git_break_glass` grant cover the whole life
+  of a branch's work — push/force-push **and** open + own its draft PR
+  (`gh pr create|edit|ready|comment`) — for the scoped branches, brokered
+  server-side. The agent asks once and a human approves once; after approval
+  plain `git push` and `gh pr …` just work for the granted branches. The prior
+  two-call activation ritual — "calling `request_git_break_glass` again activates
+  a separate `tank-git-break-glass` MCP server and an agent may need to reload its
+  MCP registry before it sees `mint_full_git_token` / `push_current_head`" — is
+  **retired**: there is no second `request_*` call, no MCP-registry reload, and no
+  agent-visible choice between `push_current_head` / `publish_current_head` / a
+  separate PR-lane tool. The grant's scope (`named` / `count` / `unlimited`)
+  bounds *which* branches may be touched, never *whether* push and PR-open work.
+  Brokered use is still audited (`github.break_glass.*` control-action events);
+  Tank's browser UI renders the approval panel and writes the grant or denial,
+  and auth.romaine.life only authenticates the admin JWT that Tank verifies. When
+  a grant is persisted, Tank writes the activation state itself so the privileged
+  path is live with no follow-up agent action.
 - Break-glass approval chip + panel (added 2026-06-14). A started
   `github.break_glass.request` with no unexpired grant for its repo is surfaced
   as a "chip": the composer pull-request button turns amber with an alert dot,
@@ -497,6 +506,93 @@ Open hardening:
   PR the agent opened (control-action git activity) and the PR explicitly linked
   via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
   positioning so the composer input-group's `overflow: hidden` cannot clip it.
+
+## Branch Lane Grants
+
+Status: in progress (Stage 1 — unified model + brokering primitives; the atomic
+cutover that retires the separate PR-lane surface lands in Stage 2). Full design:
+[docs/branch-lane-grants.md](../../branch-lane-grants.md).
+
+Intent:
+Unify the two parallel governed-write mechanisms a restricted
+(`TANK_RESTRICTED_GIT=true`) session used to expose — break-glass git
+(`request_git_break_glass` → push) and PR lanes (`request_pr_lane` →
+`create_pr_lane`) — into **one** grant. A break-glass git grant is permission to
+do work on a branch (existing or not): create + push/force-push it **and** open &
+own its draft PR (edit title/body, mark ready, comment) through review. The
+agent asks once (`request_git_break_glass`), a human approves once, and then
+plain `git push` (incl. `--force`) and `gh pr create|edit|ready|comment` just
+work for the scoped branches — brokered server-side, scope-enforced, audited.
+This closes the core defect of the old split: a branch-scoped break-glass grant
+could push a branch but not open its PR (the PR half lived only in the separate
+`create_pr_lane` mechanism the agent had no signal to use), so an agent taking
+the least-privilege instinct got approved, pushed, and was silently stranded
+with commits and no PR. Scope (`named` / `count` / `unlimited`) bounds *which*
+branches a grant covers; it never bounds *whether* the grant works. `unlimited`
+is simply the widest version — the whole-repo / full-GitHub-API escape hatch —
+not a different mechanism and not a precondition for basic branch work.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- A single `request_git_break_glass` grant authorizes **push + PR open/own** for
+  the branches in its scope. On approval Tank provisions the lane (creates or
+  adopts the branch and opens its draft PR, reusing the old PR-lane branch+PR
+  provisioning) and writes the activation state itself, so the privileged path
+  is live with **no second `request_*` call and no MCP-registry reload**. The
+  agent never names `push_current_head` / `publish_current_head` /
+  `create_pr_lane` / a branch scope it has to reason about — it states *why*, the
+  human decides *how much*, and `git`/`gh` do the rest.
+- GitHub installation tokens are scoped by repo+permission, never by branch, so a
+  branch-scoped grant cannot be honored by handing a raw token to the shell
+  (that token would push every branch and edit every PR). Tank **brokers** the
+  writes server-side and enforces the branch scope itself: `git push` /
+  `git push --force` go through a governed push (create-if-absent) for in-scope
+  branches; `gh pr create|edit|ready|comment` route through a governed PR-write
+  endpoint that resolves the PR to its head branch, verifies head ∈ lane scope,
+  performs the write with Tank's credential, and audits it. No raw token and no
+  denylist wall for the scoped case. `unlimited` grants additionally surface the
+  whole-repo GitHub API (the `full_github_api` / full-maintainer escape hatch).
+- The control-action audit ledger is **kept**; every brokered operation records a
+  `github.break_glass.*` event (`request` / `grant` / `push` / `pr_write`, plus
+  `github.pull_request.open` for opens), with `operations` as the explicit
+  audited capability set (`push_current_head`, `mint_full_git_token`, and
+  `full_github_api` present only on `unlimited` grants). The
+  `unlimited` / `full_api` whole-repo escape hatch, server-side branch-scope
+  enforcement, `publish_current_head` normal session-branch auto-publish, and the
+  restricted-mode raw-mcp-github write denylist are all unchanged.
+- **Retired (no live route, tool, event, UI, or test may remain):** the
+  `request_pr_lane` / `create_pr_lane` MCP tools + handlers + routes; the
+  `github.pr_lane.*` event family and its reader/writer/auto-approval logic; the
+  "scoped grant returns `{"active": false}` / `full_github_api` only on
+  `unlimited`" split that made scoped grants useless for branch work; the
+  separate PR-lane approval UI surface; and the old PR-lane / two-call-activation
+  tests. Merge-to-base stays the separate, CI-gated step
+  (`merge_current_session_pr`) — a branch lane gets work *to* review, not
+  *through* it.
+
+Acceptance evidence (the contract this capability must prove):
+- A **branch-scoped** grant can **push the branch AND open + own its PR** — no
+  `unlimited` required, and the agent is never silently stranded with commits and
+  no PR.
+- The agent reaches it in **one request + one approval**, with **no second
+  `request_*` call and no MCP-registry reload**; `git push` / `gh pr …` are the
+  only commands it runs, and no governed-tool names leak into its workflow.
+- The retired `request_pr_lane` / `create_pr_lane` / `github.pr_lane.*` paths are
+  gone from live code, tests, and UI, and the reintroduction guard
+  `scripts/check-removed-pr-lane.mjs` (merged into
+  `scripts/check-removed-chat-runtime.mjs`'s CI run) fails if
+  `request_pr_lane`, `create_pr_lane`, `github.pr_lane.`, `_TANK_PR_LANE_TOOL`,
+  `_TANK_CREATE_PR_LANE_TOOL`, or a `handle*PRLane` handler reappears in live
+  source.
+- Observability: `tank_break_glass_grant_total{result}`,
+  `tank_break_glass_push_total{result}`, `tank_break_glass_pr_open_total{result}`,
+  `tank_break_glass_pr_write_total{result}`, and
+  `tank_break_glass_retired_path_total` (any increment means a retired `pr_lane`
+  path was exercised and is a counted bug).
 
 ## Locked-by-default Azure MCP (break-glass)
 
@@ -667,6 +763,15 @@ Contract impact:
   the endpoint returns `{"active": false}` and the wrappers keep the read-only
   default unchanged. See "Break-glass full GitHub API elevation (unlimited
   grants)" below.
+  **Retired by Branch Lane Grants (see below):** the description that a
+  *branch-scoped* grant stays read-only for raw `git`/`gh` and only an
+  unlimited-branch grant lets a session push or run `gh pr edit|ready` no longer
+  holds. Under the unified branch lane, a branch-scoped grant pushes (incl.
+  force-push) and opens + owns its PR for the granted branches through Tank's
+  server-side brokering — no raw token required for the scoped case. `unlimited`
+  is reserved for the whole-repo / full raw GitHub API need, not as the
+  precondition for branch work. With no grant at all, restricted sessions remain
+  read-only exactly as described here.
 - **Fail loud, never silent (elevation).** The wrappers treat only a clean
   `{"active": true, "token": …}` (elevate) or `{"active": false}` over HTTP 200
   (quiet, expected no-grant) as recognized answers. Any other shape — a JSON-RPC

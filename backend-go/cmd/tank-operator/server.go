@@ -588,9 +588,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/deny", s.handleDenyBreakGlassRequest)
 	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}", s.handleGetTestSlotModelApprovalRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}/approve", s.handleApproveTestSlotModelApprovalRequest)
-	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/approve", s.handleApprovePRLaneRequest)
-	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
-	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	// Durable turn directory: the COMPLETE submission-ordered turn set so the
 	// Turns selector lists every turn independent of the bounded /timeline
@@ -652,8 +649,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/governed-merge/verify", s.handleInternalVerifyGovernedMerge)
-	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-auto-approval", s.handleInternalGetPRLaneAutoApproval)
-	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/azure-break-glass/grant", s.handleInternalGetAzureBreakGlassGrant)
 	// Read-only SQL for non-restricted sessions (backs the query_tank_db MCP tool).
