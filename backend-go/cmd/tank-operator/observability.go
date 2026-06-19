@@ -619,6 +619,38 @@ func recordSessionNestUpdate(action, result string) {
 	sessionNestUpdateTotal.WithLabelValues(action, result).Inc()
 }
 
+// sessionDragStepTotal traces the sidebar drag lifecycle from the browser so a
+// "drag does nothing" report is diagnosable from the stack instead of the user's
+// DevTools. The client beacons each step (POST /api/client-metrics/session-drag-step);
+// the LAST step with a count localizes the break: a row press that never reaches
+// dragstart means native drag is blocked, dragstart without drop means the drop
+// never fires, drop without persist means the handler bailed. Bounded: step is a
+// fixed lifecycle enum, detail a small per-step enum.
+var sessionDragStepTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_drag_step_total",
+		Help: "Sidebar drag lifecycle steps reported by the browser, by step and bounded detail.",
+	},
+	[]string{"step", "detail"},
+)
+
+func recordSessionDragStep(step, detail string) {
+	switch step {
+	case "mousedown", "dragstart", "dragover", "drop", "persist":
+	default:
+		step = "other"
+	}
+	switch detail {
+	case "",
+		"draggable", "blocked", // mousedown: was the row draggable when pressed
+		"nest", "reorder_before", "reorder_after", "noplan", // drop: zone / bail
+		"order", "parent": // persist: which write fired
+	default:
+		detail = "other"
+	}
+	sessionDragStepTotal.WithLabelValues(step, detail).Inc()
+}
+
 // orchestrateLaunchTotal counts attempts to turn a GUI chat session into a
 // spoke-fleet hub via POST /api/sessions/{id}/orchestrate, by bounded result.
 // "ok" is a launched hub; the rejection labels make the human-owner gate,

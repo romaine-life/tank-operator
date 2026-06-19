@@ -9,7 +9,7 @@
 // `useSessionDrag` hook owns the drag state and the DOM handlers and is rendered
 // against in sessionDrag.test.tsx with real DragEvents.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent } from "react";
 
 import { arrangeSessionTree } from "./sessionTree";
@@ -18,6 +18,7 @@ import {
   placeSessionRelative,
   type DragIntentKind,
 } from "./dragNest";
+import { reportDragStep } from "./dragTelemetry";
 
 // The minimal session shape the drag decision needs. Structural so App's full
 // Session and lightweight test fixtures both satisfy it.
@@ -124,16 +125,21 @@ export function useSessionDrag(
     null,
   );
   const [dragIntent, setDragIntent] = useState<DragIntentKind | null>(null);
+  // Emit the "dragover" telemetry beacon once per drag, not on every move.
+  const overReportedRef = useRef(false);
 
   const end = () => {
     setDraggingSessionId(null);
     setDragOverSessionId(null);
     setDragIntent(null);
+    overReportedRef.current = false;
   };
 
   const rowHandlers = (id: string): SessionRowDragHandlers => ({
     onDragStart: (event) => {
       if (opts.readOnly) return;
+      reportDragStep("dragstart");
+      overReportedRef.current = false;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", id);
       setDraggingSessionId(id);
@@ -146,6 +152,10 @@ export function useSessionDrag(
       // target; without it the browser never fires drop.
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
+      if (!overReportedRef.current) {
+        reportDragStep("dragover");
+        overReportedRef.current = true;
+      }
       const rect = event.currentTarget.getBoundingClientRect();
       setDragOverSessionId(id);
       setDragIntent(dropIntentForRow(event.clientY, rect.top, rect.height));
@@ -159,8 +169,12 @@ export function useSessionDrag(
       const movedId =
         event.dataTransfer.getData("text/plain") || draggingSessionId || "";
       end();
-      if (opts.readOnly || !opts.enabled || !movedId) return;
+      if (opts.readOnly || !opts.enabled || !movedId) {
+        reportDragStep("drop", "noplan");
+        return;
+      }
       const plan = planSessionDrop(opts.sessions, movedId, id, intent);
+      reportDragStep("drop", plan ? intent.replace("-", "_") : "noplan");
       if (plan) opts.onDrop(plan);
     },
     onDragEnd: end,
