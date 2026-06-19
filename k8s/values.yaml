@@ -3,18 +3,18 @@ image:
   # Fingerprint-pinned. The build workflow rewrites this line on every push
   # to main via a `[skip ci]` follow-up commit, so the cluster reconciles to
   # the exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-594b3ad976b454ea12e97623a3b451c9ea55a904d1b0cbcf3390c78b31e6e1ee"
+  tag: "app-53a75c752a051d50e61c6ca6f6658fca506e2fd5cdd47b7cd879b3b4b353e382"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-19T04:02:13Z"
-    git_sha: "cef25886df137d91112ded4a194f7287b9d3b7d9"
+    built_at: "2026-06-19T04:30:01Z"
+    git_sha: "88904a5f0ab2e08b306914f92b7e96ca342cb472"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/cef25886df137d91112ded4a194f7287b9d3b7d9"
-    pr_number: "1327"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1327"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27804496491"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/88904a5f0ab2e08b306914f92b7e96ca342cb472"
+    pr_number: "1329"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1329"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27805445955"
     repository: "romaine-life/tank-operator"
-    actor: "nelsong6"
+    actor: "tank-operator-host[bot]"
 
 # normal: regular chart render
 # warm: per-slot baseline resources, no long-running app/proxy pods
