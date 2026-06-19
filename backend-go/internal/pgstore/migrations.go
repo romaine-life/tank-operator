@@ -2183,6 +2183,20 @@ var schemaMigrations = []migration{
 	// Session reverse lookup (debug/audit + any future per-session guard query).
 	{ID: "0177", SQL: `CREATE INDEX IF NOT EXISTS pending_test_provisions_session
 		ON pending_test_provisions (session_scope, session_id, status)`},
+
+	// 0178: the CI-watch ready ping (pr_ready.notified) joins the lifecycle
+	// event set so the activity fold surfaces needs_input attention for a
+	// green+mergeable PR. The LatestLifecycleEvents DESC scan inlines its
+	// event-type set as a SQL literal so the partial index provably matches;
+	// adding a new type to that list changes the query predicate, so the
+	// partial index predicate (migration 0153) must be widened to match or the
+	// planner falls back to a full session-partition scan. DROP + recreate
+	// because a partial index's WHERE clause is immutable. Keep this predicate
+	// in lockstep with store.LifecycleEventTypes.
+	{ID: "0178", SQL: `DROP INDEX IF EXISTS session_events_lifecycle;
+		CREATE INDEX IF NOT EXISTS session_events_lifecycle
+			ON session_events (tank_session_id, order_key DESC)
+			WHERE event_type IN ('turn.submitted', 'turn.claimed', 'turn.started', 'turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupt_requested', 'turn.interrupted', 'turn.awaiting_input', 'turn.input_answered', 'pr_ready.notified')`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

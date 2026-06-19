@@ -258,6 +258,69 @@ func TestDeriveActivitySummaryIgnoresLateStartedAfterTerminalForSameTurn(t *test
 	}
 }
 
+// TestDeriveActivitySummaryPRReadyNotifiedSetsNeedsInputFromIdle pins the
+// CI-watch ready ping: a pr_ready.notified delivered while the session is idle
+// (ready) folds to the needs_input attention the sidebar surfaces as "your
+// turn", with no active turn id (it is not a turn).
+func TestDeriveActivitySummaryPRReadyNotifiedSetsNeedsInputFromIdle(t *testing.T) {
+	got := DeriveActivitySummary(nil, []map[string]any{
+		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "turn.completed", "turn_id": "turn-1", "order_key": "2"},
+		{"type": "pr_ready.notified", "order_key": "3"},
+	}, 0, false)
+	if got.Status != "needs_input" {
+		t.Fatalf("status = %q, want needs_input after pr_ready.notified from idle", got.Status)
+	}
+	if !got.NeedsInput {
+		t.Fatal("NeedsInput = false, want true after pr_ready.notified from idle")
+	}
+	if got.ActiveTurnID != nil {
+		t.Fatalf("ActiveTurnID = %#v, want nil (pr_ready.notified is not a turn)", got.ActiveTurnID)
+	}
+	if got.Failed {
+		t.Fatal("Failed = true, want false (a green PR is not a failure)")
+	}
+}
+
+// TestDeriveActivitySummaryPRReadyNotifiedDoesNotClobberActiveTurn pins the
+// "do not collide with a live agent turn" guard: if CI goes green while the
+// agent is mid-turn (streaming), the ping must NOT downgrade the live status to
+// needs_input — the active turn owns the status; the ping is only a visible
+// notice.
+func TestDeriveActivitySummaryPRReadyNotifiedDoesNotClobberActiveTurn(t *testing.T) {
+	got := DeriveActivitySummary(nil, []map[string]any{
+		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "turn.started", "turn_id": "turn-1", "order_key": "2"},
+		{"type": "pr_ready.notified", "order_key": "3"},
+	}, 0, false)
+	if got.Status != "streaming" {
+		t.Fatalf("status = %q, want streaming (active turn owns status)", got.Status)
+	}
+	if got.NeedsInput {
+		t.Fatal("NeedsInput = true, want false while a turn is active")
+	}
+	if got.ActiveTurnID == nil || *got.ActiveTurnID != "turn-1" {
+		t.Fatalf("ActiveTurnID = %#v, want turn-1", got.ActiveTurnID)
+	}
+}
+
+// TestDeriveActivitySummaryPRReadyNotifiedClearsOnNextTurn pins terminal-safety:
+// the needs_input attention from a ping is not sticky — a subsequent
+// turn.submitted (the user engaging again) clears it through the normal fold.
+func TestDeriveActivitySummaryPRReadyNotifiedClearsOnNextTurn(t *testing.T) {
+	got := DeriveActivitySummary(nil, []map[string]any{
+		{"type": "turn.completed", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "pr_ready.notified", "order_key": "2"},
+		{"type": "turn.submitted", "turn_id": "turn-2", "order_key": "3"},
+	}, 0, false)
+	if got.Status != "submitted" {
+		t.Fatalf("status = %q, want submitted (ping attention cleared by next turn)", got.Status)
+	}
+	if got.NeedsInput {
+		t.Fatal("NeedsInput stayed true after a new turn.submitted")
+	}
+}
+
 func TestIsLifecycleChatEventTypeAllowlist(t *testing.T) {
 	for _, allowed := range LifecycleChatEventTypes {
 		if !IsLifecycleChatEventType(allowed) {

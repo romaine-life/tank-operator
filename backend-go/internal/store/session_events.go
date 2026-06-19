@@ -249,6 +249,12 @@ var LifecycleEventTypes = []string{
 	"turn.interrupted",
 	"turn.awaiting_input",
 	"turn.input_answered",
+	// pr_ready.notified is not a turn but drives the needs_input attention
+	// fold (the CI-watch ready ping). In lockstep with
+	// sessionactivity.LifecycleChatEventTypes and the session_events_lifecycle
+	// partial index — migration 0178 adds it to that index predicate so this
+	// literal list still provably matches the index.
+	"pr_ready.notified",
 }
 
 // UnreadOutputItemTypes are event types whose timeline_id contributes to

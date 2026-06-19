@@ -48,15 +48,20 @@ func sortedCopy(in []string) []string {
 // matching requires the query predicate to IMPLY the index predicate, and
 // the store queries inline their Go type lists as SQL literals to make that
 // provable. If store.LifecycleEventTypes or the unread type lists change
-// without the same PR updating migrations 0153/0154 (a NEW migration —
+// without the same PR shipping a follow-up index migration (a NEW migration —
 // applied migrations are checksum-immutable), the indexes silently stop
 // matching and every lifecycle event regresses to the unindexed scan this
 // work removed. This test turns that silent regression into a compile-time
 // red.
+//
+// The lifecycle index predicate was first defined by 0153 and later widened by
+// 0178 (DROP + recreate to add pr_ready.notified). The authoritative live
+// predicate is whichever migration last (re)created session_events_lifecycle,
+// so the lockstep assertion reads 0178.
 func TestActivityPartialIndexPredicatesLockstepWithStoreTypeLists(t *testing.T) {
-	lifecycle := sqlInListLiterals(t, migrationByID(t, "0153").SQL)
+	lifecycle := sqlInListLiterals(t, migrationByID(t, "0178").SQL)
 	if got, want := sortedCopy(lifecycle), sortedCopy(store.LifecycleEventTypes); strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("migration 0153 predicate %v != store.LifecycleEventTypes %v — ship a follow-up index migration in the same PR", got, want)
+		t.Fatalf("migration 0178 predicate %v != store.LifecycleEventTypes %v — ship a follow-up index migration in the same PR", got, want)
 	}
 
 	unread := sqlInListLiterals(t, migrationByID(t, "0154").SQL)

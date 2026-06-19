@@ -183,6 +183,22 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.NeedsInput = false
 			out.Failed = false
 			bgPendingAtLastReady = false
+		case "pr_ready.notified":
+			// A backend-side "your governed PR is green and mergeable" ping.
+			// It is NOT a turn; it folds into the same needs_input attention a
+			// hand-off back to the user gets, so the sidebar surfaces "your
+			// turn" without ever waking the agent. Guarded to NOT clobber an
+			// active turn: if the agent happens to be mid-turn when CI goes
+			// green, the live turn owns the status and the ping is just a
+			// visible system notice (the next idle/ready boundary is when the
+			// attention belongs to the user). A subsequent turn.submitted /
+			// turn.* lifecycle event clears NeedsInput via the cases above, so
+			// this never sticks past the user engaging again.
+			if out.Status == "ready" {
+				out.Status = "needs_input"
+				out.NeedsInput = true
+				out.Failed = false
+			}
 		}
 	}
 	// background_work_pending is meaningful only at a ready terminal; a parked
@@ -263,6 +279,13 @@ var LifecycleChatEventTypes = []string{
 	"turn.interrupted",
 	"turn.awaiting_input",
 	"turn.input_answered",
+	// pr_ready.notified is not a turn, but it drives the same needs_input
+	// sidebar attention as a hand-off back to the user (the CI-watch ready
+	// ping). It must be in the lifecycle set so the persister refreshes the
+	// activity summary on it and the fold above sees it. Keep in lockstep with
+	// store.LifecycleEventTypes and the session_events_lifecycle partial index
+	// (migration 0178).
+	"pr_ready.notified",
 }
 
 // IsLifecycleChatEventType is a sugar wrapper used by the persister's
