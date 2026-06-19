@@ -27,6 +27,11 @@ const (
 var (
 	ErrNotFound = errors.New("session not found")
 	ErrNotOwned = errors.New("session not owned")
+	// ErrInvalidParent rejects a manual drag-to-nest whose target parent is
+	// missing, cross-scope, the session itself, or would close a cycle. It keeps
+	// the durable parent_session_id tree acyclic even though the renderer
+	// tolerates cycles. Maps to HTTP 400.
+	ErrInvalidParent = errors.New("invalid parent session")
 )
 
 type Info struct {
@@ -48,6 +53,7 @@ type Info struct {
 	Name         string         `json:"name"`
 	TestState    map[string]any `json:"test_state"`
 	RolloutState map[string]any `json:"rollout_state"`
+	SpokeConfig  map[string]any `json:"spoke_config"`
 	// SpawnedSessions is the durable parent→child lineage rendered by the
 	// session-bar "spawned sessions" chip: the sessions this session
 	// spawned via spawn_run_session / spawn_test_slot_session. Omitted from
@@ -299,6 +305,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Name:                             record.Name,
 		TestState:                        record.TestState,
 		RolloutState:                     record.RolloutState,
+		SpokeConfig:                      record.SpokeConfig,
 		SpawnedSessions:                  record.SpawnedSessions,
 		ParentSessionID:                  record.ParentSessionID,
 		Repos:                            repos,

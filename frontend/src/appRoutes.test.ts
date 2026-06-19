@@ -204,6 +204,24 @@ test("session routes parse only session-scoped pages", () => {
     settingsTab: "preferences",
     adminView: "controls",
   });
+  expect(readSessionRouteFromPathname("/sessions/s-1/test-slot")).toEqual({
+    sessionId: "s-1",
+    tab: "test-slot",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    filePath: null,
+    fileLine: null,
+    breakGlassRequestId: null,
+    testSlotModelRequestId: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // The dedicated test-slot page is distinct from the test-slot-model approval
+  // route, which carries a required request id and must not be shadowed.
+  expect(readSessionRouteFromPathname("/sessions/s-1/test-slot/extra")).toBeNull();
   expect(readSessionRouteFromPathname("/sessions/s-1/files/src/App.tsx:42")).toEqual({
     sessionId: "s-1",
     tab: "files",
@@ -284,6 +302,7 @@ test("session route urls broadcast only session-owned pages", () => {
   expect(buildSessionRouteUrl(current, "s 1", "test-slot-model", null, null, null, null, null, null, "request 1")).toBe("https://tank.example.test/sessions/s%201/test-slot-model/request%201");
   expect(buildSessionRouteUrl(current, "s 1", "files")).toBe("https://tank.example.test/sessions/s%201/files");
   expect(buildSessionRouteUrl(current, "s 1", "background")).toBe("https://tank.example.test/sessions/s%201/background");
+  expect(buildSessionRouteUrl(current, "s 1", "test-slot")).toBe("https://tank.example.test/sessions/s%201/test-slot");
 });
 
 test("turn routes carry an optional page ordinal", () => {
@@ -315,6 +334,32 @@ test("turn routes carry an optional page ordinal", () => {
   expect(buildSessionRouteUrl(current, "s-1", "turns", 3, null, 2)).toBe("https://tank.example.test/sessions/s-1/turns/3/pages/2");
   // A page ordinal without a turn never appears — a bare turns route can't pin one.
   expect(buildSessionRouteUrl(current, "s-1", "turns", null, null, 2)).toBe("https://tank.example.test/sessions/s-1");
+});
+
+test("orchestrate route parses and builds round-trip", () => {
+  // /sessions/{id}/orchestrate is a simple tab-level subroute with no extra id segment.
+  expect(readSessionRouteFromPathname("/sessions/s-1/orchestrate")).toEqual({
+    sessionId: "s-1",
+    tab: "orchestrate",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    filePath: null,
+    fileLine: null,
+    breakGlassRequestId: null,
+    testSlotModelRequestId: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // An extra segment after /orchestrate is not a valid route.
+  expect(readSessionRouteFromPathname("/sessions/s-1/orchestrate/extra")).toBe(null);
+  // URL builder emits the correct path.
+  const current = "https://tank.example.test/sessions/old";
+  expect(buildSessionRouteUrl(current, "s 1", "orchestrate")).toBe(
+    "https://tank.example.test/sessions/s%201/orchestrate",
+  );
 });
 
 test("home splash route parses only the new-session splash", () => {
@@ -354,6 +399,11 @@ test("app route urls broadcast top-level settings help and cluster surfaces", ()
         tab: "settings",
         settingsTab: "admin",
         adminView: "break-glass",
+      });
+  expect(readAppRouteFromPathname("/settings/admin/data")).toEqual({
+        tab: "settings",
+        settingsTab: "admin",
+        adminView: "data",
       });
   expect(readAppRouteFromPathname("/settings/admin/orchestrations")).toEqual({
         tab: "settings",

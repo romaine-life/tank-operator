@@ -28,6 +28,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/transcriptstore"
 )
 
 const designSelectionConfigMapName = "tank-design-selection"
@@ -49,8 +50,12 @@ type appServer struct {
 	avatars             avatarassets.Store
 	avatarImages        avatarassets.ImageStore
 	avatarUploads       avataruploads.Store
+	transcripts         transcriptstore.Store
 	pgPool              *pgxpool.Pool
-	sessionBus          sessionCommandBus
+	// dataBrowser backs the admin-only read-only DB browser. nil in stub mode
+	// (no pgPool); handlers return 503 rather than pretend to browse.
+	dataBrowser dataBrowserReader
+	sessionBus  sessionCommandBus
 	// rowWriter is the shared session-row transition writer (same instance
 	// the K8s watch and chat-activity emitter use). The internal
 	// provider-fatal endpoint routes runner-reported agent-process death
@@ -408,6 +413,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// responding") with a correlation label tying each block to the
 	// most-recent tank-event / session-switch / scroll the SPA saw.
 	mux.HandleFunc("POST /api/client-metrics/long-tasks", s.handleLongTaskMetrics)
+	// Browser-side sidebar-drag lifecycle beacon. Records each step
+	// (mousedown→dragstart→dragover→drop→persist) on
+	// tank_session_drag_step_total so "the drag does nothing" is diagnosable
+	// from metrics rather than the user's DevTools.
+	mux.HandleFunc("POST /api/client-metrics/session-drag-step", s.handleSessionDragStepMetric)
 
 	// Avatar assets. Reads are authenticated so uploaded backing photos
 	// are not exposed as static public files; writes are admin-only.
@@ -428,6 +438,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
 	mux.HandleFunc("GET /api/admin/break-glass-requests", s.handleAdminBreakGlassRequests)
+	// Admin-only, read-only database browser: a table directory plus keyset
+	// pages of one table's rows. No caller SQL; redaction + bounds live in
+	// internal/pgstore.DataBrowser.
+	mux.HandleFunc("GET /api/admin/data/tables", s.handleAdminDataTables)
+	mux.HandleFunc("GET /api/admin/data/tables/{table}/rows", s.handleAdminDataTableRows)
 	// Admin-only durable support surface for avatar upload failures. The
 	// form error returns attempt_id; this endpoint turns that reference into
 	// a curl-able diagnosis without browser devtools.
@@ -524,13 +539,17 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}", s.handlePatchSession)
+	mux.HandleFunc("POST /api/sessions/{session_id}/resurrect", s.handleResurrectSession)
+	mux.HandleFunc("PUT /api/sessions/{session_id}/parent", s.handleSetSessionParent)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/open-target", s.handleSetOpenTarget)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/run-config", s.handleSetSessionRunConfig)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-state", s.handleSetTestState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-workflow/start", s.handleStartTestWorkflow)
+	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot", s.handleGetTestSlotStatus)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/return", s.handleReturnTestSlot)
 	mux.HandleFunc("POST /api/sessions/{session_id}/rollout-state", s.handleSetRolloutState)
+	mux.HandleFunc("POST /api/sessions/{session_id}/orchestrate", s.handleOrchestrateLaunch)
 	mux.HandleFunc("POST /api/sessions/{session_id}/merge-pr", s.handleMergeSessionPR)
 	mux.HandleFunc("POST /api/sessions/{session_id}/save-credentials", s.handleSaveCredentials)
 	mux.HandleFunc("POST /api/sessions/{session_id}/paste-image", s.handlePasteImage)
@@ -624,6 +643,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/timeline", s.handleInternalSessionTimeline)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/transcript-snapshot", s.handleInternalSessionTranscriptSnapshot)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/resume-transcript", s.handleInternalSessionResumeTranscript)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pr-readiness", s.handleInternalRegisterPRReadiness)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/ci-watches", s.handleInternalRegisterCIWatch)

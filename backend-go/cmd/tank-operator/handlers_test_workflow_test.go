@@ -215,7 +215,7 @@ func TestStartTestWorkflow_NoRepoRefuses(t *testing.T) {
 // deployed, the session test-state is marked active, and the provision thread
 // opens ("creating") and closes with a terminal "ready" record carrying the
 // test-environment URL.
-func TestRunInteractiveTestWorkflow_ReadyProvisionsAndAnnounces(t *testing.T) {
+func TestRunInteractiveTestWorkflow_ReadyProvisionsPageOnly(t *testing.T) {
 	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
 	glim := &fakeGlimmungClient{}
 	app, reg, events, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
@@ -243,30 +243,19 @@ func TestRunInteractiveTestWorkflow_ReadyProvisionsAndAnnounces(t *testing.T) {
 	if active, _ := rec.TestState["active"].(bool); !active {
 		t.Fatalf("ready verdict should mark test-state active: %#v", rec.TestState)
 	}
-	if opener := noticeTurnOpener(events); opener != "Creating test slot." {
-		t.Fatalf("notice-turn opener=%q, want 'Creating test slot.'", opener)
-	}
-	body := noticeTurnBody(events)
-	if !strings.Contains(body, "ready") {
-		t.Fatalf("notice-turn body=%q, want it to announce the environment is ready", body)
-	}
-	if !strings.Contains(body, "://") {
-		t.Fatalf("ready body should carry the test-environment URL, got %q", body)
-	}
-	if !noticeTurnClosed(events) {
-		t.Fatalf("ready notice turn must be closed with turn.completed (no strand)")
-	}
-	// Opener + body + close share one turn_id, so it renders as a single turn
-	// the user can land on — not an orphan role:system record.
-	if !noticeTurnSingleTurn(events) {
-		t.Fatalf("all notice-turn events must share a turn_id: %v", noticeTurnEvents(events))
+	// Provisioning is page-only: it emits NOTHING to the transcript. The
+	// dedicated test-slot page reads the durable rows + test_state; the slot pill
+	// lights from the session-row SSE. No notice turn, no orphan record.
+	if len(events.upserts) != 0 {
+		t.Fatalf("ready provision must not emit any transcript event, got %d: %v", len(events.upserts), events.upserts)
 	}
 }
 
-// TestRunInteractiveTestWorkflow_RefusalSurfacesReason drives a failed verdict:
-// glimmung is never touched, the refusal reason is the terminal error record's
-// text, and the session test-state stays inactive.
-func TestRunInteractiveTestWorkflow_RefusalSurfacesReason(t *testing.T) {
+// TestRunInteractiveTestWorkflow_RefusalLeavesGlimmungUntouched drives a failed
+// verdict: glimmung is never touched, no transcript record is emitted (the
+// reason lands on the durable pending row the page reads), and the session
+// test-state stays inactive.
+func TestRunInteractiveTestWorkflow_RefusalLeavesGlimmungUntouched(t *testing.T) {
 	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{{
 		CheckState:       "failure",
 		AllChecksSettled: true,
@@ -291,18 +280,10 @@ func TestRunInteractiveTestWorkflow_RefusalSurfacesReason(t *testing.T) {
 	if glim.checkoutCalls != 0 || glim.deployCalls != 0 {
 		t.Fatalf("refusal must not touch glimmung; checkout=%d deploy=%d", glim.checkoutCalls, glim.deployCalls)
 	}
-	if opener := noticeTurnOpener(events); opener != "Creating test slot." {
-		t.Fatalf("notice-turn opener=%q, want 'Creating test slot.'", opener)
-	}
-	detail := noticeTurnBody(events)
-	if !strings.Contains(detail, "Couldn't create test slot") {
-		t.Fatalf("refusal body=%q, want it to surface the refusal", detail)
-	}
-	if !strings.Contains(detail, "build") || !strings.Contains(detail, "lint") {
-		t.Fatalf("refusal body should list failing checks, got %q", detail)
-	}
-	if !noticeTurnClosed(events) {
-		t.Fatalf("refusal notice turn must be closed with turn.completed (no strand)")
+	// Page-only: a refusal emits no transcript record. The reason lands on the
+	// durable pending_test_provisions row, which the test-slot page surfaces.
+	if len(events.upserts) != 0 {
+		t.Fatalf("refusal must not emit any transcript event, got %d: %v", len(events.upserts), events.upserts)
 	}
 	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
 	if !ok {
@@ -367,10 +348,10 @@ func TestRunInteractiveTestWorkflow_DriveReadyWakesAgent(t *testing.T) {
 	if wake.req.Branch != "tank/session/77/tank-operator" {
 		t.Fatalf("wake req branch=%q, want the governed branch", wake.req.Branch)
 	}
-	// The visible thread is identical to the plain button: a ready notice turn
-	// announcing the same URL the wake used.
-	if body := noticeTurnBody(events); !strings.Contains(body, "ready") || !strings.Contains(body, wake.url) {
-		t.Fatalf("ready notice body=%q, want it to announce ready at %q", body, wake.url)
+	// Provisioning is page-only: the drive wake fires (captured above), but no
+	// transcript record is emitted — the page + slot pill carry status.
+	if len(events.upserts) != 0 {
+		t.Fatalf("drive+ready must not emit any transcript event, got %d: %v", len(events.upserts), events.upserts)
 	}
 }
 
@@ -395,8 +376,8 @@ func TestRunInteractiveTestWorkflow_DriveRefusalDoesNotWake(t *testing.T) {
 	if len(*wakes) != 0 {
 		t.Fatalf("drive+refusal must NOT wake the agent, got %d wakes", len(*wakes))
 	}
-	if body := noticeTurnBody(events); !strings.Contains(body, "Couldn't create test slot") {
-		t.Fatalf("refusal notice body=%q, want it to surface the refusal", body)
+	if len(events.upserts) != 0 {
+		t.Fatalf("drive+refusal must not emit any transcript event, got %d: %v", len(events.upserts), events.upserts)
 	}
 }
 
@@ -414,8 +395,8 @@ func TestRunInteractiveTestWorkflow_PlainReadyDoesNotWake(t *testing.T) {
 	if len(*wakes) != 0 {
 		t.Fatalf("plain (drive=false) ready must NOT wake the agent, got %d wakes", len(*wakes))
 	}
-	if body := noticeTurnBody(events); !strings.Contains(body, "ready") {
-		t.Fatalf("ready notice body=%q, want it to announce ready", body)
+	if len(events.upserts) != 0 {
+		t.Fatalf("plain ready must not emit any transcript event, got %d: %v", len(events.upserts), events.upserts)
 	}
 }
 
@@ -502,76 +483,3 @@ func TestSessionGlimmungProjectMapping(t *testing.T) {
 	}
 }
 
-// noticeTurnEvents returns the persisted events of the test-slot notice turn —
-// the system-authored opener (user_message.created), the assistant body line
-// (assistant_message.created), and the close (turn.completed) — in emission
-// order. All share one turn_id.
-func noticeTurnEvents(events *recordingSessionEventStore) []map[string]any {
-	var out []map[string]any
-	for _, ev := range events.upserts {
-		switch t, _ := ev["type"].(string); t {
-		case "user_message.created", "assistant_message.created", "turn.completed":
-			out = append(out, ev)
-		}
-	}
-	return out
-}
-
-// noticeTurnOpener returns the system-authored opener text ("Creating test
-// slot."), or "" if no opener was emitted.
-func noticeTurnOpener(events *recordingSessionEventStore) string {
-	for _, ev := range events.upserts {
-		if t, _ := ev["type"].(string); t != "user_message.created" {
-			continue
-		}
-		if payload, ok := ev["payload"].(map[string]any); ok {
-			text, _ := payload["text"].(string)
-			return text
-		}
-	}
-	return ""
-}
-
-// noticeTurnBody returns the assistant body text of the notice turn — the
-// outcome line ("Test environment ready at <url>" / "Couldn't create test
-// slot: ..."), or "" if none.
-func noticeTurnBody(events *recordingSessionEventStore) string {
-	for _, ev := range events.upserts {
-		if t, _ := ev["type"].(string); t != "assistant_message.created" {
-			continue
-		}
-		if payload, ok := ev["payload"].(map[string]any); ok {
-			text, _ := payload["text"].(string)
-			return text
-		}
-	}
-	return ""
-}
-
-// noticeTurnClosed reports whether the notice turn was closed (turn.completed),
-// i.e. it cannot strand.
-func noticeTurnClosed(events *recordingSessionEventStore) bool {
-	for _, ev := range events.upserts {
-		if t, _ := ev["type"].(string); t == "turn.completed" {
-			return true
-		}
-	}
-	return false
-}
-
-// noticeTurnSingleTurn reports whether every notice-turn event shares one
-// turn_id, so it renders as a single turn the user can land on.
-func noticeTurnSingleTurn(events *recordingSessionEventStore) bool {
-	turnID := ""
-	for _, ev := range noticeTurnEvents(events) {
-		id, _ := ev["turn_id"].(string)
-		if turnID == "" {
-			turnID = id
-			continue
-		}
-		if id != turnID {
-			return false
-		}
-	}
-	return turnID != ""
-}

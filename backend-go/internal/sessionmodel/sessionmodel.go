@@ -218,6 +218,9 @@ type SessionRecord struct {
 	ActivitySummary []byte         // JSON-marshaled; nil when no chat activity yet
 	TestState       map[string]any // jsonb column, materialized for the handler layer
 	RolloutState    map[string]any // jsonb column
+	// SpokeConfig is the hub's spoke-fleet launch config, set by the orchestrate
+	// endpoint. NULL/nil until the orchestrate endpoint writes it. jsonb column.
+	SpokeConfig     map[string]any // jsonb column
 
 	// SpawnedSessions is the durable parent→child lineage surfaced by the
 	// session-bar "spawned sessions" chip: one ref per session this
@@ -431,6 +434,11 @@ type ManifestOptions struct {
 	// being materialized. The registry persists the same list so the runtime
 	// surface stays inspectable after creation.
 	Capabilities []string
+	// ResurrectSourceSessionID, when set, marks this pod as resurrecting a dead
+	// session's conversation. It is stamped on the claude-runner sidecar env as
+	// TANK_RESURRECT_SOURCE_SESSION_ID; the runner fetches that source's
+	// captured transcript and resumes it. Empty for normal sessions.
+	ResurrectSourceSessionID string
 	// Non-secret SpireLens tailnet configuration. Only used when
 	// Capabilities includes SessionCapabilitySpireLensMCP.
 	SpireLensTailscaleOIDCClientID string
@@ -1081,6 +1089,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
+			// Empty for normal sessions; set on a resurrected pod so the runner
+			// fetches the dead session's transcript and resumes it.
+			map[string]any{"name": "TANK_RESURRECT_SOURCE_SESSION_ID", "value": opts.ResurrectSourceSessionID},
 			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
 		}
 		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude

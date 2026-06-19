@@ -56,9 +56,11 @@ type SessionRegistry interface {
 	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
+	SetSpokeConfig(ctx context.Context, email, sessionID string, config map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
 	AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
+	SetParentSession(ctx context.Context, email, sessionID, parentID string) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
@@ -260,6 +262,12 @@ type CreateOptions struct {
 	// BugLabels is the plural create-time form. BugLabel remains populated for
 	// compatibility with clients and row projections that read one label.
 	BugLabels []*sessionmodel.SessionBugLabel
+	// ResurrectSourceSessionID, when set, marks this create as a conversation
+	// resurrection: the new pod is stamped with the dead session's id so its
+	// runner fetches that source's captured transcript and resumes it. The dead
+	// pod stays terminal; this is a new session lifecycle, not a revival. See
+	// docs/session-transcript-capture.md.
+	ResurrectSourceSessionID string
 	// ParentSessionID is the origin session that spawned this one (the
 	// X-Tank-Origin-Session-Id on the spawning MCP call). Persisted on the
 	// child row at create so the sidebar nests it under its origin from the
@@ -350,6 +358,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.Capabilities = capabilities
 	manifestOpts.Model = model
 	manifestOpts.Effort = effort
+	manifestOpts.ResurrectSourceSessionID = strings.TrimSpace(opts.ResurrectSourceSessionID)
 	m.applyImageOverride(ctx, &manifestOpts, mode)
 	sessionImage := sessionmodel.ResolvedSessionImage(mode, manifestOpts)
 	sessionImageMetadata := sessionmodel.ResolvedSessionImageMetadata(mode, manifestOpts)
@@ -780,6 +789,20 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 		})
 }
 
+// SetSpokeConfig replaces the sessions.spoke_config payload persisted by the
+// orchestrate endpoint and publishes the updated row to the sidebar stream.
+// It does not patch pod annotations: spoke_config is hub-side only, read
+// from the durable row. Returns a refreshed Info the same way SetCloneState does.
+func (m *Manager) SetSpokeConfig(ctx context.Context, owner, sessionID string, config map[string]any) (Info, error) {
+	if m.registry != nil {
+		if err := m.registry.SetSpokeConfig(ctx, owner, sessionID, config); err != nil {
+			return Info{}, err
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
 // SetCloneState replaces the sessions.clone_state payload written by
 // the repo-cloner init container and publishes the updated row to the
 // sidebar stream. It does not patch pod annotations: clone_state is a
@@ -941,6 +964,100 @@ func (m *Manager) ReorderSessions(ctx context.Context, owner string, orderedIDs 
 		m.publishRow(ctx, owner, id)
 	}
 	return nil
+}
+
+// SetParentSession sets or clears a session's durable parent_session_id — the
+// child→parent edge the sidebar nests on (see arrangeSessionTree and
+// docs/features/session-bar/capabilities.md). This is the explicit user-driven
+// mutation behind drag-to-nest and the "Un-nest" menu action; it is distinct
+// from the write-once stamp Create applies for agent-spawned children. An empty
+// parentID clears nesting (un-nest) and returns the row to the top level.
+//
+// The durable tree is kept acyclic on write even though the renderer tolerates
+// cycles: the parent must be a different, owner-visible, same-scope session, and
+// the session being nested must not appear in the parent's ancestor chain. Depth
+// is deliberately NOT clamped here — the stored edge stays the literal direct
+// parent, and arrangeSessionTree clamps deeper lineage to a single tier exactly
+// as it already does for an agent sub-session that spawns its own children. The
+// parent-side spawned_sessions chip is untouched; manual nesting is organization,
+// not spawn lineage.
+func (m *Manager) SetParentSession(ctx context.Context, owner, sessionID, parentID string) (Info, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	parentID = strings.TrimSpace(parentID)
+	if sessionID == "" {
+		return Info{}, ErrNotFound
+	}
+	// The child must exist, be owned, and be sidebar-visible.
+	if _, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err != nil {
+		return Info{}, err
+	}
+	if parentID != "" {
+		if parentID == sessionID {
+			return Info{}, ErrInvalidParent
+		}
+		// The parent must be a visible, owned, same-scope session. A cross-scope
+		// or missing target simply isn't found within this owner/scope and is
+		// rejected rather than persisted as a dangling edge.
+		if _, err := m.GetRegisteredByOwner(ctx, owner, parentID); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return Info{}, ErrInvalidParent
+			}
+			return Info{}, err
+		}
+		cyclic, err := m.parentChainContains(ctx, owner, parentID, sessionID)
+		if err != nil {
+			return Info{}, err
+		}
+		if cyclic {
+			return Info{}, ErrInvalidParent
+		}
+	}
+	if m.registry != nil {
+		if regErr := m.registry.SetParentSession(ctx, owner, sessionID, parentID); regErr != nil {
+			return Info{}, regErr
+		}
+	}
+	// Republish so every open session list converges on the new nesting over the
+	// row-update stream without a manual refresh (session-bar contract).
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// parentChainContains walks upward from startID following parent_session_id and
+// reports whether targetID appears in the chain. Used to reject a manual nest
+// that would close a cycle. Durable lineage is at most a couple of hops, and a
+// visited set defends against any pre-existing cyclic data so the walk always
+// terminates. Stub registries without a getter cannot walk and conservatively
+// report no cycle (they have no durable graph to corrupt).
+func (m *Manager) parentChainContains(ctx context.Context, owner, startID, targetID string) (bool, error) {
+	getter, ok := m.registry.(sessionRegistryGetter)
+	if !ok {
+		return false, nil
+	}
+	visited := map[string]struct{}{}
+	cur := strings.TrimSpace(startID)
+	for cur != "" {
+		if cur == targetID {
+			return true, nil
+		}
+		if _, seen := visited[cur]; seen {
+			return false, nil
+		}
+		visited[cur] = struct{}{}
+		record, found, err := getter.Get(ctx, owner, cur)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, nil
+		}
+		cur = strings.TrimSpace(record.ParentSessionID)
+	}
+	return false, nil
 }
 
 func (m *Manager) patchStateAnnotations(

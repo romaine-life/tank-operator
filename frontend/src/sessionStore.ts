@@ -82,6 +82,10 @@ export interface SessionRow {
   activity_summary?: Record<string, unknown>;
   test_state?: Record<string, unknown>;
   rollout_state?: Record<string, unknown>;
+  // spoke_config is present when this session is acting as a hub in an
+  // orchestration — it carries the config used to launch the spoke session.
+  // Absent/undefined when not a hub.
+  spoke_config?: Record<string, unknown>;
   // spawned_sessions is the durable parent→child lineage the session-bar
   // "spawned sessions" chip lists. Omitted/empty when this session spawned
   // nothing. Normalized to clean refs at the store boundary.
@@ -549,6 +553,9 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
         : undefined,
       rollout_state: isRecord(rowRaw.rollout_state)
         ? (rowRaw.rollout_state as Record<string, unknown>)
+        : undefined,
+      spoke_config: isRecord(rowRaw.spoke_config)
+        ? (rowRaw.spoke_config as Record<string, unknown>)
         : undefined,
       spawned_sessions: normalizeSpawnedSessions(rowRaw.spawned_sessions),
       parent_session_id:

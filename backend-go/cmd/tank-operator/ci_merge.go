@@ -38,11 +38,18 @@ func (s *appServer) handleMergeSessionPR(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Session PRs start as drafts, which GitHub refuses to merge; mark ready
-	// first, tolerating an "already ready" error.
-	if err := s.mcpGitHub.MarkPRReady(ctx, user.Email, watch.PROwner, watch.PRName, watch.PRNumber); err != nil {
-		slog.Warn("mark PR ready failed (continuing to merge)", "session", sessionID, "error", err)
+	// first. mark_pull_request_ready_for_review is idempotent (an already-ready
+	// PR is not an error), so a failure here is a real failure that the merge
+	// cannot recover from -- surface it instead of marching into a confusing
+	// "still a draft" merge rejection (the failure this path used to swallow).
+	// Both calls pass the owning session id so mcp-github keys the governed-merge
+	// control-action audit to this session's ledger, not the orchestrator's.
+	if err := s.mcpGitHub.MarkPRReady(ctx, user.Email, watch.PROwner, watch.PRName, watch.PRNumber, watch.SessionID); err != nil {
+		recordCITerminal("merge_rejected")
+		writeError(w, http.StatusConflict, "merge failed: could not mark PR ready for review: "+err.Error())
+		return
 	}
-	mergeCommit, err := s.mcpGitHub.MergePR(ctx, user.Email, watch.PROwner, watch.PRName, watch.PRNumber, "squash")
+	mergeCommit, err := s.mcpGitHub.MergePR(ctx, user.Email, watch.PROwner, watch.PRName, watch.PRNumber, "squash", watch.SessionID)
 	if err != nil {
 		recordCITerminal("merge_rejected")
 		writeError(w, http.StatusConflict, "merge failed: "+err.Error())

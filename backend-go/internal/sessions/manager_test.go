@@ -998,6 +998,10 @@ func (r *managerTestRegistry) SetRolloutState(context.Context, string, string, m
 	return nil
 }
 
+func (r *managerTestRegistry) SetSpokeConfig(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
 func (r *managerTestRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
 	return nil
 }
@@ -1067,6 +1071,16 @@ func (r *managerTestRegistry) Reorder(_ context.Context, _ string, orderedIDs []
 	return orderedIDs, nil
 }
 
+func (r *managerTestRegistry) SetParentSession(_ context.Context, _, sessionID, parentID string) error {
+	for i := range r.records {
+		if r.records[i].ID == sessionID {
+			r.records[i].ParentSessionID = parentID
+			return nil
+		}
+	}
+	return nil
+}
+
 func (r *managerTestRegistry) MarkDeleted(context.Context, string, string) error { return nil }
 
 // upsertFailingRegistry satisfies SessionRegistry with a failing Upsert —
@@ -1099,6 +1113,9 @@ func (upsertFailingRegistry) SetTestState(context.Context, string, string, map[s
 func (upsertFailingRegistry) SetRolloutState(context.Context, string, string, map[string]any) error {
 	return nil
 }
+func (upsertFailingRegistry) SetSpokeConfig(context.Context, string, string, map[string]any) error {
+	return nil
+}
 func (upsertFailingRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
 	return nil
 }
@@ -1107,6 +1124,9 @@ func (upsertFailingRegistry) AppendSpawnedSession(context.Context, string, strin
 }
 func (upsertFailingRegistry) Reorder(context.Context, string, []string) ([]string, error) {
 	return nil, nil
+}
+func (upsertFailingRegistry) SetParentSession(context.Context, string, string, string) error {
+	return nil
 }
 func (upsertFailingRegistry) MarkDeleted(context.Context, string, string) error { return nil }
 

@@ -746,13 +746,68 @@ func (s *appServer) handleReorderSessions(w http.ResponseWriter, r *http.Request
 	owner := user.OwnerEmail()
 	if err := s.mgr.ReorderSessions(r.Context(), owner, body.SessionIDs); err != nil {
 		if errors.Is(err, sessionmodel.ErrSessionOrderConflict) {
+			recordSessionReorder("conflict")
 			writeError(w, http.StatusConflict, "session order is stale; refresh and retry")
 			return
 		}
+		recordSessionReorder("error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	recordSessionReorder("ok")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleSetSessionParent sets or clears a session's parent_session_id — the
+// durable child→parent edge the sidebar nests on. Body:
+// {"parent_session_id": "<id>"} to nest, or null/"" to un-nest. This is the
+// explicit write behind drag-to-nest and the row "Un-nest" action; the
+// create-time stamp for agent-spawned children is unchanged. Self/cycle/missing
+// or cross-scope targets are rejected (ErrInvalidParent → 400) so the durable
+// tree stays acyclic. Returns the updated row so the SPA reconciles immediately.
+func (s *appServer) handleSetSessionParent(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	var body struct {
+		ParentSessionID *string `json:"parent_session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	parentID := ""
+	if body.ParentSessionID != nil {
+		parentID = strings.TrimSpace(*body.ParentSessionID)
+	}
+	action := "nest"
+	if parentID == "" {
+		action = "unnest"
+	}
+	owner := user.OwnerEmail()
+	info, err := s.mgr.SetParentSession(r.Context(), owner, sessionID, parentID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+			recordSessionNestUpdate(action, "rejected")
+			writeError(w, http.StatusNotFound, "session not found")
+		case errors.Is(err, sessions.ErrInvalidParent):
+			recordSessionNestUpdate(action, "rejected")
+			writeError(w, http.StatusBadRequest, "invalid parent session")
+		default:
+			recordSessionNestUpdate(action, "error")
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	recordSessionNestUpdate(action, "ok")
+	writeJSON(w, http.StatusOK, info)
 }
 
 // handleDeleteSession deletes a session.

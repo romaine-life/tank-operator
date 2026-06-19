@@ -53,6 +53,43 @@ var (
 	)
 )
 
+// --- Transcript capture (docs/session-transcript-capture.md, Stage 1) ---
+
+var (
+	// transcriptUploadTotal counts transcript-snapshot uploads received from
+	// session pods. result is a bounded set: ok, bad_request, forbidden,
+	// not_configured, read_error, error. No session/email labels (cardinality
+	// rule); the snapshot is keyed in blob storage, not in the metric.
+	transcriptUploadTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_transcript_upload_total",
+			Help: "Transcript JSONL snapshot uploads received from session pods, by result.",
+		},
+		[]string{"result"},
+	)
+)
+
+func recordTranscriptUpload(result string) {
+	transcriptUploadTotal.WithLabelValues(result).Inc()
+}
+
+var (
+	// sessionResurrectTotal counts conversation-resurrection requests by
+	// result: ok, bad_request, not_found, unsupported_mode, create_failed,
+	// unavailable. Bounded; no session/email labels.
+	sessionResurrectTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_session_resurrect_total",
+			Help: "Session conversation-resurrection requests, by result.",
+		},
+		[]string{"result"},
+	)
+)
+
+func recordSessionResurrect(result string) {
+	sessionResurrectTotal.WithLabelValues(result).Inc()
+}
+
 // --- Session-event stream metrics (the names match what the prior
 // counter surface exposed, so dashboards reading the old series keep
 // rendering against the new collectors). ---
@@ -570,6 +607,124 @@ var spawnedSessionLinkTotal = promauto.NewCounterVec(
 	[]string{"result"},
 )
 
+// sessionReorderTotal counts PUT /api/sessions/order outcomes. result=ok|conflict|error.
+// Bounded (3 series). conflict is the benign stale-tab permutation rejection
+// (the SPA refreshes and retries); a nonzero error rate means the durable
+// reorder write is failing — exactly the class of silent breakage that shipped
+// the 42P18 500 on every drag, invisible until pulled from the generic 5xx log.
+var sessionReorderTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_reorder_total",
+		Help: "Sidebar reorder (PUT /api/sessions/order) outcomes, by bounded result.",
+	},
+	[]string{"result"},
+)
+
+func recordSessionReorder(result string) {
+	switch result {
+	case "ok", "conflict", "error":
+	default:
+		result = "error"
+	}
+	sessionReorderTotal.WithLabelValues(result).Inc()
+}
+
+// sessionNestUpdateTotal counts manual drag-to-nest / un-nest writes to a
+// session's parent_session_id (PUT /api/sessions/{id}/parent). action=nest|unnest,
+// result=ok|rejected|error. Bounded (6 series). rejected is a guard refusal
+// (self-parent, cycle, or missing/cross-scope target — the durable tree stays
+// acyclic and one tier); error means the durable write or row republish failed.
+var sessionNestUpdateTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_nest_update_total",
+		Help: "Manual session nest/un-nest writes to parent_session_id, by action and bounded result.",
+	},
+	[]string{"action", "result"},
+)
+
+func recordSessionNestUpdate(action, result string) {
+	switch action {
+	case "nest", "unnest":
+	default:
+		action = "nest"
+	}
+	switch result {
+	case "ok", "rejected", "error":
+	default:
+		result = "error"
+	}
+	sessionNestUpdateTotal.WithLabelValues(action, result).Inc()
+}
+
+// sessionDragStepTotal traces the sidebar drag lifecycle from the browser so a
+// "drag does nothing" report is diagnosable from the stack instead of the user's
+// DevTools. The client beacons each step (POST /api/client-metrics/session-drag-step);
+// the LAST step with a count localizes the break: a row press that never reaches
+// dragstart means native drag is blocked, dragstart without drop means the drop
+// never fires, drop without persist means the handler bailed. Bounded: step is a
+// fixed lifecycle enum, detail a small per-step enum.
+var sessionDragStepTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_drag_step_total",
+		Help: "Sidebar drag lifecycle steps reported by the browser, by step and bounded detail.",
+	},
+	[]string{"step", "detail"},
+)
+
+func recordSessionDragStep(step, detail string) {
+	switch step {
+	case "mousedown", "dragstart", "dragover", "drop", "persist":
+	default:
+		step = "other"
+	}
+	switch detail {
+	case "",
+		"draggable", "blocked", // mousedown: was the row draggable when pressed
+		"nest", "reorder_before", "reorder_after", "noplan", // drop: zone / bail
+		"order", "parent": // persist: which write fired
+	default:
+		detail = "other"
+	}
+	sessionDragStepTotal.WithLabelValues(step, detail).Inc()
+}
+
+// orchestrateLaunchTotal counts attempts to turn a GUI chat session into a
+// spoke-fleet hub via POST /api/sessions/{id}/orchestrate, by bounded result.
+// "ok" is a launched hub; the rejection labels make the human-owner gate,
+// SDK-chat-hub gate, and spoke-config validation contract visible, and
+// "grant_error"/"kickoff_error"/"store_error"/"store_unavailable" surface the
+// partial-failure modes of the persist→self-grant→kickoff sequence.
+var orchestrateLaunchTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_orchestrate_launch_total",
+		Help: "Orchestrate hub launch attempts, labeled by bounded result.",
+	},
+	[]string{"result"},
+)
+
+func recordOrchestrateLaunch(result string) {
+	orchestrateLaunchTotal.WithLabelValues(orchestrateLaunchResultLabel(result)).Inc()
+}
+
+// orchestrateLaunchResultLabel bounds the result label cardinality to the known
+// outcomes so an unexpected string can't explode the time series.
+func orchestrateLaunchResultLabel(result string) string {
+	switch result {
+	case "ok",
+		"service_rejected",
+		"not_owner",
+		"not_hub_mode",
+		"invalid_spoke_config",
+		"store_unavailable",
+		"store_error",
+		"grant_error",
+		"kickoff_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
 // pinnedReposUpdateTotal counts authenticated writes to the durable per-user
 // repo pin list. The bounded result label makes user-trust failures visible:
 // invalid means the SPA/server slug contract drifted, unavailable means a
@@ -773,6 +928,46 @@ var controlActionEventTotal = promauto.NewCounterVec(
 	},
 	[]string{"source_service", "source_tool", "action", "status", "result"},
 )
+
+// controlActionInternalWriteTotal records which authorized writer class reached
+// the internal session-scoped control-action write endpoint and whether it was
+// authorized. The two legitimate writers are a session pod writing its own
+// ledger (svc:tank:<id>) and the orchestrator control plane writing on behalf of
+// a governed merge (svc:tank-operator:<id>; docs/event-driven-rollout.md §E). A
+// rise in control_plane/forbidden is the signature of the governed-merge audit
+// regression this counter exists to surface.
+var controlActionInternalWriteTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_control_action_internal_write_total",
+		Help: "Internal session-scoped control-action ledger writes by authorized writer class and authorization outcome.",
+	},
+	[]string{"writer", "result"},
+)
+
+func recordControlActionInternalWrite(writer, result string) {
+	controlActionInternalWriteTotal.WithLabelValues(
+		controlActionWriterLabel(writer),
+		controlActionInternalWriteResultLabel(result),
+	).Inc()
+}
+
+func controlActionWriterLabel(writer string) string {
+	switch writer {
+	case "session_pod", "control_plane", "other":
+		return writer
+	default:
+		return "other"
+	}
+}
+
+func controlActionInternalWriteResultLabel(result string) string {
+	switch result {
+	case "authorized", "forbidden":
+		return result
+	default:
+		return "other"
+	}
+}
 
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
@@ -1732,6 +1927,20 @@ var (
 		[]string{"result"},
 	)
 
+	// adminDataBrowserReadsTotal is the volume + outcome signal for the
+	// admin-only read-only database browser (GET /api/admin/data/...).
+	// `surface` is table_list|rows; `result` is a bounded outcome. The
+	// browsed table name is deliberately NOT a label — it already rides the
+	// per-call audit slog line, and keeping it off the metric pins
+	// cardinality at surface×result.
+	adminDataBrowserReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_data_browser_reads_total",
+			Help: "Admin reads of the read-only data browser, labeled by bounded surface and result.",
+		},
+		[]string{"surface", "result"},
+	)
+
 	// conversationReadCursorStagnantTotal is the durable cross-check
 	// for the transcript navigation latch failure mode. Increments
 	// once per sample pass for every (session_mode, scope) tuple where
@@ -1796,6 +2005,31 @@ func recordDebugSessionEventLedgerRead(result string) {
 func debugSessionEventLedgerResultLabel(result string) string {
 	switch result {
 	case "ok", "empty", "bad_request", "forbidden", "store_error", "not_configured":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func recordAdminDataBrowserRead(surface, result string) {
+	adminDataBrowserReadsTotal.WithLabelValues(
+		adminDataBrowserSurfaceLabel(surface),
+		adminDataBrowserResultLabel(result),
+	).Inc()
+}
+
+func adminDataBrowserSurfaceLabel(surface string) string {
+	switch surface {
+	case "table_list", "rows":
+		return surface
+	default:
+		return "other"
+	}
+}
+
+func adminDataBrowserResultLabel(result string) string {
+	switch result {
+	case "ok", "empty", "bad_request", "forbidden", "not_found", "error", "not_configured":
 		return result
 	default:
 		return "other"
@@ -2381,7 +2615,7 @@ func recordSessionEventPersistTransientFailure() {
 
 func recordSessionRunConfigRejected(surface, provider, reason string) {
 	switch surface {
-	case "create", "turn", "runtime_config", "run_config_update":
+	case "create", "turn", "runtime_config", "run_config_update", "orchestrate":
 	default:
 		surface = "other"
 	}

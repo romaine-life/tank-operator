@@ -69,6 +69,29 @@ and [../README.md](../README.md) for how capability ledgers are used.
   durable `session_ci_watches` readiness row plus live reducer output from GitHub PR
   state.
 
+## governed-merge-control-action-audit
+
+- **Status:** shipped
+- **Intent:** Every governed PR mutation (`mark_pull_request_ready_for_review`,
+  `merge_pull_request`) records its `control_action_events` audit on the **owning
+  session's** ledger, regardless of which principal performed the merge. The agent
+  in-pod path and the two orchestrator-mediated paths — the in-app "Merge in Tank"
+  button (`handleMergeSessionPR`) and the green-path auto-merge
+  (`autoMergeOrchestrationPhasePR`) — produce an identical ledger row keyed to the
+  PR's session (event-driven-rollout.md §E).
+- **Durable source / mechanism:** mcp-github keys the audit to a `governed_session_id`
+  the orchestrator passes (the owning session), falling back to the caller's own
+  session for the in-pod agent path. Tank's internal write endpoint
+  (`internalCallerMatchesSession`) authorizes **two** verified-IdP writers: a session
+  pod for its *own* session (`svc:tank:<id>`, the #1207 rule) and the orchestrator
+  control plane (`svc:tank-operator:<id>`) for *any* session. Neither is a
+  caller-asserted header.
+- **Failure signature:** if the control-plane writer is not recognized, the audit
+  `started` write is rejected `403`, the mcp-github tool fails closed *before* the
+  GitHub merge, the PR stays an unmerged draft, and the human sees `merge failed:
+  mcp-github tool error: Error executing tool merge_pull_request: …`. Watched by
+  `tank_control_action_internal_write_total{writer="control_plane",result="forbidden"}`.
+
 ## gated-test-slot-provisioning
 
 - **Status:** shipped (shared server-side gate + orchestration-review path + interactive
@@ -128,6 +151,20 @@ and [../README.md](../README.md) for how capability ledgers are used.
   Outcomes are observable via `tank_test_slot_interactive_total{outcome}` (terminal
   outcome of the interactive trigger) plus the shared
   `tank_test_slot_validate_total` / `tank_test_slot_provision_total` gate counters.
+- **Update (2026-06-19):** the surfacing described above is **retired** — the
+  interactive provision is now **page-only** and emits nothing to the transcript.
+  History: #1332 first re-authored the outcome as a backend notice turn (replacing
+  the orphan `test_provision.updated` records); this change then retired that
+  notice turn entirely in favor of the dedicated **test-slot-page** (below). The
+  durable outcome lives on the `pending_test_provisions` row (refusal reason /
+  done) and the slot pill (`test_state`); the page reads both. Removed:
+  `emitTestProvisionRecord` / `newTestProvisionRunID` and the
+  `internal/conversation/notice_turn.go` helpers (their sole caller). The
+  pre-#1332 `test_provision.updated` event type, its `validateTestProvisionPayload`
+  validation, the `applyTestProvision` projection (`transcript_projection.go`), and
+  the `conversationReducer.ts` / `conversationProjection.ts` cases are intentionally
+  **kept** as a read path so historical durable records still render; retiring them
+  is a separate, data-aware migration (old rows must not silently stop rendering).
 
 ## interactive-test-workflow-drive
 
@@ -161,6 +198,74 @@ and [../README.md](../README.md) for how capability ledgers are used.
   backend-owned turn. Observable via `tank_test_slot_interactive_total{outcome}`
   with `outcome="drive_wake"` (wake submitted) / `"drive_wake_error"` (enqueue
   failed; non-fatal — the slot is up and the ready thread already announced it).
+
+## test-slot-page
+
+- **Status:** in progress (dedicated UI surface; shipped pending slot validation)
+- **Intent:** The composer "beaker" is a **navigation entry**, not an action menu:
+  it routes to a dedicated per-session page at `/sessions/{id}/test-slot`
+  (`SessionRouteTab` `test-slot`) that is the primary surface for the
+  create / create-and-test / open / return controls and for PR readiness. This
+  replaces the inline beaker dropdown and moves provisioning feedback off the
+  transcript and onto a page the user navigates to. **Create gating:** the button
+  is greyed out only when there is **no open PR** to test (resolved
+  `has_open_pr` is false); an open PR in any CI state stays clickable and the
+  gate surfaces its verdict. Provisioning itself is unchanged — the click still
+  runs the deterministic, zero-LLM `provisionTestSlotForSession` gate, which
+  re-reads live GitHub, so the page's cheap durable display can never cause a
+  wrong provision.
+- **Durable source:** read-only `GET /api/sessions/{id}/test-slot`
+  (`handleGetTestSlotStatus`, owner-scoped) returns a snapshot that must not
+  contradict the durable system: last-known readiness from the
+  `session_ci_watches` row (cheap, event-driven, rendered "as of"
+  `last_event_at`), the in-flight/last interactive `pending_test_provisions`
+  row, the resolved governed-PR coordinates (or a soft `repo_error` for an
+  ambiguous multi-repo session so the page can render a picker), and the session
+  `test_state`. With `?refresh=1` it additionally runs the **same** one-shot
+  live read + `classifyCIWatchState` the gate uses (`testSlotPreflight`) with no
+  durable row and no side effects, so the page shows an authoritative current
+  verdict on demand; `mcpgithub.ErrNoOpenPR` maps to a first-class `no_pr`
+  verdict rather than an error. Observable via
+  `tank_test_slot_status_requests_total{result}`.
+- **Affected contracts:** ci-watch (the readiness display must converge from /
+  not contradict the durable watch), session-lifecycle (test-slot provisioning),
+  transcript-navigation (new session route, refresh-survivable).
+- **Evidence:** `appRoutes.test.ts` (route parse/build + a guard that the page
+  route does not shadow the `test-slot-model` approval route),
+  `handlers_test_slot_status_test.go` (auth, owner scope, durable coordinate
+  resolution, live ready/`no_pr` preflight, multi-repo soft error), frontend
+  `tsc` + `vite build`, and a Glimmung test-slot click-through (pending).
+- **Enrichment (2026-06-19, follow-up):** the page now names and links the
+  entities it talks about: a labeled identity strip (repo ↗ / branch ↗ /
+  **PR #N ↗**), and — when a slot is up — an **active-environment panel** (slot
+  name/index, URL shown + clickable, **deployed branch @ commit** from the
+  provision row, started-at) with a **stale-slot** warning when the deployed SHA
+  no longer matches the branch head. The readiness card humanizes
+  `mergeable_state`, summarizes the check rollup, and lists **failing/pending
+  check names** (from the live preflight's `failing_checks`/`pending_checks`,
+  shown only while they describe the current head). The verdict is sourced from
+  the durable watch (event-driven) and a **12s durable poll** (paused when the
+  tab is hidden) converges the `mergeable → merged` transition without a manual
+  refresh; the live preflight (mount + Refresh) supplies the check names. Backend:
+  `pr_number` + `pending_checks` added to the preflight view.
+- **Fixes (2026-06-19, follow-up):**
+  - **Merged showed as "Green & mergeable".** The durable CI-watch row freezes at
+    its first terminal verdict — a `ready` watch never flips to `merged` because
+    the merge webhook handler skipped any non-`watching` row. Fixed two ways: the
+    page now **prefers the live preflight verdict** (the watch is the instant
+    paint + fallback) with a **live 20s poll** so a merge while-viewing converges;
+    and the merge webhook now **marks even a `ready`/terminal watch `merged`**
+    (`github_webhook.go`, before the not-watching coalescing guard). A distinct
+    **purple `is-merged`** tone + "Merged" label render it. The read-only status
+    endpoint resolves the preflight against the durable watch's **PR by number**
+    (not the open PR by branch) so a merged PR is detected as `merged` rather than
+    `no_pr` — a merged PR has no *open* PR for the branch, and the watch row may be
+    stuck `ready`; the by-number live read sees `merged=true` either way.
+  - **Falsely showed "Test environment — running".** An `active:true` `test_state`
+    with no URL (the optimistic flag set at "test" session-create) was rendered as
+    a running env. The page now requires a real **URL** to show "running"; and the
+    provision double-trigger guard (`handleStartTestWorkflow`) requires
+    `active && url` so the empty flag no longer 409s a genuine Create.
 
 ## pending-provision-backstop
 

@@ -113,7 +113,11 @@ func (s *appServer) createAndMergeBranchPR(ctx context.Context, actorEmail strin
 	if pr.Number <= 0 {
 		return pr, "", false, errors.New("created branch PR without number")
 	}
-	mergeCommit, err := s.mcpGitHub.MergePR(ctx, actorEmail, orch.RepoOwner, orch.RepoName, pr.Number, "merge")
+	// The integration-branch merge is a control-plane action with no single
+	// owning session (it integrates many spoke sessions' work), so it carries no
+	// governed session id: mcp-github attributes the control-action audit to the
+	// orchestrator principal that performs it rather than to one spoke's ledger.
+	mergeCommit, err := s.mcpGitHub.MergePR(ctx, actorEmail, orch.RepoOwner, orch.RepoName, pr.Number, "merge", "")
 	if err != nil {
 		return pr, "", false, err
 	}
