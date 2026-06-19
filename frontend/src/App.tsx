@@ -18,6 +18,7 @@ import type {
   ClipboardEvent as ReactClipboardEvent,
   ComponentProps,
   CSSProperties,
+  DragEvent as ReactDragEvent,
   FocusEvent as ReactFocusEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -73,7 +74,7 @@ import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
 import { WorkspaceShell } from "./WorkspaceShell";
-import { useFinePointer, useViewport } from "./useViewport";
+import { useViewport } from "./useViewport";
 import { filesBodyClassName } from "./filesView";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
@@ -350,7 +351,8 @@ import {
   type SessionRow,
 } from "./sessionStore";
 import { arrangeSessionTree } from "./sessionTree";
-import { useSessionDrag, type DropDecision } from "./sessionDrag";
+import { planSessionDrop } from "./sessionDrag";
+import { dropIntentForRow } from "./dragNest";
 import { reportDragStep } from "./dragTelemetry";
 import {
   decideFollowupSubmit,
@@ -26649,11 +26651,16 @@ function AuthenticatedApp() {
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   const { isCompact } = useViewport();
-  // Drag-reorder follows the input device, not the window width: a fine
-  // (mouse-like) pointer keeps the gesture even in a narrow/compact window or
-  // with DevTools docked. Gating on isCompact (≤768px) wrongly killed mouse-drag
-  // there; the real boundary is "no dead gesture on touch" (Session Bar).
-  const canDragSessions = useFinePointer();
+  // Sidebar drag-reorder state. Restored to the simple, known-good inline
+  // handlers — a rewrite into a hook broke the native drag gesture; the
+  // nest-vs-reorder decision is made at drop time so this gesture path stays
+  // minimal and matches the version that worked.
+  const [draggingSessionId, setDraggingSessionId] = useState<string | null>(
+    null,
+  );
+  const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(
+    null,
+  );
   // Off-canvas session drawer, compact viewports only. Per the App Chrome
   // contract, drawer open/closed is browser UI state — not durable product
   // state — so it lives in React state and resets on reload by design.
@@ -27273,41 +27280,6 @@ function AuthenticatedApp() {
   const viewingProdSessions =
     canViewProdSessions && effectiveSessionScope === PROD_SESSION_SCOPE;
   const readOnlySessionView = effectiveSessionScope !== currentSessionScope;
-  // Commit one drop's durable + optimistic consequences. Extracted from the old
-  // inline dropSession so the decision (planSessionDrop) and the event wiring
-  // (useSessionDrag) are each tested; persistSessionOrder/Parent stay below.
-  const applyDropPlan = (plan: DropDecision) => {
-    const withParent = plan.parentChanged
-      ? sessions.map((session) =>
-          session.id === plan.movedId
-            ? // Local row type omits the pointer when absent (the wire's
-              // omitempty shape); null-to-root maps to undefined here while the
-              // durable write still sends null to clear it.
-              { ...session, parent_session_id: plan.newParentId ?? undefined }
-            : session,
-        )
-      : sessions;
-    sessionStoreRef.current.applyLocalOrder(plan.nextOrder);
-    const ordered = orderSessionsByIds(withParent, plan.nextOrder);
-    setSessions(ordered);
-    sessionsRef.current = ordered;
-    if (plan.parentChanged) {
-      reportDragStep("persist", "parent");
-      void persistSessionParent(plan.movedId, plan.newParentId);
-    }
-    if (plan.orderChanged) {
-      reportDragStep("persist", "order");
-      void persistSessionOrder(plan.nextOrder);
-    }
-  };
-  // Drag state + per-row DOM handlers live in the tested hook. enabled gates on
-  // an authenticated user; readOnly disables drag in a cross-scope view.
-  const sessionDrag = useSessionDrag({
-    sessions,
-    readOnly: readOnlySessionView,
-    enabled: user != null,
-    onDrop: applyDropPlan,
-  });
   const scopedSessionPath = useCallback(
     (path: string) =>
       appendQueryParam(path, "session_scope", effectiveSessionScope),
@@ -28928,6 +28900,69 @@ function AuthenticatedApp() {
     activate(id);
   }
 
+  function dragSessionStart(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    if (readOnlySessionView) return;
+    reportDragStep("dragstart");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+    setDraggingSessionId(id);
+    setDragOverSessionId(id);
+  }
+
+  function dragSessionOver(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    if (readOnlySessionView) return;
+    if (!draggingSessionId || draggingSessionId === id) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverSessionId(id);
+  }
+
+  function dragSessionEnd() {
+    setDraggingSessionId(null);
+    setDragOverSessionId(null);
+  }
+
+  // dropSession decides nest-vs-reorder from WHERE on the target row the drop
+  // lands (dropIntentForRow): the middle band nests the dragged session under
+  // the target, the edge bands reorder. The decision is made here at drop time
+  // so the gesture path (dragSessionStart/Over) stays the minimal, known-good
+  // version. planSessionDrop turns it into the durable permutation + parent
+  // edge; the optimistic apply mirrors the sidebar immediately and the
+  // order/parent writes reconcile over SSE.
+  function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    event.preventDefault();
+    if (readOnlySessionView) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const intent = dropIntentForRow(event.clientY, rect.top, rect.height);
+    const movedId =
+      event.dataTransfer.getData("text/plain") || draggingSessionId;
+    setDraggingSessionId(null);
+    setDragOverSessionId(null);
+    if (!movedId || movedId === id || !user) return;
+    const plan = planSessionDrop(sessions, movedId, id, intent);
+    reportDragStep("drop", plan ? intent.replace("-", "_") : "noplan");
+    if (!plan) return;
+    const withParent = plan.parentChanged
+      ? sessions.map((session) =>
+          session.id === plan.movedId
+            ? { ...session, parent_session_id: plan.newParentId ?? undefined }
+            : session,
+        )
+      : sessions;
+    sessionStoreRef.current.applyLocalOrder(plan.nextOrder);
+    const ordered = orderSessionsByIds(withParent, plan.nextOrder);
+    setSessions(ordered);
+    sessionsRef.current = ordered;
+    if (plan.parentChanged) {
+      reportDragStep("persist", "parent");
+      void persistSessionParent(plan.movedId, plan.newParentId);
+    }
+    if (plan.orderChanged) {
+      reportDragStep("persist", "order");
+      void persistSessionOrder(plan.nextOrder);
+    }
+  }
+
   async function persistSessionOrder(sessionIds: string[]): Promise<void> {
     try {
       const res = await authedFetch("/api/sessions/order", {
@@ -30012,17 +30047,20 @@ function AuthenticatedApp() {
                   key={s.id}
                   data-session-id={s.id}
                   data-depth={depth}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${depth > 0 ? " is-nested" : ""}${depth > 0 && isLastChild ? " is-nested-last" : ""}${sessionDrag.draggingSessionId === s.id ? " is-dragging" : ""}${sessionDrag.dragOverSessionId === s.id && sessionDrag.draggingSessionId !== s.id ? ` is-drag-over is-drag-${sessionDrag.dragIntent ?? "nest"}` : ""}`}
-                  draggable={!isClosing && !rowReadOnly && canDragSessions}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${depth > 0 ? " is-nested" : ""}${depth > 0 && isLastChild ? " is-nested-last" : ""}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  draggable={!isClosing && !rowReadOnly && !isCompact}
                   onMouseDown={() =>
                     reportDragStep(
                       "mousedown",
-                      !isClosing && !rowReadOnly && canDragSessions
+                      !isClosing && !rowReadOnly && !isCompact
                         ? "draggable"
                         : "blocked",
                     )
                   }
-                  {...sessionDrag.rowHandlers(s.id)}
+                  onDragStart={(e) => dragSessionStart(s.id, e)}
+                  onDragOver={(e) => dragSessionOver(s.id, e)}
+                  onDrop={(e) => dropSession(s.id, e)}
+                  onDragEnd={dragSessionEnd}
                   onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={
                     sidebarCollapsed ? `${s.name} (${statusLabel})` : undefined

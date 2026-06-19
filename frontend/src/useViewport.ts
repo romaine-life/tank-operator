@@ -52,28 +52,3 @@ export function useViewport(): Viewport {
   const isPhone = useSyncExternalStore(subscribePhone, readPhone, serverFalse);
   return { isCompact, isPhone };
 }
-
-// Input-capability primitive, distinct from viewport WIDTH. `(any-pointer: fine)`
-// is true whenever the device has a mouse-like (fine) pointer available — a
-// desktop, a laptop trackpad, a 2-in-1 with a trackpad — and false only for
-// pointer-coarse-only devices (phones, touch tablets). Drag-to-reorder is gated
-// on THIS, not on isCompact: a narrow desktop window, a side-docked DevTools, or
-// a zoomed page is still a fine-pointer device where HTML5 mouse-drag works and
-// must keep the gesture. This is the real "no dead gesture on touch" boundary
-// (Session Bar contract) — the input device, not the window size. Defaults to
-// true when matchMedia is unavailable (SSR/node tests): drag is desktop-first.
-const MQ_FINE_POINTER = "(any-pointer: fine)";
-function readFinePointer(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return true;
-  }
-  return window.matchMedia(MQ_FINE_POINTER).matches;
-}
-const subscribeFinePointer = (onChange: () => void) =>
-  subscribeMatch(MQ_FINE_POINTER, onChange);
-const serverTrue = () => true;
-
-/** True when a mouse-like (fine) pointer is available; gates mouse-drag UIs. */
-export function useFinePointer(): boolean {
-  return useSyncExternalStore(subscribeFinePointer, readFinePointer, serverTrue);
-}

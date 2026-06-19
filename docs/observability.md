@@ -593,6 +593,18 @@ All metric names are prefixed `tank_`. The full namespace:
   is a guard refusal (self-parent, cycle, or missing/cross-scope target → 400 so
   the durable tree stays acyclic and one tier); a rising `error` rate is a
   durable-write/republish failure worth alerting on.
+- `tank_session_drag_step_total{step,detail}` — the browser drag *gesture*
+  lifecycle, beaconed per step (`POST /api/client-metrics/session-drag-step`).
+  `step` is `mousedown|dragstart|dragover|drop|persist` (else `other`); `detail`
+  is a small per-step enum — `draggable|blocked` (was the pressed row draggable),
+  `nest|reorder_before|reorder_after|noplan` (drop zone or bail), `order|parent`
+  (which write fired), else `other`; bounded. This is the no-DevTools diagnosis
+  for a "click-and-drag is broken" report: the *last* step with a count localizes
+  the break — a press that never reaches `dragstart` means native drag is blocked,
+  `dragstart` without `dragover`/`drop` means the drag was cancelled before the
+  row became a drop target (the exact signature of the reverted `useSessionDrag`
+  hook), and `drop` without `persist` means the handler bailed (no plan / no
+  signed-in user).
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   `PROXY_PROVIDER`.
   `tank_api_proxy_upstream_status_total{provider,status_class}` buckets every

@@ -406,27 +406,31 @@ Named behaviors in the session-bar surface. See
   This is the manual counterpart to spawn-driven nesting — organization the user
   controls, not lineage.
 - **Gesture / zones:** `frontend/src/dragNest.ts` is the DOM-free decision layer
-  (`dropIntentForRow`, `placeSessionRelative`). The drag *orchestration* — state +
-  per-row DOM handlers + the `planSessionDrop` decision — lives in
-  `frontend/src/sessionDrag.ts` (`useSessionDrag`), extracted from App so the
-  event→decision→persist flow is tested (`sessionDrag.test.tsx` fires real
-  `dragstart/dragover/drop`), not buried untested inline. `dropIntentForRow` maps
-  the pointer to `reorder-before | reorder-after | nest` (top/bottom
-  `NEST_EDGE_FRACTION`=0.25 reorder, middle nests), recomputed from the drop
-  position (not stale hover state). Rows render the live affordance via
-  `is-drag-nest` (row glows) or `is-drag-reorder-before/after` (edge insertion
-  line) in `index.css`.
-- **Drag gate — pointer capability, not viewport width.** Rows are `draggable`
-  only when `canDragSessions` = `useFinePointer()` (`(any-pointer: fine)`), i.e.
-  the device has a mouse-like pointer — true on any desktop/laptop including a
-  *narrow window, a side-docked DevTools, or a zoomed page*, false only on
-  coarse-pointer-only touch devices. This replaced the prior `!isCompact`
-  (≤768px width) gate, which conflated "narrow viewport" with "touch device" and
-  silently killed mouse-drag whenever the window dropped below 768px (e.g. with
-  DevTools docked) — a real "the click-and-drag is broken" report. The
-  "no dead gesture on touch" boundary is preserved (touch = coarse pointer = no
-  drag) and pinned by `mobileShell.test.ts`. `isCompact` still drives the shell
-  layout; only the drag gate moved to the pointer primitive.
+  (`dropIntentForRow`, `placeSessionRelative`) and `frontend/src/sessionDrag.ts`
+  holds the pure `planSessionDrop` decision (current rows + moved + target + zone
+  → durable order permutation + parent edge, or null for a no-op). Both are
+  unit-tested (`dragNest.test.ts`, `sessionDrag.test.tsx`). The DOM gesture itself
+  — `dragSessionStart/Over/End` + `dropSession` — stays **inline in App** as the
+  minimal, known-good handlers: `dragover` only `preventDefault`s to enable the
+  drop, and the nest-vs-reorder choice is made **at drop time**, not previewed
+  during hover. On release, `dropIntentForRow` maps the pointer-Y within the
+  target row to `reorder-before | reorder-after | nest` (top/bottom
+  `NEST_EDGE_FRACTION`=0.25 reorder, middle nests) and `planSessionDrop` turns it
+  into the two writes below. The live affordance is the single `is-drag-over`
+  drop-target highlight (`index.css`); the gesture is verified in production via
+  `tank_session_drag_step_total` (below), not a DOM integration test that can't
+  reproduce real-browser native drag.
+- **Drag gate — desktop-only via `isCompact`.** Rows are `draggable` only when
+  `!isClosing && !rowReadOnly && !isCompact`: drag-reorder/nest is a desktop
+  sidebar gesture, disabled on compact (touch/phone) viewports and for
+  read-only/hidden rows. `mobileShell.test.ts` pins this exact expression. This is
+  the original, working gate. **History (settled — do not reintroduce):** chasing
+  a misdiagnosed "click-and-drag is broken" report, this gate was briefly swapped
+  to a `useFinePointer()` pointer-capability primitive and the handlers to a
+  `useSessionDrag` hook; that rewrite *cancelled the native drag* (telemetry
+  showed `dragstart` firing but `dragover` never), while the only real bug was the
+  SQL 500 on release (below). Both were reverted to this baseline and the
+  fine-pointer path is kept out by `mobileShell.test.ts`.
 - **Durable model — two single-purpose writes, orchestrated per drop:**
   - **Reorder** persists the complete visible permutation to
     `sessions.sidebar_position` via `PUT /api/sessions/order`
@@ -460,7 +464,11 @@ Named behaviors in the session-bar surface. See
   `parent_session_id`; the parent-side `spawned_sessions` chip JSONB keeps its
   agent-spawn semantics. The two relationships stay independent.
 - **Observability:** `tank_session_reorder_total{result=ok|conflict|error}` and
-  `tank_session_nest_update_total{action=nest|unnest,result=ok|rejected|error}`.
+  `tank_session_nest_update_total{action=nest|unnest,result=ok|rejected|error}`
+  cover the writes; `tank_session_drag_step_total{step,detail}` traces the browser
+  gesture itself (`mousedown → dragstart → dragover → drop → persist`) so a "drag
+  is broken" report is diagnosable from the metric with no DevTools — it was this
+  counter that exposed the hook rewrite's drag dying right after `dragstart`.
   `conflict` is the benign stale-permutation rejection the SPA reconciles;
   `rejected` is a guard refusal; `error` is a durable-write failure — the
   user-trust signals that the original 500 lacked (it was only visible via the
@@ -469,9 +477,12 @@ Named behaviors in the session-bar surface. See
   parent locally, then persists; on any non-409 failure it surfaces a friendly
   message and `refresh()`-reconciles from the authoritative snapshot. A 409 stale
   reorder reconciles silently.
-- **Tests:** `dragNest.test.ts` (zone math + relative placement), DSN-gated
-  `Store.Reorder` / `Store.SetParentSession` round-trips, hermetic
-  `handleSetSessionParent` guard matrix (nest/un-nest/self/cycle/missing/404).
+- **Tests:** `dragNest.test.ts` (zone math + relative placement),
+  `sessionDrag.test.tsx` (`planSessionDrop`: nest / reorder / un-nest / no-op),
+  `mobileShell.test.ts` (the desktop-only `!isCompact` drag gate; fine-pointer
+  path stays out), DSN-gated `Store.Reorder` / `Store.SetParentSession`
+  round-trips, and the hermetic `handleSetSessionParent` guard matrix
+  (nest/un-nest/self/cycle/missing/404).
 - **Non-goal:** no second indent tier (durable lineage may go deeper but renders
   clamped), no fine within-group ordering beyond `sidebar_position`, no
   cross-scope nesting.

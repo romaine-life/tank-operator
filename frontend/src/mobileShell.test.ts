@@ -45,25 +45,27 @@ test("desktop sidebar is constrained so long session lists scroll internally", (
 test("the shell wires the compact drawer, top bar, and desktop-only gate", () => {
   // The load-bearing pieces of the compact triage shell. A change that removes
   // one without a deliberate replacement should fail here.
-  expect(appSource.includes('import { useFinePointer, useViewport } from "./useViewport";')).toBeTruthy();
+  expect(appSource.includes('import { useViewport } from "./useViewport";')).toBeTruthy();
   expect(appSource.includes("<MobileTopBar")).toBeTruthy();
   expect(appSource.includes("<Sheet open={navDrawerOpen}")).toBeTruthy();
   expect(appSource.includes("<DesktopOnly")).toBeTruthy();
 });
 
-test("reorder-by-drag follows pointer capability, not viewport width (no dead gesture on touch)", () => {
+test("session-row drag is the minimal known-good gesture: desktop-only, read-only rows excluded", () => {
   expect(appSource.includes(
           "const rowReadOnly = readOnlySessionView || s.read_only_hidden === true;",
-        ), "session rows must include read-only hidden rows in the read-only guard").toBeTruthy();
-  // Drag is gated on a fine (mouse-like) pointer, NOT isCompact. A narrow desktop
-  // window or a side-docked DevTools is pointer-fine and must keep the gesture;
-  // a touch device (coarse pointer) gets no dead drag. Gating on width (≤768px)
-  // wrongly killed mouse-drag in those desktop cases. See useFinePointer.
+        ), "session rows must fold read-only + hidden rows into one drag guard").toBeTruthy();
+  // Drag-reorder/nest is a desktop sidebar gesture, gated off on compact
+  // (touch/phone) viewports via isCompact. This is deliberately width-based and
+  // byte-for-byte the gate that works — NOT a bespoke pointer-capability
+  // primitive: that `canDragSessions = useFinePointer()` rewrite cancelled the
+  // native drag (dragstart fired, dragover never did). This guard pins the
+  // working expression so the broken pointer gate can't creep back.
   expect(appSource.includes(
-          "draggable={!isClosing && !rowReadOnly && canDragSessions}",
-        ), "session rows must gate drag on fine-pointer capability, not width").toBeTruthy();
-  expect(appSource.includes("const canDragSessions = useFinePointer();"),
-    "the drag gate must derive from the fine-pointer capability primitive").toBeTruthy();
+          "draggable={!isClosing && !rowReadOnly && !isCompact}",
+        ), "session rows gate drag on !isCompact (desktop-only), not a pointer primitive").toBeTruthy();
+  expect(appSource.includes("useFinePointer"),
+    "the reverted fine-pointer drag gate must stay out of App").toBe(false);
 });
 
 test("compact nav drawer keeps the session delete affordance visible, not hover-only", () => {
