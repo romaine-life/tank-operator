@@ -146,6 +146,7 @@ import {
   GitPullRequestIcon,
   GlobeIcon,
   ImageIcon,
+  IndentDecreaseIcon,
   InfoIcon,
   LinkIcon,
   ListChecksIcon,
@@ -348,6 +349,11 @@ import {
   type SessionRow,
 } from "./sessionStore";
 import { arrangeSessionTree } from "./sessionTree";
+import {
+  dropIntentForRow,
+  placeSessionRelative,
+  type DragIntentKind,
+} from "./dragNest";
 import {
   decideFollowupSubmit,
   describeRunBlock,
@@ -1630,21 +1636,6 @@ function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
     if (bRank == null) return -1;
     return aRank - bRank;
   });
-}
-
-function moveSessionId(
-  order: string[],
-  movedId: string,
-  targetId: string,
-): string[] {
-  if (movedId === targetId) return order;
-  const fromIndex = order.indexOf(movedId);
-  const toIndex = order.indexOf(targetId);
-  if (fromIndex < 0 || toIndex < 0) return order;
-  const next = [...order];
-  const [moved] = next.splice(fromIndex, 1);
-  next.splice(toIndex, 0, moved);
-  return next;
 }
 
 const SDK_TIMELINE_TAIL_ROWS = 24;
@@ -9790,14 +9781,18 @@ function SessionTabMenu({
   session,
   isClosing,
   readOnly,
+  nested,
   onClose,
+  onUnnest,
   onSaveCredentials,
   saveDisabled,
 }: {
   session: Session;
   isClosing: boolean;
   readOnly: boolean;
+  nested?: boolean;
   onClose: () => void;
+  onUnnest?: () => void;
   onSaveCredentials?: () => void;
   saveDisabled?: boolean;
 }) {
@@ -9850,6 +9845,16 @@ function SessionTabMenu({
           >
             <SaveIcon className="run-tab-more-item-icon" />
             <span>Save credentials</span>
+          </DropdownMenuItem>
+        )}
+        {nested && onUnnest && (
+          <DropdownMenuItem
+            className="run-tab-more-item"
+            onSelect={onUnnest}
+            title="move this session out of its group"
+          >
+            <IndentDecreaseIcon className="run-tab-more-item-icon" />
+            <span>Un-nest</span>
           </DropdownMenuItem>
         )}
         <DropdownMenuItem
@@ -26567,6 +26572,10 @@ function AuthenticatedApp() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(
     null,
   );
+  // Which zone of the hovered row the drag is over: nest (middle band) vs
+  // reorder before/after (edge bands). Drives the row's drop affordance and the
+  // drop's nest-vs-reorder branch. See dragNest.ts.
+  const [dragIntent, setDragIntent] = useState<DragIntentKind | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
@@ -28579,7 +28588,11 @@ function AuthenticatedApp() {
     if (!draggingSessionId || draggingSessionId === id) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+    // The pointer's position within the row decides the affordance: middle band
+    // = nest under this row, top/bottom edge = reorder before/after it.
+    const rect = event.currentTarget.getBoundingClientRect();
     setDragOverSessionId(id);
+    setDragIntent(dropIntentForRow(event.clientY, rect.top, rect.height));
   }
 
   async function persistSessionOrder(sessionIds: string[]): Promise<void> {
@@ -28589,51 +28602,131 @@ function AuthenticatedApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_ids: sessionIds }),
       });
-      if (!res.ok) {
-        throw new Error(`session order update failed: ${res.status}`);
+      if (res.ok) return;
+      // 409 is a benign stale-order conflict — another tab or a freshly spawned
+      // child changed the visible set out from under this drag. Reconcile
+      // silently from the authoritative snapshot rather than alarming the user
+      // with a raw status code (the old behavior showed "...failed: 500"/409).
+      if (res.status !== 409) {
+        setError("Couldn't save the new session order — reverting to the saved order.");
       }
-    } catch (e) {
-      setError(String(e));
+      void refresh();
+    } catch {
+      setError("Couldn't save the new session order — reverting to the saved order.");
+      void refresh();
+    }
+  }
+
+  async function persistSessionParent(
+    id: string,
+    parentId: string | null,
+  ): Promise<void> {
+    try {
+      const res = await authedFetch(`/api/sessions/${id}/parent`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parent_session_id: parentId }),
+      });
+      if (res.ok) return;
+      setError("Couldn't update the session nesting — reverting.");
+      void refresh();
+    } catch {
+      setError("Couldn't update the session nesting — reverting.");
       void refresh();
     }
   }
 
   function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
     event.preventDefault();
-    if (readOnlySessionView) return;
+    // Recompute the zone from the drop position so the decision never rides on
+    // possibly-stale hover state: middle band nests, edge bands reorder.
+    const rect = event.currentTarget.getBoundingClientRect();
+    const intent = dropIntentForRow(event.clientY, rect.top, rect.height);
     const movedId =
       event.dataTransfer.getData("text/plain") || draggingSessionId;
-    setDraggingSessionId(null);
-    setDragOverSessionId(null);
-    if (!movedId || movedId === id || !user) return;
+    dragSessionEnd();
+    if (readOnlySessionView || !movedId || movedId === id || !user) return;
 
-    // Drag operates on the order the user actually sees — children grouped
-    // under their origin — not the raw recency sort. A freshly spawned child
-    // sorts to the top by recency but renders nested at the bottom, so moving a
-    // row relative to the raw order would land it somewhere the user did not
-    // aim. Hidden rows aren't draggable; keep them after the visible order so
-    // the permutation still covers every row (applyLocalOrder requires the
-    // complete set). Persisting the arranged order also converges the durable
-    // sidebar_position toward what is shown, so the two stop diverging.
-    const visibleOrder = arrangeSessionTree(
+    // Operate on the order the user actually sees — children grouped under their
+    // origin — so a move lands where it was aimed. Hidden (admin read-only) rows
+    // aren't draggable; keep them after the visible order so the permutation
+    // still covers every row (applyLocalOrder requires the complete set).
+    const arranged = arrangeSessionTree(
       sessions.filter((session) => session.read_only_hidden !== true),
-    ).map((arranged) => arranged.session.id);
+    );
+    const targetArranged = arranged.find((a) => a.session.id === id);
+    const movedArranged = arranged.find((a) => a.session.id === movedId);
+    if (!targetArranged || !movedArranged) return;
+
+    // The drop zone decides the moved row's new parent:
+    //  - nest: under the target's group. Store the literal target as the parent;
+    //    arrangeSessionTree clamps deeper lineage to one tier, exactly as it does
+    //    for an agent sub-session that spawns its own children.
+    //  - reorder: join the target's level — the target's own parent, which is
+    //    null at the top level, so reordering a child up beside a root un-nests
+    //    it. The backend re-validates (self/cycle/cross-scope) before persisting.
+    const newParentId: string | null =
+      intent === "nest" ? id : targetArranged.parentId;
+    const prevParentId = movedArranged.parentId;
+    const parentChanged = newParentId !== prevParentId;
+
+    const visibleOrder = arranged.map((a) => a.session.id);
     const hiddenOrder = sessions
       .filter((session) => session.read_only_hidden === true)
       .map((session) => session.id);
     const currentOrder = [...visibleOrder, ...hiddenOrder];
-    const next = moveSessionId(currentOrder, movedId, id);
-    if (next === currentOrder) return;
-    sessionStoreRef.current.applyLocalOrder(next);
-    const ordered = orderSessionsByIds(sessions, next);
+    const nextOrder = placeSessionRelative(
+      currentOrder,
+      movedId,
+      id,
+      intent === "reorder-before",
+    );
+    if (!parentChanged && nextOrder === currentOrder) return;
+
+    // Optimistic: reflect the new parent + order locally so the sidebar updates
+    // immediately; the durable writes and the row-update SSE reconcile (or
+    // revert on failure). applyLocalOrder owns the optimistic sidebar_position.
+    const withParent = parentChanged
+      ? sessions.map((session) =>
+          session.id === movedId
+            ? // The local row type omits the pointer when absent (the wire's
+              // omitempty shape); null-to-root maps to undefined here, while the
+              // durable write below still sends null to clear it.
+              { ...session, parent_session_id: newParentId ?? undefined }
+            : session,
+        )
+      : sessions;
+    sessionStoreRef.current.applyLocalOrder(nextOrder);
+    const ordered = orderSessionsByIds(withParent, nextOrder);
     setSessions(ordered);
     sessionsRef.current = ordered;
-    void persistSessionOrder(next);
+
+    if (parentChanged) {
+      void persistSessionParent(movedId, newParentId);
+    }
+    void persistSessionOrder(nextOrder);
   }
 
   function dragSessionEnd() {
     setDraggingSessionId(null);
     setDragOverSessionId(null);
+    setDragIntent(null);
+  }
+
+  // unnestSession is the "…" menu's explicit, unambiguous inverse of drag-to-nest
+  // (dragging a child out to a root slot also un-nests, but the menu item is the
+  // discoverable path). It clears the durable parent pointer; the row returns to
+  // the top level on the next arrangeSessionTree pass.
+  function unnestSession(id: string) {
+    if (readOnlySessionView) return;
+    const updated = sessions.map((session) =>
+      session.id === id
+        ? { ...session, parent_session_id: undefined }
+        : session,
+    );
+    setSessions(updated);
+    sessionsRef.current = updated;
+    void persistSessionParent(id, null);
   }
 
   async function markCreatedSessionTestState(id: string): Promise<void> {
@@ -29639,7 +29732,7 @@ function AuthenticatedApp() {
                   key={s.id}
                   data-session-id={s.id}
                   data-depth={depth}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${depth > 0 ? " is-nested" : ""}${depth > 0 && isLastChild ? " is-nested-last" : ""}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${depth > 0 ? " is-nested" : ""}${depth > 0 && isLastChild ? " is-nested-last" : ""}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? ` is-drag-over is-drag-${dragIntent ?? "nest"}` : ""}`}
                   draggable={!isClosing && !rowReadOnly && !isCompact}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
@@ -29674,7 +29767,9 @@ function AuthenticatedApp() {
                       session={s}
                       isClosing={isClosing}
                       readOnly={rowReadOnly}
+                      nested={depth > 0}
                       onClose={() => deleteSession(s.id)}
+                      onUnnest={() => unnestSession(s.id)}
                       onSaveCredentials={
                         CONFIG_MODES.has(s.mode)
                           ? () => saveCredentials(s.id)

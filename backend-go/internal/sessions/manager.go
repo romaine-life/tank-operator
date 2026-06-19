@@ -60,6 +60,7 @@ type SessionRegistry interface {
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
 	AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
+	SetParentSession(ctx context.Context, email, sessionID, parentID string) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
@@ -956,6 +957,100 @@ func (m *Manager) ReorderSessions(ctx context.Context, owner string, orderedIDs 
 		m.publishRow(ctx, owner, id)
 	}
 	return nil
+}
+
+// SetParentSession sets or clears a session's durable parent_session_id — the
+// child→parent edge the sidebar nests on (see arrangeSessionTree and
+// docs/features/session-bar/capabilities.md). This is the explicit user-driven
+// mutation behind drag-to-nest and the "Un-nest" menu action; it is distinct
+// from the write-once stamp Create applies for agent-spawned children. An empty
+// parentID clears nesting (un-nest) and returns the row to the top level.
+//
+// The durable tree is kept acyclic on write even though the renderer tolerates
+// cycles: the parent must be a different, owner-visible, same-scope session, and
+// the session being nested must not appear in the parent's ancestor chain. Depth
+// is deliberately NOT clamped here — the stored edge stays the literal direct
+// parent, and arrangeSessionTree clamps deeper lineage to a single tier exactly
+// as it already does for an agent sub-session that spawns its own children. The
+// parent-side spawned_sessions chip is untouched; manual nesting is organization,
+// not spawn lineage.
+func (m *Manager) SetParentSession(ctx context.Context, owner, sessionID, parentID string) (Info, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	parentID = strings.TrimSpace(parentID)
+	if sessionID == "" {
+		return Info{}, ErrNotFound
+	}
+	// The child must exist, be owned, and be sidebar-visible.
+	if _, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err != nil {
+		return Info{}, err
+	}
+	if parentID != "" {
+		if parentID == sessionID {
+			return Info{}, ErrInvalidParent
+		}
+		// The parent must be a visible, owned, same-scope session. A cross-scope
+		// or missing target simply isn't found within this owner/scope and is
+		// rejected rather than persisted as a dangling edge.
+		if _, err := m.GetRegisteredByOwner(ctx, owner, parentID); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return Info{}, ErrInvalidParent
+			}
+			return Info{}, err
+		}
+		cyclic, err := m.parentChainContains(ctx, owner, parentID, sessionID)
+		if err != nil {
+			return Info{}, err
+		}
+		if cyclic {
+			return Info{}, ErrInvalidParent
+		}
+	}
+	if m.registry != nil {
+		if regErr := m.registry.SetParentSession(ctx, owner, sessionID, parentID); regErr != nil {
+			return Info{}, regErr
+		}
+	}
+	// Republish so every open session list converges on the new nesting over the
+	// row-update stream without a manual refresh (session-bar contract).
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// parentChainContains walks upward from startID following parent_session_id and
+// reports whether targetID appears in the chain. Used to reject a manual nest
+// that would close a cycle. Durable lineage is at most a couple of hops, and a
+// visited set defends against any pre-existing cyclic data so the walk always
+// terminates. Stub registries without a getter cannot walk and conservatively
+// report no cycle (they have no durable graph to corrupt).
+func (m *Manager) parentChainContains(ctx context.Context, owner, startID, targetID string) (bool, error) {
+	getter, ok := m.registry.(sessionRegistryGetter)
+	if !ok {
+		return false, nil
+	}
+	visited := map[string]struct{}{}
+	cur := strings.TrimSpace(startID)
+	for cur != "" {
+		if cur == targetID {
+			return true, nil
+		}
+		if _, seen := visited[cur]; seen {
+			return false, nil
+		}
+		visited[cur] = struct{}{}
+		record, found, err := getter.Get(ctx, owner, cur)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, nil
+		}
+		cur = strings.TrimSpace(record.ParentSessionID)
+	}
+	return false, nil
 }
 
 func (m *Manager) patchStateAnnotations(

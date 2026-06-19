@@ -27,6 +27,11 @@ const (
 var (
 	ErrNotFound = errors.New("session not found")
 	ErrNotOwned = errors.New("session not owned")
+	// ErrInvalidParent rejects a manual drag-to-nest whose target parent is
+	// missing, cross-scope, the session itself, or would close a cycle. It keeps
+	// the durable parent_session_id tree acyclic even though the renderer
+	// tolerates cycles. Maps to HTTP 400.
+	ErrInvalidParent = errors.New("invalid parent session")
 )
 
 type Info struct {
