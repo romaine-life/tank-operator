@@ -7350,11 +7350,10 @@ function groupTranscriptEntries(
             activityHiddenEntryIds.add(id);
           const needsInput = turnActivityGroupNeedsInput(group);
           if (needsInput) {
-            // Surface the pending question inline in the main transcript: emit
-            // the activity group so RunTurnActivityGroup renders the question
-            // widget beneath the agent's preamble, instead of an "Answer
-            // requested" pointer the reader has to follow into the Turns view.
-            groups.push(group);
+            // The pending question renders inline on the ASKING turn's question
+            // message (see RunInlineAskUserQuestion in RunMessages), so the
+            // synthetic question turn is not shown as its own block in chat — it
+            // remains only the home for Q2+ pages in the Turns view.
           } else if (
             group.active &&
             !insertedThinkingTurnIds.has(group.turnId)
@@ -12369,9 +12368,14 @@ function emptyAskUserQuestionDraft(): AskUserQuestionDraft {
 function RunAwaitingInputCard({
   entry,
   questionNavigation,
+  firstQuestionOnly = false,
 }: {
   entry: TranscriptEntry;
   questionNavigation?: QuestionPageNavigation;
+  // Inline-on-the-asking-turn rendering: the asking turn's question message
+  // carries the whole set, but only Q1 belongs inline (Q2+ live on dedicated
+  // pages). When set, the card shows just the first question.
+  firstQuestionOnly?: boolean;
 }) {
   const { submitAnswer, askUserQuestionDrafts, setAskUserQuestionDraft } =
     useContext(RunContext);
@@ -12403,11 +12407,13 @@ function RunAwaitingInputCard({
     { planApproval },
   );
   const visibleQuestionIndex =
-    aw?.questionIndex &&
-    aw.questionIndex >= 1 &&
-    aw.questionIndex <= questions.length
-      ? aw.questionIndex - 1
-      : null;
+    firstQuestionOnly && questions.length > 0
+      ? 0
+      : aw?.questionIndex &&
+          aw.questionIndex >= 1 &&
+          aw.questionIndex <= questions.length
+        ? aw.questionIndex - 1
+        : null;
   const visibleQuestions =
     visibleQuestionIndex == null
       ? questions
@@ -12760,6 +12766,53 @@ function RunAwaitingInputCard({
         </div>
       )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
+    </div>
+  );
+}
+
+// A pending AskUserQuestion the main transcript should render inline: the asking
+// turn's derived question message (assistant, carries awaitingInput). The whole
+// set rides on this one message; only Q1 renders inline (Q2+ on dedicated pages),
+// and the run composer is the answer surface.
+function isPendingInlineQuestionEntry(entry: TranscriptEntry): boolean {
+  const aw = entry.awaitingInput;
+  return Boolean(
+    entry.kind === "message" &&
+      entry.role === "assistant" &&
+      aw &&
+      Array.isArray(aw.questions) &&
+      aw.questions.length > 0,
+  );
+}
+
+// RunInlineAskUserQuestion renders the question widget inline on the asking turn,
+// in place of the derived "summary" question message. It frames the card as the
+// agent's message (avatar gutter + content column) so it reads as a continuation
+// of the agent's preamble directly above it.
+function RunInlineAskUserQuestion({
+  entry,
+  avatar,
+}: {
+  entry: TranscriptEntry;
+  avatar: AgentAvatar | null;
+}) {
+  return (
+    <div
+      className="run-transcript-message run-inline-question"
+      data-slot="message"
+      data-variant="assistant"
+      data-role="assistant"
+      data-kind="inline-question"
+    >
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <RunAwaitingInputCard entry={entry} firstQuestionOnly />
+      </div>
     </div>
   );
 }
@@ -14495,27 +14548,6 @@ function RunTurnActivityGroup({
   // Always-present pager state: a single-page turn renders a disabled
   // "page 1 of 1" rather than vanishing, so the affordance never looks absent.
   const pagerState = turnActivityPagerState(pageInfo);
-  // Inline question surface: the pending question's widget renders directly in
-  // the main transcript beneath the agent's preamble. The single-question case
-  // (the common one) is fully inline; for a multi-question set only Q1 is inline
-  // and Q2+ stay on their dedicated pages, so the inline card never flips in
-  // place — advancing leaves this surface for the Turns view.
-  const inlineQuestionEntry = useMemo(() => {
-    if (!needsInput) return null;
-    if (pageInfo && pageInfo.kind === "question") {
-      const count = pageInfo.questionCount ?? 1;
-      const index = pageInfo.questionIndex ?? 1;
-      if (count > 1 && index !== 1) return null;
-    }
-    return (
-      group.entries.find(
-        (entry) =>
-          entry.metaKind === "awaiting_input" &&
-          entry.awaitingInput &&
-          !(entry.awaitingInput.answered || entry.awaitingInput.dismissed),
-      ) ?? null
-    );
-  }, [group.entries, needsInput, pageInfo]);
   return (
     <div
       className="run-turn-activity"
@@ -14599,11 +14631,6 @@ function RunTurnActivityGroup({
                 )}
               </span>
             </button>
-            {inlineQuestionEntry && (
-              <div className="run-turn-activity-question">
-                <RunAwaitingInputCard entry={inlineQuestionEntry} />
-              </div>
-            )}
             {open && (
               <div className="run-turn-activity-body">
                 {onSelectPage && (
@@ -14667,11 +14694,6 @@ function RunTurnActivityGroup({
                     }
                     if (child.kind === "meta") {
                       if (child.entry.metaKind === "awaiting_input") {
-                        // The pending question renders inline above the activity
-                        // body; don't duplicate it inside the expanded body.
-                        if (inlineQuestionEntry?.id === child.entry.id) {
-                          return null;
-                        }
                         return (
                           <RunAwaitingInputCard
                             key={child.entry.id}
@@ -16240,6 +16262,11 @@ export function RunMessages({
             }
           />
         );
+      }
+      if (g.kind === "message" && isPendingInlineQuestionEntry(g.entry)) {
+        // The agent's pending question renders inline here as the widget,
+        // replacing the derived "summary" question message on the asking turn.
+        return <RunInlineAskUserQuestion entry={g.entry} avatar={avatar} />;
       }
       return (
         <RunMessageBubble

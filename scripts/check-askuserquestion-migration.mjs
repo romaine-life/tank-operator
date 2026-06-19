@@ -381,18 +381,18 @@ const required = [
   },
   {
     file: "frontend/src/App.tsx",
-    name: "pending question is resolved as an inline entry",
-    pattern: /const inlineQuestionEntry/,
+    name: "pending question is detected on the asking turn's question message",
+    pattern: /function isPendingInlineQuestionEntry/,
   },
   {
     file: "frontend/src/App.tsx",
-    name: "inline question widget renders in the main transcript",
-    pattern: /run-turn-activity-question/,
+    name: "question widget renders inline on the asking turn",
+    pattern: /RunInlineAskUserQuestion/,
   },
   {
     file: "frontend/src/App.tsx",
-    name: "needs_input activity group is emitted inline (not condensed to a pointer)",
-    pattern: /if \(needsInput\) \{[\s\S]{0,400}groups\.push\(group\)/,
+    name: "inline asking-turn card shows only the first question",
+    pattern: /firstQuestionOnly/,
   },
   {
     file: "backend-go/cmd/tank-operator/turn_pages.go",

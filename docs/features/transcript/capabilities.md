@@ -722,15 +722,14 @@ one semantic `question_set` page per question in the set. Those adjacent pages c
 letting the Turns UI label the set and provide previous/next question shortcuts
 without creating a third navigation system. If the agent asks immediately, that
 first activity page is marker-only by design: it preserves the ledger handoff
-without squeezing the question UI into activity history. The main transcript
-renders the derived assistant question message so the user sees the agent's
-question at the same conversation level as a normal final answer, and the
-pending question's interactive widget renders **inline beneath it** in the main
-transcript: the question turn's activity group is emitted inline (rather than
-condensed to an "Answer requested" pointer), and the run composer is the answer
-input. The single-question case is fully inline. For a multi-question set, Q1 is
-inline and Q2+ stay on their dedicated question pages; advancing past Q1 leaves
-the inline surface for the Turns view rather than flipping the inline card in
+without squeezing the question UI into activity history. On the asking turn, the
+pending question's interactive widget renders **inline in the main transcript**,
+in place of the derived "summary" question message and beneath the agent's
+preamble (RunInlineAskUserQuestion), with the run composer as the answer input.
+The synthetic question turn is not shown as its own block in chat. The
+single-question case is fully inline. For a multi-question set, only Q1 is inline
+and Q2+ stay on their dedicated question pages; advancing past Q1 leaves the
+inline surface for the Turns view rather than flipping the inline card in
 place. The card reflects durable state rather than local React optimism, so a
 fresh tab renders the same question set and defaults to it while the turn is
 still waiting for input. There is no navigate-to-the-question-turn shortcut
@@ -765,12 +764,13 @@ Affected contracts:
 
 Contract impact:
 - The question page is a Turn activity projection of durable
-  `turn.awaiting_input`; it is not a second ledger. The main transcript uses
-  the derived `assistant_message.created` question message as the assistant
-  handoff and renders the pending question's interactive widget inline beneath
-  it (the question turn's activity group is emitted inline), answered through the
-  composer — never a standalone navigate-to-Turns question-button row. For a
-  multi-question set, Q1 is inline and Q2+ stay on their dedicated pages.
+  `turn.awaiting_input`; it is not a second ledger. On the asking turn the main
+  transcript renders the derived `assistant_message.created` question message AS
+  the interactive widget inline (RunInlineAskUserQuestion replaces the summary
+  message body with the card), answered through the composer — never a standalone
+  navigate-to-Turns question-button row, and the synthetic question turn is not
+  shown as its own block in chat. For a multi-question set, Q1 is inline and Q2+
+  stay on their dedicated pages.
 - The preceding activity page receives a compact `AskUserQuestion` tool marker
   derived from the same durable `turn.awaiting_input` event. It is an audit
   marker for the invocation, not the answer surface and not a dependency on
@@ -836,25 +836,23 @@ Evidence:
   proves the asking turn's triggering prompt is projected as the question turn's
   `turnContextContinued` context without adding a page or changing event counts.
 - Frontend: `frontend/src/migrationPolicy.test.ts` proves the pending question's
-  widget renders inline in the main transcript (`inlineQuestionEntry` +
-  `run-turn-activity-question`, the needs_input activity group pushed inline),
-  that the retired navigate-to-Turns shortcuts are gone (the assistant-message
-  answer button, the tool-row "Open question page" button, and their helpers),
-  and that Q2+ pages carry the "Question prompt continued from previous turn"
-  header. The migration guard `scripts/check-askuserquestion-migration.mjs`
-  forbids the retired shortcuts and requires the inline-question + continued-
-  prompt path. Visual: `frontend/src/styleguide/question-heading.tsx`
+  widget renders inline on the asking turn (`isPendingInlineQuestionEntry` +
+  `RunInlineAskUserQuestion`, the card shown `firstQuestionOnly`), that the
+  synthetic needs_input turn is not pushed as its own chat block
+  (`groups.push(group)` absent), that the retired navigate-to-Turns shortcuts are
+  gone (the assistant-message answer button, the tool-row "Open question page"
+  button, and their helpers), and that Q2+ pages carry the "Question prompt
+  continued from previous turn" header. The migration guard
+  `scripts/check-askuserquestion-migration.mjs` forbids the retired shortcuts and
+  requires the inline-on-asking-turn + continued-prompt path. It also pins the
+  question heading as a `data-variant="system"` `RunQuestionHeadingMessage` frame
+  while retiring the orphaned `run-turn-question-page-head` banner.
+  `frontend/src/composerCss.test.ts` keeps the retired pinned-head CSS rule from
+  reappearing. Visual: `frontend/src/styleguide/question-heading.tsx`
   (`/_styleguide/question-heading`) renders the inline question surface and the
   continued-prompt header.
 - Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   proves an unanswered `needs_input` turn defaults to the question page.
-- Frontend: `frontend/src/migrationPolicy.test.ts` proves the main transcript
-  renders the pending question's widget inline (`RunAwaitingInputCard` reached
-  via the inline `run-turn-activity-question` surface) and pins the question
-  heading as a `data-variant="system"` `RunQuestionHeadingMessage` frame while
-  retiring the orphaned `run-turn-question-page-head` banner.
-  `frontend/src/composerCss.test.ts` keeps the retired pinned-head CSS rule from
-  reappearing.
 - Frontend visual: `frontend/src/styleguide/question-heading.tsx`
   (`/_styleguide/question-heading`) renders the system-user question heading
   next to the assistant question message and the answer card for review.
