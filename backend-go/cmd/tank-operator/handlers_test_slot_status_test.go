@@ -8,6 +8,7 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
 // getTestSlotStatus drives handleGetTestSlotStatus through the shared
@@ -86,6 +87,42 @@ func TestGetTestSlotStatus_RefreshReadyPreflight(t *testing.T) {
 	}
 	if !resp.Preflight.HasOpenPR {
 		t.Fatalf("ready verdict must report has_open_pr=true")
+	}
+}
+
+// TestGetTestSlotStatus_RefreshDetectsMergedFromWatchPR proves the refresh reads
+// the durable watch's PR BY NUMBER, so a PR that has actually merged is reported
+// `merged` even when its watch row is stuck at `ready` (the merge webhook missed
+// it). Resolving the open PR by branch would instead report `no_pr` and hide the
+// merge — the page would never show purple "Merged".
+func TestGetTestSlotStatus_RefreshDetectsMergedFromWatchPR(t *testing.T) {
+	merged := mcpgithub.PullRequestState{
+		PR: mcpgithub.PullRequestDetail{
+			Merged: true, Number: 100,
+			HTMLURL: "https://github.com/romaine-life/tank-operator/pull/100",
+		},
+		HeadSHA: "h1",
+	}
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{merged}}
+	app, _, _, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, &fakeGlimmungClient{})
+	// Stuck-'ready' watch whose PR is in fact merged.
+	app.ciWatches = &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "77", PROwner: "romaine-life", PRName: "tank-operator",
+		PRNumber: 100, Status: pgstore.CIWatchReady,
+	}}
+
+	rec, resp := getTestSlotStatus(t, app, provisionTestOwner, "?refresh=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if resp.Preflight == nil {
+		t.Fatalf("expected a live preflight on ?refresh=1")
+	}
+	if resp.Preflight.Verdict != "merged" {
+		t.Fatalf("preflight verdict = %q, want merged (read the watch's PR #100 by number)", resp.Preflight.Verdict)
+	}
+	if resp.Preflight.HasOpenPR {
+		t.Fatalf("merged verdict must report has_open_pr=false")
 	}
 }
 

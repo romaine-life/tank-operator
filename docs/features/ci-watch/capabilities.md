@@ -256,7 +256,11 @@ and [../README.md](../README.md) for how capability ledgers are used.
     paint + fallback) with a **live 20s poll** so a merge while-viewing converges;
     and the merge webhook now **marks even a `ready`/terminal watch `merged`**
     (`github_webhook.go`, before the not-watching coalescing guard). A distinct
-    **purple `is-merged`** tone + "Merged" label render it.
+    **purple `is-merged`** tone + "Merged" label render it. The read-only status
+    endpoint resolves the preflight against the durable watch's **PR by number**
+    (not the open PR by branch) so a merged PR is detected as `merged` rather than
+    `no_pr` — a merged PR has no *open* PR for the branch, and the watch row may be
+    stuck `ready`; the by-number live read sees `merged=true` either way.
   - **Falsely showed "Test environment — running".** An `active:true` `test_state`
     with no URL (the optimistic flag set at "test" session-create) was rendered as
     a running env. The page now requires a real **URL** to show "running"; and the
