@@ -986,6 +986,22 @@ Each invocation writes immutable events sharing one `invocation_id`:
 - `succeeded` after the external system accepts the mutation.
 - `failed` when the external system rejects the mutation.
 
+The internal write endpoint (`POST /api/internal/sessions/{id}/control-actions`)
+has two authorized writers, both authenticated by their **verified** IdP
+subject, never a caller-asserted header: a **session pod** (`svc:tank:<id>`)
+writing its *own* session's ledger, and the **orchestrator control plane**
+(`svc:tank-operator:<id>`) writing *any* session's ledger. The second writer is
+what lets the orchestrator-mediated governed merges — the in-app "Merge in Tank"
+button (`handleMergeSessionPR`) and the green-path auto-merge
+(`autoMergeOrchestrationPhasePR`) — record their `github.pull_request.merge`
+audit on the **owning session's** ledger rather than the orchestrator's: the
+orchestrator passes the owning session id to mcp-github (`governed_session_id`),
+so the ledger is identical regardless of who merged
+(docs/event-driven-rollout.md §E). Before this writer was recognized, every
+orchestrator-mediated merge `started` write was rejected `403`, which fails the
+tool closed and surfaced to the user as `merge failed: mcp-github tool error:
+Error executing tool merge_pull_request: …`.
+
 The browser reads the per-session ledger through:
 
 ```
@@ -1002,6 +1018,12 @@ Prometheus counters:
 - `tank_control_action_events_total{source_service,source_tool,action,status,result}`
   counts accepted/rejected Tank ledger writes. Labels are deliberately bounded;
   PR numbers, emails, session ids, and SHAs live in Postgres, not metrics.
+- `tank_control_action_internal_write_total{writer,result}` counts internal
+  session-scoped ledger writes by authorized writer class
+  (`session_pod` | `control_plane` | `other`) and authorization outcome
+  (`authorized` | `forbidden`). A rise in `control_plane`/`forbidden` is the
+  signature of the orchestrator-mediated governed-merge regression: the merge
+  button stops working because the control-plane writer is no longer accepted.
 - MCP servers may expose their own action counters. For `mcp-github`, use
   `mcp_github_control_action_total{tool,action,status,result}` and
   `mcp_github_control_action_audit_append_total{status,result}`.

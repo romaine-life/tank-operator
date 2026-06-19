@@ -53,13 +53,13 @@ func (f *provisionFakeGitHub) ResolveOpenPullRequestState(_ context.Context, _, 
 func (f *provisionFakeGitHub) ListRepos(context.Context, string) ([]mcpgithub.Repo, error) {
 	return nil, nil
 }
-func (f *provisionFakeGitHub) MarkPRReady(context.Context, string, string, string, int) error {
+func (f *provisionFakeGitHub) MarkPRReady(context.Context, string, string, string, int, string) error {
 	return nil
 }
-func (f *provisionFakeGitHub) MergePR(context.Context, string, string, string, int, string) (string, error) {
+func (f *provisionFakeGitHub) MergePR(context.Context, string, string, string, int, string, string) (string, error) {
 	return "", nil
 }
-func (f *provisionFakeGitHub) MergePRWithHead(context.Context, string, string, string, int, string, string) (string, error) {
+func (f *provisionFakeGitHub) MergePRWithHead(context.Context, string, string, string, int, string, string, string) (string, error) {
 	return "", nil
 }
 func (f *provisionFakeGitHub) CreateBranch(context.Context, string, string, string, string, string) error {

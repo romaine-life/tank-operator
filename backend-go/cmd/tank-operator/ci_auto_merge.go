@@ -91,10 +91,14 @@ func (s *appServer) autoMergeOrchestrationPhasePR(ctx context.Context, watch pgs
 			"auto-merge deferred: CI is not a confirmed settled green on the head yet (will retry).")
 		return true, nil
 	}
-	if err := s.mcpGitHub.MarkPRReady(ctx, watch.OwnerEmail, watch.PROwner, watch.PRName, watch.PRNumber); err != nil {
+	// Pass the owning session id so mcp-github keys the governed-merge
+	// control-action audit to this session's ledger (the orchestrator's own
+	// service principal merges on its behalf). A mark-ready failure surfaces
+	// through the merge below, which returns the error to the caller.
+	if err := s.mcpGitHub.MarkPRReady(ctx, watch.OwnerEmail, watch.PROwner, watch.PRName, watch.PRNumber, watch.SessionID); err != nil {
 		slog.Warn("orchestration auto-merge mark PR ready failed (continuing)", "watch_id", watch.WatchID, "error", err)
 	}
-	mergeCommit, err := s.mcpGitHub.MergePRWithHead(ctx, watch.OwnerEmail, watch.PROwner, watch.PRName, watch.PRNumber, "squash", watch.HeadSHA)
+	mergeCommit, err := s.mcpGitHub.MergePRWithHead(ctx, watch.OwnerEmail, watch.PROwner, watch.PRName, watch.PRNumber, "squash", watch.HeadSHA, watch.SessionID)
 	if err != nil {
 		return true, err
 	}

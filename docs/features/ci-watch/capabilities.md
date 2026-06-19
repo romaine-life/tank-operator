@@ -69,6 +69,29 @@ and [../README.md](../README.md) for how capability ledgers are used.
   durable `session_ci_watches` readiness row plus live reducer output from GitHub PR
   state.
 
+## governed-merge-control-action-audit
+
+- **Status:** shipped
+- **Intent:** Every governed PR mutation (`mark_pull_request_ready_for_review`,
+  `merge_pull_request`) records its `control_action_events` audit on the **owning
+  session's** ledger, regardless of which principal performed the merge. The agent
+  in-pod path and the two orchestrator-mediated paths — the in-app "Merge in Tank"
+  button (`handleMergeSessionPR`) and the green-path auto-merge
+  (`autoMergeOrchestrationPhasePR`) — produce an identical ledger row keyed to the
+  PR's session (event-driven-rollout.md §E).
+- **Durable source / mechanism:** mcp-github keys the audit to a `governed_session_id`
+  the orchestrator passes (the owning session), falling back to the caller's own
+  session for the in-pod agent path. Tank's internal write endpoint
+  (`internalCallerMatchesSession`) authorizes **two** verified-IdP writers: a session
+  pod for its *own* session (`svc:tank:<id>`, the #1207 rule) and the orchestrator
+  control plane (`svc:tank-operator:<id>`) for *any* session. Neither is a
+  caller-asserted header.
+- **Failure signature:** if the control-plane writer is not recognized, the audit
+  `started` write is rejected `403`, the mcp-github tool fails closed *before* the
+  GitHub merge, the PR stays an unmerged draft, and the human sees `merge failed:
+  mcp-github tool error: Error executing tool merge_pull_request: …`. Watched by
+  `tank_control_action_internal_write_total{writer="control_plane",result="forbidden"}`.
+
 ## gated-test-slot-provisioning
 
 - **Status:** shipped (shared server-side gate + orchestration-review path + interactive
