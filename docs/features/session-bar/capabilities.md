@@ -367,7 +367,16 @@ Named behaviors in the session-bar surface. See
   (`frontend/src/App.tsx`, styled in `index.css`). The tab keeps its right edge
   pinned and steps its left edge in via `margin-left`, and reads slightly
   smaller (compact height + smaller avatar/name) so it is visibly subordinate.
-  The collapsed icon-rail sidebar drops the indent and connector.
+  The collapsed icon-rail sidebar drops the indent and connector. The connector
+  is an opaque, single-paint spine: each nested row's `::before` spans its own
+  height plus the one row gap *above* it (`top: -var(--nest-row-gap); height:
+  100% + var(--nest-row-gap)`), so the per-row segments butt-join into a
+  continuous vertical without overshooting onto the tab above or double-painting
+  the seam. `--nest-row-gap` is bound to the `.sessions` flex `gap` (it *is* that
+  gap); the two must not drift, or the butt-join misses. (The original bridge was
+  a fixed `4px` against a real `2px` gap — the 2px overshoot is what made the
+  guide clip into the tabs and the translucent segments brighten where they
+  overlapped.)
 - **Observability:** the session-list debug projection
   (`sessionListDebugRow`/`SessionListDebugRow`) carries `parent_session_id` and
   `nest_depth` so a "my sub-session didn't nest" report is diagnosable from the

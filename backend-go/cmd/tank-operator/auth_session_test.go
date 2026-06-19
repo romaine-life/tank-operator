@@ -463,6 +463,9 @@ func (r *testSessionRegistry) SetTestState(_ context.Context, owner, sessionID s
 func (r *testSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
+func (r *testSessionRegistry) SetSpokeConfig(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
 func (r *testSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }

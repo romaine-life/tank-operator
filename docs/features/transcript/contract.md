@@ -179,7 +179,13 @@ answer; it must not visibly move a rendered row from one surface to the other.
   background-task wake turns source it from durable
   `turn.submitted.payload.prompt` and mark it system-authored. This context is
   not an activity child row, so it stays visible while the reader moves between
-  activity pages.
+  activity pages. A synthetic AskUserQuestion turn has no `user_message.created`
+  of its own, so it sources this context from the asking turn's triggering
+  `user_message.created` (carried over server-side and marked
+  `turnContextContinued`); the Turns view labels that copy "Question prompt
+  continued from previous turn" so the question stays fused to what produced it.
+  This is page-context copy only: it must not add an activity page or change the
+  question turn's lifecycle/event counts.
 - Synthetic AskUserQuestion turns may render the asking turn's durable
   final-answer candidate on each question page before the answer card. The
   candidate is snapshotted by the runner on
@@ -208,9 +214,12 @@ answer; it must not visibly move a rendered row from one surface to the other.
   `/turns/{id}/activity` `final_answer.entries` for that turn is the agent's
   preamble (the `asking_turn_final_answer` assistant prose the runner
   snapshotted, named with the same `final_answer.timeline_ids` shape) followed by
-  the AskUserQuestion card, whose `awaitingInput` carries the shortcut to the
-  question turn. This makes the asking turn collapsible to that bundle instead of
-  rendering "No turn activity", and is the same snapshot the question page copies
+  the AskUserQuestion card. The pending question's widget renders inline in the
+  main transcript (single question fully inline; for a multi-question set, Q1
+  inline and Q2+ on their dedicated pages), so there is no navigate-to-the-
+  question-turn shortcut. This makes the asking turn collapsible to that bundle
+  instead of rendering "No turn activity", and is the same snapshot the question
+  page copies
   as page context — but only the asking turn promotes it to a final answer; the
   synthetic question turn's copy stays a page-context copy (above) and never
   becomes that turn's final answer. The promotion projects existing durable rows;
@@ -332,6 +341,16 @@ answer; it must not visibly move a rendered row from one surface to the other.
   turn's final-answer candidate above the answer card when the awaiting-input
   payload names one, keeps the page kind as `question`, and invalidates the
   cached page when the asking turn's durable high-water mark changes.
+- A pending AskUserQuestion renders its question widget inline in the main
+  transcript beneath the agent's preamble (the activity group is emitted inline,
+  not condensed to an "Answer requested" pointer), and is answerable there
+  through the composer. There is no assistant-message "Answer in Turns" / tool
+  "Open question page" shortcut. For a multi-question set, only Q1 renders inline;
+  advancing leaves the inline surface for Q2+'s dedicated pages rather than
+  flipping the inline card in place.
+- Each Q2+ question page renders the asking turn's triggering prompt (projected
+  as `turnContextContinued` turn context) under a "Question prompt continued from
+  previous turn" header.
 - A pending AskUserQuestion renders a visible Stop/cancel control in the
   composer alongside Submit; the exit is not removed while a question is active.
 - An AskUserQuestion with no option picked and nothing typed is submittable and

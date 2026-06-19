@@ -802,6 +802,62 @@ func TestProjectTurnPagesQuestionOnlyTurnIncludesAskingFinalAnswerContext(t *tes
 	}
 }
 
+func TestProjectTurnPagesQuestionOnlyTurnSurfacesAskingPromptAsContinuedContext(t *testing.T) {
+	// readUserFacingTurnEventsWithChain copies the asking turn's triggering user
+	// message into the question turn's window tagged for the question turn; this
+	// simulates that tagged event.
+	askingPrompt := projectionTestEvent("u1", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+		"text": "Should we redesign the question UI?",
+	})
+	askingPrompt[questionPromptContextForTurnField] = "turn-2"
+
+	events := []map[string]any{
+		askingPrompt,
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-2", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("await", "00000003", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{
+			"asking_turn_id":       "turn-1",
+			"question_turn_id":     "turn-2",
+			"provider_item_id":     "toolu_ask",
+			"timeline_id":          "turn-2:item:ask",
+			"provider_timeline_id": "turn-1:item:ask",
+			"questions": []any{
+				map[string]any{"question": "Which path?", "options": []any{map[string]any{"label": "A"}}},
+				map[string]any{"question": "Deploy after?", "options": []any{map[string]any{"label": "Yes"}}},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-2", events)
+
+	// The triggering prompt becomes the question turn's context, marked continued
+	// so the Turns view labels it "continued from previous turn".
+	if proj.TurnContext == nil {
+		t.Fatalf("turn context = nil, want the asking turn's triggering prompt")
+	}
+	if proj.TurnContext["turnContextContinued"] != true {
+		t.Fatalf("turn context = %#v, want turnContextContinued=true", proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "text"); got != "Should we redesign the question UI?" {
+		t.Fatalf("turn context text = %q, want the asking turn's prompt", got)
+	}
+
+	// The copied prompt is page-context only: it must not add a page, change the
+	// per-question pages, or count toward the question turn's events.
+	if proj.TotalEventCount != 2 {
+		t.Fatalf("total event count = %d, want question-turn events only (prompt copy excluded)", proj.TotalEventCount)
+	}
+	if len(proj.Pages) != 2 {
+		t.Fatalf("page count = %d, want one page per question", len(proj.Pages))
+	}
+	for _, page := range proj.Pages {
+		for _, entry := range page.Entries {
+			if entry["turnContextContinued"] == true {
+				t.Fatalf("question page %d leaked the continued prompt into its body: %#v", page.Number, entry)
+			}
+		}
+	}
+}
+
 func TestProjectTurnPagesQuestionOnlyTurnSealsAfterDurableAnswer(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("await", "00000001", "turn.awaiting_input", "runner", "claude", "turn-2", "turn-2:item:ask", map[string]any{

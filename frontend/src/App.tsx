@@ -69,6 +69,7 @@ import { AdminAvatarManager } from "./AdminAvatarManager";
 import { AdminBreakGlassPanel as AdminBreakGlassGrantPanel } from "./AdminBreakGlassPanel";
 import { OrchestrationsDashboard } from "./OrchestrationsDashboard";
 import { AdminDataBrowser } from "./AdminDataBrowser";
+import { OrchestratePanel } from "./OrchestratePanel";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
@@ -167,6 +168,7 @@ import {
   TerminalIcon,
   TextQuoteIcon,
   TimerIcon,
+  Wand2Icon,
   WrenchIcon,
   XIcon,
   SaveIcon,
@@ -302,7 +304,13 @@ import {
   type SessionInteraction,
   type SessionMode,
 } from "./sessionModes";
-import { startTestWorkflow } from "./testWorkflow";
+import {
+  startTestWorkflow,
+  fetchTestSlotStatus,
+  type TestSlotStatus,
+  type TestSlotPreflight,
+  type TestSlotWatch,
+} from "./testWorkflow";
 import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
@@ -556,6 +564,10 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // row in the main transcript.
   turnOnly?: boolean;
   wakePrompt?: boolean;
+  // turnContextContinued marks a question turn's prompt context as a copy of the
+  // asking turn's triggering message. The Turns view labels it "Question prompt
+  // continued from previous turn" so the question stays fused to what produced it.
+  turnContextContinued?: boolean;
   questionFinalAnswerContext?: boolean;
   backendTurnId?: string;
   turnDetailRole?: "final_answer";
@@ -599,12 +611,6 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     dismissed?: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
-  };
-  questionTarget?: {
-    turnId?: string;
-    turnNumber?: number;
-    page?: number;
-    timelineId?: string;
   };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
@@ -894,6 +900,9 @@ interface Session {
   name: string;
   test_state?: TestState | null;
   rollout_state?: RolloutState | null;
+  // spoke_config is present when this session acts as an orchestration hub.
+  // Carries the provider/surface/model/effort used to launch the spoke.
+  spoke_config?: Record<string, unknown>;
   // spawned_sessions is the durable parent→child lineage the session-bar
   // "spawned sessions" chip lists (sessions this one spawned via
   // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
@@ -1494,6 +1503,12 @@ function normalizeSession(session: Session): Session {
   next.spawned_sessions = Array.isArray(session.spawned_sessions)
     ? session.spawned_sessions
     : undefined;
+  next.spoke_config =
+    session.spoke_config != null &&
+    typeof session.spoke_config === "object" &&
+    !Array.isArray(session.spoke_config)
+      ? (session.spoke_config as Record<string, unknown>)
+      : undefined;
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter(
         (entry): entry is string => typeof entry === "string",
@@ -2569,14 +2584,26 @@ interface ComposerToolButtonsProps {
     title: string;
     onClick?: () => void;
   };
+  orchestrate?: {
+    visible?: boolean;
+    active?: boolean;
+    disabled?: boolean;
+    title: string;
+    onClick?: () => void;
+  };
   test: {
     active?: boolean;
     disabled?: boolean;
     readyUrl?: string;
     title: string;
+    // The per-session beaker is a navigation entry: it opens the dedicated
+    // test-slot page where the create/open/return controls and PR-readiness
+    // live. onCreateHold is the splash-only fallback (no session/page to route
+    // to yet) that seeds a new session's first turn with the /test skill. The
+    // button prefers onOpenPage; both are optional so the signed-out preview can
+    // render a disabled beaker with neither.
+    onOpenPage?: () => void;
     onCreateHold?: () => void;
-    onCreateDrive?: () => void;
-    onOpenReady?: () => void;
   };
   glimmungRuns: {
     runs: GlimmungRunLink[];
@@ -3435,6 +3462,7 @@ function ComposerToolButtons({
   attach,
   cost,
   rollout,
+  orchestrate,
   test,
   glimmungRuns,
   spawnedSessions,
@@ -3472,70 +3500,34 @@ function ComposerToolButtons({
           <WheelsIcon className="run-composer-icon" />
         </button>
       )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
-            disabled={test.disabled}
-            aria-label="Test actions"
-            title={test.title}
-            aria-haspopup="menu"
-          >
-            <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-            {testReadyURL && (
-              <ExternalLinkIcon
-                className="run-test-ready-icon"
-                aria-hidden="true"
-              />
-            )}
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          side="top"
-          className="run-test-action-menu"
+      {orchestrate?.visible && (
+        <button
+          type="button"
+          className={`run-composer-icon-btn run-composer-action-btn run-orchestrate-action-btn${orchestrate.active ? " is-active" : ""}`}
+          onClick={orchestrate.onClick}
+          disabled={orchestrate.disabled}
+          aria-label="Orchestrate"
+          title={orchestrate.title}
         >
-          <DropdownMenuItem
-            className="run-test-action-menu-item"
-            onSelect={test.onCreateHold}
-          >
-            <FlaskConicalIcon aria-hidden="true" />
-            <span>Create test slot</span>
-          </DropdownMenuItem>
-          {test.onCreateDrive && (
-            <DropdownMenuItem
-              className="run-test-action-menu-item"
-              onSelect={test.onCreateDrive}
-            >
-              <FlaskConicalIcon aria-hidden="true" />
-              <span>Create test slot and test</span>
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuSeparator className="run-test-action-menu-separator" />
-          {testReadyURL ? (
-            <DropdownMenuItem className="run-test-action-menu-item" asChild>
-              <a
-                href={testReadyURL}
-                target="_blank"
-                rel="noreferrer"
-                onClick={test.onOpenReady}
-              >
-                <ExternalLinkIcon aria-hidden="true" />
-                <span>Open test slot</span>
-              </a>
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem
-              className="run-test-action-menu-item"
-              disabled
-            >
-              <ExternalLinkIcon aria-hidden="true" />
-              <span>Open test slot</span>
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+          <Wand2Icon className="run-composer-icon" aria-hidden="true" />
+        </button>
+      )}
+      <button
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
+        onClick={test.onOpenPage ?? test.onCreateHold}
+        disabled={test.disabled}
+        aria-label="Test slot"
+        title={test.title}
+      >
+        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+        {testReadyURL && (
+          <ExternalLinkIcon
+            className="run-test-ready-icon"
+            aria-hidden="true"
+          />
+        )}
+      </button>
       <GlimmungRunMenuButton {...glimmungRuns} />
       <SpawnedSessionsMenuButton {...spawnedSessions} />
       <PullRequestMenuButton {...pullRequest} />
@@ -5209,6 +5201,11 @@ function DemoLanding() {
                         disabled: true,
                         title: "Sign in to use /rollout",
                       }}
+                      orchestrate={{
+                        visible: GUI_ROLLOUT_MODES.has(selectedMode),
+                        disabled: true,
+                        title: "Sign in to orchestrate",
+                      }}
                       test={{
                         disabled: true,
                         title: "Sign in to start a session",
@@ -5759,6 +5756,8 @@ type RunTab =
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
+  | "test-slot"
+  | "orchestrate"
   | "settings"
   | "help"
   | "cluster"
@@ -6737,7 +6736,6 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
           usageObservation: entry.usageObservation,
-          questionTarget: entry.questionTarget,
         };
       }
       if (entry.kind === "reasoning") {
@@ -7199,15 +7197,6 @@ function turnActivityGroupNeedsInput(
   return group.shell?.activity?.status === "needs_input";
 }
 
-function turnActivityGroupIsNeedsInputTarget(
-  group: Extract<EntryGroup, { kind: "activity" }>,
-  activeTurnId: string | null,
-): boolean {
-  if (!turnActivityGroupNeedsInput(group)) return false;
-  const active = activeTurnId?.trim() ?? "";
-  return active !== "" && group.turnId === active;
-}
-
 function flushTranscriptToolBucket(
   groups: EntryGroup[],
   bucket: { entries: TranscriptEntry[] },
@@ -7371,21 +7360,17 @@ function groupTranscriptEntries(
           for (const id of group.compactedEntryIds)
             activityHiddenEntryIds.add(id);
           const needsInput = turnActivityGroupNeedsInput(group);
-          if (
+          if (needsInput) {
+            // Surface the pending question inline in the main transcript: emit
+            // the activity group so RunTurnActivityGroup renders the question
+            // widget beneath the agent's preamble, instead of an "Answer
+            // requested" pointer the reader has to follow into the Turns view.
+            groups.push(group);
+          } else if (
             group.active &&
-            !needsInput &&
             !insertedThinkingTurnIds.has(group.turnId)
           ) {
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
-            pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
-            insertedThinkingTurnIds.add(group.turnId);
-          } else if (
-            turnActivityGroupIsNeedsInputTarget(group, activeTurnId) &&
-            !insertedThinkingTurnIds.has(group.turnId)
-          ) {
-            pendingThinkingGroups.push(
-              turnThinkingGroup(group.turnId, entry, "needs_input"),
-            );
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
           }
@@ -8694,7 +8679,9 @@ function RunMessageBubble({
       ? FlaskConicalIcon
       : skillName === "rollout"
         ? TankIcon
-        : ListChecksIcon;
+        : skillName === "orchestrate"
+          ? Wand2Icon
+          : ListChecksIcon;
   const SkillActionIcon = skillActionIcon;
   const explicitAttachments = entry.attachments ?? [];
   const legacyAttachmentParts =
@@ -8702,12 +8689,6 @@ function RunMessageBubble({
       ? splitLegacyAttachmentDisplayText(text)
       : null;
   const visibleText = legacyAttachmentParts?.text ?? text;
-  const awaitingInput = entry.awaitingInput;
-  const questionTurnId = awaitingInput?.questionTurnId || "";
-  const openQuestionTurn = (): void => {
-    if (!questionTurnId) return;
-    onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true });
-  };
   const visibleAttachments =
     explicitAttachments.length > 0
       ? explicitAttachments
@@ -8882,20 +8863,6 @@ function RunMessageBubble({
               >
                 {messageActionLabel}
               </a>
-            )}
-          {variant === "assistant" &&
-            awaitingInput &&
-            questionTurnId &&
-            onOpenTurn && (
-              <button
-                type="button"
-                className="run-msg-question-action"
-                onClick={openQuestionTurn}
-              >
-                {awaitingInput.answered || awaitingInput.dismissed
-                  ? "View questions"
-                  : "Answer in Turns"}
-              </button>
             )}
         </div>
         {variant === "user" && visibleAttachments.length > 0 && (
@@ -10345,6 +10312,472 @@ function SessionDataTestSlotDetails({
         </div>
       )}
       {error && <div className="run-session-data-name-error">{error}</div>}
+    </div>
+  );
+}
+
+// testSlotVerdictTone maps a readiness verdict / watch status to the shared card
+// tone classes the session-data cards use, so the test-slot page reads native.
+function testSlotVerdictTone(
+  verdict: string,
+): "good" | "warning" | "danger" | "info" {
+  switch (verdict) {
+    case "ready":
+      return "good";
+    case "failed":
+    case "error":
+      return "danger";
+    case "conflict":
+    case "watching":
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
+function testSlotVerdictLabel(verdict: string): string {
+  switch (verdict) {
+    case "ready":
+      return "Green & mergeable";
+    case "failed":
+      return "CI failing";
+    case "conflict":
+      return "Needs rebase";
+    case "merged":
+      return "Already merged";
+    case "watching":
+      return "Checks running";
+    case "no_pr":
+      return "No open PR";
+    case "error":
+      return "Unavailable";
+    default:
+      return verdict || "Unknown";
+  }
+}
+
+// testSlotReadiness collapses a status snapshot into the single readiness view
+// the page renders. It prefers the authoritative live preflight (present only
+// after a ?refresh=1 read) and otherwise falls back to the durable last-known
+// watch row ("as of" its last event). Null when neither is known yet.
+function testSlotReadiness(status: TestSlotStatus | null): {
+  verdict: string;
+  hasOpenPR: boolean;
+  detail: string;
+  prUrl: string;
+  mergeableState: string;
+  asOf: string | null;
+  live: boolean;
+} | null {
+  if (!status) return null;
+  const p: TestSlotPreflight | null = status.preflight;
+  if (p) {
+    return {
+      verdict: p.verdict,
+      hasOpenPR: p.has_open_pr,
+      detail: p.detail,
+      prUrl: p.pr_url,
+      mergeableState: p.mergeable_state,
+      asOf: null,
+      live: true,
+    };
+  }
+  const w: TestSlotWatch | null = status.watch;
+  if (w) {
+    return {
+      verdict: w.status,
+      hasOpenPR: w.has_open_pr,
+      detail: w.detail,
+      prUrl: w.pr_url,
+      mergeableState: w.mergeable_state,
+      asOf: w.last_event_at,
+      live: false,
+    };
+  }
+  return null;
+}
+
+function formatTestSlotAsOf(iso: string | null): string {
+  if (!iso) return "";
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return "";
+  return t.toLocaleString();
+}
+
+// TestSlotScreen is the dedicated per-session test-slot page the beaker routes
+// to. It is the primary surface for the create/open/return controls and shows
+// last-known PR readiness from the durable snapshot (with an on-demand live
+// refresh). The "Create test slot" action runs the same deterministic,
+// server-side gate as before — this page only frames it and sets expectations.
+function TestSlotScreen({
+  sessionId,
+  testState,
+  authedFetch,
+  disabled,
+  readOnly,
+  onCreateHold,
+  onCreateDrive,
+  onReturnTestSlot,
+  onOpenReady,
+  onOpenTranscript,
+}: {
+  sessionId: string;
+  testState: TestState | null;
+  authedFetch: (input: string, init?: RequestInit) => Promise<Response>;
+  disabled?: boolean;
+  readOnly?: boolean;
+  onCreateHold: () => void;
+  onCreateDrive: () => void;
+  onReturnTestSlot?: () => Promise<void>;
+  onOpenReady: () => void;
+  onOpenTranscript: () => void;
+}) {
+  const [status, setStatus] = useState<TestSlotStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [returning, setReturning] = useState(false);
+  // Keep the latest authedFetch without making it an effect dependency (it may
+  // be re-created each render; depending on it would re-fire the load loop).
+  const fetchRef = useRef(authedFetch);
+  fetchRef.current = authedFetch;
+
+  const load = useCallback(
+    async (refresh: boolean) => {
+      if (refresh) setRefreshing(true);
+      else setLoading(true);
+      setError(null);
+      try {
+        const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
+          refresh,
+        });
+        setStatus(next);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (refresh) setRefreshing(false);
+        else setLoading(false);
+      }
+    },
+    [sessionId],
+  );
+
+  // Load on mount, and re-pull the durable snapshot whenever the slot pill
+  // (testState, which converges live via the session SSE) flips — so a
+  // provisioning → ready/url transition reflects without a manual refresh.
+  useEffect(() => {
+    void load(false);
+  }, [load, testState?.active, testState?.url]);
+
+  const readiness = testSlotReadiness(status);
+  const active = Boolean(testState?.active);
+  const readyUrl = testState?.url?.trim() || "";
+  const repoSlug = status?.repo?.slug || "";
+  const branch = status?.repo?.branch || "";
+  const repoBlocked = Boolean(status) && !status?.repo;
+  const hasOpenPR = readiness ? readiness.hasOpenPR : true;
+  const canCreate =
+    !disabled && !readOnly && !active && !repoBlocked && hasOpenPR;
+
+  const verdict = readiness?.verdict ?? "";
+  const tone = verdict ? testSlotVerdictTone(verdict) : "info";
+
+  const doReturn = async () => {
+    if (!onReturnTestSlot || returning) return;
+    setReturning(true);
+    try {
+      await onReturnTestSlot();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReturning(false);
+    }
+  };
+
+  return (
+    <div className="run-session-data-screen">
+      <section
+        className="run-session-data-section"
+        aria-labelledby="run-test-slot-title"
+      >
+        <div className="run-session-data-page-head">
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={onOpenTranscript}
+            title="Back to transcript"
+          >
+            <ArrowLeftIcon
+              className="run-session-data-action-icon"
+              aria-hidden="true"
+            />
+            <span>Transcript</span>
+          </button>
+          <h2 className="run-session-data-title" id="run-test-slot-title">
+            Test slot
+          </h2>
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={() => void load(true)}
+            disabled={refreshing || loading}
+            aria-busy={refreshing || undefined}
+            title="Re-check PR readiness against GitHub now"
+          >
+            {refreshing ? (
+              <Loader2Icon
+                className="run-session-data-action-icon run-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <RotateCcwIcon
+                className="run-session-data-action-icon"
+                aria-hidden="true"
+              />
+            )}
+            <span>{refreshing ? "Checking…" : "Refresh"}</span>
+          </button>
+        </div>
+
+        {repoSlug && (
+          <p className="run-session-data-summary">
+            {repoSlug}
+            {branch ? ` · ${branch}` : ""}
+          </p>
+        )}
+
+        {error && <div className="run-session-data-name-error">{error}</div>}
+
+        {loading && !status ? (
+          <div className="run-session-data-card is-info">
+            <div className="run-session-data-card-top">
+              <span className="run-session-data-card-icon" aria-hidden="true">
+                <Loader2Icon className="run-spin" />
+              </span>
+              <span className="run-session-data-card-main">
+                <span className="run-session-data-card-label">
+                  Loading test-slot status…
+                </span>
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="run-session-data-page-list" aria-label="Test slot">
+            {/* PR readiness */}
+            <div className={`run-session-data-card is-${tone}`}>
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <GitPullRequestIcon />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">
+                    Pull request readiness
+                  </span>
+                  <span className="run-session-data-card-detail">
+                    {repoBlocked
+                      ? status?.repo_error ||
+                        "Could not resolve a repository to test."
+                      : readiness
+                        ? readiness.detail ||
+                          testSlotVerdictLabel(readiness.verdict)
+                        : "No PR readiness recorded yet — Refresh to check live."}
+                  </span>
+                </span>
+                {readiness?.prUrl ? (
+                  <a
+                    className="run-session-data-card-status"
+                    href={readiness.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={readiness.prUrl}
+                  >
+                    <span>{testSlotVerdictLabel(verdict)}</span>
+                    <ExternalLinkIcon aria-hidden="true" />
+                  </a>
+                ) : (
+                  <span className="run-session-data-card-status">
+                    {readiness ? testSlotVerdictLabel(verdict) : "Unknown"}
+                  </span>
+                )}
+              </div>
+              <SessionDataFacts
+                facts={[
+                  [
+                    "Mergeable",
+                    readiness?.mergeableState
+                      ? readiness.mergeableState
+                      : "Unknown",
+                  ],
+                  [
+                    "Source",
+                    readiness
+                      ? readiness.live
+                        ? "Live (just checked)"
+                        : `Last known${
+                            readiness.asOf
+                              ? ` · as of ${formatTestSlotAsOf(readiness.asOf)}`
+                              : ""
+                          }`
+                      : "Not checked",
+                  ],
+                ]}
+              />
+            </div>
+
+            {/* Controls */}
+            <div className="run-session-data-card is-info">
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <FlaskConicalIcon />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">
+                    {active ? "Test environment" : "Create a test environment"}
+                  </span>
+                  <span className="run-session-data-card-detail">
+                    {active
+                      ? "A slot is provisioned for this session."
+                      : repoBlocked
+                        ? "Resolve a repository above to enable provisioning."
+                        : hasOpenPR
+                          ? "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict."
+                          : "No open PR for this branch yet — publish a PR to test."}
+                  </span>
+                </span>
+              </div>
+              <div className="run-session-data-actions">
+                {active ? (
+                  <>
+                    {readyUrl && (
+                      <a
+                        className="run-session-data-action"
+                        href={readyUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={onOpenReady}
+                        title={readyUrl}
+                      >
+                        <ExternalLinkIcon
+                          className="run-session-data-action-icon"
+                          aria-hidden="true"
+                        />
+                        <span>Open test slot</span>
+                      </a>
+                    )}
+                    {onReturnTestSlot && !readOnly && (
+                      <button
+                        type="button"
+                        className="run-session-data-action"
+                        disabled={returning}
+                        aria-busy={returning || undefined}
+                        onClick={() => void doReturn()}
+                      >
+                        {returning ? (
+                          <Loader2Icon
+                            className="run-session-data-action-icon run-spin"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <RotateCcwIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span>{returning ? "Returning…" : "Return lease"}</span>
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={!canCreate}
+                      onClick={onCreateHold}
+                      title={
+                        canCreate
+                          ? "Provision a test slot for this branch"
+                          : repoBlocked
+                            ? "Resolve a repository first"
+                            : hasOpenPR
+                              ? "Unavailable"
+                              : "No open PR to test"
+                      }
+                    >
+                      <FlaskConicalIcon
+                        className="run-session-data-action-icon"
+                        aria-hidden="true"
+                      />
+                      <span>Create test slot</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={!canCreate}
+                      onClick={onCreateDrive}
+                      title={
+                        canCreate
+                          ? "Provision a slot, then have the agent validate it"
+                          : "Unavailable"
+                      }
+                    >
+                      <FlaskConicalIcon
+                        className="run-session-data-action-icon"
+                        aria-hidden="true"
+                      />
+                      <span>Create test slot and test</span>
+                    </button>
+                  </>
+                )}
+                {readOnly && (
+                  <span className="run-session-data-readonly">
+                    Read-only session
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Last provision outcome (durable) */}
+            {status?.provision && (
+              <div
+                className={`run-session-data-card is-${
+                  status.provision.status === "failed"
+                    ? "danger"
+                    : status.provision.status === "pending"
+                      ? "warning"
+                      : "info"
+                }`}
+              >
+                <div className="run-session-data-card-top">
+                  <span
+                    className="run-session-data-card-icon"
+                    aria-hidden="true"
+                  >
+                    {status.provision.status === "pending" ? (
+                      <Loader2Icon className="run-spin" />
+                    ) : status.provision.status === "failed" ? (
+                      <XIcon />
+                    ) : (
+                      <CheckIcon />
+                    )}
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      {status.provision.status === "pending"
+                        ? "Provisioning…"
+                        : "Last provision"}
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      {status.provision.detail ||
+                        `Status: ${status.provision.status}`}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -12251,124 +12684,20 @@ function ToolDefaultBody({
   );
 }
 
-export type AskUserQuestionTarget = {
-  turnId: string;
-  turnNumber?: number;
-  page: number;
-};
-
-function askUserQuestionToolTarget(
-  entry: TranscriptEntry,
-): AskUserQuestionTarget | null {
-  if (!isAskUserQuestionTool(entry)) return null;
-  const raw = entry.questionTarget;
-  const turnId = raw?.turnId?.trim() ?? "";
-  if (!turnId) return null;
-  const page =
-    typeof raw?.page === "number" && Number.isSafeInteger(raw.page) && raw.page > 0
-      ? raw.page
-      : 1;
-  const turnNumber =
-    typeof raw?.turnNumber === "number" &&
-    Number.isSafeInteger(raw.turnNumber) &&
-    raw.turnNumber > 0
-      ? raw.turnNumber
-      : undefined;
-  return { turnId, turnNumber, page };
-}
-
-export function askUserQuestionTargetHref(
-  currentHref: string,
-  sessionId: string,
-  target: AskUserQuestionTarget,
-): string | undefined {
-  if (!target.turnNumber) return undefined;
-  return buildSessionRouteUrl(
-    currentHref,
-    sessionId,
-    "turns",
-    target.turnNumber,
-    null,
-    target.page,
-  );
-}
-
-function AskUserQuestionToolTargetButton({
-  sessionId,
-  target,
-  onOpenTurn,
-  compact = false,
-}: {
-  sessionId: string;
-  target: AskUserQuestionTarget;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
-  compact?: boolean;
-}) {
-  const label = "Open question page";
-  const href = askUserQuestionTargetHref(window.location.href, sessionId, target);
-  const className = `run-tool-question-target${compact ? " run-tool-question-target-compact" : ""}`;
-  const open = () =>
-    onOpenTurn?.(target.turnId, { anchor: "top", page: target.page });
-  if (href) {
-    return (
-      <a
-        className={className}
-        href={href}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (
-            e.button !== 0 ||
-            e.metaKey ||
-            e.ctrlKey ||
-            e.shiftKey ||
-            e.altKey ||
-            !onOpenTurn
-          )
-            return;
-          e.preventDefault();
-          open();
-        }}
-      >
-        <MessageSquareIcon size={13} aria-hidden="true" />
-        <span>{label}</span>
-      </a>
-    );
-  }
-  if (!onOpenTurn) return null;
-  return (
-    <button
-      type="button"
-      className={className}
-      onClick={(e) => {
-        e.stopPropagation();
-        open();
-      }}
-    >
-      <MessageSquareIcon size={13} aria-hidden="true" />
-      <span>{label}</span>
-    </button>
-  );
-}
-
 function RunToolItem({
   entry,
   showTimestamps,
   expanded,
   onExpandedChange,
-  sessionId,
-  onOpenTurn,
 }: {
   entry: TranscriptEntry;
   showTimestamps: boolean;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  sessionId: string;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
-  const questionTarget = askUserQuestionToolTarget(entry);
   return (
     <div
       className="run-transcript-tool"
@@ -12383,10 +12712,7 @@ function RunToolItem({
         <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
-        <div
-          className="run-transcript-tool-header-row"
-          data-has-question-target={questionTarget ? "true" : undefined}
-        >
+        <div className="run-transcript-tool-header-row">
           <button
             type="button"
             className="run-transcript-tool-header"
@@ -12446,14 +12772,6 @@ function RunToolItem({
               )}
             </span>
           </button>
-          {questionTarget && (
-            <AskUserQuestionToolTargetButton
-              sessionId={sessionId}
-              target={questionTarget}
-              onOpenTurn={onOpenTurn}
-              compact
-            />
-          )}
         </div>
         {expanded && (
           <ToolBody entry={entry} />
@@ -12471,8 +12789,6 @@ function RunToolGroup({
   onOpenChange,
   toolExpansionOverrides,
   onToolExpandedChange,
-  sessionId,
-  onOpenTurn,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
@@ -12481,8 +12797,6 @@ function RunToolGroup({
   onOpenChange: (open: boolean) => void;
   toolExpansionOverrides: Record<string, boolean>;
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
-  sessionId: string;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   if (entries.length === 0) return null;
   if (entries.length === 1) {
@@ -12496,8 +12810,6 @@ function RunToolGroup({
           onExpandedChange={(expanded) =>
             onToolExpandedChange(entry.id, expanded)
           }
-          sessionId={sessionId}
-          onOpenTurn={onOpenTurn}
         />
       </div>
     );
@@ -12580,8 +12892,6 @@ function RunToolGroup({
               onExpandedChange={(expanded) =>
                 onToolExpandedChange(e.id, expanded)
               }
-              sessionId={sessionId}
-              onOpenTurn={onOpenTurn}
             />
           ))}
         </div>
@@ -13893,7 +14203,6 @@ function RunTurnActivityGroup({
   highlightedEntryId,
   onQuote,
   onFork,
-  onOpenTurn,
   onOpenBackgroundTask,
   loading,
   pageInfo,
@@ -13917,7 +14226,6 @@ function RunTurnActivityGroup({
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
   pageInfo?: TurnActivityPageInfo;
@@ -13956,6 +14264,27 @@ function RunTurnActivityGroup({
   // Always-present pager state: a single-page turn renders a disabled
   // "page 1 of 1" rather than vanishing, so the affordance never looks absent.
   const pagerState = turnActivityPagerState(pageInfo);
+  // Inline question surface: the pending question's widget renders directly in
+  // the main transcript beneath the agent's preamble. The single-question case
+  // (the common one) is fully inline; for a multi-question set only Q1 is inline
+  // and Q2+ stay on their dedicated pages, so the inline card never flips in
+  // place — advancing leaves this surface for the Turns view.
+  const inlineQuestionEntry = useMemo(() => {
+    if (!needsInput) return null;
+    if (pageInfo && pageInfo.kind === "question") {
+      const count = pageInfo.questionCount ?? 1;
+      const index = pageInfo.questionIndex ?? 1;
+      if (count > 1 && index !== 1) return null;
+    }
+    return (
+      group.entries.find(
+        (entry) =>
+          entry.metaKind === "awaiting_input" &&
+          entry.awaitingInput &&
+          !(entry.awaitingInput.answered || entry.awaitingInput.dismissed),
+      ) ?? null
+    );
+  }, [group.entries, needsInput, pageInfo]);
   return (
     <div
       className="run-turn-activity"
@@ -14039,16 +14368,10 @@ function RunTurnActivityGroup({
                 )}
               </span>
             </button>
-            {needsInput && onOpenTurn && (
-              <button
-                type="button"
-                className="run-turn-activity-action"
-                onClick={() =>
-                  onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
-                }
-              >
-                Answer questions
-              </button>
+            {inlineQuestionEntry && (
+              <div className="run-turn-activity-question">
+                <RunAwaitingInputCard entry={inlineQuestionEntry} />
+              </div>
             )}
             {open && (
               <div className="run-turn-activity-body">
@@ -14099,8 +14422,6 @@ function RunTurnActivityGroup({
                           }
                           toolExpansionOverrides={toolExpansionOverrides}
                           onToolExpandedChange={onToolExpandedChange}
-                          sessionId={sessionId}
-                          onOpenTurn={onOpenTurn}
                         />
                       );
                     }
@@ -14115,6 +14436,11 @@ function RunTurnActivityGroup({
                     }
                     if (child.kind === "meta") {
                       if (child.entry.metaKind === "awaiting_input") {
+                        // The pending question renders inline above the activity
+                        // body; don't duplicate it inside the expanded body.
+                        if (inlineQuestionEntry?.id === child.entry.id) {
+                          return null;
+                        }
                         return (
                           <RunAwaitingInputCard
                             key={child.entry.id}
@@ -14650,8 +14976,6 @@ function RunTurnActivityScreen({
           onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
           toolExpansionOverrides={toolExpansionOverrides}
           onToolExpandedChange={setToolExpanded}
-          sessionId={sessionId}
-          onOpenTurn={onOpenTurn}
         />
       );
     }
@@ -14843,21 +15167,31 @@ function RunTurnActivityScreen({
                     truncated text) instead of hiding the body, so the prompt
                     stays recognizable in the Turns view. */}
                 {selectedTurnContext ? (
-                  <RunMessageBubble
-                    entry={selectedTurnContext}
-                    avatar={avatar}
-                    systemAvatar={systemAvatar}
-                    originSessionAvatarByID={originSessionAvatarByID}
-                    sessionId={sessionId}
-                    highlighted={false}
-                    showTimestamps={showTimestamps}
-                    showDuration={showDuration}
-                    canonicalMessage={false}
-                    ownedByTurnActivity
-                    compact={selectedTurnContextCollapsed}
-                    transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
-                    onOpenTranscriptMessage={onOpenTranscriptMessage}
-                  />
+                  <>
+                    {selectedTurnContext.turnContextContinued &&
+                      !selectedTurnContextCollapsed && (
+                        <p className="run-turn-view-context-continued-label">
+                          Question prompt continued from previous turn
+                        </p>
+                      )}
+                    <RunMessageBubble
+                      entry={selectedTurnContext}
+                      avatar={avatar}
+                      systemAvatar={systemAvatar}
+                      originSessionAvatarByID={originSessionAvatarByID}
+                      sessionId={sessionId}
+                      highlighted={false}
+                      showTimestamps={showTimestamps}
+                      showDuration={showDuration}
+                      canonicalMessage={false}
+                      ownedByTurnActivity
+                      compact={selectedTurnContextCollapsed}
+                      transcriptHref={transcriptHrefForEntry?.(
+                        selectedTurnContext,
+                      )}
+                      onOpenTranscriptMessage={onOpenTranscriptMessage}
+                    />
+                  </>
                 ) : selectedPageInfo?.kind === "question" ? (
                   // No user message started this turn — the agent did, by
                   // invoking AskUserQuestion / ExitPlanMode. The "Question N of M"
@@ -15580,8 +15914,6 @@ export function RunMessages({
             onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
             toolExpansionOverrides={toolExpansionOverrides}
             onToolExpandedChange={setToolExpanded}
-            sessionId={sessionId}
-            onOpenTurn={onOpenTurn}
           />
         );
       }
@@ -15667,7 +15999,6 @@ export function RunMessages({
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
             onFork={onFork}
-            onOpenTurn={onOpenTurn}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
             pageInfo={turnActivityPageInfo[g.turnId]}
@@ -20006,6 +20337,20 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (route.tab === "test-slot") {
+      setActiveTab("test-slot");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "orchestrate") {
+      setActiveTab("orchestrate");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     setActiveTab("turns");
     setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor("bottom");
@@ -22971,6 +23316,10 @@ function ChatPane({
       );
     } else if (activeTab === "background") {
       replaceSessionRoute(session.id, "background");
+    } else if (activeTab === "test-slot") {
+      replaceSessionRoute(session.id, "test-slot");
+    } else if (activeTab === "orchestrate") {
+      replaceSessionRoute(session.id, "orchestrate");
     } else if (activeTab === "chat") {
       replaceSessionTranscriptRoute(session.id);
     } else {
@@ -23030,6 +23379,24 @@ function ChatPane({
     ensureTurnActivityLoaded,
     turnActivityLoadsByTurn,
   ]);
+  // Answering runs through the run composer, which only enters answer mode once
+  // the pending question turn's activity is loaded (answeringContext reads its
+  // snapshot). The reconciler above only loads while the Turns tab is active,
+  // which is why the question used to be reachable only from Turns. Load the
+  // pending needs_input turn regardless of tab so its question widget renders
+  // inline in the main transcript and the composer can answer it right there.
+  const pendingNeedsInputTurnId = useMemo(() => {
+    if (publicView || readOnly) return null;
+    return (
+      turnViewItems.find(
+        (turn) => turn.shell?.activity?.status === "needs_input",
+      )?.turnId ?? null
+    );
+  }, [publicView, readOnly, turnViewItems]);
+  useEffect(() => {
+    if (!pendingNeedsInputTurnId) return;
+    ensureTurnActivityLoaded(pendingNeedsInputTurnId);
+  }, [pendingNeedsInputTurnId, ensureTurnActivityLoaded]);
   // Behavior-free watchdog (telemetry only): report when the selected turn's
   // activity body stays on "Loading activity..." past the threshold. It emits a
   // bounded session-event-stream metric and does NOT start a load, touch the
@@ -23903,6 +24270,40 @@ function ChatPane({
     };
   }, [publicView, readOnly, turnActivityLoadsByTurn, turnViewItems]);
 
+  // Observability for the inline-question surface: once the pending turn's
+  // activity has loaded, answeringContext is non-null exactly when a question is
+  // surfaced (the inline widget renders it and the composer can answer it). A
+  // loaded pending turn with no answeringContext means the question is invisible
+  // — the user-trust failure this surface could introduce. Fire once per turn so
+  // a stuck state doesn't spam the metric.
+  const noInlineCardReportedTurnRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingNeedsInputTurnId) {
+      noInlineCardReportedTurnRef.current = null;
+      return;
+    }
+    const snapshot = turnActivityLoadVisibleSnapshot(
+      turnActivityLoadsByTurn[pendingNeedsInputTurnId],
+    );
+    if (!snapshot) return; // still loading — not yet a miss
+    if (answeringContext) {
+      if (noInlineCardReportedTurnRef.current === pendingNeedsInputTurnId) {
+        noInlineCardReportedTurnRef.current = null;
+      }
+      return;
+    }
+    if (noInlineCardReportedTurnRef.current === pendingNeedsInputTurnId) return;
+    noInlineCardReportedTurnRef.current = pendingNeedsInputTurnId;
+    logSessionEventStreamEvent("turn_activity_needs_input_no_inline_card", {
+      sessionMode: session.mode,
+    });
+  }, [
+    answeringContext,
+    pendingNeedsInputTurnId,
+    turnActivityLoadsByTurn,
+    session.mode,
+  ]);
+
   // Refs to the latest composer text + drafts so the page-change effect below
   // reads current values without re-running on every keystroke.
   const composerTextRef = useRef(composerText);
@@ -24031,6 +24432,13 @@ function ChatPane({
   function advanceToNextQuestion(): void {
     const ctx = answeringContext;
     if (!ctx || !ctx.hasNextPage) return;
+    // Q1 answers inline in the main transcript; Q2+ live on their dedicated
+    // question pages. Advancing from chat therefore leaves the inline surface
+    // for the Turns view rather than flipping the inline card in place (which
+    // the design explicitly rules out). From Turns, advancing just pages.
+    if (activeTab === "chat") {
+      setActiveTab("turns");
+    }
     // Navigation only — the page-change effect above persists the current
     // question's text and restores the next one's, so this button and the
     // header page arrows behave identically.
@@ -24765,6 +25173,28 @@ function ChatPane({
                   onActivitySelectPage={selectTurnActivityPage}
                 />
               )
+            ) : activeTab === "test-slot" ? (
+              <TestSlotScreen
+                sessionId={session.id}
+                testState={testState}
+                authedFetch={authedFetch}
+                disabled={!ready}
+                readOnly={readOnly}
+                onCreateHold={() => startInteractiveTestWorkflow(false)}
+                onCreateDrive={() => startInteractiveTestWorkflow(true)}
+                onReturnTestSlot={readOnly ? undefined : returnTestSlot}
+                onOpenReady={() => {
+                  if (testState)
+                    void markTestState({ ...testState, active: true });
+                }}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
+              />
             ) : activeTab === "background" ? (
               <BackgroundScreen
                 shellEntries={backgroundShellEntries}
@@ -24855,6 +25285,13 @@ function ChatPane({
                 onApprove={(request, note) => {
                   void postTestSlotModelApproval(request, note);
                 }}
+              />
+            ) : activeTab === "orchestrate" ? (
+              <OrchestratePanel
+                sessionId={session.id}
+                spokeConfig={session.spoke_config}
+                spawnedSessions={session.spawned_sessions ?? []}
+                ready={ready}
               />
             ) : activeTab === "settings" ? (
               <RunSettingsPanel
@@ -25443,19 +25880,22 @@ function ChatPane({
                     ? "Use /rollout in this run"
                     : "Use $rollout in this run",
                 }}
+                orchestrate={{
+                  visible: GUI_ROLLOUT_MODES.has(session.mode),
+                  active: Boolean(
+                    session.spoke_config &&
+                      Object.keys(session.spoke_config).length > 0,
+                  ),
+                  disabled: !ready,
+                  title: "Orchestrate a spoke session",
+                  onClick: () => setActiveTab("orchestrate"),
+                }}
                 test={{
                   active: testActionActive,
                   readyUrl: testState?.active ? testState.url?.trim() : "",
-                  onOpenReady: () => {
-                    if (testState)
-                      void markTestState({ ...testState, active: true });
-                  },
-                  onCreateHold: () => startInteractiveTestWorkflow(false),
-                  onCreateDrive: () => startInteractiveTestWorkflow(true),
+                  onOpenPage: () => setActiveTab("test-slot"),
                   disabled: !ready,
-                  title: testState?.active
-                    ? "Choose a test action"
-                    : "Start a test workflow",
+                  title: "Open the test slot page",
                 }}
                 glimmungRuns={{
                   runs: glimmungRunLinks,
@@ -27285,6 +27725,7 @@ function AuthenticatedApp() {
       name: row.name,
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
+      spoke_config: row.spoke_config,
       spawned_sessions: row.spawned_sessions,
       parent_session_id: row.parent_session_id,
       sidebar_position: row.sidebar_position,
@@ -27352,6 +27793,12 @@ function AuthenticatedApp() {
       activity_summary: raw.activity ?? undefined,
       test_state: raw.test_state ?? undefined,
       rollout_state: raw.rollout_state ?? undefined,
+      spoke_config:
+        raw.spoke_config != null &&
+        typeof raw.spoke_config === "object" &&
+        !Array.isArray(raw.spoke_config)
+          ? (raw.spoke_config as Record<string, unknown>)
+          : undefined,
       spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
@@ -30132,7 +30579,17 @@ function AuthenticatedApp() {
                       disabled: true,
                       title: "Use /rollout once your session starts",
                     }}
+                    orchestrate={{
+                      visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
+                      disabled: true,
+                      title: "Orchestrate is available in an active chat session",
+                    }}
                     test={{
+                      // Splash beaker: disabled here (no live session yet), but
+                      // it keeps the create-a-session-seeded-with-the-/test-skill
+                      // wiring. The per-session beaker is what navigates to the
+                      // dedicated test-slot page (onOpenPage); on the splash there
+                      // is no session to open a page for.
                       onCreateHold: () => {
                         void createSession(
                           defaultSessionMode,

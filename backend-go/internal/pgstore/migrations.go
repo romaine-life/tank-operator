@@ -2215,6 +2215,12 @@ var schemaMigrations = []migration{
 	// a cross-scope test-slot origin stored here never produces a phantom nest.
 	{ID: "0179", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS parent_session_id text`},
+
+	// Hub-side spoke-fleet launch config persisted by the orchestrate endpoint.
+	// NULL until set; read by the RowPublisher/snapshot path. Same jsonb style
+	// as rollout_state (0176) and spawned_sessions (0178).
+	{ID: "0180", SQL: `ALTER TABLE sessions
+	ADD COLUMN IF NOT EXISTS spoke_config jsonb`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

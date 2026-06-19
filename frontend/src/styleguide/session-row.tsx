@@ -153,7 +153,10 @@ export function StyleguideSessionRow() {
             is the last child, so it gets the └─ elbow). Mirrors the sidebar
             markup — each nested row carries <code>is-nested</code> and a
             <code> session-nest-connector</code>; the last carries{" "}
-            <code>is-nested-last</code>.
+            <code>is-nested-last</code>. The guide is one continuous opaque spine:
+            each row paints its height plus the single gap above it, so the
+            segments butt-join without overshooting onto a tab or doubling the
+            seam.
           </p>
           <ul className="sessions" style={{ maxWidth: 420, listStyle: "none", padding: 0, margin: 0 }}>
             <li data-depth={0}>

@@ -534,3 +534,47 @@ Evidence:
   (never the bearer value), and bytea cells render as a size.
 - `frontend/src/appRoutes.test.ts` pins `/settings/admin/data` as a
   URL-addressable admin surface.
+
+## Orchestrate Wand + Routed Surface
+
+Status: in progress
+
+Intent:
+Give a GUI chat session a one-tap path to become a spoke-fleet hub: a maestro
+wand in the composer opens a URL-addressable Orchestrate page that is a launch
+form before the session is a hub and a live status surface after. See the
+Orchestrate feature folder and the Session Lifecycle "Orchestrate Hub Launch"
+capability for the backend contract this surface drives.
+
+Affected contracts:
+- App Chrome
+- Session Lifecycle
+
+Contract impact:
+- A `Wand2Icon` button in `ComposerToolButtons` is gated exactly like the
+  rollout button — visible only on active GUI chat sessions, disabled until the
+  session is ready — and is lit (`is-active`) from the durable `spoke_config`,
+  not local state. It navigates to the new routed surface.
+- `/sessions/{id}/orchestrate` is a URL-addressable, reload-stable
+  `SessionRouteTab` (round-tripped by `appRoutes.ts`), rendering
+  `OrchestratePanel`. The form↔status flip is driven by durable `spoke_config`
+  arriving via the session SSE snapshot — the UI does not optimistically flip on
+  the POST response.
+- Form state (not yet a hub): provider / surface (GUI·CLI) / model / reasoning,
+  no repo, options sourced from `GET /api/session-run-options`, and it states the
+  break-glass blast radius (all repositories, 24h) before confirm. Confirm POSTs
+  `/api/sessions/{id}/orchestrate`; pending/success/failure are surfaced per the
+  App Chrome async-action contract.
+- Status state (is a hub): the hub session, its spoke config, the spawned spokes
+  (reusing the durable `spawned_sessions` lineage → links), and the break-glass
+  grant note.
+
+Evidence:
+- `frontend/src/OrchestratePanel.tsx` (form + status), the `orchestrate` prop on
+  `ComposerToolButtons` and the `Wand2Icon` button wiring in
+  `frontend/src/App.tsx`, the `spoke_config` field on `SessionRow` in
+  `frontend/src/sessionStore.ts`, and the `orchestrate` `SessionRouteTab` in
+  `frontend/src/appRoutes.ts` (with `appRoutes.test.ts` round-trip coverage).
+- Owed before "done": behavioral validation on a per-change environment
+  (wand → form → confirm → status flip) and the live spoke→hub ping-back smoke,
+  per the Orchestrate feature contract.

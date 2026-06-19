@@ -418,6 +418,7 @@ func publicMessageLinkSessionBody(info sessions.Info) map[string]any {
 		"name":                  info.Name,
 		"test_state":            nil,
 		"rollout_state":         nil,
+		"spoke_config":          nil,
 		"repos":                 []string{},
 		"clone_state":           nil,
 		"row_version":           int64(0),

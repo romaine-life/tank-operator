@@ -80,7 +80,25 @@ var (
 		Name: "tank_test_slot_provision_guard_total",
 		Help: "Interactive test-workflow double-trigger guard outcomes, by bounded result.",
 	}, []string{"result"})
+
+	// Read-only test-slot status surface (handlers_test_slot_status.go). The
+	// dedicated test-slot page reads this on navigation/refresh. "result" is the
+	// bounded fetch outcome: "durable" (snapshot from the session_ci_watches +
+	// pending_test_provisions rows), "live" (a ?refresh=1 read that also ran the
+	// zero-side-effect preflight), "no_repo"/"ambiguous_repo" (coordinates could
+	// not be resolved), "not_found", or "error".
+	testSlotStatusRequestTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_test_slot_status_requests_total",
+		Help: "Read-only test-slot status-surface requests, by bounded result.",
+	}, []string{"result"})
 )
+
+func recordTestSlotStatus(result string) {
+	if result == "" {
+		result = "error"
+	}
+	testSlotStatusRequestTotal.WithLabelValues(result).Inc()
+}
 
 func setTestSlotPendingProvisionOldestAge(seconds float64) {
 	if seconds < 0 {

@@ -852,6 +852,10 @@ type gitBreakGlassGrantInput struct {
 	RequestEventID string
 	Reason         string
 	ApprovedBy     string
+	// Source, when set, is recorded in the grant payload as an audit marker
+	// for non-human-approval grant origins (e.g. "orchestrate-self-grant").
+	// Empty for the normal admin-approval path.
+	Source string
 }
 
 type azureBreakGlassGrantInput struct {
@@ -889,7 +893,7 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 	// full_github_api is bound to the (resolved) branch scope: only an
 	// unlimited-branch grant carries the App's full GitHub API write.
 	operations := normalizeBreakGlassOperations(in.Operations, strings.TrimSpace(resolvedBranchScope.Kind) == "unlimited")
-	payload, _ := json.Marshal(map[string]any{
+	payloadFields := map[string]any{
 		"approved_by":      strings.TrimSpace(in.ApprovedBy),
 		"expires_at":       expiresAt.Format(time.RFC3339),
 		"ttl_seconds":      ttl,
@@ -898,7 +902,11 @@ func (s *appServer) appendGitBreakGlassGrant(ctx context.Context, in gitBreakGla
 		"reason":           strings.TrimSpace(in.Reason),
 		"repo_scope":       resolvedRepoScope,
 		"branch_scope":     resolvedBranchScope,
-	})
+	}
+	if source := strings.TrimSpace(in.Source); source != "" {
+		payloadFields["source"] = source
+	}
+	payload, _ := json.Marshal(payloadFields)
 	event := pgstore.ControlActionEvent{
 		EventID:       "tank-break-glass-grant-" + in.SessionID + "-" + randomHex(12),
 		InvocationID:  "tank-break-glass-grant-" + randomHex(12),

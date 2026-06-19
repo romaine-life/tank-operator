@@ -48,6 +48,7 @@ type Info struct {
 	Name         string         `json:"name"`
 	TestState    map[string]any `json:"test_state"`
 	RolloutState map[string]any `json:"rollout_state"`
+	SpokeConfig  map[string]any `json:"spoke_config"`
 	// SpawnedSessions is the durable parent→child lineage rendered by the
 	// session-bar "spawned sessions" chip: the sessions this session
 	// spawned via spawn_run_session / spawn_test_slot_session. Omitted from
@@ -299,6 +300,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Name:                             record.Name,
 		TestState:                        record.TestState,
 		RolloutState:                     record.RolloutState,
+		SpokeConfig:                      record.SpokeConfig,
 		SpawnedSessions:                  record.SpawnedSessions,
 		ParentSessionID:                  record.ParentSessionID,
 		Repos:                            repos,
