@@ -49,6 +49,18 @@ export const transcriptCaptureLagMs = new Gauge({
   registers: [registry],
 });
 
+// Resume bootstrap outcome on a resurrected pod (Stage 2). `outcome` is a
+// closed set: materialized (transcript written, will `resume`), not_found
+// (nothing to resume), version_mismatch (SDK-format gap — started fresh to
+// avoid a corrupt resume), error. A resurrected pod that lands `not_found` or
+// `error` is a resurrection regression worth alerting on.
+export const transcriptResumeTotal = new Counter({
+  name: "tank_runner_transcript_resume_total",
+  help: "Resume-bootstrap outcomes on resurrected pods, by outcome.",
+  labelNames: ["outcome"],
+  registers: [registry],
+});
+
 export const natsConnectionStatusTotal = new Counter({
   name: "tank_runner_nats_connection_status_total",
   help: "NATS connection lifecycle events observed by the runner, by bounded status type.",

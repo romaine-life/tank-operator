@@ -11,10 +11,13 @@ import {
   startMetricsServer,
   transcriptCaptureLagMs,
   transcriptCaptureTotal,
+  transcriptResumeTotal,
 } from "./metrics.js";
 import { Runner } from "./runner.js";
+import { runResumeBootstrap } from "./resumeBootstrap.js";
 import { TranscriptCapture } from "./transcriptCapture.js";
 import { uploadTranscriptSnapshot } from "../../runner-shared/transcriptUpload.js";
+import { fetchResumeTranscript } from "../../runner-shared/transcriptDownload.js";
 
 // Best-effort read of the Claude Agent SDK version, captured alongside each
 // transcript snapshot so Stage-2 restore can gate resume on SDK-format
@@ -65,6 +68,30 @@ async function main(): Promise<void> {
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+
+  // Resurrected pod: materialize the dead session's transcript and pin its SDK
+  // session id so the runner `resume`s that conversation instead of starting
+  // fresh. Gated by env — normal pods skip this entirely. Any failure starts
+  // fresh and never blocks boot. See docs/session-transcript-capture.md.
+  if (cfg.resurrectSourceSessionId) {
+    try {
+      const home = process.env.HOME?.trim() || "/home/node";
+      const resumeSessionId = await runResumeBootstrap({
+        homeDir: home,
+        runningSdkVersion: readClaudeSdkVersion(),
+        fetchTranscript: () => fetchResumeTranscript(cfg),
+        onOutcome: (outcome) => transcriptResumeTotal.labels(outcome).inc(),
+      });
+      if (resumeSessionId) {
+        cfg.resumeSessionId = resumeSessionId;
+        console.log(
+          JSON.stringify({ msg: "resuming prior conversation", resume_session_id: resumeSessionId }),
+        );
+      }
+    } catch (err) {
+      console.warn("resume bootstrap setup failed (starting fresh):", err);
+    }
+  }
 
   // Transcript capture runs in-process as a read-only sink. It is fully
   // crash-isolated: a failure to set it up must never stop the runner from

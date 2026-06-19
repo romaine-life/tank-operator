@@ -10,6 +10,7 @@ package transcriptstore
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -24,9 +25,15 @@ type Snapshot struct {
 
 // Store is the durable sink. Put overwrites the blob at key; the latest
 // snapshot is the resume source, so last-write-wins is the intended semantics.
+// Get reads a snapshot back for restore (Stage 2); ok is false when absent.
 type Store interface {
 	Put(ctx context.Context, key string, snap Snapshot) error
+	Get(ctx context.Context, key string) (snap Snapshot, ok bool, err error)
 }
+
+// ErrNotFound is returned by stores when a key is absent. Get reports absence
+// via its ok result; this sentinel is for callers that prefer error matching.
+var ErrNotFound = errors.New("transcriptstore: not found")
 
 // MemoryStore is an in-process stub used in tests and as a non-fatal fallback.
 type MemoryStore struct {
@@ -49,11 +56,16 @@ func (m *MemoryStore) Put(_ context.Context, key string, snap Snapshot) error {
 	return nil
 }
 
-// Get returns a stored snapshot; second result is false when absent. Test-only
-// helper (the production read path is Stage-2 restore).
-func (m *MemoryStore) Get(key string) (Snapshot, bool) {
+func (m *MemoryStore) Get(_ context.Context, key string) (Snapshot, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	snap, ok := m.objs[key]
-	return snap, ok
+	if !ok {
+		return Snapshot{}, false, nil
+	}
+	cp := make([]byte, len(snap.Bytes))
+	copy(cp, snap.Bytes)
+	out := snap
+	out.Bytes = cp
+	return out, true, nil
 }

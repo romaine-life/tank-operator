@@ -15,7 +15,10 @@ func TestMemoryStorePutGetRoundTrip(t *testing.T) {
 	if err := m.Put(context.Background(), "owner/8/abc.jsonl", want); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, ok := m.Get("owner/8/abc.jsonl")
+	got, ok, err := m.Get(context.Background(), "owner/8/abc.jsonl")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	if !ok {
 		t.Fatal("Get: snapshot not found after Put")
 	}
@@ -38,7 +41,7 @@ func TestMemoryStoreCopiesBytes(t *testing.T) {
 	}
 	// Mutating the caller's buffer must not corrupt the stored snapshot.
 	src[0] = 'X'
-	got, _ := m.Get("k")
+	got, _, _ := m.Get(context.Background(), "k")
 	if string(got.Bytes) != "one\n" {
 		t.Fatalf("stored bytes aliased caller buffer: %q", got.Bytes)
 	}
@@ -48,7 +51,7 @@ func TestMemoryStoreLastWriteWins(t *testing.T) {
 	m := NewMemoryStore()
 	_ = m.Put(context.Background(), "k", Snapshot{Bytes: []byte("v1")})
 	_ = m.Put(context.Background(), "k", Snapshot{Bytes: []byte("v2")})
-	got, _ := m.Get("k")
+	got, _, _ := m.Get(context.Background(), "k")
 	if string(got.Bytes) != "v2" {
 		t.Fatalf("expected last write to win, got %q", got.Bytes)
 	}

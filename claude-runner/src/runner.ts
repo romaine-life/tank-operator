@@ -1163,10 +1163,15 @@ export class Runner {
       toolAliases: {
         [TANK_ASK_USER_QUESTION_TOOL]: TANK_ASK_USER_QUESTION_TOOL_ALIAS,
       },
-      // Resume an on-disk JSONL if one exists from a prior process
-      // life (e.g., claude-runner restart within the same pod).
-      // First boot with no JSONL: no-op.
-      continue: true,
+      // Default: resume an on-disk JSONL if one exists from a prior process
+      // life (e.g., claude-runner restart within the same pod). First boot with
+      // no JSONL: no-op. On a resurrected pod the resume bootstrap has
+      // materialized the dead session's transcript at its exact path and pinned
+      // its SDK session id, so we `resume` that specific session instead —
+      // cross-pod conversation resurrection. Non-resurrect pods are unchanged.
+      ...(this.cfg.resumeSessionId
+        ? { resume: this.cfg.resumeSessionId }
+        : { continue: true }),
       // include_partial_messages keeps the typewriter effect — the SPA
       // renders stream_event deltas live and snapshots to the canonical
       // assistant message when it arrives.

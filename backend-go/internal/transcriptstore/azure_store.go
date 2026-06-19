@@ -2,11 +2,13 @@ package transcriptstore
 
 import (
 	"context"
+	"io"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 )
 
 // AzureStore writes transcript snapshots to a private Azure Blob container
@@ -40,4 +42,33 @@ func (s *AzureStore) Put(ctx context.Context, key string, snap Snapshot) error {
 	}
 	_, err := s.client.UploadBuffer(ctx, s.container, key, snap.Bytes, opts)
 	return err
+}
+
+func (s *AzureStore) Get(ctx context.Context, key string) (Snapshot, bool, error) {
+	resp, err := s.client.DownloadStream(ctx, s.container, key, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound, bloberror.ContainerNotFound) {
+			return Snapshot{}, false, nil
+		}
+		return Snapshot{}, false, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	snap := Snapshot{Bytes: body}
+	if resp.ContentType != nil {
+		snap.ContentType = *resp.ContentType
+	}
+	if len(resp.Metadata) > 0 {
+		md := make(map[string]string, len(resp.Metadata))
+		for k, v := range resp.Metadata {
+			if v != nil {
+				md[k] = *v
+			}
+		}
+		snap.Metadata = md
+	}
+	return snap, true, nil
 }
