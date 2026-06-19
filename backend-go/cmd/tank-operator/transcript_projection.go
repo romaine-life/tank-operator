@@ -341,6 +341,8 @@ func (s *projectionState) apply(event map[string]any) {
 		s.upsertScheduledWakeup(event)
 	case "test_provision.updated":
 		s.applyTestProvision(event)
+	case "pr_ready.notified":
+		s.applyPRReadyNotice(event)
 	case "turn.awaiting_input":
 		// The agent asked the user a question as the Tank-visible response.
 		// The durable question set owns the Turn question page; the main
@@ -660,6 +662,41 @@ func (s *projectionState) applyTestProvision(event map[string]any) {
 	if url := strings.TrimSpace(transcriptPayloadString(event, "url")); url != "" {
 		entry["action"] = map[string]any{
 			"label": "Open test environment",
+			"href":  url,
+		}
+	}
+	s.messages = append(s.messages, projectedEntryItem{
+		entry:    entry,
+		orderKey: transcriptString(event, "order_key"),
+		index:    len(s.messages),
+	})
+}
+
+// applyPRReadyNotice projects the CI-watch ready USER ping
+// (pr_ready.notified) as a top-level role:system message — the same shape as
+// applyTestProvision: a deliberate, conversation-altitude system notice with no
+// owning turn (it is not folded into any turn's activity). It carries the PR
+// URL as a click-through action. The needs_input sidebar attention this ping
+// also raises is owned by the activity fold (sessionactivity), not this
+// transcript-row projection.
+func (s *projectionState) applyPRReadyNotice(event map[string]any) {
+	text := transcriptPayloadString(event, "text")
+	if transcriptString(event, "timeline_id") == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	entry := map[string]any{
+		"id":            transcriptString(event, "timeline_id"),
+		"kind":          "message",
+		"role":          "system",
+		"text":          strings.TrimSpace(text),
+		"severity":      "info",
+		"time":          transcriptString(event, "created_at"),
+		"sourceEventId": transcriptString(event, "event_id"),
+		"orderKey":      transcriptString(event, "order_key"),
+	}
+	if url := strings.TrimSpace(transcriptPayloadString(event, "pr_url")); url != "" {
+		entry["action"] = map[string]any{
+			"label": "View PR",
 			"href":  url,
 		}
 	}

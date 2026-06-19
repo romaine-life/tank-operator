@@ -202,6 +202,64 @@ test("test_provision error phase carries error severity", () => {
   expect(state.messages[0].severity).toBe("error");
 });
 
+function prReadyEv(
+  fields: Partial<TankConversationEvent> = {},
+): TankConversationEvent {
+  return ev("pr-ready:romaine-life/tank-operator:12", "pr_ready.notified", {
+    actor: "system",
+    source: "tank",
+    timeline_id: "pr-ready:romaine-life/tank-operator:12",
+    client_nonce: "pr-ready-pr-ready:romaine-life/tank-operator:12",
+    payload: {
+      kind: "pr_ready",
+      repo: "romaine-life/tank-operator",
+      pr_number: 12,
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/12",
+      head_sha: "abc1234",
+      text: "✅ Your governed PR romaine-life/tank-operator #12 is green and mergeable — ready to merge.",
+    },
+    ...fields,
+  });
+}
+
+test("pr_ready.notified records are valid Tank envelopes", () => {
+  expect(isTankConversationEvent(prReadyEv())).toBe(true);
+  // Missing pr_url is rejected.
+  expect(
+    isTankConversationEvent(
+      prReadyEv({
+        payload: { kind: "pr_ready", text: "ready" },
+      }),
+    ),
+  ).toBe(false);
+});
+
+test("pr_ready.notified renders a system notice and summons from idle", () => {
+  const state = reduceConversationEvents([prReadyEv()]);
+  expect(state.messages).toHaveLength(1);
+  expect(state.messages[0].role).toBe("system");
+  expect(state.messages[0].action).toEqual({
+    label: "View PR",
+    href: "https://github.com/romaine-life/tank-operator/pull/12",
+  });
+  // The needs_input attention is reused as the "your turn" UI dressing.
+  expect(state.runStatus).toBe("needs_input");
+  expect(state.needsInput).toBe(true);
+});
+
+test("pr_ready.notified does not clobber an in-flight agent turn", () => {
+  // CI goes green while the agent is mid-turn: the ping renders as a notice but
+  // must not downgrade the live streaming run status.
+  const state = reduceConversationEvents([
+    ev("1", "turn.submitted", { client_nonce: "run-live" }),
+    ev("2", "turn.started", { source: "claude" }),
+    prReadyEv(),
+  ]);
+  expect(state.runStatus).toBe("streaming");
+  expect(state.needsInput).toBe(false);
+  expect(state.messages.some((m) => m.role === "system")).toBe(true);
+});
+
 test("Normal turn reaches ready with one user message and assistant item", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {

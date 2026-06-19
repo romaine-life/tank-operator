@@ -1955,6 +1955,42 @@ func TestProjectTranscriptEventsRendersTestProvisionThread(t *testing.T) {
 	}
 }
 
+// TestProjectTranscriptEventsRendersPRReadyNotice proves the CI-watch ready
+// USER ping (pr_ready.notified) projects to a top-level role:system message
+// carrying a View-PR click-through action — the inline rendering the
+// invisible ci_status.updated "ready" record never had.
+func TestProjectTranscriptEventsRendersPRReadyNotice(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("pr1", "001", "pr_ready.notified", "system", "tank", "", "pr-ready:romaine-life/tank-operator:12", map[string]any{
+			"kind": "pr_ready", "repo": "romaine-life/tank-operator", "pr_number": 12,
+			"pr_url":   "https://github.com/romaine-life/tank-operator/pull/12",
+			"head_sha": "abc1234",
+			"text":     "✅ Your governed PR romaine-life/tank-operator #12 is green and mergeable — ready to merge.",
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	var msgs []map[string]any
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "message" && entry["role"] == "system" {
+			msgs = append(msgs, entry)
+		}
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("projected system messages = %d, want 1: %#v", len(msgs), projection.Entries)
+	}
+	if got, _ := msgs[0]["id"].(string); got != "pr-ready:romaine-life/tank-operator:12" {
+		t.Fatalf("message id = %q, want the pr-ready timeline id", got)
+	}
+	action, ok := msgs[0]["action"].(map[string]any)
+	if !ok {
+		t.Fatalf("ready notice should carry a View-PR action: %#v", msgs[0])
+	}
+	if href, _ := action["href"].(string); href != "https://github.com/romaine-life/tank-operator/pull/12" {
+		t.Fatalf("action href=%q, want the PR URL", href)
+	}
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,

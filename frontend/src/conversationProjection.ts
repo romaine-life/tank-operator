@@ -141,14 +141,17 @@ export function projectConversationState(
         // including the recovery "back online" ready) stay, as do the
         // test_provision workflow thread records (their own "test-provision:"
         // timeline) which are deliberate conversation-altitude feedback for a
-        // zero-LLM workflow. Mirrors the server's applySessionStatus /
-        // applyTestProvision markers in transcript_projection.go.
+        // zero-LLM workflow, and the CI-watch ready ping ("pr-ready:" timeline),
+        // a deliberate system notice that the governed PR is mergeable. Mirrors
+        // the server's applySessionStatus / applyTestProvision /
+        // applyPRReadyNotice markers in transcript_projection.go.
         if (
           message.role === "system" &&
           message.severity !== "error" &&
           !message.action &&
           !message.id.includes(":provider:") &&
-          !message.id.startsWith("test-provision:")
+          !message.id.startsWith("test-provision:") &&
+          !message.id.startsWith("pr-ready:")
         ) {
           return [];
         }

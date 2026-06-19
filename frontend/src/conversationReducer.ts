@@ -312,6 +312,8 @@ export function conversationReducer(
       return applySessionStatusMessage(next, event);
     case "test_provision.updated":
       return applyTestProvisionMessage(next, event);
+    case "pr_ready.notified":
+      return applyPRReadyMessage(next, event);
     case "item.started":
       return upsertItem(next, event, "started");
     case "item.completed":
@@ -678,6 +680,52 @@ function applyTestProvisionMessage(
     return { ...state, messages: next };
   }
   return { ...state, messages: [...state.messages, message] };
+}
+
+// applyPRReadyMessage reduces the CI-watch ready USER ping (pr_ready.notified)
+// into a role:system message AND reflects the needs_input attention the agent's
+// AskUserQuestion hand-off uses — without a runner, an answer form, or a turn.
+// The pr_url is surfaced as a View-PR click-through. It is informational; the
+// existing merge surface handles merging (no Merge action button here).
+//
+// The attention is mirrored from the server-owned activity summary
+// (sessionactivity folds pr_ready.notified to needs_input). This reducer drives
+// the in-pane companion state; it sets needsInput ONLY when the pane is idle
+// (runStatus "ready"), so a ping that races a live agent turn cannot downgrade a
+// streaming/submitted turn — matching the backend fold's no-clobber guard. Any
+// later turn.* event clears it through the cases above.
+function applyPRReadyMessage(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  const text = stringPayload(event, "text") ?? "";
+  if (!event.timeline_id || !text) return state;
+  const url = stringPayload(event, "pr_url");
+  const message: ConversationMessage = {
+    id: event.timeline_id,
+    role: "system",
+    text,
+    orderKey: event.order_key,
+    sourceEventId: event.event_id,
+    createdAt: event.created_at,
+    severity: "info",
+    ...(url ? { action: { label: "View PR", href: url } } : {}),
+  };
+  const existingIndex = state.messages.findIndex(
+    (m) => m.id === event.timeline_id,
+  );
+  const messages =
+    existingIndex >= 0
+      ? state.messages.map((m, i) => (i === existingIndex ? message : m))
+      : [...state.messages, message];
+  // Only summon when idle: never clobber an in-flight turn's run status.
+  const idle = state.runStatus === "ready";
+  return {
+    ...state,
+    messages,
+    runStatus: idle ? "needs_input" : state.runStatus,
+    needsInput: idle ? true : state.needsInput,
+  };
 }
 
 function sessionStatusAction(
