@@ -63,6 +63,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sessions.rollout_state,
 			sessions.spoke_config,
 			sessions.spawned_sessions,
+			sessions.pull_requests,
 			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
@@ -129,8 +130,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			name                                                                      string
 			visible                                                                   bool
 			sessionImageMetadata                                                      []byte
-			activitySummary, testState, rolloutState, spokeConfig, cloneState          []byte
-			spawnedSessions                                                           []byte
+			activitySummary, testState, rolloutState, spokeConfig, cloneState         []byte
+			spawnedSessions, pullRequests                                             []byte
 			parentSessionID                                                           string
 			providerRateLimitInfo                                                     []byte
 			repos, capabilities                                                       []string
@@ -153,6 +154,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState, &spokeConfig,
 			&spawnedSessions,
+			&pullRequests,
 			&parentSessionID,
 			&repos, &cloneState, &capabilities, &model, &effort,
 			&runtimeModel, &runtimeEffort, &runtimeAt,
@@ -196,6 +198,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			RolloutState:                     unmarshalJSONB(rolloutState),
 			SpokeConfig:                      unmarshalJSONB(spokeConfig),
 			SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
+			PullRequests:                     sessionmodel.DecodeSessionPullRequests(pullRequests),
 			ParentSessionID:                  parentSessionID,
 			Repos:                            repos,
 			CloneState:                       unmarshalJSONB(cloneState),

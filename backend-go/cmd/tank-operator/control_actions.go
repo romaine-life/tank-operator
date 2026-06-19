@@ -18,6 +18,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 const maxControlActionPayloadBytes = 16 << 10
@@ -167,7 +168,63 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 		return
 	}
 	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	s.recordSessionPullRequestSighting(r.Context(), row)
 	writeJSON(w, http.StatusCreated, controlActionToJSON(row, true))
+}
+
+// recordSessionPullRequestSighting mirrors any github.pull_request.* control
+// action into the session's durable pull_requests projection so the git chip
+// and the dedicated /pull-requests page surface every PR a session touched,
+// without re-deriving the list from the capped recent-activity feed (where the
+// oldest .open rows silently dropped on busy sessions). Best-effort and
+// display-only: a failure is logged and counted but never affects the
+// already-committed control-action write — the ledger stays the source of truth.
+func (s *appServer) recordSessionPullRequestSighting(ctx context.Context, row pgstore.ControlActionEvent) {
+	if s.mgr == nil {
+		return
+	}
+	ref, ok := sessionPullRequestRefFromControlAction(row)
+	if !ok {
+		return
+	}
+	if err := s.mgr.AppendSessionPullRequest(ctx, row.OwnerEmail, row.SessionID, ref); err != nil {
+		slog.Warn("record session pull-request sighting failed",
+			"session_id", row.SessionID, "url", ref.URL, "error", err)
+		sessionPullRequestLinkTotal.WithLabelValues("error").Inc()
+		return
+	}
+	sessionPullRequestLinkTotal.WithLabelValues("ok").Inc()
+}
+
+// sessionPullRequestRefFromControlAction extracts a durable PR ref from a
+// control-action row, or (zero, false) when the row is not a github.pull_request.*
+// action carrying a real github.com/.../pull/N URL. Pure so the filter + ref
+// construction is unit-testable without a session manager.
+func sessionPullRequestRefFromControlAction(row pgstore.ControlActionEvent) (sessionmodel.SessionPullRequestRef, bool) {
+	if !strings.HasPrefix(row.Action, "github.pull_request.") {
+		return sessionmodel.SessionPullRequestRef{}, false
+	}
+	url := strings.TrimSpace(row.TargetRef)
+	if !strings.Contains(url, "github.com/") || !strings.Contains(url, "/pull/") {
+		return sessionmodel.SessionPullRequestRef{}, false
+	}
+	owner := strings.TrimSpace(row.RepoOwner)
+	name := strings.TrimSpace(row.RepoName)
+	repo := ""
+	if owner != "" && name != "" {
+		repo = owner + "/" + name
+	}
+	ref := sessionmodel.SessionPullRequestRef{
+		Repo:      repo,
+		URL:       url,
+		Action:    row.Action,
+		Status:    row.Status,
+		UpdatedAt: row.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	if row.PRNumber != nil {
+		ref.Number = *row.PRNumber
+	}
+	return ref, true
 }
 
 // internalCallerMatchesSession authorizes a session-scoped internal write by the

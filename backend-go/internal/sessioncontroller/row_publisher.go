@@ -142,6 +142,10 @@ type rowWireShape struct {
 	// SpawnedSessions: omit-when-empty parent→child lineage for the
 	// session-bar "spawned sessions" chip. Mirrors the snapshot Info field.
 	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
+	// PullRequests: omit-when-empty durable list of PRs this session touched,
+	// surfaced by the git chip / dedicated /pull-requests page. Mirrors the
+	// snapshot Info field.
+	PullRequests []sessionmodel.SessionPullRequestRef `json:"pull_requests,omitempty"`
 	// ParentSessionID: omit-when-empty child→parent (origin) pointer that drives
 	// sidebar nesting. On the create row-update this lands with the child, so
 	// the SPA nests it on arrival without waiting for the parent's
@@ -218,6 +222,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			RolloutState:                     record.RolloutState,
 			SpokeConfig:                      record.SpokeConfig,
 			SpawnedSessions:                  record.SpawnedSessions,
+			PullRequests:                     record.PullRequests,
 			ParentSessionID:                  record.ParentSessionID,
 			Repos:                            repos,
 			CloneState:                       record.CloneState,

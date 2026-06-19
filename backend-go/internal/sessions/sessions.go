@@ -60,6 +60,11 @@ type Info struct {
 	// the wire when empty (the every-session-today shape). Same source of
 	// truth as the RowPublisher field so snapshot and SSE agree.
 	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
+	// PullRequests is the durable list of pull requests this session touched,
+	// rendered by the git chip / dedicated /pull-requests page. Omitted when
+	// empty. Same source of truth as the RowPublisher field so snapshot and SSE
+	// agree.
+	PullRequests []sessionmodel.SessionPullRequestRef `json:"pull_requests,omitempty"`
 	// ParentSessionID is the child→parent (origin) pointer that drives sidebar
 	// nesting — the id of the session that spawned this one, stamped at create.
 	// Omitted when empty (human/splash creates, pre-column sessions). Same
@@ -307,6 +312,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		RolloutState:                     record.RolloutState,
 		SpokeConfig:                      record.SpokeConfig,
 		SpawnedSessions:                  record.SpawnedSessions,
+		PullRequests:                     record.PullRequests,
 		ParentSessionID:                  record.ParentSessionID,
 		Repos:                            repos,
 		CloneState:                       record.CloneState,

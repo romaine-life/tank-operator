@@ -105,6 +105,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			sessions.rollout_state,
 			sessions.spoke_config,
 			sessions.spawned_sessions,
+			sessions.pull_requests,
 			COALESCE(sessions.parent_session_id, '') AS parent_session_id,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
@@ -163,26 +164,26 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 	var out []sessionmodel.SessionRecord
 	for rows.Next() {
 		var (
-			sessionID, mode, podName, requestedAt, createdAt, updatedAt string
-			status, readyAt, terminatingAt                              string
-			name                                                        string
-			visible                                                     bool
+			sessionID, mode, podName, requestedAt, createdAt, updatedAt       string
+			status, readyAt, terminatingAt                                    string
+			name                                                              string
+			visible                                                           bool
 			activitySummary, testState, rolloutState, spokeConfig, cloneState []byte
-			spawnedSessions                                                   []byte
-			parentSessionID                                             string
-			providerRateLimitInfo                                       []byte
-			repos, capabilities                                         []string
-			agentAvatarID, systemAvatarID                               string
-			model, effort                                               string
-			runtimeModel, runtimeEffort, runtimeAt                      string
-			runtimeContextWindowTokens                                  int64
-			runtimeContextWindowSource, runtimeContextWindowAt          string
-			runtimeProviderSessionID, runtimeProviderSessionObservedAt  string
-			providerRateLimitObservedAt                                 string
-			sidebarPosition, rowVersion                                 int64
-			bugLabelID                                                  sql.NullInt64
-			bugLabelName, bugLabelSlug                                  sql.NullString
-			bugLabelsRaw                                                []byte
+			spawnedSessions, pullRequests                                     []byte
+			parentSessionID                                                   string
+			providerRateLimitInfo                                             []byte
+			repos, capabilities                                               []string
+			agentAvatarID, systemAvatarID                                     string
+			model, effort                                                     string
+			runtimeModel, runtimeEffort, runtimeAt                            string
+			runtimeContextWindowTokens                                        int64
+			runtimeContextWindowSource, runtimeContextWindowAt                string
+			runtimeProviderSessionID, runtimeProviderSessionObservedAt        string
+			providerRateLimitObservedAt                                       string
+			sidebarPosition, rowVersion                                       int64
+			bugLabelID                                                        sql.NullInt64
+			bugLabelName, bugLabelSlug                                        sql.NullString
+			bugLabelsRaw                                                      []byte
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
@@ -190,6 +191,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState, &spokeConfig,
 			&spawnedSessions,
+			&pullRequests,
 			&parentSessionID,
 			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID,
 			&model, &effort, &runtimeModel, &runtimeEffort, &runtimeAt,
@@ -227,6 +229,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			RolloutState:                     unmarshalJSONBField(rolloutState),
 			SpokeConfig:                      unmarshalJSONBField(spokeConfig),
 			SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
+			PullRequests:                     sessionmodel.DecodeSessionPullRequests(pullRequests),
 			ParentSessionID:                  parentSessionID,
 			Repos:                            repos,
 			CloneState:                       unmarshalJSONBField(cloneState),

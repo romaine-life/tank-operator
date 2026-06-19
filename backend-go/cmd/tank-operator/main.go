@@ -1260,6 +1260,9 @@ func (r *stubSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ ma
 func (r *stubSessionRegistry) AppendSpawnedSession(_ context.Context, _, _ string, _ sessionmodel.SpawnedSessionRef) error {
 	return nil
 }
+func (r *stubSessionRegistry) AppendSessionPullRequest(_ context.Context, _, _ string, _ sessionmodel.SessionPullRequestRef) error {
+	return nil
+}
 func (r *stubSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
 }

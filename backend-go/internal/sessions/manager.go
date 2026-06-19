@@ -59,6 +59,7 @@ type SessionRegistry interface {
 	SetSpokeConfig(ctx context.Context, email, sessionID string, config map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
 	AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error
+	AppendSessionPullRequest(ctx context.Context, email, sessionID string, ref sessionmodel.SessionPullRequestRef) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
 	SetParentSession(ctx context.Context, email, sessionID, parentID string) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
@@ -836,6 +837,24 @@ func (m *Manager) AppendSpawnedSession(ctx context.Context, owner, parentSession
 		return err
 	}
 	m.publishRow(ctx, owner, parentSessionID)
+	return nil
+}
+
+// AppendSessionPullRequest records one PR sighting on the session row's durable
+// pull_requests projection and republishes the row so the git chip /
+// /pull-requests page converge over SSE without a manual refresh. Like
+// AppendSpawnedSession this is best-effort, display-only lineage: it patches no
+// pod annotation and the control-action ledger remains the source of truth; the
+// projection only spares the SPA from re-deriving PRs out of the capped
+// recent-activity feed (where the oldest .open rows silently dropped).
+func (m *Manager) AppendSessionPullRequest(ctx context.Context, owner, sessionID string, ref sessionmodel.SessionPullRequestRef) error {
+	if m.registry == nil {
+		return nil
+	}
+	if err := m.registry.AppendSessionPullRequest(ctx, owner, sessionID, ref); err != nil {
+		return err
+	}
+	m.publishRow(ctx, owner, sessionID)
 	return nil
 }
 

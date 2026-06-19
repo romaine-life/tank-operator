@@ -607,6 +607,21 @@ var spawnedSessionLinkTotal = promauto.NewCounterVec(
 	[]string{"result"},
 )
 
+// sessionPullRequestLinkTotal counts attempts to record a github.pull_request.*
+// sighting onto the session row's durable pull_requests projection. Bounded
+// (2 series: ok|error). The write is best-effort and never fails the
+// control-action append; a rising error rate means sessions are silently losing
+// PR links (the projection write is failing) so the git chip / /pull-requests
+// page under-reports — the same user-trust regression class as the spawn-link
+// counter above, worth alerting on per docs/observability.md.
+var sessionPullRequestLinkTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_pull_request_link_total",
+		Help: "github.pull_request.* sighting writes onto the session row's pull_requests projection, by result.",
+	},
+	[]string{"result"},
+)
+
 // sessionReorderTotal counts PUT /api/sessions/order outcomes. result=ok|conflict|error.
 // Bounded (3 series). conflict is the benign stale-tab permutation rejection
 // (the SPA refreshes and retries); a nonzero error rate means the durable
