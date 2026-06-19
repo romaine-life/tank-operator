@@ -8,12 +8,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
-	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
@@ -221,89 +219,54 @@ func (s *appServer) pickTestWorkflowRepo(ctx context.Context, sessionID string, 
 
 // runInteractiveTestWorkflow runs the gated validate→wait→provision sequence for
 // the interactive trigger off the request path (it can wait minutes for CI to
-// settle) and surfaces the outcome durably as a grouped role:system thread of
-// test_provision.updated records: an opener on kickoff, intermediate
-// validating/waiting updates as the gate advances, and a terminal ready/refusal
-// record. On a ready verdict the gate's SetTestState already marked the slot
-// active + URL; on any refusal the gate left glimmung and test-state untouched,
-// so the refusal reason is the terminal record's text. It uses a fresh
-// background context budgeted for the settle cap plus deploy grace, not a
-// possibly-canceled request ctx.
+// settle) and records the outcome durably. The user-visible surface is the
+// dedicated test-slot page (see handlers_test_slot_status.go), NOT the
+// transcript: provisioning no longer emits any transcript record. On a ready
+// verdict the gate's SetTestState already marked the slot active + URL (the page
+// and the pill light from the session-row SSE); on any refusal the gate left
+// glimmung and test-state untouched and the reason lands on the durable
+// pending_test_provisions row the page reads. It uses a fresh background context
+// budgeted for the settle cap plus deploy grace, not a possibly-canceled request
+// ctx.
 func (s *appServer) runInteractiveTestWorkflow(req provisionTestSlotRequest) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.provisionBackgroundTimeout())
 	defer cancel()
 
-	runID := s.newTestProvisionRunID()
 	repo := req.RepoOwner + "/" + req.RepoName
-
-	// Opener: the user sees the workflow start immediately, before the gate's
-	// (potentially minutes-long) validate+wait runs.
-	s.emitTestProvisionRecord(ctx, req, runID, "creating", "info", "Creating test slot.", "")
-
-	// Intermediate progress: the gate calls back as it advances. Each phase is
-	// emitted at most once per run (the closure dedupes).
-	emitted := map[string]bool{}
-	req.progress = func(phase string) {
-		if emitted[phase] {
-			return
-		}
-		emitted[phase] = true
-		switch phase {
-		case "validating":
-			s.emitTestProvisionRecord(ctx, req, runID, "validating", "info", "Validating PR readiness…", "")
-		case "waiting":
-			s.emitTestProvisionRecord(ctx, req, runID, "waiting", "info", "Waiting for CI to settle…", "")
-		}
-	}
 
 	outcome, err := s.provisionTestSlotForSession(ctx, req)
 	if err != nil {
 		recordTestSlotInteractive("error")
 		slog.Warn("interactive test workflow gate failed",
 			"session_id", req.SessionID, "repo", repo, "branch", req.Branch, "error", err)
-		s.emitTestProvisionRecord(ctx, req, runID, "error", "error",
-			"Couldn't create test slot: "+err.Error(), "")
 		// Infra error: terminalize 'failed' so the backstop only recovers a
-		// restart-stranded record, not a deterministic infra failure loop.
+		// restart-stranded record, not a deterministic infra failure loop. The
+		// reason surfaces on the test-slot page via the durable pending row.
 		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionFailed, "gate error: "+err.Error())
 		return
 	}
 	if outcome.Provisioned {
 		recordTestSlotInteractive(provisionStepProvisioned)
-		url := testProvisionOutcomeURL(outcome)
-		text := "Test environment ready."
-		if url != "" {
-			text = "Test environment ready at " + url
-		}
-		s.emitTestProvisionRecord(ctx, req, runID, "ready", "info", text, url)
 		s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, strings.TrimSpace(outcome.Detail))
 		// The "drive" variant (and only on a ready terminal) hands back to the
 		// agent: provisioning stayed zero-LLM, and now the agent re-enters to do
 		// the inherently-agent part — exercise the running app. A refusal never
 		// reaches here, so a no-slot outcome never wakes.
 		if req.drive {
-			s.driveTestSlot(ctx, req, url)
+			s.driveTestSlot(ctx, req, testProvisionOutcomeURL(outcome))
 		}
 		return
 	}
 
-	// Refusal: surface the reason so the user sees why no environment came up.
+	// Refusal: a reached verdict, not a strand. Terminalize 'done' with the
+	// reason so the backstop does not re-drive it and the page can show why no
+	// environment came up.
 	recordTestSlotInteractive(string(outcome.Verdict))
 	reason := strings.TrimSpace(outcome.Detail)
 	if reason == "" {
 		reason = "no test environment for " + req.Branch + " (" + string(outcome.Verdict) + ")"
 	}
-	s.emitTestProvisionRecord(ctx, req, runID, "error", "error", "Couldn't create test slot: "+reason, "")
-	// A gate refusal is a reached verdict, not a strand: terminalize 'done' so
-	// the backstop does not re-drive a legitimately-refused provision.
 	s.markInteractiveProvisionTerminal(ctx, req, outcome.HeadSHA, pgstore.PendingTestProvisionDone, reason)
-}
-
-// newTestProvisionRunID derives a per-run identifier so the phases of one
-// interactive provision run thread together (and a later re-run renders as a
-// fresh thread). Uses the gate's clock so a fake clock keeps tests stable.
-func (s *appServer) newTestProvisionRunID() string {
-	return strconv.FormatInt(s.provisionNowTime().UTC().UnixNano(), 36)
 }
 
 // testProvisionOutcomeURL returns the provisioned test-environment URL from a
@@ -414,76 +377,6 @@ func testDriveWakePrompt(req provisionTestSlotRequest, url string) string {
 	}
 	b.WriteString(", exercise the feature you changed end to end, and report concrete findings (what you checked, what worked, what didn't) with evidence. If something is broken, say so plainly.")
 	return b.String()
-}
-
-// emitTestProvisionRecord writes a display-only test_provision.updated event to
-// the session ledger so one phase of the interactive test-workflow run is
-// visible inline as a grouped role:system thread — not only in logs. Each phase
-// (creating → validating → waiting → ready/error) carries its own timeline_id
-// keyed by runID, so the records append in order and group under one system
-// avatar. The ci_status.updated emission this replaced never rendered inline
-// (no projection case existed for it), so the prior outcome records were
-// invisible.
-func (s *appServer) emitTestProvisionRecord(ctx context.Context, req provisionTestSlotRequest, runID, phase, severity, text, url string) {
-	if s.sessionEvents == nil {
-		return
-	}
-	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, req.SessionID)
-	clientNonce := "test-provision-" + runID
-	persist := func(event map[string]any) {
-		if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
-			slog.Warn("interactive test workflow notice-turn persist failed",
-				"session", req.SessionID, "phase", phase, "error", err)
-		}
-	}
-	// The provision thread is authored as one backend "notice turn" — a real,
-	// turn-anchored entry the user can land on, rendered by the standard turn
-	// renderer (not an orphan role:system record with no turn_id). It is
-	// emitted ATOMICALLY on the terminal phase (open + body + turn.completed in
-	// one shot) so it can never strand: there is never an open turn awaiting a
-	// close, and a reconcile re-drive that uses a fresh runID still emits
-	// exactly one complete turn (a run that died pre-terminal emitted nothing).
-	// No submit_turn command is published, so the SDK runner never wakes.
-	// Interim phases (creating/validating/waiting) are not emitted here — the
-	// test-state pill carries in-flight status. Live per-phase streaming is a
-	// follow-up; it needs a durable per-attempt turn id to stay strand-safe.
-	if phase != "ready" && phase != "error" {
-		return
-	}
-	_, openEvents, err := conversation.NoticeTurnOpenEventMaps(conversation.NoticeTurnOpenArgs{
-		SessionID:         req.SessionID,
-		SessionStorageKey: storageKey,
-		Email:             req.OwnerEmail,
-		ClientNonce:       clientNonce,
-		OpenerText:        "Creating test slot.",
-	})
-	if err != nil {
-		slog.Warn("interactive test workflow notice-turn open failed",
-			"session", req.SessionID, "error", err)
-		return
-	}
-	for _, event := range openEvents {
-		persist(event)
-	}
-	turnID := conversation.TurnIDForClientNonce(clientNonce)
-	bodyTimelineID := turnID + ":notice:" + phase
-	persist(conversation.AssistantNoticeEventMap(conversation.AssistantNoticeArgs{
-		SessionID:         req.SessionID,
-		SessionStorageKey: storageKey,
-		Email:             req.OwnerEmail,
-		TurnID:            turnID,
-		TimelineID:        bodyTimelineID,
-		Text:              text,
-	}))
-	persist(conversation.NoticeTurnCompletedEventMap(conversation.NoticeTurnCompletedArgs{
-		SessionID:         req.SessionID,
-		SessionStorageKey: storageKey,
-		Email:             req.OwnerEmail,
-		TurnID:            turnID,
-		FinalTimelineIDs:  []string{bodyTimelineID},
-	}))
-	_ = severity
-	_ = url
 }
 
 // sessionGovernedBranch is the Tank-owned session branch the governed Git flow

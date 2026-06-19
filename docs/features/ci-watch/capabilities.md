@@ -128,6 +128,20 @@ and [../README.md](../README.md) for how capability ledgers are used.
   Outcomes are observable via `tank_test_slot_interactive_total{outcome}` (terminal
   outcome of the interactive trigger) plus the shared
   `tank_test_slot_validate_total` / `tank_test_slot_provision_total` gate counters.
+- **Update (2026-06-19):** the surfacing described above is **retired** — the
+  interactive provision is now **page-only** and emits nothing to the transcript.
+  History: #1332 first re-authored the outcome as a backend notice turn (replacing
+  the orphan `test_provision.updated` records); this change then retired that
+  notice turn entirely in favor of the dedicated **test-slot-page** (below). The
+  durable outcome lives on the `pending_test_provisions` row (refusal reason /
+  done) and the slot pill (`test_state`); the page reads both. Removed:
+  `emitTestProvisionRecord` / `newTestProvisionRunID` and the
+  `internal/conversation/notice_turn.go` helpers (their sole caller). The
+  pre-#1332 `test_provision.updated` event type, its `validateTestProvisionPayload`
+  validation, the `applyTestProvision` projection (`transcript_projection.go`), and
+  the `conversationReducer.ts` / `conversationProjection.ts` cases are intentionally
+  **kept** as a read path so historical durable records still render; retiring them
+  is a separate, data-aware migration (old rows must not silently stop rendering).
 
 ## interactive-test-workflow-drive
 
@@ -161,6 +175,43 @@ and [../README.md](../README.md) for how capability ledgers are used.
   backend-owned turn. Observable via `tank_test_slot_interactive_total{outcome}`
   with `outcome="drive_wake"` (wake submitted) / `"drive_wake_error"` (enqueue
   failed; non-fatal — the slot is up and the ready thread already announced it).
+
+## test-slot-page
+
+- **Status:** in progress (dedicated UI surface; shipped pending slot validation)
+- **Intent:** The composer "beaker" is a **navigation entry**, not an action menu:
+  it routes to a dedicated per-session page at `/sessions/{id}/test-slot`
+  (`SessionRouteTab` `test-slot`) that is the primary surface for the
+  create / create-and-test / open / return controls and for PR readiness. This
+  replaces the inline beaker dropdown and moves provisioning feedback off the
+  transcript and onto a page the user navigates to. **Create gating:** the button
+  is greyed out only when there is **no open PR** to test (resolved
+  `has_open_pr` is false); an open PR in any CI state stays clickable and the
+  gate surfaces its verdict. Provisioning itself is unchanged — the click still
+  runs the deterministic, zero-LLM `provisionTestSlotForSession` gate, which
+  re-reads live GitHub, so the page's cheap durable display can never cause a
+  wrong provision.
+- **Durable source:** read-only `GET /api/sessions/{id}/test-slot`
+  (`handleGetTestSlotStatus`, owner-scoped) returns a snapshot that must not
+  contradict the durable system: last-known readiness from the
+  `session_ci_watches` row (cheap, event-driven, rendered "as of"
+  `last_event_at`), the in-flight/last interactive `pending_test_provisions`
+  row, the resolved governed-PR coordinates (or a soft `repo_error` for an
+  ambiguous multi-repo session so the page can render a picker), and the session
+  `test_state`. With `?refresh=1` it additionally runs the **same** one-shot
+  live read + `classifyCIWatchState` the gate uses (`testSlotPreflight`) with no
+  durable row and no side effects, so the page shows an authoritative current
+  verdict on demand; `mcpgithub.ErrNoOpenPR` maps to a first-class `no_pr`
+  verdict rather than an error. Observable via
+  `tank_test_slot_status_requests_total{result}`.
+- **Affected contracts:** ci-watch (the readiness display must converge from /
+  not contradict the durable watch), session-lifecycle (test-slot provisioning),
+  transcript-navigation (new session route, refresh-survivable).
+- **Evidence:** `appRoutes.test.ts` (route parse/build + a guard that the page
+  route does not shadow the `test-slot-model` approval route),
+  `handlers_test_slot_status_test.go` (auth, owner scope, durable coordinate
+  resolution, live ready/`no_pr` preflight, multi-repo soft error), frontend
+  `tsc` + `vite build`, and a Glimmung test-slot click-through (pending).
 
 ## pending-provision-backstop
 

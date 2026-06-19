@@ -300,7 +300,13 @@ import {
   type SessionInteraction,
   type SessionMode,
 } from "./sessionModes";
-import { startTestWorkflow } from "./testWorkflow";
+import {
+  startTestWorkflow,
+  fetchTestSlotStatus,
+  type TestSlotStatus,
+  type TestSlotPreflight,
+  type TestSlotWatch,
+} from "./testWorkflow";
 import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
@@ -2572,9 +2578,14 @@ interface ComposerToolButtonsProps {
     disabled?: boolean;
     readyUrl?: string;
     title: string;
+    // The per-session beaker is a navigation entry: it opens the dedicated
+    // test-slot page where the create/open/return controls and PR-readiness
+    // live. onCreateHold is the splash-only fallback (no session/page to route
+    // to yet) that seeds a new session's first turn with the /test skill. The
+    // button prefers onOpenPage; both are optional so the signed-out preview can
+    // render a disabled beaker with neither.
+    onOpenPage?: () => void;
     onCreateHold?: () => void;
-    onCreateDrive?: () => void;
-    onOpenReady?: () => void;
   };
   glimmungRuns: {
     runs: GlimmungRunLink[];
@@ -3470,70 +3481,22 @@ function ComposerToolButtons({
           <WheelsIcon className="run-composer-icon" />
         </button>
       )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
-            disabled={test.disabled}
-            aria-label="Test actions"
-            title={test.title}
-            aria-haspopup="menu"
-          >
-            <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-            {testReadyURL && (
-              <ExternalLinkIcon
-                className="run-test-ready-icon"
-                aria-hidden="true"
-              />
-            )}
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          side="top"
-          className="run-test-action-menu"
-        >
-          <DropdownMenuItem
-            className="run-test-action-menu-item"
-            onSelect={test.onCreateHold}
-          >
-            <FlaskConicalIcon aria-hidden="true" />
-            <span>Create test slot</span>
-          </DropdownMenuItem>
-          {test.onCreateDrive && (
-            <DropdownMenuItem
-              className="run-test-action-menu-item"
-              onSelect={test.onCreateDrive}
-            >
-              <FlaskConicalIcon aria-hidden="true" />
-              <span>Create test slot and test</span>
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuSeparator className="run-test-action-menu-separator" />
-          {testReadyURL ? (
-            <DropdownMenuItem className="run-test-action-menu-item" asChild>
-              <a
-                href={testReadyURL}
-                target="_blank"
-                rel="noreferrer"
-                onClick={test.onOpenReady}
-              >
-                <ExternalLinkIcon aria-hidden="true" />
-                <span>Open test slot</span>
-              </a>
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem
-              className="run-test-action-menu-item"
-              disabled
-            >
-              <ExternalLinkIcon aria-hidden="true" />
-              <span>Open test slot</span>
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <button
+        type="button"
+        className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testReadyURL ? " is-ready" : ""}${test.active ? " is-active" : ""}`}
+        onClick={test.onOpenPage ?? test.onCreateHold}
+        disabled={test.disabled}
+        aria-label="Test slot"
+        title={test.title}
+      >
+        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+        {testReadyURL && (
+          <ExternalLinkIcon
+            className="run-test-ready-icon"
+            aria-hidden="true"
+          />
+        )}
+      </button>
       <GlimmungRunMenuButton {...glimmungRuns} />
       <SpawnedSessionsMenuButton {...spawnedSessions} />
       <PullRequestMenuButton {...pullRequest} />
@@ -5757,6 +5720,7 @@ type RunTab =
   | "pull-requests"
   | "break-glass"
   | "test-slot-model"
+  | "test-slot"
   | "settings"
   | "help"
   | "cluster"
@@ -10343,6 +10307,472 @@ function SessionDataTestSlotDetails({
         </div>
       )}
       {error && <div className="run-session-data-name-error">{error}</div>}
+    </div>
+  );
+}
+
+// testSlotVerdictTone maps a readiness verdict / watch status to the shared card
+// tone classes the session-data cards use, so the test-slot page reads native.
+function testSlotVerdictTone(
+  verdict: string,
+): "good" | "warning" | "danger" | "info" {
+  switch (verdict) {
+    case "ready":
+      return "good";
+    case "failed":
+    case "error":
+      return "danger";
+    case "conflict":
+    case "watching":
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
+function testSlotVerdictLabel(verdict: string): string {
+  switch (verdict) {
+    case "ready":
+      return "Green & mergeable";
+    case "failed":
+      return "CI failing";
+    case "conflict":
+      return "Needs rebase";
+    case "merged":
+      return "Already merged";
+    case "watching":
+      return "Checks running";
+    case "no_pr":
+      return "No open PR";
+    case "error":
+      return "Unavailable";
+    default:
+      return verdict || "Unknown";
+  }
+}
+
+// testSlotReadiness collapses a status snapshot into the single readiness view
+// the page renders. It prefers the authoritative live preflight (present only
+// after a ?refresh=1 read) and otherwise falls back to the durable last-known
+// watch row ("as of" its last event). Null when neither is known yet.
+function testSlotReadiness(status: TestSlotStatus | null): {
+  verdict: string;
+  hasOpenPR: boolean;
+  detail: string;
+  prUrl: string;
+  mergeableState: string;
+  asOf: string | null;
+  live: boolean;
+} | null {
+  if (!status) return null;
+  const p: TestSlotPreflight | null = status.preflight;
+  if (p) {
+    return {
+      verdict: p.verdict,
+      hasOpenPR: p.has_open_pr,
+      detail: p.detail,
+      prUrl: p.pr_url,
+      mergeableState: p.mergeable_state,
+      asOf: null,
+      live: true,
+    };
+  }
+  const w: TestSlotWatch | null = status.watch;
+  if (w) {
+    return {
+      verdict: w.status,
+      hasOpenPR: w.has_open_pr,
+      detail: w.detail,
+      prUrl: w.pr_url,
+      mergeableState: w.mergeable_state,
+      asOf: w.last_event_at,
+      live: false,
+    };
+  }
+  return null;
+}
+
+function formatTestSlotAsOf(iso: string | null): string {
+  if (!iso) return "";
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return "";
+  return t.toLocaleString();
+}
+
+// TestSlotScreen is the dedicated per-session test-slot page the beaker routes
+// to. It is the primary surface for the create/open/return controls and shows
+// last-known PR readiness from the durable snapshot (with an on-demand live
+// refresh). The "Create test slot" action runs the same deterministic,
+// server-side gate as before — this page only frames it and sets expectations.
+function TestSlotScreen({
+  sessionId,
+  testState,
+  authedFetch,
+  disabled,
+  readOnly,
+  onCreateHold,
+  onCreateDrive,
+  onReturnTestSlot,
+  onOpenReady,
+  onOpenTranscript,
+}: {
+  sessionId: string;
+  testState: TestState | null;
+  authedFetch: (input: string, init?: RequestInit) => Promise<Response>;
+  disabled?: boolean;
+  readOnly?: boolean;
+  onCreateHold: () => void;
+  onCreateDrive: () => void;
+  onReturnTestSlot?: () => Promise<void>;
+  onOpenReady: () => void;
+  onOpenTranscript: () => void;
+}) {
+  const [status, setStatus] = useState<TestSlotStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [returning, setReturning] = useState(false);
+  // Keep the latest authedFetch without making it an effect dependency (it may
+  // be re-created each render; depending on it would re-fire the load loop).
+  const fetchRef = useRef(authedFetch);
+  fetchRef.current = authedFetch;
+
+  const load = useCallback(
+    async (refresh: boolean) => {
+      if (refresh) setRefreshing(true);
+      else setLoading(true);
+      setError(null);
+      try {
+        const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
+          refresh,
+        });
+        setStatus(next);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (refresh) setRefreshing(false);
+        else setLoading(false);
+      }
+    },
+    [sessionId],
+  );
+
+  // Load on mount, and re-pull the durable snapshot whenever the slot pill
+  // (testState, which converges live via the session SSE) flips — so a
+  // provisioning → ready/url transition reflects without a manual refresh.
+  useEffect(() => {
+    void load(false);
+  }, [load, testState?.active, testState?.url]);
+
+  const readiness = testSlotReadiness(status);
+  const active = Boolean(testState?.active);
+  const readyUrl = testState?.url?.trim() || "";
+  const repoSlug = status?.repo?.slug || "";
+  const branch = status?.repo?.branch || "";
+  const repoBlocked = Boolean(status) && !status?.repo;
+  const hasOpenPR = readiness ? readiness.hasOpenPR : true;
+  const canCreate =
+    !disabled && !readOnly && !active && !repoBlocked && hasOpenPR;
+
+  const verdict = readiness?.verdict ?? "";
+  const tone = verdict ? testSlotVerdictTone(verdict) : "info";
+
+  const doReturn = async () => {
+    if (!onReturnTestSlot || returning) return;
+    setReturning(true);
+    try {
+      await onReturnTestSlot();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReturning(false);
+    }
+  };
+
+  return (
+    <div className="run-session-data-screen">
+      <section
+        className="run-session-data-section"
+        aria-labelledby="run-test-slot-title"
+      >
+        <div className="run-session-data-page-head">
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={onOpenTranscript}
+            title="Back to transcript"
+          >
+            <ArrowLeftIcon
+              className="run-session-data-action-icon"
+              aria-hidden="true"
+            />
+            <span>Transcript</span>
+          </button>
+          <h2 className="run-session-data-title" id="run-test-slot-title">
+            Test slot
+          </h2>
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={() => void load(true)}
+            disabled={refreshing || loading}
+            aria-busy={refreshing || undefined}
+            title="Re-check PR readiness against GitHub now"
+          >
+            {refreshing ? (
+              <Loader2Icon
+                className="run-session-data-action-icon run-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <RotateCcwIcon
+                className="run-session-data-action-icon"
+                aria-hidden="true"
+              />
+            )}
+            <span>{refreshing ? "Checking…" : "Refresh"}</span>
+          </button>
+        </div>
+
+        {repoSlug && (
+          <p className="run-session-data-summary">
+            {repoSlug}
+            {branch ? ` · ${branch}` : ""}
+          </p>
+        )}
+
+        {error && <div className="run-session-data-name-error">{error}</div>}
+
+        {loading && !status ? (
+          <div className="run-session-data-card is-info">
+            <div className="run-session-data-card-top">
+              <span className="run-session-data-card-icon" aria-hidden="true">
+                <Loader2Icon className="run-spin" />
+              </span>
+              <span className="run-session-data-card-main">
+                <span className="run-session-data-card-label">
+                  Loading test-slot status…
+                </span>
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="run-session-data-page-list" aria-label="Test slot">
+            {/* PR readiness */}
+            <div className={`run-session-data-card is-${tone}`}>
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <GitPullRequestIcon />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">
+                    Pull request readiness
+                  </span>
+                  <span className="run-session-data-card-detail">
+                    {repoBlocked
+                      ? status?.repo_error ||
+                        "Could not resolve a repository to test."
+                      : readiness
+                        ? readiness.detail ||
+                          testSlotVerdictLabel(readiness.verdict)
+                        : "No PR readiness recorded yet — Refresh to check live."}
+                  </span>
+                </span>
+                {readiness?.prUrl ? (
+                  <a
+                    className="run-session-data-card-status"
+                    href={readiness.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={readiness.prUrl}
+                  >
+                    <span>{testSlotVerdictLabel(verdict)}</span>
+                    <ExternalLinkIcon aria-hidden="true" />
+                  </a>
+                ) : (
+                  <span className="run-session-data-card-status">
+                    {readiness ? testSlotVerdictLabel(verdict) : "Unknown"}
+                  </span>
+                )}
+              </div>
+              <SessionDataFacts
+                facts={[
+                  [
+                    "Mergeable",
+                    readiness?.mergeableState
+                      ? readiness.mergeableState
+                      : "Unknown",
+                  ],
+                  [
+                    "Source",
+                    readiness
+                      ? readiness.live
+                        ? "Live (just checked)"
+                        : `Last known${
+                            readiness.asOf
+                              ? ` · as of ${formatTestSlotAsOf(readiness.asOf)}`
+                              : ""
+                          }`
+                      : "Not checked",
+                  ],
+                ]}
+              />
+            </div>
+
+            {/* Controls */}
+            <div className="run-session-data-card is-info">
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <FlaskConicalIcon />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">
+                    {active ? "Test environment" : "Create a test environment"}
+                  </span>
+                  <span className="run-session-data-card-detail">
+                    {active
+                      ? "A slot is provisioned for this session."
+                      : repoBlocked
+                        ? "Resolve a repository above to enable provisioning."
+                        : hasOpenPR
+                          ? "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict."
+                          : "No open PR for this branch yet — publish a PR to test."}
+                  </span>
+                </span>
+              </div>
+              <div className="run-session-data-actions">
+                {active ? (
+                  <>
+                    {readyUrl && (
+                      <a
+                        className="run-session-data-action"
+                        href={readyUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={onOpenReady}
+                        title={readyUrl}
+                      >
+                        <ExternalLinkIcon
+                          className="run-session-data-action-icon"
+                          aria-hidden="true"
+                        />
+                        <span>Open test slot</span>
+                      </a>
+                    )}
+                    {onReturnTestSlot && !readOnly && (
+                      <button
+                        type="button"
+                        className="run-session-data-action"
+                        disabled={returning}
+                        aria-busy={returning || undefined}
+                        onClick={() => void doReturn()}
+                      >
+                        {returning ? (
+                          <Loader2Icon
+                            className="run-session-data-action-icon run-spin"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <RotateCcwIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span>{returning ? "Returning…" : "Return lease"}</span>
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={!canCreate}
+                      onClick={onCreateHold}
+                      title={
+                        canCreate
+                          ? "Provision a test slot for this branch"
+                          : repoBlocked
+                            ? "Resolve a repository first"
+                            : hasOpenPR
+                              ? "Unavailable"
+                              : "No open PR to test"
+                      }
+                    >
+                      <FlaskConicalIcon
+                        className="run-session-data-action-icon"
+                        aria-hidden="true"
+                      />
+                      <span>Create test slot</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={!canCreate}
+                      onClick={onCreateDrive}
+                      title={
+                        canCreate
+                          ? "Provision a slot, then have the agent validate it"
+                          : "Unavailable"
+                      }
+                    >
+                      <FlaskConicalIcon
+                        className="run-session-data-action-icon"
+                        aria-hidden="true"
+                      />
+                      <span>Create test slot and test</span>
+                    </button>
+                  </>
+                )}
+                {readOnly && (
+                  <span className="run-session-data-readonly">
+                    Read-only session
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Last provision outcome (durable) */}
+            {status?.provision && (
+              <div
+                className={`run-session-data-card is-${
+                  status.provision.status === "failed"
+                    ? "danger"
+                    : status.provision.status === "pending"
+                      ? "warning"
+                      : "info"
+                }`}
+              >
+                <div className="run-session-data-card-top">
+                  <span
+                    className="run-session-data-card-icon"
+                    aria-hidden="true"
+                  >
+                    {status.provision.status === "pending" ? (
+                      <Loader2Icon className="run-spin" />
+                    ) : status.provision.status === "failed" ? (
+                      <XIcon />
+                    ) : (
+                      <CheckIcon />
+                    )}
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      {status.provision.status === "pending"
+                        ? "Provisioning…"
+                        : "Last provision"}
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      {status.provision.detail ||
+                        `Status: ${status.provision.status}`}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -19972,6 +20402,13 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (route.tab === "test-slot") {
+      setActiveTab("test-slot");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     setActiveTab("turns");
     setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor("bottom");
@@ -22937,6 +23374,8 @@ function ChatPane({
       );
     } else if (activeTab === "background") {
       replaceSessionRoute(session.id, "background");
+    } else if (activeTab === "test-slot") {
+      replaceSessionRoute(session.id, "test-slot");
     } else if (activeTab === "chat") {
       replaceSessionTranscriptRoute(session.id);
     } else {
@@ -24731,6 +25170,28 @@ function ChatPane({
                   onActivitySelectPage={selectTurnActivityPage}
                 />
               )
+            ) : activeTab === "test-slot" ? (
+              <TestSlotScreen
+                sessionId={session.id}
+                testState={testState}
+                authedFetch={authedFetch}
+                disabled={!ready}
+                readOnly={readOnly}
+                onCreateHold={() => startInteractiveTestWorkflow(false)}
+                onCreateDrive={() => startInteractiveTestWorkflow(true)}
+                onReturnTestSlot={readOnly ? undefined : returnTestSlot}
+                onOpenReady={() => {
+                  if (testState)
+                    void markTestState({ ...testState, active: true });
+                }}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
+              />
             ) : activeTab === "background" ? (
               <BackgroundScreen
                 shellEntries={backgroundShellEntries}
@@ -25412,16 +25873,9 @@ function ChatPane({
                 test={{
                   active: testActionActive,
                   readyUrl: testState?.active ? testState.url?.trim() : "",
-                  onOpenReady: () => {
-                    if (testState)
-                      void markTestState({ ...testState, active: true });
-                  },
-                  onCreateHold: () => startInteractiveTestWorkflow(false),
-                  onCreateDrive: () => startInteractiveTestWorkflow(true),
+                  onOpenPage: () => setActiveTab("test-slot"),
                   disabled: !ready,
-                  title: testState?.active
-                    ? "Choose a test action"
-                    : "Start a test workflow",
+                  title: "Open the test slot page",
                 }}
                 glimmungRuns={{
                   runs: glimmungRunLinks,
@@ -30099,6 +30553,11 @@ function AuthenticatedApp() {
                       title: "Use /rollout once your session starts",
                     }}
                     test={{
+                      // Splash beaker: disabled here (no live session yet), but
+                      // it keeps the create-a-session-seeded-with-the-/test-skill
+                      // wiring. The per-session beaker is what navigates to the
+                      // dedicated test-slot page (onOpenPage); on the splash there
+                      // is no session to open a page for.
                       onCreateHold: () => {
                         void createSession(
                           defaultSessionMode,
