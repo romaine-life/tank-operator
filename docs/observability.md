@@ -477,6 +477,21 @@ All metric names are prefixed `tank_`. The full namespace:
   subagent authority regression is a nonzero
   `{agent_kind="subagent",tool_family="mcp",server="<configured server>"}`
   series while the parent can use that server.
+  `tank_runner_transcript_capture_total{result}` counts whole-file SDK
+  transcript snapshot uploads from the in-process capture sink
+  (docs/session-transcript-capture.md); `result` is a closed set `ok`,
+  `skipped` (storage unconfigured — best-effort, retried), `error` (read or
+  upload failed). `tank_runner_transcript_capture_lag_ms` gauges the age of the
+  captured file at upload time. `tank_runner_transcript_resume_total{outcome}`
+  counts resume-bootstrap outcomes on resurrected pods
+  (materialized|not_found|version_mismatch|error). Capture is additive and
+  read-only; a sustained nonzero `result="error"` rate is a capture
+  regression, not a turn-loop fault. The orchestrator counterparts are
+  `tank_transcript_upload_total{result}` and `tank_session_resurrect_total{result}`.
+- `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
+  This runner has its own namespace because it drives the native `agy` binary
+  rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`
+  is the red signal for failed agy turns. `reason="skill_missing"` means the
   backend accepted a skill turn but the runner could not find
   executor terminal error such as `UNKNOWN (code 500)` or
   `PlannerResponse without ModifiedResponse`; `reason="provider_no_final_answer"`

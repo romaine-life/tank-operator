@@ -271,6 +271,17 @@ avatarAssets:
   blobAccountURL: "https://romainetankavatars.blob.core.windows.net"
   blobContainer: avatar-assets
 
+# Durable session transcript storage (docs/session-transcript-capture.md).
+# Private Azure Blob container provisioned by infra/transcript_storage.tf,
+# written by the orchestrator via the same workload identity. The pod-side
+# claude-runner ships whole-file JSONL snapshots so a session's conversation
+# can be resurrected onto a fresh pod after pod death. When this block is
+# absent the orchestrator runs degraded (env vars unset) and capture is
+# disabled — the snapshot endpoint answers 503 and runners simply retry.
+transcriptStorage:
+  blobAccountURL: "https://romainetanktranscripts.blob.core.windows.net"
+  blobContainer: session-transcripts
+
 sessionBus:
   stream: TANK_SESSION_BUS
   # WorkQueue stream owning durable session commands (issue #1076 item 2);

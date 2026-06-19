@@ -19,6 +19,12 @@ the rest of the product reconstruct what happened.
 - Provider SDK streams are adapter input only.
 - Runner process memory may hold in-flight provider state but must not be the
   only record of user-visible completed work.
+- The Claude SDK's on-disk JSONL transcript is the resume-faithful record (it
+  carries `thinking`/`redacted_thinking` blocks + signatures that
+  `session_events` deliberately drops). It must be captured durably off-pod so
+  it is not the only copy on a pod that can die; `session_events` remains the
+  display projection and neither is derived from the other. Capture is a
+  read-only, best-effort sink and must never affect turn processing.
 
 ## Migration Rules
 

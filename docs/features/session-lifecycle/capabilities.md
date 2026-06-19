@@ -331,6 +331,64 @@ touches) into the reap predicate. Browser disconnects are explicitly
 inside the durability boundary, so presence can never be evidence of
 abandonment. If reap latency ever matters, lower the interval, not the
 evidence bar.
+
+## Conversation resurrection (transcript capture)
+
+Status: in progress (Stages 1–3 implemented: capture, resurrection
+endpoints/runner-resume/SPA trigger, and the contract amendments; Codex parity
+and a durable `resurrected_from` lineage column are deliberate follow-ups)
+
+Intent:
+Make a session's *conversation* survivable across pod death. Session pods are
+`emptyDir`-backed; a node drain (AKS node-image upgrade, eviction) destroys the
+pod and the Claude SDK's on-disk JSONL transcript — the only resume-faithful
+record, because it carries `thinking`/`redacted_thinking` blocks + signatures
+that `session_events` deliberately drops. The owner accepts losing the
+`/workspace` filesystem (uncommitted edits) but not the conversation. Full
+design: [docs/session-transcript-capture.md](../../session-transcript-capture.md).
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- Capture is additive and changes no existing behavior: the claude-runner runs
+  an in-process, read-only, crash-isolated snapshotter that ships whole-file
+  JSONL snapshots to an orchestrator-internal endpoint, which stores them in a
+  private Azure Blob container. `session_events` remains the display projection;
+  the transcript blob is the separate resume-faithful record. This closes the
+  Agent Runners gap where the resume-faithful record lived ONLY on the pod.
+- Capture is best-effort: when transcript storage is unconfigured the endpoint
+  answers `503` and the runner counts a skip and retries — never an error, never
+  a turn-loop fault.
+- Resurrection is a NEW explicit lifecycle, not a revival: `POST
+  /api/sessions/{id}/resurrect` (Claude-only) creates a new session that
+  re-clones the same repos and whose runner fetches the dead session's captured
+  transcript (brokered `GET .../resume-transcript`, orchestrator re-verifies
+  ownership) and `resume`s it. Pod death stays terminal; the workspace is still
+  gone; SDK-version mismatch starts fresh rather than a corrupt resume. Lineage
+  currently rides pod env (`TANK_RESURRECT_SOURCE_SESSION_ID`); a durable
+  `resurrected_from` column + UI badge is a follow-up.
+
+Evidence:
+- `claude-runner/src/transcriptCapture.test.ts` (capture scan/dedup core) and
+  `claude-runner/src/resumeBootstrap.test.ts` (materialize, version-mismatch,
+  path containment, fetch-failure-starts-fresh).
+- `backend-go/internal/transcriptstore/store_test.go` (Put/Get/Latest, buffer
+  isolation, last-write-wins).
+- `backend-go/cmd/tank-operator/handlers_internal_transcript_test.go`
+  (path-traversal guard, blob-key/metadata sanitization, header decode).
+- Auth reuses `requireInternalSessionPodCaller` (SA TokenReview + live pod
+  lookup); resurrect uses `requireAuth` owner scoping.
+- Infra: `infra/transcript_storage.tf`. Chart: `k8s/values.yaml`
+  `transcriptStorage` + `k8s/templates/deployment.yaml` env.
+- Metrics: `tank_runner_transcript_capture_total{result}` +
+  `tank_runner_transcript_capture_lag_ms` +
+  `tank_runner_transcript_resume_total{outcome}` (runner);
+  `tank_transcript_upload_total{result}` + `tank_session_resurrect_total{result}`
+  (orchestrator).
+
 ## Governed Git publish path
 
 Status: in progress

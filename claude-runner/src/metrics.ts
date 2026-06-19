@@ -26,6 +26,41 @@ export const busConsumerRestartTotal = new Counter({
   registers: [registry],
 });
 
+// Transcript capture (docs/session-transcript-capture.md, Stage 1). The
+// in-process snapshotter ships the SDK's on-disk JSONL to the orchestrator
+// so a session's conversation survives pod death. `result` is a bounded set:
+// ok (stored), skipped (storage not configured / nothing changed-on-disk is
+// not counted), error (read or upload failed). Capture is best-effort and
+// must never affect turn processing — a non-zero error rate is a capture
+// regression, not a turn-loop fault.
+export const transcriptCaptureTotal = new Counter({
+  name: "tank_runner_transcript_capture_total",
+  help: "Transcript JSONL snapshot uploads attempted by the runner, by result (ok|skipped|error).",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
+// Age of the captured file at upload time (now - file mtime). High lag means
+// the snapshotter is falling behind the SDK's writes; pairs with the
+// orchestrator-side freshness alert.
+export const transcriptCaptureLagMs = new Gauge({
+  name: "tank_runner_transcript_capture_lag_ms",
+  help: "Milliseconds between the JSONL file's last modification and its most recent successful capture upload.",
+  registers: [registry],
+});
+
+// Resume bootstrap outcome on a resurrected pod (Stage 2). `outcome` is a
+// closed set: materialized (transcript written, will `resume`), not_found
+// (nothing to resume), version_mismatch (SDK-format gap — started fresh to
+// avoid a corrupt resume), error. A resurrected pod that lands `not_found` or
+// `error` is a resurrection regression worth alerting on.
+export const transcriptResumeTotal = new Counter({
+  name: "tank_runner_transcript_resume_total",
+  help: "Resume-bootstrap outcomes on resurrected pods, by outcome.",
+  labelNames: ["outcome"],
+  registers: [registry],
+});
+
 export const natsConnectionStatusTotal = new Counter({
   name: "tank_runner_nats_connection_status_total",
   help: "NATS connection lifecycle events observed by the runner, by bounded status type.",

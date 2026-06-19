@@ -40,6 +40,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 	"github.com/romaine-life/tank-operator/backend-go/internal/stuckturns"
+	"github.com/romaine-life/tank-operator/backend-go/internal/transcriptstore"
 )
 
 // buildMCPGitHubClient wires up the mcpgithub client when the
@@ -221,6 +222,7 @@ func main() {
 	avatarStore := buildAvatarAssetStore(pgPool)
 	avatarImageStore := buildAvatarImageStore(azCred, pgPool)
 	avatarUploadAttemptStore := buildAvatarUploadAttemptStore(pgPool)
+	transcriptStore := buildTranscriptStore(azCred)
 	if pgAvatarStore, ok := avatarStore.(*pgstore.AvatarAssetStore); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := migrateLegacyAvatarAssetImages(ctx, pgAvatarStore, avatarImageStore); err != nil {
@@ -625,6 +627,7 @@ func main() {
 		avatars:                      avatarStore,
 		avatarImages:                 avatarImageStore,
 		avatarUploads:                avatarUploadAttemptStore,
+		transcripts:                  transcriptStore,
 		pgPool:                       pgPool,
 		sessionImageOverridesEnabled: sessionImageOverridesEnabled,
 		sessionBus:                   sessionBus,
@@ -1000,6 +1003,35 @@ func buildAvatarImageStore(azCred *azidentity.DefaultAzureCredential, pool *pgxp
 		slog.Error("avatar blob image store init failed", "error", err)
 		os.Exit(1)
 	}
+	return store
+}
+
+// buildTranscriptStore wires durable transcript-snapshot storage. Unlike the
+// avatar store it never os.Exit on missing config: transcript capture is
+// additive and best-effort, so a missing storage account degrades to a nil
+// store (the snapshot endpoint then answers 503 and the runner retries) rather
+// than blocking orchestrator startup — important for first-install ordering
+// before tofu has provisioned the container.
+func buildTranscriptStore(azCred *azidentity.DefaultAzureCredential) transcriptstore.Store {
+	accountURL := strings.TrimSpace(os.Getenv("TRANSCRIPT_BLOB_ACCOUNT_URL"))
+	container := strings.TrimSpace(os.Getenv("TRANSCRIPT_BLOB_CONTAINER"))
+	if accountURL == "" || container == "" {
+		slog.Warn("transcript storage unconfigured; conversation capture disabled (degraded stub)",
+			"TRANSCRIPT_BLOB_ACCOUNT_URL_set", accountURL != "",
+			"TRANSCRIPT_BLOB_CONTAINER_set", container != "",
+		)
+		return nil
+	}
+	if azCred == nil {
+		slog.Error("transcript storage configured but Azure credential unavailable; capture disabled")
+		return nil
+	}
+	store, err := transcriptstore.NewAzureStore(accountURL, container, azCred)
+	if err != nil {
+		slog.Error("transcript blob store init failed; capture disabled", "error", err)
+		return nil
+	}
+	slog.Info("transcript storage enabled", "container", container)
 	return store
 }
 
