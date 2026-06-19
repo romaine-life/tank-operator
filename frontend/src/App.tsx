@@ -339,6 +339,7 @@ import {
   type SessionBugLabel,
   type SessionRow,
 } from "./sessionStore";
+import { arrangeSessionTree } from "./sessionTree";
 import {
   decideFollowupSubmit,
   describeRunBlock,
@@ -2327,7 +2328,24 @@ function sessionListDebugRow(session: Session): SessionListDebugRow {
 function sessionListDebugRows(
   sessions: readonly Session[],
 ): SessionListDebugRow[] {
-  return sessions.map(sessionListDebugRow);
+  // Enrich each row with its rendered nesting tier so a "my sub-session didn't
+  // nest" report is diagnosable from the capture. Computed from the same
+  // arrangement the sidebar renders, keyed by id back onto the input order.
+  const lineage = new Map<string, { parentId: string | null; depth: number }>();
+  for (const arranged of arrangeSessionTree(sessions)) {
+    lineage.set(arranged.session.id, {
+      parentId: arranged.parentId,
+      depth: arranged.depth,
+    });
+  }
+  return sessions.map((session) => {
+    const link = lineage.get(session.id);
+    return {
+      ...sessionListDebugRow(session),
+      parent_session_id: link?.parentId ?? null,
+      nest_depth: link?.depth ?? 0,
+    };
+  });
 }
 
 function selectTitleInputText(event: ReactFocusEvent<HTMLInputElement>): void {
@@ -28136,7 +28154,21 @@ function AuthenticatedApp() {
     setDragOverSessionId(null);
     if (!movedId || movedId === id || !user) return;
 
-    const currentOrder = sessions.map((session) => session.id);
+    // Drag operates on the order the user actually sees — children grouped
+    // under their origin — not the raw recency sort. A freshly spawned child
+    // sorts to the top by recency but renders nested at the bottom, so moving a
+    // row relative to the raw order would land it somewhere the user did not
+    // aim. Hidden rows aren't draggable; keep them after the visible order so
+    // the permutation still covers every row (applyLocalOrder requires the
+    // complete set). Persisting the arranged order also converges the durable
+    // sidebar_position toward what is shown, so the two stop diverging.
+    const visibleOrder = arrangeSessionTree(
+      sessions.filter((session) => session.read_only_hidden !== true),
+    ).map((arranged) => arranged.session.id);
+    const hiddenOrder = sessions
+      .filter((session) => session.read_only_hidden === true)
+      .map((session) => session.id);
+    const currentOrder = [...visibleOrder, ...hiddenOrder];
     const next = moveSessionId(currentOrder, movedId, id);
     if (next === currentOrder) return;
     sessionStoreRef.current.applyLocalOrder(next);
@@ -29075,6 +29107,13 @@ function AuthenticatedApp() {
   const sidebarSessions = sessions.filter(
     (session) => session.read_only_hidden !== true,
   );
+  // Group spawned sub-sessions directly under their origin session so a running
+  // sub-session is never lost in the flat list. Exactly one indent tier (see
+  // sessionTree.ts and the "nested-spawned-sessions" capability). This is pure
+  // presentation over the durable `spawned_sessions` lineage — it converges
+  // over the session-list SSE like the spawned-sessions chip and otherwise
+  // preserves the durable sidebar_position sort and the user's drag order.
+  const arrangedSidebarSessions = arrangeSessionTree(sidebarSessions);
 
   // The sidebar contents have exactly one source of truth. On the desktop shell
   // they render inline as the grid's first column; on a compact viewport the
@@ -29124,10 +29163,10 @@ function AuthenticatedApp() {
           </button>
         </div>
         <ul className="sessions">
-          {sidebarSessions.length === 0 ? (
+          {arrangedSidebarSessions.length === 0 ? (
             <li className="sessions-empty">no sessions</li>
           ) : (
-            sidebarSessions.map((s) => {
+            arrangedSidebarSessions.map(({ session: s, depth, isLastChild }) => {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
@@ -29146,7 +29185,8 @@ function AuthenticatedApp() {
                 <li
                   key={s.id}
                   data-session-id={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  data-depth={depth}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${depth > 0 ? " is-nested" : ""}${depth > 0 && isLastChild ? " is-nested-last" : ""}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
                   draggable={!isClosing && !rowReadOnly && !isCompact}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
@@ -29157,6 +29197,9 @@ function AuthenticatedApp() {
                     sidebarCollapsed ? `${s.name} (${statusLabel})` : undefined
                   }
                 >
+                  {depth > 0 && (
+                    <span className="session-nest-connector" aria-hidden="true" />
+                  )}
                   <SessionAvatarIcon
                     avatar={avatar}
                     className="session-avatar"

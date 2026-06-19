@@ -80,5 +80,13 @@ work completion, deletion, unread counts, or running state.
   spawned-sessions chip as a working link, converging from the durable
   `sessions.spawned_sessions` row without a manual refresh, and is absent for
   sessions that spawned nothing or were created without an origin.
+- A same-scope spawned child renders as a single indented tier directly under
+  its origin in the session list, regrouped from the durable
+  `sessions.spawned_sessions` lineage and converging over the live path without
+  a manual refresh. Nesting never exceeds one tier (deeper lineage is clamped
+  to the same tier under the top-level ancestor), and a cross-scope test-slot
+  child — which is not in the `(email, session_scope)`-scoped list — does not
+  nest. The regrouping must not drop, duplicate, or reorder a root relative to
+  the durable `sidebar_position` order.
 - Tests cover a projection lag or missed wake scenario and prove the sidebar
   catches up from durable state.
