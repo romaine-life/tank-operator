@@ -737,10 +737,13 @@ Answering resumes the provider callback and starts the next visible turn:
   callback may still be parked under the asking turn inside the runner harness.
 
 Each question page has two states:
-- waiting — unanswered. The page surfaces one question from the set, with its
-  options (single/multi-select), the free-form textarea when `allowFreeForm` is
-  set, and one set-level Submit button that only enables after every question
-  page in the set has a response.
+- waiting — unanswered. The page surfaces one question from the set with its
+  options (single/multi-select), including the always-present "Something else"
+  default. The free-form answer is the run composer bound as the question's
+  single answer input: always available and valid with any selection. Submit is
+  always live — the default selection means there is no nothing-selected state —
+  and an empty pass is acceptable. See "AskUserQuestion Answer Input (no dead
+  ends)".
 - answered — a later `turn.input_answered` event references the question set
   (`awaitingInput.answered` is true), or the user just submitted (a local
   snapshot locks the page for the round-trip). The page renders locked with the
@@ -1023,3 +1026,64 @@ Evidence:
 - Frontend route: `frontend/src/appRoutes.test.ts` proves the
   `/sessions/{id}/queue-status` parse + build round-trip and rejects a trailing
   subsegment, matching the `session-data` tab contract.
+
+## AskUserQuestion Answer Input (no dead ends)
+
+Status: active
+
+Intent:
+A pending AskUserQuestion must be a conversation the user steers, not a form that
+traps them. This entry names the answer-input behavior surfaced after a user hit
+a question they could not escape: the visible Stop control was structurally
+swapped out for Submit while a question was pending, so the only way out was to
+guess that Esc worked; there was no "I don't want to answer this"; and typed text
+was silently discarded unless the agent had set `allowFreeForm` — leaving the
+user at the mercy of the agent enumerating exactly the option they needed, which
+it cannot do. The fix inverts the model: declining is the frictionless default
+and answering is the deliberate act.
+
+Affected contracts:
+- Transcript (owns the answer card + composer answer input)
+
+Contract impact:
+- Every question carries a synthetic "Something else" choice, selected by
+  default. There is no nothing-selected state:
+  `effectiveAskUserQuestionSelection` resolves an empty stored selection to
+  "Something else", so Submit is always live and Enter always advances/submits.
+  An agent's options are shortcuts, never a fence.
+- Companion free-form text works with ANY selection and is never gated on
+  `allowFreeForm` and never silently dropped. It rides as `annotations.notes` on
+  a real option, or becomes the whole answer under "Something else". An
+  options-only question still accepts a typed answer.
+- An empty pass is acceptable: nothing picked + nothing typed submits "Something
+  else" with no elaboration (an honest "not answering this"), which satisfies the
+  backend >=1-non-empty-label gate by construction — the backend does not
+  validate answer labels against the offered options, so the synthetic default
+  needs no backend change.
+- The Stop control (also bound to Esc, advertised in the answer placeholder)
+  renders ALONGSIDE the answer Submit while a question is pending. Stopping is
+  the durable dismiss path (card `dismissed`) — the emergency hatch, not the
+  primary flow. The win is that the user rarely needs it because they can always
+  keep talking.
+- Multi-question sets: Enter advances mid-set and submits on the last page;
+  per-question typed text is persisted on page change and restored on return, so
+  advancing never discards an answer. The prior composer-clear that raced the
+  page-change effect and ate text on advance is removed (the app, not the
+  composer, owns answer-text lifecycle during a question).
+
+Evidence:
+- Pure gate (unit tested): `frontend/src/askUserQuestionSelection.ts` +
+  `frontend/src/askUserQuestionSelection.test.ts` prove the never-empty default,
+  the "Something else" sentinel's mutual exclusion with real picks, and
+  `buildAskUserQuestionAnswerPayload`'s empty-pass + companion-text-on-any-
+  selection invariants.
+- Wiring: `frontend/src/App.tsx` injects the default option
+  (`appendSomethingElseOption`), reads selections through
+  `effectiveAskUserQuestionSelection`, always carries composer text into the
+  answer, and gates Submit/advance on paging only; `frontend/src/ChatComposer.tsx`
+  renders the Stop control alongside the answer Submit and no longer clears
+  app-owned composer text on advance.
+- Required before this capability's browser evidence is complete: test-slot
+  proof that a pending question shows a visible cancel, that an empty pass
+  submits `["Something else"]`, and that an options-only question accepts typed
+  text without dropping it.

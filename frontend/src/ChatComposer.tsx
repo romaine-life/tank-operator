@@ -8,7 +8,7 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { SendHorizontalIcon } from "lucide-react";
+import { SendHorizontalIcon, SquareIcon } from "lucide-react";
 import type { ChatStatus } from "ai";
 
 // The composer is the single source of truth for the chat-style prompt box.
@@ -160,8 +160,13 @@ export function ChatComposer({
         // (current selections + this typed text), not a new chat turn.
         if (!answerMode.canSubmit) return;
         answerMode.onSubmit();
+        // Clear only the local hint mirror, NOT the app-owned composer value.
+        // During a question the app owns text lifecycle: the page-change effect
+        // persists+restores each question's text on advance, and
+        // submitComposerAnswer clears on final submit. Clearing app state here
+        // raced that effect and silently ate a typed answer on advance — the
+        // exact "into the void" failure this surface is being fixed for.
         setText("");
-        onTextChange?.("");
         return;
       }
       onSubmit({ text: message.text });
@@ -237,36 +242,77 @@ export function ChatComposer({
             </span>
           )}
           {answerMode ? (
-            <button
-              type="button"
-              className="run-answer-submit"
-              onClick={() => {
-                if (answerMode.canSubmit) answerMode.onSubmit();
-              }}
-              disabled={!answerMode.canSubmit}
-              aria-label={answerMode.label}
+            // A live question must never be a jail: the emergency exit (Stop —
+            // also bound to Esc) renders ALONGSIDE Submit, not swapped out for
+            // it. The previous layout put Stop only in the non-answer branch, so
+            // a pending question had no visible way out at all.
+            <div
+              className="run-answer-actions"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                height: "32px",
-                width: "auto",
-                padding: "0 16px",
-                borderRadius: "8px",
-                fontSize: "13px",
-                fontWeight: 600,
-                whiteSpace: "nowrap",
-                color: answerMode.canSubmit
-                  ? "rgb(255,255,255)"
-                  : "rgb(150,150,150)",
-                background: answerMode.canSubmit
-                  ? "rgb(37,99,235)"
-                  : "rgba(255,255,255,0.06)",
-                border: "none",
-                cursor: answerMode.canSubmit ? "pointer" : "not-allowed",
+                gap: "8px",
               }}
             >
-              {answerMode.label}
-            </button>
+              {onStop && (
+                <button
+                  type="button"
+                  className="run-answer-cancel"
+                  onClick={onStop}
+                  disabled={isStopping}
+                  aria-label="Stop the agent and end this question (Escape)"
+                  title="Stop the agent and end this question (Esc)"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    height: "32px",
+                    padding: "0 12px",
+                    borderRadius: "8px",
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    color: "rgb(228,228,228)",
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    cursor: isStopping ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <SquareIcon size={12} aria-hidden="true" />
+                  {isStopping ? "Stopping…" : "Stop"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="run-answer-submit"
+                onClick={() => {
+                  if (answerMode.canSubmit) answerMode.onSubmit();
+                }}
+                disabled={!answerMode.canSubmit}
+                aria-label={answerMode.label}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  height: "32px",
+                  width: "auto",
+                  padding: "0 16px",
+                  borderRadius: "8px",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  color: answerMode.canSubmit
+                    ? "rgb(255,255,255)"
+                    : "rgb(150,150,150)",
+                  background: answerMode.canSubmit
+                    ? "rgb(37,99,235)"
+                    : "rgba(255,255,255,0.06)",
+                  border: "none",
+                  cursor: answerMode.canSubmit ? "pointer" : "not-allowed",
+                }}
+              >
+                {answerMode.label}
+              </button>
+            </div>
           ) : (
             <PromptInputSubmit
               className="run-submit-btn"

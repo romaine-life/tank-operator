@@ -316,7 +316,12 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
-import { nextAskUserQuestionSelections } from "./askUserQuestionSelection";
+import {
+  SOMETHING_ELSE_LABEL,
+  buildAskUserQuestionAnswerPayload,
+  effectiveAskUserQuestionSelection,
+  nextAskUserQuestionSelections,
+} from "./askUserQuestionSelection";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -11364,11 +11369,29 @@ function parseAskUserQuestions(
       question: String(q.question ?? ""),
       header: typeof q.header === "string" && q.header ? q.header : undefined,
       multiSelect: q.multiSelect === true,
-      options,
+      options: appendSomethingElseOption(options),
       allowFreeForm: q.allowFreeForm === true,
       secret: q.secret === true,
     } satisfies AskUserQuestion;
   });
+}
+
+// Every question carries a synthetic "Something else" choice, selected by
+// default (effectiveAskUserQuestionSelection). It is the user's standing right
+// to answer outside the agent's menu: the options are shortcuts, never a cage.
+// Appended, not prepended, so the agent's real options lead; skipped if the
+// agent already authored an option with that exact label.
+function appendSomethingElseOption(
+  options: AskUserQuestion["options"],
+): AskUserQuestion["options"] {
+  if (options.some((opt) => opt.label === SOMETHING_ELSE_LABEL)) return options;
+  return [
+    ...options,
+    {
+      label: SOMETHING_ELSE_LABEL,
+      description: "None of these — type your own answer below.",
+    },
+  ];
 }
 
 function emptyAskUserQuestionDraft(): AskUserQuestionDraft {
@@ -11454,7 +11477,10 @@ function RunAwaitingInputCard({
     if (submittedSnapshot && submittedSnapshot.answers[q.question]) {
       return submittedSnapshot.answers[q.question];
     }
-    return selections[q.question] ?? [];
+    // Live (unanswered): never-empty — a question with no explicit pick shows
+    // the default "Something else" selected, so the card is never in a
+    // nothing-selected state.
+    return effectiveAskUserQuestionSelection(selections, q.question);
   }
 
   function answeredNoteFor(question: string): string | undefined {
@@ -23556,24 +23582,9 @@ function ChatPane({
     const questions = parseAskUserQuestions({ questions: aw.questions });
     if (questions.length === 0) return null;
     const draftKey = (aw.timelineId || awEntry.id || "").trim();
-    const draft =
-      askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft();
-    const selections = draft.selections;
     const visibleIndex =
       aw.questionIndex && aw.questionIndex >= 1 ? aw.questionIndex - 1 : 0;
     const visibleQuestion = questions[visibleIndex] ?? questions[0] ?? null;
-    // The composer holds the live free-form text for the currently visible
-    // question, so a typed custom answer counts toward that question being
-    // answered. Without this, typing (with no option picked) left Submit
-    // disabled and the box read as frozen.
-    const composerFree = composerText.trim();
-    const hasResponse = (q: AskUserQuestion): boolean => {
-      if ((selections[q.question]?.length ?? 0) > 0) return true;
-      if (!q.allowFreeForm) return false;
-      if ((draft.notes[q.question]?.trim().length ?? 0) > 0) return true;
-      if (q === visibleQuestion && composerFree.length > 0) return true;
-      return false;
-    };
     const pager = turnActivityPagerState(snapshot?.pageInfo);
     return {
       questionTurnId: (
@@ -23588,22 +23599,16 @@ function ChatPane({
       questions,
       visibleQuestion,
       multiQuestion: questions.length > 1,
-      // visibleAnswered gates the per-question forward action; allAnswered gates
-      // the final submit; hasNextPage/nextPage drive multi-question paging so a
-      // 2-question set can move from one question to the next.
-      visibleAnswered: visibleQuestion ? hasResponse(visibleQuestion) : false,
-      allAnswered: questions.every(hasResponse),
+      // No nothing-selected state: every question always answers via the
+      // default "Something else" (effectiveAskUserQuestionSelection), so Submit
+      // is always live and an empty pass is acceptable. hasNextPage/nextPage
+      // drive paging — Enter advances mid-set and submits on the last page; the
+      // per-question answer values are read from the draft + live composer at
+      // submit time.
       hasNextPage: pager.page < pager.pageCount,
       nextPage: pager.page + 1,
     };
-  }, [
-    askUserQuestionDrafts,
-    composerText,
-    publicView,
-    readOnly,
-    turnActivityLoadsByTurn,
-    turnViewItems,
-  ]);
+  }, [publicView, readOnly, turnActivityLoadsByTurn, turnViewItems]);
 
   // Refs to the latest composer text + drafts so the page-change effect below
   // reads current values without re-running on every keystroke.
@@ -23669,34 +23674,26 @@ function ChatPane({
 
   async function submitComposerAnswer(): Promise<void> {
     const ctx = answeringContext;
-    if (!ctx || !ctx.allAnswered) return;
+    if (!ctx) return;
     const typed = composerText.trim();
     const draft =
       askUserQuestionDrafts[ctx.draftKey] ?? emptyAskUserQuestionDraft();
     const selections = draft.selections;
     const notes: Record<string, string> = { ...draft.notes };
-    if (typed && ctx.visibleQuestion?.allowFreeForm) {
+    // Companion text works with ANY selection and is never gated on
+    // allowFreeForm and never silently dropped. The visible question's live
+    // composer text wins over its persisted draft note.
+    if (typed && ctx.visibleQuestion) {
       notes[ctx.visibleQuestion.question] = typed;
     }
-    const answers: Record<string, string[]> = {};
-    const annotations: Record<
-      string,
-      { preview?: string; notes?: string }
-    > = {};
-    for (const q of ctx.questions) {
-      const labels = selections[q.question] ?? [];
-      const noteText = q.allowFreeForm ? (notes[q.question]?.trim() ?? "") : "";
-      if (labels.length > 0) answers[q.question] = labels;
-      else if (noteText) answers[q.question] = ["Other"];
-      else continue;
-      const preview = q.options.find((opt) =>
-        labels.includes(opt.label),
-      )?.preview;
-      const ann: { preview?: string; notes?: string } = {};
-      if (preview) ann.preview = preview;
-      if (noteText) ann.notes = noteText;
-      if (ann.preview || ann.notes) annotations[q.question] = ann;
-    }
+    // Never-empty + companion-text-on-any-selection invariants live in the
+    // pure, directly-tested buildAskUserQuestionAnswerPayload so the contract is
+    // provable in isolation.
+    const { answers, annotations } = buildAskUserQuestionAnswerPayload(
+      ctx.questions,
+      selections,
+      notes,
+    );
     if (Object.keys(answers).length === 0) return;
     // Carry any attached files the same way the normal turn path does: they're
     // already uploaded to /workspace via uploadAttachment; forward the ready
@@ -25054,31 +25051,27 @@ function ChatPane({
             className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
             placeholder={
               answeringContext
-                ? "Type a custom answer, or pick an option above — ⏎ to submit"
+                ? "Type your answer, pick an option, or leave empty to pass — ⏎ to send · Esc to cancel"
                 : RUN_COMPOSER_PLACEHOLDER
             }
             answerMode={
               answeringContext
                 ? {
-                    label: answeringContext.allAnswered
-                      ? answeringContext.multiQuestion
+                    // hasNextPage drives the verb: Enter/the button advances
+                    // mid-set and submits on the last (or only) page. Always
+                    // submittable — the default "Something else" selection means
+                    // there is no blocked state, and an empty pass is valid.
+                    label: answeringContext.hasNextPage
+                      ? "Next"
+                      : answeringContext.multiQuestion
                         ? "Submit answers"
-                        : "Submit answer"
-                      : answeringContext.hasNextPage
-                        ? "Next"
-                        : answeringContext.multiQuestion
-                          ? "Submit answers"
-                          : "Submit answer",
-                    canSubmit: answeringContext.allAnswered
-                      ? true
-                      : answeringContext.hasNextPage
-                        ? answeringContext.visibleAnswered
-                        : false,
+                        : "Submit answer",
+                    canSubmit: true,
                     onSubmit: () => {
-                      if (answeringContext.allAnswered) {
-                        void submitComposerAnswer();
-                      } else if (answeringContext.hasNextPage) {
+                      if (answeringContext.hasNextPage) {
                         advanceToNextQuestion();
+                      } else {
+                        void submitComposerAnswer();
                       }
                     },
                   }
