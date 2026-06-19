@@ -474,6 +474,151 @@ func TestTestDriveWakeHelpers(t *testing.T) {
 	}
 }
 
+// TestInternalStartTestWorkflow_OwnSessionAcceptedAndLaunches: a session pod's
+// own service principal (subject svc:tank:77 on the default scope == session 77)
+// triggers the same deterministic provision the browser button does. It resolves
+// the governed coordinates and fires the launch hook, returning 202. The
+// actor_email on signedControlActionServiceToken (owner@example.test ==
+// provisionTestOwner) is the session owner, so GetRegisteredByOwner resolves.
+func TestInternalStartTestWorkflow_OwnSessionAcceptedAndLaunches(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/77/test-workflow/start", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "77")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:77"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 1 {
+		t.Fatalf("expected exactly one launched gate run, got %d", len(*launched))
+	}
+	got := (*launched)[0]
+	if got.RepoOwner != "romaine-life" || got.RepoName != "tank-operator" {
+		t.Fatalf("repo coords = %s/%s, want romaine-life/tank-operator", got.RepoOwner, got.RepoName)
+	}
+	if got.Branch != "tank/session/77/tank-operator" {
+		t.Fatalf("branch = %q, want tank/session/77/tank-operator", got.Branch)
+	}
+	if got.PRNumber != 0 || got.ExpectedSHA != "" {
+		t.Fatalf("expected by-branch (no PR pin / no SHA pin); got PR=%d sha=%q", got.PRNumber, got.ExpectedSHA)
+	}
+	if got.Workflow != interactiveTestWorkflowLabel {
+		t.Fatalf("workflow label = %q, want %q", got.Workflow, interactiveTestWorkflowLabel)
+	}
+}
+
+// TestInternalStartTestWorkflow_ThreadsBodyOptions: the internal trigger threads
+// the same {repo, drive, pr} body the browser path does onto the launched gate
+// request, proving both triggers run the identical shared tail.
+func TestInternalStartTestWorkflow_ThreadsBodyOptions(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t,
+		testWorkflowSessionRecord("romaine-life/tank-operator", "romaine-life/glimmung"), gh, glim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/77/test-workflow/start",
+		strings.NewReader(`{"repo":"romaine-life/glimmung","drive":true,"pr":42}`))
+	req.SetPathValue("session_id", "77")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:77"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 1 {
+		t.Fatalf("expected one launched gate run, got %d", len(*launched))
+	}
+	got := (*launched)[0]
+	if got.RepoName != "glimmung" || got.Branch != "tank/session/77/glimmung" {
+		t.Fatalf("override coords = %s branch %q, want glimmung", got.RepoName, got.Branch)
+	}
+	if !got.drive {
+		t.Fatalf("drive flag should thread onto the launched request")
+	}
+	if got.PRNumber != 42 {
+		t.Fatalf("PR=%d, want 42 threaded from the body", got.PRNumber)
+	}
+}
+
+// TestInternalStartTestWorkflow_RejectsDifferentSession: a service principal whose
+// verified subject encodes a DIFFERENT session (svc:tank:88) may not provision a
+// slot for session 77 — internalCallerMatchesSession confines a session pod to its
+// own session. Mirrors the control-action cross-session 403 guard.
+func TestInternalStartTestWorkflow_RejectsDifferentSession(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/77/test-workflow/start", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "77")
+	// Subject is a DIFFERENT session than the path's session 77.
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:88"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s, want 403 for a cross-session service principal", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 0 {
+		t.Fatalf("cross-session request must not launch a gate run; launched=%d", len(*launched))
+	}
+}
+
+// TestInternalStartTestWorkflow_RequiresServiceRole: a non-service (user) token is
+// rejected by requireServicePrincipal before any provision, even for the owner.
+func TestInternalStartTestWorkflow_RequiresServiceRole(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/77/test-workflow/start", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "77")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, provisionTestOwner, auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s, want 403 for a non-service role", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 0 {
+		t.Fatalf("non-service request must not launch a gate run; launched=%d", len(*launched))
+	}
+}
+
+// TestInternalStartTestWorkflow_MissingGlimmungUnavailable: with glimmung
+// unconfigured the internal trigger reports 503 (mirrors the browser handler), and
+// the authorized own-session caller still does not launch a gate run.
+func TestInternalStartTestWorkflow_MissingGlimmungUnavailable(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+	app.glimmung = nil // glimmung unavailable
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/77/test-workflow/start", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "77")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:77"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s, want 503 when glimmung is unavailable", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 0 {
+		t.Fatalf("unavailable test workflow must not launch a gate run; launched=%d", len(*launched))
+	}
+}
+
 func TestSessionGlimmungProjectMapping(t *testing.T) {
 	if got := sessionGlimmungProject("romaine-life", "glimmung"); got != "glimmung" {
 		t.Fatalf("romaine-life repo project=%q, want glimmung", got)
@@ -482,4 +627,3 @@ func TestSessionGlimmungProjectMapping(t *testing.T) {
 		t.Fatalf("non-romaine project=%q, want %q", got, defaultGlimmungProject)
 	}
 }
-
