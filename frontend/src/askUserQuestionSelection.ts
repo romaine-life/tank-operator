@@ -14,22 +14,29 @@ export interface AskUserQuestionSelectionInput {
 // docs/features/transcript/contract.md -> "AskUserQuestion answer input".
 export const SOMETHING_ELSE_LABEL = "Something else";
 
-// effectiveAskUserQuestionSelection enforces the never-empty invariant at read
-// time: a question with no stored selection (or one toggled back to empty)
-// answers as the default "Something else". The reducer is free to store [] on a
-// deselect; every reader (render, submit, answered-gate) routes through here so
-// there is exactly one place that owns "there is no nothing-selected state."
+// effectiveAskUserQuestionSelection enforces the normal never-empty invariant
+// at read time: a question with no stored selection (or one toggled back to
+// empty) answers as the default "Something else". Plan approval can opt out by
+// passing null because Approve/Request-changes are exhaustive there.
 export function effectiveAskUserQuestionSelection(
   selections: Record<string, string[]>,
   question: string,
+  defaultSelectionLabel: string | null = SOMETHING_ELSE_LABEL,
 ): string[] {
   const stored = selections[question];
-  return stored && stored.length > 0 ? stored : [SOMETHING_ELSE_LABEL];
+  if (stored && stored.length > 0) return stored;
+  return defaultSelectionLabel ? [defaultSelectionLabel] : [];
 }
 
 export interface AskUserQuestionAnswerableQuestion {
   question: string;
   options: Array<{ label: string; preview?: string }>;
+  // Omitted preserves the AskUserQuestion safety fallback. Set null for
+  // workflows like plan approval where the offered options are exhaustive.
+  defaultSelectionLabel?: string | null;
+  // Label to submit when the user typed free-form text without choosing a
+  // concrete option. Defaults to defaultSelectionLabel.
+  freeFormSelectionLabel?: string | null;
 }
 
 export interface AskUserQuestionAnswerPayload {
@@ -41,9 +48,11 @@ export interface AskUserQuestionAnswerPayload {
 // per-question selections + companion notes. It owns three contract invariants
 // so they are provable in isolation (see
 // docs/features/transcript/contract.md -> "AskUserQuestion answer input"):
-//   1. Never-empty: a question with no explicit pick answers as the default
-//      "Something else" sentinel, so `answers` always carries >=1 label per
-//      question and an empty pass is a valid, honest answer.
+//   1. Never-empty by default: a normal question with no explicit pick answers
+//      as the default "Something else" sentinel, so `answers` carries >=1 label
+//      per question and an empty pass is a valid, honest answer. Callers can
+//      set defaultSelectionLabel=null for exhaustive workflows like plan
+//      approval.
 //   2. Companion text works with ANY selection: it rides as annotations.notes
 //      whether the selection is a real option or "Something else", and is never
 //      dropped on an options-only question.
@@ -56,8 +65,24 @@ export function buildAskUserQuestionAnswerPayload(
   const answers: Record<string, string[]> = {};
   const annotations: Record<string, { preview?: string; notes?: string }> = {};
   for (const q of questions) {
-    const labels = effectiveAskUserQuestionSelection(selections, q.question);
     const noteText = notes[q.question]?.trim() ?? "";
+    const defaultSelectionLabel =
+      q.defaultSelectionLabel === undefined
+        ? SOMETHING_ELSE_LABEL
+        : q.defaultSelectionLabel;
+    const freeFormSelectionLabel =
+      q.freeFormSelectionLabel === undefined
+        ? defaultSelectionLabel
+        : q.freeFormSelectionLabel;
+    let labels = effectiveAskUserQuestionSelection(
+      selections,
+      q.question,
+      defaultSelectionLabel,
+    );
+    if (labels.length === 0 && noteText && freeFormSelectionLabel) {
+      labels = [freeFormSelectionLabel];
+    }
+    if (labels.length === 0) continue;
     answers[q.question] = labels;
     const preview = q.options.find((opt) => labels.includes(opt.label))?.preview;
     const ann: { preview?: string; notes?: string } = {};

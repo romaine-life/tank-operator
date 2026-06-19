@@ -9120,11 +9120,13 @@ function RunMetaBlock({
 function RunQuestionHeadingMessage({
   systemAvatar,
   answered,
+  planApproval = false,
   questionIndex,
   questionCount,
 }: {
   systemAvatar: AgentAvatar | null;
   answered: boolean;
+  planApproval?: boolean;
   questionIndex?: number;
   questionCount?: number;
 }) {
@@ -9158,8 +9160,10 @@ function RunQuestionHeadingMessage({
       >
         <div className="run-transcript-message-text" data-slot="message-text">
           <span className="run-question-heading">
-            <span className="run-question-heading-label">{label}</span>
-            {counter && (
+            <span className="run-question-heading-label">
+              {planApproval ? "The agent has proposed a plan." : label}
+            </span>
+            {!planApproval && counter && (
               <span className="run-question-heading-count">{counter}</span>
             )}
           </span>
@@ -11533,6 +11537,8 @@ interface AskUserQuestion {
   header?: string;
   multiSelect: boolean;
   options: Array<{ label: string; description?: string; preview?: string }>;
+  defaultSelectionLabel?: string | null;
+  freeFormSelectionLabel?: string | null;
   // allowFreeForm and secret are projected from the Tank-canonical
   // question shape produced by the runner adapters. Claude maps every
   // question to allowFreeForm=true (mirroring Claude Code's host UI's
@@ -11546,8 +11552,82 @@ interface AskUserQuestion {
   secret: boolean;
 }
 
+const PLAN_APPROVAL_REQUEST_CHANGES_LABEL = "Request changes";
+
+function isPlanApprovalAwaitingInput(
+  awaitingInput: TranscriptEntry["awaitingInput"] | undefined,
+): boolean {
+  return (
+    typeof awaitingInput?.plan === "string" &&
+    awaitingInput.plan.trim().length > 0
+  );
+}
+
+function isPlanApprovalAwaitingInputEntry(entry: TranscriptEntry): boolean {
+  return (
+    entry.metaKind === "awaiting_input" &&
+    isPlanApprovalAwaitingInput(entry.awaitingInput)
+  );
+}
+
+function askUserQuestionDefaultSelectionLabel(
+  q: Pick<AskUserQuestion, "defaultSelectionLabel">,
+): string | null {
+  return q.defaultSelectionLabel === undefined
+    ? SOMETHING_ELSE_LABEL
+    : q.defaultSelectionLabel;
+}
+
+function askUserQuestionFreeFormSelectionLabel(
+  q: Pick<AskUserQuestion, "defaultSelectionLabel" | "freeFormSelectionLabel">,
+): string | null {
+  return q.freeFormSelectionLabel === undefined
+    ? askUserQuestionDefaultSelectionLabel(q)
+    : q.freeFormSelectionLabel;
+}
+
+function planApprovalFreeFormSelectionLabel(
+  options: AskUserQuestion["options"],
+): string | null {
+  return (
+    options.find((opt) => opt.label === PLAN_APPROVAL_REQUEST_CHANGES_LABEL)
+      ?.label ??
+    options[1]?.label ??
+    null
+  );
+}
+
+function askUserQuestionHasResponse(
+  q: AskUserQuestion,
+  selections: Record<string, string[]>,
+  notes: Record<string, string>,
+): boolean {
+  if (
+    effectiveAskUserQuestionSelection(
+      selections,
+      q.question,
+      askUserQuestionDefaultSelectionLabel(q),
+    ).length > 0
+  ) {
+    return true;
+  }
+  if (
+    q.allowFreeForm &&
+    askUserQuestionFreeFormSelectionLabel(q) &&
+    (notes[q.question]?.trim().length ?? 0) > 0
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function parseAskUserQuestions(
   input: Record<string, unknown> | null,
+  {
+    planApproval = false,
+  }: {
+    planApproval?: boolean;
+  } = {},
 ): AskUserQuestion[] {
   if (!Array.isArray(input?.questions)) return [];
   return (input.questions as Array<Record<string, unknown>>).map((q) => {
@@ -11564,18 +11644,22 @@ function parseAskUserQuestions(
       question: String(q.question ?? ""),
       header: typeof q.header === "string" && q.header ? q.header : undefined,
       multiSelect: q.multiSelect === true,
-      options: appendSomethingElseOption(options),
-      allowFreeForm: q.allowFreeForm === true,
+      options: planApproval ? options : appendSomethingElseOption(options),
+      defaultSelectionLabel: planApproval ? null : SOMETHING_ELSE_LABEL,
+      freeFormSelectionLabel: planApproval
+        ? planApprovalFreeFormSelectionLabel(options)
+        : undefined,
+      allowFreeForm: planApproval || q.allowFreeForm === true,
       secret: q.secret === true,
     } satisfies AskUserQuestion;
   });
 }
 
-// Every question carries a synthetic "Something else" choice, selected by
-// default (effectiveAskUserQuestionSelection). It is the user's standing right
-// to answer outside the agent's menu: the options are shortcuts, never a cage.
-// Appended, not prepended, so the agent's real options lead; skipped if the
-// agent already authored an option with that exact label.
+// Normal AskUserQuestion cards carry a synthetic "Something else" choice,
+// selected by default (effectiveAskUserQuestionSelection). It is the user's
+// standing right to answer outside the agent's menu: the options are shortcuts,
+// never a cage. Plan approval opts out because its Approve/Request-changes
+// choices are the whole contract.
 function appendSomethingElseOption(
   options: AskUserQuestion["options"],
 ): AskUserQuestion["options"] {
@@ -11624,8 +11708,10 @@ function RunAwaitingInputCard({
   // (awaitingInput.answered flips).
   const submittedSnapshot = draft.submittedSnapshot;
 
+  const planApproval = isPlanApprovalAwaitingInput(aw);
   const questions = parseAskUserQuestions(
     aw ? { questions: aw.questions } : null,
+    { planApproval },
   );
   const visibleQuestionIndex =
     aw?.questionIndex &&
@@ -11672,10 +11758,13 @@ function RunAwaitingInputCard({
     if (submittedSnapshot && submittedSnapshot.answers[q.question]) {
       return submittedSnapshot.answers[q.question];
     }
-    // Live (unanswered): never-empty — a question with no explicit pick shows
-    // the default "Something else" selected, so the card is never in a
-    // nothing-selected state.
-    return effectiveAskUserQuestionSelection(selections, q.question);
+    // Live (unanswered): normal questions default to "Something else"; plan
+    // approval opts out so Approve/Request-changes remain exhaustive.
+    return effectiveAskUserQuestionSelection(
+      selections,
+      q.question,
+      askUserQuestionDefaultSelectionLabel(q),
+    );
   }
 
   function answeredNoteFor(question: string): string | undefined {
@@ -11693,10 +11782,7 @@ function RunAwaitingInputCard({
   // the renderer surfaces a free-form textarea whenever allowFreeForm
   // is true, and submit accepts text without an option pick.
   function questionHasResponse(q: AskUserQuestion): boolean {
-    if ((selections[q.question]?.length ?? 0) > 0) return true;
-    if (q.allowFreeForm && (notes[q.question]?.trim().length ?? 0) > 0)
-      return true;
-    return false;
+    return askUserQuestionHasResponse(q, selections, notes);
   }
   const isReady =
     !answered &&
@@ -11735,35 +11821,11 @@ function RunAwaitingInputCard({
 
   async function submit(): Promise<void> {
     if (submitting || resolved || !isReady) return;
-    const answers: Record<string, string[]> = {};
-    const annotations: Record<string, { preview?: string; notes?: string }> =
-      {};
-    for (const q of questions) {
-      const labels = selections[q.question] ?? [];
-      const notesText = q.allowFreeForm
-        ? (notes[q.question]?.trim() ?? "")
-        : "";
-      // The wire shape requires `answers[question]` to be a non-empty
-      // string array. When the user only typed free-form text, we
-      // synthesize a single "Other" label so the answers map stays valid;
-      // the actual free-form text rides in `annotations[question].notes`.
-      // Both halves post to /answer; turn.input_answered resolves the question
-      // set, and the same backend request records the visible answer turn.
-      if (labels.length > 0) {
-        answers[q.question] = labels;
-      } else if (notesText) {
-        answers[q.question] = ["Other"];
-      } else {
-        continue;
-      }
-      const preview = q.options.find((opt) =>
-        labels.includes(opt.label),
-      )?.preview;
-      const ann: { preview?: string; notes?: string } = {};
-      if (preview) ann.preview = preview;
-      if (notesText) ann.notes = notesText;
-      if (ann.preview || ann.notes) annotations[q.question] = ann;
-    }
+    const { answers, annotations } = buildAskUserQuestionAnswerPayload(
+      questions,
+      selections,
+      notes,
+    );
     // Lock the card before the await; the snapshot is the user-visible
     // truth until the durable answer event lands (awaitingInput.answered).
     setSubmitting(true);
@@ -14196,6 +14258,9 @@ function RunTurnActivityScreen({
   const selectedTurnContext = selectedSnapshot?.context ?? null;
   const selectedFinalAnswerEntries = selectedSnapshot?.finalAnswerEntries ?? [];
   const selectedCollapse = selectedSnapshot?.collapse;
+  const selectedPagePlanApproval =
+    selectedPageInfo?.kind === "question" &&
+    (selectedSnapshot?.entries ?? []).some(isPlanApprovalAwaitingInputEntry);
   const pagerState = turnActivityPagerState(selectedPageInfo);
   const detailEntries = useMemo(
     () => {
@@ -14776,6 +14841,7 @@ function RunTurnActivityScreen({
                   <RunQuestionHeadingMessage
                     systemAvatar={systemAvatar}
                     answered={selectedPageInfo.answered ?? false}
+                    planApproval={selectedPagePlanApproval}
                     questionIndex={selectedPageInfo.questionIndex}
                     questionCount={selectedPageInfo.questionCount}
                   />
@@ -23747,7 +23813,11 @@ function ChatPane({
     );
     const aw = awEntry?.awaitingInput;
     if (!awEntry || !aw) return null;
-    const questions = parseAskUserQuestions({ questions: aw.questions });
+    const planApproval = isPlanApprovalAwaitingInput(aw);
+    const questions = parseAskUserQuestions(
+      { questions: aw.questions },
+      { planApproval },
+    );
     if (questions.length === 0) return null;
     const draftKey = (aw.timelineId || awEntry.id || "").trim();
     const visibleIndex =
@@ -23766,13 +23836,11 @@ function ChatPane({
       draftKey,
       questions,
       visibleQuestion,
+      planApproval,
       multiQuestion: questions.length > 1,
-      // No nothing-selected state: every question always answers via the
-      // default "Something else" (effectiveAskUserQuestionSelection), so Submit
-      // is always live and an empty pass is acceptable. hasNextPage/nextPage
-      // drive paging — Enter advances mid-set and submits on the last page; the
-      // per-question answer values are read from the draft + live composer at
-      // submit time.
+      // hasNextPage/nextPage drive paging — Enter advances mid-set and submits
+      // on the last page; the per-question answer values are read from the draft
+      // + live composer at submit time.
       hasNextPage: pager.page < pager.pageCount,
       nextPage: pager.page + 1,
     };
@@ -23911,6 +23979,36 @@ function ChatPane({
     // header page arrows behave identically.
     selectTurnAndPage(ctx.questionTurnId, ctx.nextPage);
   }
+
+  const answeringDraft = !answeringContext
+    ? null
+    : (askUserQuestionDrafts[answeringContext.draftKey] ??
+        emptyAskUserQuestionDraft());
+  const answeringNotes: Record<string, string> =
+    answeringContext && answeringDraft
+      ? { ...answeringDraft.notes }
+      : {};
+  if (answeringContext?.visibleQuestion && composerText.trim()) {
+    answeringNotes[answeringContext.visibleQuestion.question] =
+      composerText.trim();
+  }
+  const answerModeCanSubmit = answeringContext
+    ? answeringContext.hasNextPage
+      ? answeringContext.visibleQuestion
+        ? askUserQuestionHasResponse(
+            answeringContext.visibleQuestion,
+            answeringDraft?.selections ?? {},
+            answeringNotes,
+          )
+        : false
+      : answeringContext.questions.every((q) =>
+          askUserQuestionHasResponse(
+            q,
+            answeringDraft?.selections ?? {},
+            answeringNotes,
+          ),
+        )
+    : false;
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
     if (publicView && tab !== "turns") return;
@@ -25219,23 +25317,27 @@ function ChatPane({
             className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
             placeholder={
               answeringContext
-                ? "Type your answer, pick an option, or leave empty to pass — ⏎ to send · Esc to cancel"
+                ? answeringContext.planApproval
+                  ? "Approve the plan or request changes — add feedback if needed · Esc to cancel"
+                  : "Type your answer, pick an option, or leave empty to pass — ⏎ to send · Esc to cancel"
                 : RUN_COMPOSER_PLACEHOLDER
             }
             answerMode={
               answeringContext
                 ? {
                     // hasNextPage drives the verb: Enter/the button advances
-                    // mid-set and submits on the last (or only) page. Always
-                    // submittable — the default "Something else" selection means
-                    // there is no blocked state, and an empty pass is valid.
+                    // mid-set and submits on the last (or only) page. Normal
+                    // questions stay submittable through the "Something else"
+                    // default; plan approval requires an actual choice or
+                    // typed feedback.
                     label: answeringContext.hasNextPage
                       ? "Next"
                       : answeringContext.multiQuestion
                         ? "Submit answers"
                         : "Submit answer",
-                    canSubmit: true,
+                    canSubmit: answerModeCanSubmit,
                     onSubmit: () => {
+                      if (!answerModeCanSubmit) return;
                       if (answeringContext.hasNextPage) {
                         advanceToNextQuestion();
                       } else {
