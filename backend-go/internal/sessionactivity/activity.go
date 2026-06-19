@@ -284,7 +284,7 @@ var LifecycleChatEventTypes = []string{
 	// ping). It must be in the lifecycle set so the persister refreshes the
 	// activity summary on it and the fold above sees it. Keep in lockstep with
 	// store.LifecycleEventTypes and the session_events_lifecycle partial index
-	// (migration 0178).
+	// (migration 0179).
 	"pr_ready.notified",
 }
 

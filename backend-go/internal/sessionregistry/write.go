@@ -441,6 +441,47 @@ func (s *Store) SetCloneState(ctx context.Context, email, sessionID string, stat
 	return s.setJSONBColumn(ctx, "clone_state", "", email, sessionID, state)
 }
 
+// AppendSpawnedSession appends one child ref to the parent row's
+// spawned_sessions jsonb array, deduped by child id so a spawn retry is
+// idempotent. Matches the parent on the full (email, session_scope,
+// session_id) primary-key prefix like every other row writer — session ids
+// are only unique within a scope (session_counters is per-scope), so a
+// scope-less match could append the child onto an unrelated same-id row in
+// another scope. Bumps row_version so the snapshot/SSE catch-up re-reads the
+// row. No-op on empty inputs.
+//
+// Consequence: lineage is recorded whenever the spawn is handled in the
+// parent's scope — every same-scope spawn, i.e. spawn_run_session. A
+// cross-scope test-slot spawn handled by a different-scope operator would
+// need the origin scope plumbed through (a follow-up) to land on the prod
+// parent; this deliberately writes nothing rather than risk the wrong row.
+func (s *Store) AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	parent := strings.TrimSpace(parentSessionID)
+	childID := strings.TrimSpace(ref.ID)
+	if normalized == "" || parent == "" || childID == "" {
+		return nil
+	}
+	raw, err := json.Marshal(ref)
+	if err != nil {
+		return fmt.Errorf("sessionregistry: marshal spawned session: %w", err)
+	}
+	const q = `
+		UPDATE sessions
+		SET spawned_sessions = COALESCE(spawned_sessions, '[]'::jsonb) || jsonb_build_array($4::jsonb),
+			updated_at = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM jsonb_array_elements(COALESCE(spawned_sessions, '[]'::jsonb)) elem
+			WHERE elem->>'id' = $5
+		  )
+	`
+	_, err = s.pool.Exec(ctx, q, normalized, s.scope, parent, raw, childID)
+	return err
+}
+
 func (s *Store) setJSONBColumn(ctx context.Context, column, clearColumn, email, sessionID string, state map[string]any) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
@@ -495,6 +536,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.activity_summary,
 			sessions.test_state,
 			sessions.rollout_state,
+			sessions.spawned_sessions,
 			COALESCE(sessions.repos, '{}'::text[]),
 			sessions.clone_state,
 			COALESCE(sessions.capabilities, '{}'::text[]),
@@ -552,6 +594,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		visible                                                        bool
 		sessionImageMetadata                                           []byte
 		activitySummary, testState, rolloutState, cloneState           []byte
+		spawnedSessions                                                []byte
 		providerRateLimitInfo                                          []byte
 		repos, capabilities                                            []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt          string
@@ -571,6 +614,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
+		&spawnedSessions,
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
@@ -615,6 +659,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		ActivitySummary:                  activitySummary,
 		TestState:                        unmarshalJSONB(testState),
 		RolloutState:                     unmarshalJSONB(rolloutState),
+		SpawnedSessions:                  sessionmodel.DecodeSpawnedSessions(spawnedSessions),
 		Repos:                            repos,
 		CloneState:                       unmarshalJSONB(cloneState),
 		Capabilities:                     capabilities,

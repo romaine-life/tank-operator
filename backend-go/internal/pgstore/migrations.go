@@ -2184,7 +2184,24 @@ var schemaMigrations = []migration{
 	{ID: "0177", SQL: `CREATE INDEX IF NOT EXISTS pending_test_provisions_session
 		ON pending_test_provisions (session_scope, session_id, status)`},
 
-	// 0178: the CI-watch ready ping (pr_ready.notified) joins the lifecycle
+	// Parent→child session lineage for the session-bar "spawned sessions"
+	// chip. When an agent spawns a session via spawn_run_session /
+	// spawn_test_slot_session, the create handler appends a ref
+	// ({id,name,mode,model,repos,url,created_at}) to the ORIGIN (parent)
+	// session's row, keyed by the X-Tank-Origin-Session-Id header. The
+	// column is the durable, snapshot-facing source the RowPublisher fans
+	// out so the parent's chip lists its children without re-deriving the
+	// relationship from the event ledger. jsonb array; NULL/absent means
+	// "spawned nothing". Append is atomic + id-deduped (sessionregistry
+	// AppendSpawnedSession), matched on the full (email, session_scope,
+	// session_id) primary key — session ids are per-scope (session_counters),
+	// so the scope is load-bearing and a scope-less match could hit an
+	// unrelated same-id row. Cross-scope test-slot lineage is a tracked
+	// follow-up (needs the origin scope plumbed from the proxy).
+	{ID: "0178", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS spawned_sessions jsonb`},
+
+	// 0179: the CI-watch ready ping (pr_ready.notified) joins the lifecycle
 	// event set so the activity fold surfaces needs_input attention for a
 	// green+mergeable PR. The LatestLifecycleEvents DESC scan inlines its
 	// event-type set as a SQL literal so the partial index provably matches;
@@ -2193,7 +2210,7 @@ var schemaMigrations = []migration{
 	// planner falls back to a full session-partition scan. DROP + recreate
 	// because a partial index's WHERE clause is immutable. Keep this predicate
 	// in lockstep with store.LifecycleEventTypes.
-	{ID: "0178", SQL: `DROP INDEX IF EXISTS session_events_lifecycle;
+	{ID: "0179", SQL: `DROP INDEX IF EXISTS session_events_lifecycle;
 		CREATE INDEX IF NOT EXISTS session_events_lifecycle
 			ON session_events (tank_session_id, order_key DESC)
 			WHERE event_type IN ('turn.submitted', 'turn.claimed', 'turn.started', 'turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupt_requested', 'turn.interrupted', 'turn.awaiting_input', 'turn.input_answered', 'pr_ready.notified')`},

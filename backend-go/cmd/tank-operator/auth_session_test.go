@@ -332,7 +332,14 @@ func TestHandleCreateStreamTicketAllowsServiceActor(t *testing.T) {
 }
 
 type testSessionRegistry struct {
-	records map[string]map[string]sessionmodel.SessionRecord
+	records        map[string]map[string]sessionmodel.SessionRecord
+	spawnedAppends []recordedSpawnedAppend
+}
+
+type recordedSpawnedAppend struct {
+	Email           string
+	ParentSessionID string
+	Ref             sessionmodel.SpawnedSessionRef
 }
 
 func newTestSessionRegistry(records ...sessionmodel.SessionRecord) *testSessionRegistry {
@@ -457,6 +464,14 @@ func (r *testSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ 
 	return nil
 }
 func (r *testSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
+func (r *testSessionRegistry) AppendSpawnedSession(_ context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error {
+	r.spawnedAppends = append(r.spawnedAppends, recordedSpawnedAppend{
+		Email:           email,
+		ParentSessionID: parentSessionID,
+		Ref:             ref,
+	})
 	return nil
 }
 func (r *testSessionRegistry) SetRuntimeConfig(_ context.Context, email, sessionID, model, effort string) error {

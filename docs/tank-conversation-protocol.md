@@ -86,7 +86,7 @@ drives `needs_input` attention. Read-side consumers:
   `store.LifecycleEventTypes`): CONSUMES — folds to `needs_input` when the
   session is idle (no-clobber guard for active turns); cleared by the next
   `turn.*` lifecycle event. Added to the `session_events_lifecycle` partial index
-  (migration 0178) so the literal-list lifecycle query still matches the index.
+  (migration 0179) so the literal-list lifecycle query still matches the index.
 - **Stranded-turn sweeps** (`FindStrandedTurns` / `FindStrandedLaunchTurns`):
   INERT by construction — `pr_ready.notified` carries no `turn_id` and is not a
   `turn.submitted`, so it is never a sweep candidate and no false

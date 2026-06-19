@@ -616,6 +616,108 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	}
 }
 
+// newSpawnTestServer builds the minimal appServer wiring shared by the
+// spawned-session-edge tests: a prod-scope service-create surface backed by
+// a recording registry/event/bus, plus a service-principal token.
+func newSpawnTestServer(t *testing.T) (*appServer, *testSessionRegistry, string) {
+	t.Helper()
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "default",
+		sessionServiceAccount: "claude-session",
+		sessionEvents:         &recordingSessionEventStore{},
+		sessionBus:            &recordingSessionBus{},
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:parent-42",
+		"email":       "pod-parent-42@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, registry, tok
+}
+
+// A spawn carrying the X-Tank-Origin-Session-Id header records a parent→child
+// edge on the ORIGIN session's row so its session-bar chip can link to the
+// new session. The recorded ref must match the created session field-for-field.
+func TestHandleInternalCreateSessionRecordsSpawnedSessionOnOrigin(t *testing.T) {
+	server, registry, tok := newSpawnTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"Child Work",
+			"initial_turn":{"client_nonce":"turn-spawn","prompt":"go do the thing"}
+		}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set(originSessionHeader, "parent-42")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if len(registry.spawnedAppends) != 1 {
+		t.Fatalf("spawned appends = %d, want 1", len(registry.spawnedAppends))
+	}
+	got := registry.spawnedAppends[0]
+	if got.ParentSessionID != "parent-42" {
+		t.Fatalf("append parent = %q, want origin header %q", got.ParentSessionID, "parent-42")
+	}
+	if got.Email != "owner@example.test" {
+		t.Fatalf("append email = %q, want actor_email", got.Email)
+	}
+	wantURL := "https://tank.romaine.life/?session=" + info.ID
+	if got.Ref.ID != info.ID || got.Ref.Name != info.Name || got.Ref.Mode != info.Mode || got.Ref.URL != wantURL {
+		t.Fatalf("ref = %#v, want id=%q name=%q mode=%q url=%q", got.Ref, info.ID, info.Name, info.Mode, wantURL)
+	}
+	if got.Ref.Name != "Child Work" {
+		t.Fatalf("ref name = %q, want the spawned session's display name", got.Ref.Name)
+	}
+}
+
+// A spawn WITHOUT an origin header (a human/splash-page create) records no
+// edge — the chip is for agent-spawned lineage only.
+func TestHandleInternalCreateSessionWithoutOriginRecordsNoSpawnedSession(t *testing.T) {
+	server, registry, tok := newSpawnTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{
+			"mode":"claude_gui",
+			"name":"Top Level",
+			"initial_turn":{"client_nonce":"turn-noorigin","prompt":"start fresh"}
+		}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(registry.spawnedAppends) != 0 {
+		t.Fatalf("spawned appends = %d, want 0 (no origin header)", len(registry.spawnedAppends))
+	}
+}
+
 func TestHandleInternalCreateSessionRejectsPromptlessGUI(t *testing.T) {
 	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
 	if err != nil {

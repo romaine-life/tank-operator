@@ -55,13 +55,13 @@ func sortedCopy(in []string) []string {
 // red.
 //
 // The lifecycle index predicate was first defined by 0153 and later widened by
-// 0178 (DROP + recreate to add pr_ready.notified). The authoritative live
+// 0179 (DROP + recreate to add pr_ready.notified). The authoritative live
 // predicate is whichever migration last (re)created session_events_lifecycle,
-// so the lockstep assertion reads 0178.
+// so the lockstep assertion reads 0179.
 func TestActivityPartialIndexPredicatesLockstepWithStoreTypeLists(t *testing.T) {
-	lifecycle := sqlInListLiterals(t, migrationByID(t, "0178").SQL)
+	lifecycle := sqlInListLiterals(t, migrationByID(t, "0179").SQL)
 	if got, want := sortedCopy(lifecycle), sortedCopy(store.LifecycleEventTypes); strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("migration 0178 predicate %v != store.LifecycleEventTypes %v — ship a follow-up index migration in the same PR", got, want)
+		t.Fatalf("migration 0179 predicate %v != store.LifecycleEventTypes %v — ship a follow-up index migration in the same PR", got, want)
 	}
 
 	unread := sqlInListLiterals(t, migrationByID(t, "0154").SQL)

@@ -252,7 +252,7 @@ var LifecycleEventTypes = []string{
 	// pr_ready.notified is not a turn but drives the needs_input attention
 	// fold (the CI-watch ready ping). In lockstep with
 	// sessionactivity.LifecycleChatEventTypes and the session_events_lifecycle
-	// partial index — migration 0178 adds it to that index predicate so this
+	// partial index — migration 0179 adds it to that index predicate so this
 	// literal list still provably matches the index.
 	"pr_ready.notified",
 }

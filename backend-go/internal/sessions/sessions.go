@@ -48,6 +48,12 @@ type Info struct {
 	Name         string         `json:"name"`
 	TestState    map[string]any `json:"test_state"`
 	RolloutState map[string]any `json:"rollout_state"`
+	// SpawnedSessions is the durable parent→child lineage rendered by the
+	// session-bar "spawned sessions" chip: the sessions this session
+	// spawned via spawn_run_session / spawn_test_slot_session. Omitted from
+	// the wire when empty (the every-session-today shape). Same source of
+	// truth as the RowPublisher field so snapshot and SSE agree.
+	SpawnedSessions []sessionmodel.SpawnedSessionRef `json:"spawned_sessions,omitempty"`
 	// Repos is the "owner/name" slug list the user picked at
 	// session creation; always present on the wire (empty array
 	// when none were selected). Driven by the durable
@@ -288,6 +294,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Name:                             record.Name,
 		TestState:                        record.TestState,
 		RolloutState:                     record.RolloutState,
+		SpawnedSessions:                  record.SpawnedSessions,
 		Repos:                            repos,
 		CloneState:                       record.CloneState,
 		Capabilities:                     capabilities,
