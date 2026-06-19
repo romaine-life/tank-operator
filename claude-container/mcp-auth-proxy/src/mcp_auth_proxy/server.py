@@ -4380,6 +4380,195 @@ async def _handle_break_glass_wrapper_mint(
         return web.json_response({"active": False, "error": str(exc)})
 
 
+async def _handle_create_session_pr_wrapper(
+    http: ClientSession,
+    auth_romaine_provider,
+    request: web.Request,
+) -> web.Response:
+    """Governed `gh pr create` for the in-pod `gh` wrapper.
+
+    `gh-tank-wrapper.sh` delegates `gh pr create` on a Tank session branch to
+    this endpoint instead of running it with the restricted read-only token.
+    The sidecar (this :9999 listener) holds the GitHub credential, ensures an
+    open draft PR for the branch, records the `github.pull_request.open` control
+    action, and returns the PR URL — the agent shell never receives a write
+    credential. This is the governed write counterpart to the read-only `gh`
+    surface: `git commit` already auto-publishes the branch, and now
+    `gh pr create` opens its PR through the same governed path, so the agent uses
+    one normal mental model ("commit, push, open a PR") with no `publish_current_head`
+    / `create_pr_lane` / break-glass fork.
+
+    Idempotent: an already-open PR for the branch is returned with
+    `created: false`; a lost create race collapses on GitHub's "already exists".
+    """
+    try:
+        if not RESTRICTED_GIT_ENABLED:
+            return web.json_response(
+                {"ok": False, "reason": "governed PR create is restricted-git only"},
+                status=400,
+            )
+        if not ORIGIN_SESSION_ID:
+            return web.json_response(
+                {"ok": False, "reason": "SESSION_ID is required"}, status=400
+            )
+        raw_body = await request.read()
+        try:
+            payload = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        repo_args: dict[str, str] = {}
+        if payload.get("repo_path"):
+            repo_args["repo_path"] = str(payload["repo_path"])
+        if payload.get("repo"):
+            repo_args["repo"] = str(payload["repo"])
+        repo_path = _repo_path_from_arguments(repo_args)
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            return web.json_response(
+                {"ok": False, "reason": f"origin remote is not a GitHub URL: {remote_url}"},
+                status=400,
+            )
+        owner, repo = slug
+        repo_slug = f"{owner}/{repo}"
+        branch = await _git_output(repo_path, "rev-parse", "--abbrev-ref", "HEAD")
+        if not _is_tank_session_branch(branch, repo):
+            return web.json_response(
+                {"ok": False, "reason": f"{branch!r} is not a Tank session branch for {repo!r}"},
+                status=400,
+            )
+
+        service_token = await auth_romaine_provider.token()
+        headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}
+        # Read token used only inside the sidecar for the open-PR / default-base
+        # lookups; the create itself goes through mcp-github (server-side mint).
+        github_token = await _mint_github_installation_token(http, service_token, repo_slug)
+
+        from urllib.parse import quote
+
+        head_q = quote(f"{owner}:{branch}", safe="")
+
+        async def _existing_open_pr() -> tuple[str, int | None] | None:
+            status, body = await _github_api_json(
+                http,
+                github_token,
+                "GET",
+                f"/repos/{owner}/{repo}/pulls?head={head_q}&state=open",
+            )
+            if status < 400 and isinstance(body, list) and body:
+                pr = body[0]
+                if isinstance(pr, dict):
+                    number = int(pr.get("number") or 0) or None
+                    url = str(pr.get("html_url") or f"https://github.com/{repo_slug}/pull/{number}")
+                    return url, number
+            return None
+
+        existing = await _existing_open_pr()
+        if existing is not None:
+            pr_url, pr_number = existing
+            return web.json_response(
+                {"ok": True, "created": False, "pr_url": pr_url, "pr_number": pr_number}
+            )
+
+        base = str(payload.get("base") or "").strip()
+        if not base:
+            repo_status, repo_body = await _github_api_json(
+                http, github_token, "GET", f"/repos/{owner}/{repo}"
+            )
+            if repo_status < 400 and isinstance(repo_body, dict):
+                base = str(repo_body.get("default_branch") or "").strip()
+        if not base:
+            base = "main"
+
+        title = str(payload.get("title") or "").strip() or f"Tank session {ORIGIN_SESSION_ID}: {repo}"
+        body_text = str(payload.get("body") or "").strip() or (
+            f"Draft PR opened by Tank for session {ORIGIN_SESSION_ID} on `{branch}`. "
+            "Every governed commit is published through Tank so CI and mergeability "
+            "are tracked per commit."
+        )
+        # Governed session PRs open as drafts (matching repo-cloner / create_pr_lane);
+        # merge_current_session_pr marks ready before merge.
+        draft_raw = payload.get("draft")
+        draft = True if draft_raw is None else bool(draft_raw)
+        invocation_id = f"tank-session-pr-create-{uuid4().hex}"
+        sha = await _git_output(repo_path, "rev-parse", "HEAD")
+
+        try:
+            pr_objects = await _call_mcp_github_tool(
+                http,
+                service_token,
+                "create_pull_request",
+                {
+                    "owner": owner,
+                    "name": repo,
+                    "title": title,
+                    "body": body_text,
+                    "head": branch,
+                    "base": base,
+                    "draft": draft,
+                },
+            )
+        except RuntimeError as exc:
+            message = str(exc)
+            lowered = message.lower()
+            if "already exist" in lowered:
+                # Lost a create race; the PR now exists — return it idempotently.
+                existing = await _existing_open_pr()
+                if existing is not None:
+                    pr_url, pr_number = existing
+                    return web.json_response(
+                        {"ok": True, "created": False, "pr_url": pr_url, "pr_number": pr_number}
+                    )
+                return web.json_response({"ok": False, "reason": message}, status=409)
+            if "no commits between" in lowered:
+                return web.json_response(
+                    {"ok": False, "reason": "no commits between base and head — commit your work first"},
+                    status=422,
+                )
+            return web.json_response({"ok": False, "reason": message}, status=502)
+
+        pr = _first_pr_from_response(pr_objects)
+        if pr is None:
+            return web.json_response(
+                {"ok": False, "reason": "create_pull_request returned no PR URL"}, status=502
+            )
+        _pr_owner, _pr_repo, pr_url, pr_number = pr
+        await _post_tank_control_action(
+            http,
+            headers,
+            {
+                "event_id": f"tank-session-pr-open-{ORIGIN_SESSION_ID}-{uuid4().hex}",
+                "invocation_id": invocation_id,
+                "source_service": "mcp-tank-operator",
+                "source_tool": "gh_pr_create",
+                "action": "github.pull_request.open",
+                "status": "succeeded",
+                "target_kind": "github_pull_request",
+                "target_ref": pr_url,
+                "repo_owner": owner,
+                "repo_name": repo,
+                "pr_number": pr_number,
+                "result_sha": sha,
+                "payload": {
+                    "branch": branch,
+                    "base": base,
+                    "draft": draft,
+                    "channel": "gh_pr_create",
+                },
+            },
+        )
+        await _post_tank_pull_request_link(http, headers, pr_url)
+        return web.json_response(
+            {"ok": True, "created": True, "pr_url": pr_url, "pr_number": pr_number}
+        )
+    except Exception as exc:  # noqa: BLE001 - surface a clean reason to the wrapper
+        log.warning("governed gh pr create failed", exc_info=True)
+        return web.json_response({"ok": False, "reason": str(exc)}, status=500)
+
+
 async def _handle_break_glass_mcp(
     http: ClientSession,
     auth_romaine_provider,
@@ -5205,6 +5394,15 @@ async def run() -> None:
             "POST",
             "/mint-git-token",
             lambda request: _handle_break_glass_wrapper_mint(http, auth_romaine_provider, request),
+        )
+        # Governed `gh pr create` delegation for the in-pod gh wrapper. The
+        # sidecar holds the credential and opens the draft PR for the session
+        # branch; the agent shell never gets a write token. Registered before the
+        # MCP catch-all so it is not swallowed by it.
+        break_glass_app.router.add_route(
+            "POST",
+            "/create-session-pr",
+            lambda request: _handle_create_session_pr_wrapper(http, auth_romaine_provider, request),
         )
         break_glass_app.router.add_route(
             "*",

@@ -399,7 +399,11 @@ watch checks. For selected GitHub repos, session startup creates a
 Tank-owned `tank/session/<session-id>/<repo>` branch and draft PR. Every local
 commit is auto-published through the Tank MCP `publish_current_head` path,
 which owns the GitHub write token inside the session sidecar, records the
-commit in the control-action ledger, and starts CI/mergeability watching.
+commit in the control-action ledger, and starts CI/mergeability watching. When
+an agent opens a PR itself, `gh pr create` on a session branch is delegated to
+the same governed sidecar path (it is not blocked) — see "Governed
+`gh pr create`" below — so the agent uses normal `git`/`gh` verbs and never
+holds a write credential.
 
 Affected contracts:
 - Session Lifecycle
@@ -422,9 +426,28 @@ Contract impact:
   fails loudly, and the localhost GitHub MCP proxy denies write-capable
   `mint_clone_token` and file/PR write tools in restricted mode (a read-only
   `mint_clone_token` is allowed through so reads keep working — see "Restricted
-  Session Read-Only Git Access").
+  Session Read-Only Git Access"). The one write an agent routinely needs —
+  opening its PR — is **delegated, not denied**: see "Governed `gh pr create`".
 - The `post-commit` hook calls the Tank MCP publish tool rather than printing
   reminder-only guidance.
+- **Governed `gh pr create`.** The in-pod `gh` wrapper detects `gh pr create`
+  on a session branch and delegates it to a governed sidecar endpoint
+  (`POST /create-session-pr` on the break-glass listener,
+  `_handle_create_session_pr_wrapper`). That handler holds the GitHub credential,
+  ensures an open **draft** PR for the branch (idempotent on an existing open PR
+  and on GitHub's "already exists" 422; a `no commits between` create is a clean
+  422, not a crash), recomputes the base from the repo's default branch, records
+  the `github.pull_request.open` control-action event, sets the session PR link,
+  and returns the PR URL to the wrapper. The agent uses the normal `gh pr create`
+  verb and **never receives a write token** — the credential and policy stay in
+  the sidecar, the same boundary as the read-only mint. This is the explicit-verb
+  counterpart to commit-auto-publish (`git commit` publishes the branch,
+  `gh pr create` opens its PR, both through the governed path) and it removes the
+  post-merge stranding where a squash-merge deletes the branch and nothing
+  re-opened a PR — the next `gh pr create` re-opens one. `create_pr_lane` remains
+  only for genuinely *parallel* PRs from one session; Git break-glass remains the
+  escape hatch for non-PR writes (`gh pr edit/ready/merge`, issues). Every other
+  `gh` verb still falls through to the read-only / break-glass path unchanged.
 - Commit publication, CI state, PR creation, and mergeability are durable
   `control_action_events`, so the UI can show PR/commit evidence after reload.
 - Control-action ledger writes (`POST /api/internal/sessions/{id}/control-actions`)
