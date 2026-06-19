@@ -42,6 +42,11 @@ export type SessionEventStreamMetricName =
   | "turn_activity_refresh_failed"
   | "turn_activity_refresh_gave_up"
   | "turn_activity_refresh_recovered"
+  // The pending needs_input turn's activity loaded but surfaced no answerable
+  // question — the inline question widget would render nothing, so the user
+  // cannot see or answer the question. A user-trust failure the inline-question
+  // surface introduces (the question used to be reachable only from Turns).
+  | "turn_activity_needs_input_no_inline_card"
   | "turn_activity_collapse_applied"
   | "turn_activity_collapse_projection_mismatch"
   | "turn_number_unavailable_target"
