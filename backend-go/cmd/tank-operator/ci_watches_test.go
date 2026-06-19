@@ -427,6 +427,80 @@ func TestAutoMergeWithheldUntilChecksConfirmedSettled(t *testing.T) {
 	}
 }
 
+// prReadyUpserts filters a recording event store for the durable
+// pr_ready.notified user pings.
+func prReadyUpserts(t *testing.T, app *appServer) []map[string]any {
+	t.Helper()
+	es, ok := app.sessionEvents.(*recordingSessionEventStore)
+	if !ok {
+		t.Fatalf("sessionEvents is %T, want *recordingSessionEventStore", app.sessionEvents)
+	}
+	var out []map[string]any
+	for _, e := range es.upserts {
+		if typ, _ := e["type"].(string); typ == "pr_ready.notified" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// TestHandleGreenCIWatchPingsUserOnReadyTransition pins the core slice
+// behavior: on the non-orchestration watching -> ready edge, the user is pinged
+// with a durable pr_ready.notified system notice, and the AGENT is never woken
+// (no submit_turn command on the bus).
+func TestHandleGreenCIWatchPingsUserOnReadyTransition(t *testing.T) {
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", SessionScope: "tank-operator-slot-3",
+		OwnerEmail: "owner@example.test", PROwner: fakePROwner, PRName: fakePRName,
+		PRNumber: 1234, HeadSHA: "h1", PRURL: "https://github.com/o/r/pull/1234",
+		Status: pgstore.CIWatchWatching,
+	}}
+	app := ciWatchTestServer(t, store)
+
+	watch := store.getByPRResult
+	app.handleGreenCIWatch(context.Background(), watch, "All required checks passed.")
+
+	pings := prReadyUpserts(t, app)
+	if len(pings) != 1 {
+		t.Fatalf("pr_ready.notified pings = %d, want 1", len(pings))
+	}
+	payload, _ := pings[0]["payload"].(map[string]any)
+	if got, _ := payload["pr_url"].(string); got != "https://github.com/o/r/pull/1234" {
+		t.Fatalf("ping pr_url = %q, want the watch PR URL", got)
+	}
+	if got, _ := payload["head_sha"].(string); got != "h1" {
+		t.Fatalf("ping head_sha = %q, want h1", got)
+	}
+	// The agent must NEVER be woken on ready: no submit_turn command published.
+	bus, ok := app.sessionBus.(*recordingSessionBus)
+	if !ok {
+		t.Fatalf("sessionBus is %T, want *recordingSessionBus", app.sessionBus)
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0 (agent must never be woken on ready): %+v", len(bus.commands), bus.commands)
+	}
+}
+
+// TestHandleGreenCIWatchDoesNotRepingOnReentry pins idempotency: a re-entry on
+// an ALREADY-ready watch (webhook + reconcile double-drive) does not re-ping the
+// user.
+func TestHandleGreenCIWatchDoesNotRepingOnReentry(t *testing.T) {
+	store := &fakeCIWatchStore{getByPRResult: pgstore.CIWatch{
+		WatchID: "cw1", SessionID: "47", SessionScope: "tank-operator-slot-3",
+		OwnerEmail: "owner@example.test", PROwner: fakePROwner, PRName: fakePRName,
+		PRNumber: 1234, HeadSHA: "h1", PRURL: "https://github.com/o/r/pull/1234",
+		Status: pgstore.CIWatchReady,
+	}}
+	app := ciWatchTestServer(t, store)
+
+	watch := store.getByPRResult // already ready
+	app.handleGreenCIWatch(context.Background(), watch, "All required checks passed.")
+
+	if pings := prReadyUpserts(t, app); len(pings) != 0 {
+		t.Fatalf("pr_ready.notified pings on re-entry = %d, want 0 (idempotent on transition)", len(pings))
+	}
+}
+
 func TestHandleInternalRegisterCIWatchRejectsNonService(t *testing.T) {
 	store := &fakeCIWatchStore{}
 	app := ciWatchTestServer(t, store)

@@ -22,6 +22,16 @@ var (
 		Help: "Agent wakes fired by the CI-watch receiver, by source and result.",
 	}, []string{"source", "result"})
 
+	// The CI-watch ready USER ping (pr_ready.notified). Distinct from
+	// tank_ci_wake_total, which is the agent wake on red/conflict: this ping
+	// summons the user on a green+mergeable PR and never wakes the agent.
+	// result: "emitted" (durable ping written), "already_ready" (re-entry on an
+	// already-ready watch — idempotent skip), "persist_failed".
+	ciReadyPingTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_ci_ready_ping_total",
+		Help: "CI-watch ready user pings (pr_ready.notified), by result. Never wakes the agent.",
+	}, []string{"result"})
+
 	ciWatchAgeSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "tank_ci_watch_age_seconds",
 		Help:    "Age from CI-watch registration to a terminal transition (ready/failed/conflict/merged).",
@@ -137,6 +147,10 @@ func recordCITerminal(state string) {
 
 func recordCIWake(source, result string) {
 	ciWakeTotal.WithLabelValues(source, result).Inc()
+}
+
+func recordCIReadyPing(result string) {
+	ciReadyPingTotal.WithLabelValues(result).Inc()
 }
 
 func recordCIWatchAge(seconds float64) {

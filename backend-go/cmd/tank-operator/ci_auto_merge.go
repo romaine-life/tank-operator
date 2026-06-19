@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 func (s *appServer) handleGreenCIWatch(ctx context.Context, watch pgstore.CIWatch, detail string) {
@@ -24,13 +28,69 @@ func (s *appServer) handleGreenCIWatch(ctx context.Context, watch pgstore.CIWatc
 		}
 		return
 	}
+	// Capture the pre-transition status: the user is pinged only on the
+	// watching -> ready EDGE. handleGreenCIWatch is re-entered by webhook +
+	// reconcile on an already-ready watch; re-pinging on every re-entry would
+	// re-summon the user for a PR they already saw go green.
+	wasAlreadyReady := watch.Status == pgstore.CIWatchReady
 	readyWatch, err := s.ciWatches.UpdateStatus(ctx, watch.WatchID, pgstore.CIWatchReady, detail)
 	if err == nil {
 		watch = readyWatch
 	} else {
 		slog.Warn("mark CI watch ready failed", "watch_id", watch.WatchID, "error", err)
 	}
-	s.emitCIStatusRecord(ctx, watch, "ready", "", detail)
+	// Ping the USER (never the agent) that the governed PR is green and
+	// mergeable. This REPLACES the prior emitCIStatusRecord(ctx, watch,
+	// "ready", …): that ci_status.updated "ready" record had no inline
+	// projection or reducer case, so it was durable-but-invisible (see
+	// docs/features/ci-watch/capabilities.md "ci-status-record"). The
+	// pr_ready.notified ping renders inline AND trips the needs_input sidebar
+	// attention. The orchestration auto-merge path above keeps emitting
+	// ci_status.updated "merged"/"failed" — those state values stay live.
+	s.emitPRReadyPing(ctx, watch, detail, wasAlreadyReady)
+}
+
+// emitPRReadyPing posts the backend-side "your governed PR is green and
+// mergeable" notice that summons the USER and never wakes the AGENT. It is a
+// standalone system notice (no turn, no submit_turn command), so it cannot be
+// processed by the runner and cannot be swept by the stranded-turn sweeps.
+//
+// Idempotent on the transition: a re-entry on an already-ready watch
+// short-circuits before the durable write. The deterministic head-keyed
+// event_id is the durable backstop — concurrent reconcile/webhook drivers that
+// both observe the watching -> ready edge collapse to one row at the
+// session_events_event_identity unique index.
+func (s *appServer) emitPRReadyPing(ctx context.Context, watch pgstore.CIWatch, detail string, wasAlreadyReady bool) {
+	if wasAlreadyReady {
+		recordCIReadyPing("already_ready")
+		return
+	}
+	storageKey := watch.TankSessionID
+	if storageKey == "" {
+		storageKey = sessionmodel.SessionStorageKey(watch.SessionScope, watch.SessionID)
+	}
+	repoPR := watch.PROwner + "/" + watch.PRName + " #" + strconv.Itoa(watch.PRNumber)
+	text := "✅ Your governed PR " + repoPR + " is green and mergeable — ready to merge."
+	if prURL := strings.TrimSpace(watch.PRURL); prURL != "" {
+		text += "\n" + prURL
+	}
+	event := conversation.PRReadyNotifiedEventMap(conversation.PRReadyNotifiedArgs{
+		SessionID:         watch.SessionID,
+		SessionStorageKey: storageKey,
+		Email:             watch.OwnerEmail,
+		Repo:              watch.PROwner + "/" + watch.PRName,
+		PRNumber:          watch.PRNumber,
+		PRURL:             watch.PRURL,
+		HeadSHA:           watch.HeadSHA,
+		Text:              text,
+		Now:               time.Now().UTC(),
+	})
+	if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
+		recordCIReadyPing("persist_failed")
+		slog.Warn("pr_ready ping persist failed", "session", watch.SessionID, "error", err)
+		return
+	}
+	recordCIReadyPing("emitted")
 }
 
 func (s *appServer) autoMergeOrchestrationPhasePR(ctx context.Context, watch pgstore.CIWatch, detail string) (bool, error) {
