@@ -107,6 +107,53 @@ def test_recordable_pr_action_open_and_merge() -> None:
 
 # ---- mint relay -----------------------------------------------------------
 
+def _pkt(payload: bytes) -> bytes:
+    return f"{len(payload) + 4:04x}".encode() + payload
+
+
+_FLUSH = b"0000"
+_ZERO = b"0" * 40
+
+
+def test_parse_push_refs_extracts_dest_refs_and_flush() -> None:
+    # First command carries \0capabilities; a second command follows; then flush+PACK.
+    body = (
+        _pkt(_ZERO + b" " + b"a" * 40 + b" refs/heads/feature\x00 report-status side-band-64k\n")
+        + _pkt(b"b" * 40 + b" " + b"c" * 40 + b" refs/heads/other\n")
+        + _FLUSH
+        + b"PACK\x00\x00\x00\x02....binary...."
+    )
+    refs, saw_flush = gg.parse_push_refs(body)
+    assert refs == ["refs/heads/feature", "refs/heads/other"]
+    assert saw_flush is True
+
+
+def test_push_hits_protected_blocks_main_allows_branch() -> None:
+    main_push = _pkt(_ZERO + b" " + b"d" * 40 + b" refs/heads/main\x00report-status\n") + _FLUSH + b"PACK.."
+    refs, ok = gg.parse_push_refs(main_push)
+    assert ok and gg.push_hits_protected(refs) == "refs/heads/main"
+    # a feature-branch push hits nothing protected
+    assert gg.push_hits_protected(["refs/heads/feature-x", "refs/heads/wip"]) is None
+    # force-push/delete of main is still a write to main -> blocked
+    assert gg.push_hits_protected(["refs/heads/master"]) == "refs/heads/master"
+
+
+def test_parse_push_refs_non_pktline_is_not_flushed() -> None:
+    # gzipped / binary body: no valid pkt-line framing -> saw_flush False so the
+    # caller fails closed rather than wave the push through.
+    refs, saw_flush = gg.parse_push_refs(b"\x1f\x8b\x08\x00random-gzip-bytes")
+    assert saw_flush is False
+
+
+def test_is_merge_request_and_receive_pack() -> None:
+    assert gg.is_merge_request("PUT", "api.github.com", "/repos/o/r/pulls/12/merge") is True
+    assert gg.is_merge_request("POST", "api.github.com", "/repos/o/r/pulls") is False
+    assert gg.is_merge_request("PUT", "api.github.com", "/repos/o/r/pulls/12") is False
+    assert gg.is_receive_pack("github.com", "/o/r.git/git-receive-pack") is True
+    assert gg.is_receive_pack("github.com", "/o/r.git/info/refs?service=git-receive-pack") is False
+    assert gg.is_receive_pack("api.github.com", "/repos/o/r/pulls") is False
+
+
 def test_mint_payload_scopes_to_repo_and_grant() -> None:
     write = gg.mint_call_payload("romaine-life/tank-operator", gg.Decision(allow=True, write=True))
     assert write["method"] == "tools/call"

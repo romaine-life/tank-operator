@@ -38,6 +38,7 @@ import httpx
 from envoy.config.core.v3 import base_pb2
 from envoy.service.ext_proc.v3 import external_processor_pb2 as ext_proc_pb2
 from envoy.service.ext_proc.v3 import external_processor_pb2_grpc as ext_proc_grpc
+from envoy.type.v3 import http_status_pb2
 
 from . import github_governor as gg
 
@@ -76,10 +77,22 @@ def _inject_auth_headers(host: str, token: str) -> list["base_pb2.HeaderValueOpt
     ]
 
 
+def _deny(reason: str) -> "ext_proc_pb2.ProcessingResponse":
+    """Reject the request at the wall with 403 before it reaches GitHub. Because the
+    receive-pack body is buffered (BUFFERED_PARTIAL) the upstream connection is never
+    opened, so a blocked push never touches GitHub."""
+    return ext_proc_pb2.ProcessingResponse(
+        immediate_response=ext_proc_pb2.ImmediateResponse(
+            status=http_status_pb2.HttpStatus(code=403),
+            body=f"blocked by Tank restricted git: {reason}\n".encode(),
+        )
+    )
+
+
 class _Stream:
     """Per-request state carried from the request phase to the response phase."""
 
-    __slots__ = ("ident", "decision", "action", "pr_number", "owner", "repo", "status")
+    __slots__ = ("ident", "decision", "action", "pr_number", "owner", "repo", "status", "is_push")
 
     def __init__(self) -> None:
         self.ident: gg.SessionIdentity | None = None
@@ -89,6 +102,7 @@ class _Stream:
         self.owner: str = ""
         self.repo: str = ""
         self.status: int = 0
+        self.is_push: bool = False
 
 
 class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
@@ -124,6 +138,8 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             kind = req.WhichOneof("request")
             if kind == "request_headers":
                 yield await self._on_request_headers(req.request_headers, st)
+            elif kind == "request_body":
+                yield await self._on_request_body(req.request_body, st)
             elif kind == "response_headers":
                 st.status = _peek_status(req.response_headers)
                 yield ext_proc_pb2.ProcessingResponse(
@@ -132,7 +148,7 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             elif kind == "response_body":
                 yield await self._on_response_body(req.response_body, st)
             else:
-                # request_body (only if a route buffers it) / trailers: pass through.
+                # trailers / unknown: pass through.
                 yield ext_proc_pb2.ProcessingResponse()
 
     async def _on_request_headers(
@@ -157,16 +173,16 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
         st.ident = ident
 
-        decision = gg.evaluate_policy(ident, method, authority, path)
-        if not decision.allow:
-            log.warning("egress: DENY session=%s %s %s (%s)", ident.session_id, method, path, decision.reason)
-            return ext_proc_pb2.ProcessingResponse(
-                immediate_response=ext_proc_pb2.ImmediateResponse(
-                    status={"code": 403},
-                    body=f"blocked by egress policy: {decision.reason}".encode(),
-                )
-            )
-        st.decision = decision
+        # Restricted enforcement #1 (header phase): no agent merges. Merging is the
+        # human/automated path; the merge_pull_request MCP tool is already disabled in
+        # restricted mode, so this closes the raw gh/REST merge hole.
+        if gg.is_merge_request(method, authority, path):
+            log.warning("egress: DENY merge session=%s %s", ident.session_id, path)
+            return _deny("merging is the human/automated path, not the agent")
+        st.decision = gg.evaluate_policy(ident, method, authority, path)
+        # Restricted enforcement #2 is in the body phase: a git push's receive-pack refs
+        # are inspected for main. Stash that this is a push so _on_request_body acts.
+        st.is_push = gg.is_receive_pack(authority, path)
 
         rec = gg.recordable_pr_action(method, authority, path)
         if rec is not None:
@@ -189,6 +205,25 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             log.warning("egress: mint returned no token for session=%s repo=%s/%s", ident.session_id, *repo)
         # No repo in path (e.g. /user, /meta) or mint failed: forward unmodified.
         return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
+
+    async def _on_request_body(
+        self, msg: "ext_proc_pb2.HttpBody", st: _Stream
+    ) -> "ext_proc_pb2.ProcessingResponse":
+        passthrough = ext_proc_pb2.ProcessingResponse(request_body=ext_proc_pb2.BodyResponse())
+        if not (st.ident and st.is_push):
+            return passthrough
+        refs, saw_flush = gg.parse_push_refs(bytes(msg.body or b""))
+        if not saw_flush:
+            # The buffered prefix didn't yield the pkt-line command list (truncated or
+            # gzipped). Fail closed: a push we can't verify is not waved through to main.
+            log.warning("egress: DENY push (refs unverifiable) session=%s", st.ident.session_id)
+            return _deny("could not verify the push target branch")
+        hit = gg.push_hits_protected(refs)
+        if hit:
+            log.warning("egress: DENY push to %s session=%s", hit, st.ident.session_id)
+            return _deny(f"direct push to {hit} is not allowed; open a PR for the merge path")
+        log.info("egress: allow push refs=%s session=%s", refs, st.ident.session_id)
+        return passthrough
 
     async def _on_response_body(
         self, msg: "ext_proc_pb2.HttpBody", st: _Stream
