@@ -100,7 +100,13 @@ spec:
             - name: TANK_INITIAL_MODE_TEST_FILE
               value: /etc/tank-operator/app-config/initial-mode-test.md
             {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.staticOverride.enabled }}
+            # The static file server reads the override through the `current`
+            # symlink so the live-preview receiver can flip releases atomically
+            # (a request never sees a half-written bundle). The receiver manages
+            # the releases/ + current layout under the volume ROOT.
             - name: TANK_OPERATOR_STATIC_OVERRIDE_DIR
+              value: {{ printf "%s/current" .Values.staticOverride.mountPath | quote }}
+            - name: TANK_OPERATOR_STATIC_OVERRIDE_ROOT
               value: {{ .Values.staticOverride.mountPath | quote }}
             {{- end }}
             {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.hotSwapBackend.enabled }}
