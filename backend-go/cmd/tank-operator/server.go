@@ -634,6 +634,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalGetSessionImageOverride)
 	mux.HandleFunc("PUT /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalSetSessionImageOverride)
 	mux.HandleFunc("DELETE /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalDeleteSessionImageOverride)
+	// Live-preview static-override receiver (test-env slots only; enabled iff
+	// TANK_OPERATOR_STATIC_OVERRIDE_ROOT is set). A session pod streams its
+	// built frontend dist/ here for co-watching; never a merge-evidence path.
+	mux.HandleFunc("PUT /api/internal/static-override", s.handleInternalPutStaticOverride)
+	mux.HandleFunc("DELETE /api/internal/static-override", s.handleInternalDeleteStaticOverride)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
