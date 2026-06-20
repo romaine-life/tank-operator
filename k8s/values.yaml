@@ -31,12 +31,23 @@ testEnv:
   wildcardListenerSetNamespace: tank-operator
   sessionsGatewayIP: 172.179.163.96
 
+# Live-preview static-override scratch volume mounted on the orchestrator in
+# test envs. The orchestrator receives pushes directly (handlers_static_override.go),
+# so there is no writer sidecar — only the emptyDir + the orchestrator mount and
+# the TANK_OPERATOR_STATIC_OVERRIDE_DIR/ROOT env are load-bearing.
 staticOverride:
   enabled: true
   mountPath: /var/run/tank-operator-static-override
-  writerContainerName: static-writer
-  writerImage: alpine:3.20
-  writerImagePullPolicy: IfNotPresent
+
+# In-pod live frontend preview daemon (the sender side). When enabled, GUI
+# session pods spawned by this orchestrator get a `live-preview` sidecar that
+# watches frontend/, builds on the owner's toggle, and streams the built dist/
+# to the session's test slot static-override receiver — agent fully out of the
+# loop. Off by default: it adds an (idle-cheap) sidecar to every GUI session
+# pod and the live push loop should be activated deliberately after an
+# end-to-end validation. Flip to true to turn the feature on fleet-wide.
+livePreview:
+  daemonEnabled: false
 
 hotSwapBackend:
   enabled: true

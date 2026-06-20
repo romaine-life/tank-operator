@@ -550,6 +550,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-workflow/start", s.handleStartTestWorkflow)
 	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot", s.handleGetTestSlotStatus)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/return", s.handleReturnTestSlot)
+	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/live-preview", s.handleSetLivePreviewEnabled)
 	mux.HandleFunc("POST /api/sessions/{session_id}/rollout-state", s.handleSetRolloutState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/orchestrate", s.handleOrchestrateLaunch)
 	mux.HandleFunc("POST /api/sessions/{session_id}/merge-pr", s.handleMergeSessionPR)
@@ -634,6 +635,20 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalGetSessionImageOverride)
 	mux.HandleFunc("PUT /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalSetSessionImageOverride)
 	mux.HandleFunc("DELETE /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalDeleteSessionImageOverride)
+	// Live-preview static-override receiver (test-env slots only; enabled iff
+	// TANK_OPERATOR_STATIC_OVERRIDE_ROOT is set). A session pod streams its
+	// built frontend dist/ here for co-watching; never a merge-evidence path.
+	mux.HandleFunc("PUT /api/internal/static-override", s.handleInternalPutStaticOverride)
+	mux.HandleFunc("DELETE /api/internal/static-override", s.handleInternalDeleteStaticOverride)
+	// In-pod live-preview daemon reports a successful static-override push for
+	// its own session (verified per-session service subject), so the page can
+	// show last-pushed status. Display-only; never changes the owner toggle.
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/live-preview/push", s.handleInternalReportLivePreviewPush)
+	// In-pod live-preview daemon's control channel: a single-session SSE of the
+	// owner's enable toggle + slot URL, event-driven on the per-session row wake
+	// (no polling). Same per-session service-subject gate as the push receipt —
+	// a pod streams only its own session (#1207).
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/live-preview/stream", s.handleInternalLivePreviewStream)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)

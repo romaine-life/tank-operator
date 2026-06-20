@@ -154,6 +154,17 @@ func TestProvisionTestSlot_ReadyProvisionsAndSetsTestState(t *testing.T) {
 	if active, _ := rec.TestState["active"].(bool); !active {
 		t.Fatalf("SetTestState did not mark the slot active: %#v", rec.TestState)
 	}
+	// Fidelity wall: landing a real gated image must clear any live-preview
+	// override so unverified scratch can never masquerade as the gated image.
+	// The deploy path disables live preview (the in-pod daemon then DELETEs the
+	// slot override), and the disable must preserve the freshly-set active flag.
+	live, ok := rec.TestState["live_preview"].(map[string]any)
+	if !ok {
+		t.Fatalf("deploy path did not write live_preview state: %#v", rec.TestState)
+	}
+	if enabled, _ := live["enabled"].(bool); enabled {
+		t.Fatalf("deploy path left live preview enabled: %#v", live)
+	}
 }
 
 // TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate proves the deploy-by-ref

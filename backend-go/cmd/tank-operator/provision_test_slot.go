@@ -12,6 +12,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 // provisionVerdict is the bounded outcome of the deterministic test-slot
@@ -297,6 +298,18 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 	if s.mgr != nil && checkout.URL != nil {
 		if _, err := s.mgr.SetTestState(ctx, req.OwnerEmail, req.SessionID, true, checkout.SlotIndex, checkout.URL, nil); err != nil {
 			slog.Warn("provision gate set test state failed", "session_id", req.SessionID, "error", err)
+		}
+		// Fidelity wall: a real gated image just landed on this slot, so clear
+		// any live-preview override. Live preview streams unverified scratch on
+		// top of the slot; leaving it enabled would let scratch masquerade as
+		// the freshly-deployed gated image. Disabling is the durable intent —
+		// the in-pod live-preview daemon converges on enabled=false over the
+		// session SSE and DELETEs the slot override, reverting the slot to its
+		// image-baked baseline. Best-effort: a failure here never blocks the
+		// deploy (the slot is already up on the gated image).
+		disabled := false
+		if _, err := s.mgr.UpdateLivePreviewState(ctx, req.OwnerEmail, req.SessionID, sessions.LivePreviewPatch{Enabled: &disabled}); err != nil {
+			slog.Warn("provision gate disable live preview failed", "session_id", req.SessionID, "error", err)
 		}
 	}
 	out.Provisioned = true

@@ -305,6 +305,8 @@ import {
 import {
   startTestWorkflow,
   fetchTestSlotStatus,
+  readLivePreview,
+  setLivePreviewEnabled,
   type TestSlotStatus,
   type TestSlotPreflight,
   type TestSlotWatch,
@@ -10264,6 +10266,23 @@ function formatTestSlotAsOf(iso: string | null): string {
   return t.toLocaleString();
 }
 
+// formatTestSlotRelative renders a coarse "Ns/Nm/Nh/Nd ago" for an RFC3339
+// instant relative to now — used for the live-preview "last pushed …" line so a
+// stalled push daemon is obvious at a glance. Empty string for null/unparseable
+// (callers fall back to "waiting for first push").
+function formatTestSlotRelative(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const secs = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 // TestSlotScreen is the dedicated per-session test-slot page the beaker routes
 // to. It is the primary surface for the create/open/return controls and shows
 // last-known PR readiness from the durable snapshot (with an on-demand live
@@ -10323,6 +10342,13 @@ function TestSlotScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [returning, setReturning] = useState(false);
+  // Live-preview toggle in-flight guard (mirrors `returning` for doReturn).
+  const [livePreviewBusy, setLivePreviewBusy] = useState(false);
+  // Set when "Start frontend testing" is clicked with no active slot yet: it
+  // kicks off the normal provision flow and remembers to enable live preview
+  // the moment a slot becomes active (the slot is minutes away and arrives via
+  // the session SSE, so the enable POST is deferred to an effect below).
+  const [pendingEnableOnActive, setPendingEnableOnActive] = useState(false);
   // Which deployable target the user picked (option key "pr:<n>" | "ref:<name>");
   // null = the backend's intelligent default.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -10372,6 +10398,26 @@ function TestSlotScreen({
     [sessionId],
   );
 
+  // postLivePreview flips the owner's live-preview toggle then silently re-pulls
+  // the durable snapshot so the new live_preview state (and any push receipt)
+  // reflects without waiting for the next poll. Mirrors doReturn's
+  // in-flight/try-catch→banner/finally shape.
+  const postLivePreview = useCallback(
+    async (enabled: boolean) => {
+      setLivePreviewBusy(true);
+      setError(null);
+      try {
+        await setLivePreviewEnabled(sessionId, enabled, fetchRef.current);
+        await load(false, true);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLivePreviewBusy(false);
+      }
+    },
+    [sessionId, load],
+  );
+
   // Mount: instant durable paint, then a silent live read to enrich (authoritative
   // verdict + failing-check names).
   useEffect(() => {
@@ -10397,6 +10443,8 @@ function TestSlotScreen({
   }, [load]);
 
   const readiness = testSlotReadiness(status);
+  const livePreview = readLivePreview(status);
+  const livePreviewOn = livePreview?.enabled ?? false;
   const readyUrl = testState?.url?.trim() || "";
   // A real running environment requires BOTH the active flag AND a URL. An
   // `active:true` with no URL is an optimistic/stale flag (e.g. set at "test"
@@ -10429,6 +10477,20 @@ function TestSlotScreen({
     : "";
   const canCreate =
     !disabled && !readOnly && !slotActive && !repoBlocked && options.length > 0;
+  // "Start frontend testing": with a slot already up it is a plain enable POST
+  // (needs only a writable, ready session); with no slot it first runs the
+  // provision flow, so it inherits the same create gate as "Create test slot".
+  const canStartFrontendTesting =
+    !readOnly && (slotActive ? !disabled : canCreate);
+
+  // Deferred enable: once a provision kicked off by "Start frontend testing"
+  // brings a slot up (slotActive flips via the session SSE), enable live
+  // preview and clear the pending intent. Guarded so it fires once per request.
+  useEffect(() => {
+    if (!pendingEnableOnActive || !slotActive) return;
+    setPendingEnableOnActive(false);
+    void postLivePreview(true);
+  }, [pendingEnableOnActive, slotActive, postLivePreview]);
 
   const verdict = readiness?.verdict ?? "";
   const tone = verdict ? testSlotVerdictTone(verdict) : "info";
@@ -10485,6 +10547,21 @@ function TestSlotScreen({
     } finally {
       setReturning(false);
     }
+  };
+
+  // startFrontendTesting is the combined control: with a live slot it just
+  // enables live preview; with no slot it runs the existing provision flow
+  // (onCreateHold — the same call "Create test slot" uses) and defers the enable
+  // POST to the effect above, which fires when the slot comes up.
+  const startFrontendTesting = () => {
+    if (livePreviewBusy || pendingEnableOnActive) return;
+    if (slotActive) {
+      void postLivePreview(true);
+      return;
+    }
+    setError(null);
+    setPendingEnableOnActive(true);
+    onCreateHold();
   };
 
   return (
@@ -10581,6 +10658,29 @@ function TestSlotScreen({
           </div>
         ) : (
           <div className="run-session-data-page-list" aria-label="Test slot">
+            {/* Fidelity guardrail: live preview is un-gated scratch streamed
+                straight from this session pod — never the gated test-slot truth
+                and never merge evidence. Keep this banner unmistakable. */}
+            {livePreviewOn && (
+              <div
+                className="run-session-data-scratch-banner"
+                role="status"
+                aria-label="Live preview scratch warning"
+              >
+                <ShieldAlertIcon
+                  className="run-session-data-scratch-banner-icon"
+                  aria-hidden="true"
+                />
+                <span className="run-session-data-scratch-banner-text">
+                  <strong>Live-preview scratch — not gated truth.</strong> You
+                  are watching this session's freshly-built frontend streamed
+                  straight from the pod. It is un-gated, ephemeral, and{" "}
+                  <strong>not merge evidence</strong>. Use the gated test slot to
+                  validate before merge.
+                </span>
+              </div>
+            )}
+
             {/* Active environment — what slot is obtained, its URL, what's on it */}
             {slotActive && (
               <div className="run-session-data-card is-good">
@@ -10625,6 +10725,22 @@ function TestSlotScreen({
                     ],
                     ...((status?.provision?.started_at
                       ? [["Started", formatTestSlotAsOf(status.provision.started_at)]]
+                      : []) as Array<[string, string]>),
+                    // Live-preview status: shown only while enabled. "streaming"
+                    // plus a relative last-push, or "waiting for first push"
+                    // before the daemon's first receipt lands.
+                    ...((livePreviewOn
+                      ? [
+                          [
+                            "Live preview",
+                            livePreview?.pushed_at
+                              ? `Streaming — last pushed ${
+                                  formatTestSlotRelative(livePreview.pushed_at) ||
+                                  "just now"
+                                }`
+                              : "Streaming — waiting for first push",
+                          ],
+                        ]
                       : []) as Array<[string, string]>),
                   ]}
                 />
@@ -10902,6 +11018,101 @@ function TestSlotScreen({
                     <span className="run-session-data-readonly">
                       Read-only session
                     </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Live frontend preview — combined start control + stop affordance.
+                Hidden for read-only sessions (the toggle is owner-scoped). */}
+            {!readOnly && (
+              <div className="run-session-data-card is-info">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <MonitorIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      Live frontend preview
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      {livePreviewOn
+                        ? "Streaming this session's freshly-built frontend onto the slot so a human can co-watch it. Un-gated scratch — for seeing only, never merge evidence."
+                        : slotActive
+                          ? "Stream this session's freshly-built frontend onto the running slot so a human can co-watch it live."
+                          : "Provisions a test slot, then streams this session's freshly-built frontend onto it for live co-watching."}
+                    </span>
+                  </span>
+                </div>
+                <div className="run-session-data-actions">
+                  {livePreviewOn ? (
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={livePreviewBusy}
+                      aria-busy={livePreviewBusy || undefined}
+                      onClick={() => void postLivePreview(false)}
+                      title="Stop streaming and revert the slot to its built image"
+                    >
+                      {livePreviewBusy ? (
+                        <Loader2Icon
+                          className="run-session-data-action-icon run-spin"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <SquareIcon
+                          className="run-session-data-action-icon"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span>
+                        {livePreviewBusy ? "Stopping…" : "Stop live preview"}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="run-session-data-action"
+                      disabled={
+                        !canStartFrontendTesting ||
+                        livePreviewBusy ||
+                        pendingEnableOnActive
+                      }
+                      aria-busy={
+                        livePreviewBusy || pendingEnableOnActive || undefined
+                      }
+                      onClick={startFrontendTesting}
+                      title={
+                        canStartFrontendTesting
+                          ? slotActive
+                            ? "Start streaming the frontend onto the running slot"
+                            : "Provision a slot, then start streaming the frontend onto it"
+                          : repoBlocked
+                            ? "Resolve a repository first"
+                            : options.length > 0
+                              ? "Unavailable"
+                              : "No open PR to test"
+                      }
+                    >
+                      {livePreviewBusy || pendingEnableOnActive ? (
+                        <Loader2Icon
+                          className="run-session-data-action-icon run-spin"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <PlayIcon
+                          className="run-session-data-action-icon"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span>
+                        {pendingEnableOnActive
+                          ? "Waiting for slot…"
+                          : livePreviewBusy
+                            ? "Starting…"
+                            : "Start frontend testing"}
+                      </span>
+                    </button>
                   )}
                 </div>
               </div>

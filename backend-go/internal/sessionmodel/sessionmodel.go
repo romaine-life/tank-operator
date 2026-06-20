@@ -505,6 +505,20 @@ type ManifestOptions struct {
 	// behavioral change. See scripts/check-session-pod-hot-swap-migration.mjs
 	// for the completion contract.
 	HotSwapAgentRunner bool
+	// LivePreviewDaemon gates the in-pod live-preview daemon sidecar on SDK
+	// runner pods (those with a shared /workspace and the projected
+	// auth.romaine.life token). When true, PodManifest attaches a `live-preview`
+	// container that holds the service credential and runs
+	// k8s/session-config/live-preview-daemon.sh: it opens the per-session
+	// GET /api/internal/sessions/{id}/live-preview/stream SSE and, on the owner's
+	// enable toggle, builds frontend/ and streams dist/ to the session's test
+	// slot — so the agent never invokes the push. Default false; the orchestrator
+	// sets it only where live preview is appropriate (a tank-operator frontend
+	// session that can provision a slot). Production sessions see no behavioral
+	// change. The daemon and its sibling push-frontend.sh are delivered through
+	// the /workspace repo checkout (the same way push-frontend.sh already is),
+	// so this gate must imply an SDK runner pod whose repo-cloner ran.
+	LivePreviewDaemon bool
 }
 
 func NormalizeSessionMode(mode string) string {
@@ -1396,6 +1410,74 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		containers = append(containers, codexRunnerContainer)
 	}
 
+	// Live-preview daemon sidecar — the part that takes the agent out of the
+	// loop for live frontend preview. Gated on opts.LivePreviewDaemon AND an SDK
+	// runner pod: it needs the shared /workspace emptyDir (where repo-cloner put
+	// the tank-operator checkout, which carries the daemon + push-frontend.sh)
+	// and the projected auth.romaine.life token (which it HOLDS so the agent
+	// never mints the push credential). It runs idle until the owner toggles
+	// live preview on over the SSE control channel, then builds frontend/ and
+	// streams dist/ to the session's slot. Default off → production pods get no
+	// extra container.
+	if opts.LivePreviewDaemon && wantSDKRunner {
+		const (
+			livePreviewRepoDir = "/workspace/tank-operator"
+			livePreviewScript  = livePreviewRepoDir + "/k8s/session-config/live-preview-daemon.sh"
+			pushFrontendScript = livePreviewRepoDir + "/k8s/session-config/push-frontend.sh"
+		)
+		livePreviewMounts := []any{
+			map[string]any{
+				"name":      "workspace",
+				"mountPath": "/workspace",
+			},
+			map[string]any{
+				"name":      "auth-romaine-sa-token",
+				"mountPath": "/var/run/secrets/auth.romaine.life",
+				"readOnly":  true,
+			},
+		}
+		livePreviewEnv := []any{
+			map[string]any{
+				"name": "SESSION_ID",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.labels['tank-operator/session-id']",
+					},
+				},
+			},
+			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
+			map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
+			map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
+			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "FRONTEND_DIR", "value": livePreviewRepoDir + "/frontend"},
+			map[string]any{"name": "PUSH_FRONTEND_SCRIPT", "value": pushFrontendScript},
+			map[string]any{"name": "LIVE_PREVIEW_DAEMON_SCRIPT", "value": livePreviewScript},
+		}
+		livePreviewContainer := map[string]any{
+			"name":            "live-preview",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			// repo-cloner is an initContainer, so the /workspace checkout (and
+			// thus the daemon script) is present before this sidecar starts.
+			// The short wait is defensive against a slow or failed clone: on a
+			// missing script the container idles (fail-safe) rather than
+			// crash-looping, surfacing the cause to stderr.
+			"command": []any{
+				"bash", "-c",
+				`for i in $(seq 1 150); do ` +
+					`[ -f "$LIVE_PREVIEW_DAEMON_SCRIPT" ] && exec bash "$LIVE_PREVIEW_DAEMON_SCRIPT"; ` +
+					`sleep 2; ` +
+					`done; ` +
+					`echo "live-preview: daemon script not found at $LIVE_PREVIEW_DAEMON_SCRIPT (was the repo cloned?)" >&2; ` +
+					`exec sleep infinity`,
+			},
+			"env":          livePreviewEnv,
+			"volumeMounts": livePreviewMounts,
+			"resources":    livePreviewResources(),
+		}
+		containers = append(containers, livePreviewContainer)
+	}
+
 	spec := map[string]any{
 		"serviceAccountName": opts.SessionServiceAccount,
 		"securityContext": map[string]any{
@@ -1677,6 +1759,22 @@ func mcpAuthProxyResources() map[string]any {
 		},
 		"limits": map[string]any{
 			"memory": "256Mi",
+		},
+	}
+}
+
+// livePreviewResources sizes the live-preview daemon sidecar. It idles cheaply
+// waiting on the SSE control channel, but a `vite build --watch` of the
+// frontend is memory-hungry, so the limit is generous while the steady-state
+// request stays small.
+func livePreviewResources() map[string]any {
+	return map[string]any{
+		"requests": map[string]any{
+			"cpu":    "25m",
+			"memory": "128Mi",
+		},
+		"limits": map[string]any{
+			"memory": "1Gi",
 		},
 	}
 }
