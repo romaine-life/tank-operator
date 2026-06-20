@@ -92,27 +92,27 @@ orchestrator:
 session:
   # Fingerprint-pinned. claude-container-build.yml rewrites these tag
   # suffixes on every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-c4829287f5cef3e2b85c0f3413e7ad3ba3a3c8eec2dd7d3964a7444a75cab1f7"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-86dd2ef2875acd24ced59fe2a7141a1b42c4ff11b98a005b0a19a88225db0bc2"
+  image: "romainecr.azurecr.io/claude-container:claude-16f2815aa57a85e6e80a7fdac939a8fbc7568974b0e69bb668a87e544a0563ca"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-46da5d61183897606dc5766688a1a51cfd7286a3a1e667b99ff2e774190b42a8"
   imageMetadata:
     claude:
-      built_at: "2026-06-20T05:26:45Z"
-      git_sha: "cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
+      built_at: "2026-06-20T23:22:15Z"
+      git_sha: "d30680316e173f3e87f9263600ddefd93eeca1ce"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
-      pr_number: "1381"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1381"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27861435278"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/d30680316e173f3e87f9263600ddefd93eeca1ce"
+      pr_number: "1420"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1420"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27886954141"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
     codex:
-      built_at: "2026-06-20T05:26:45Z"
-      git_sha: "cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
+      built_at: "2026-06-20T23:22:15Z"
+      git_sha: "d30680316e173f3e87f9263600ddefd93eeca1ce"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
-      pr_number: "1381"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1381"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27861435278"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/d30680316e173f3e87f9263600ddefd93eeca1ce"
+      pr_number: "1420"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1420"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27886954141"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
   configMap: tank-session-config
