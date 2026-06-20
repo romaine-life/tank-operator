@@ -110,6 +110,15 @@ and [../README.md](../README.md) for how capability ledgers are used.
   a background context, never a blocked HTTP handler. `checkoutAndDeployOrchestrationReview`
   is the first caller — its previously **ungated** checkout+deploy now runs behind this
   gate.
+- **CI-image readiness:** the `ready` verdict trusts GitHub's `mergeable_state=clean` +
+  check rollup, which can read green in the window before the commit's `docker-build-check`
+  run has published its image. When the deploy then reports the CI image is not built yet
+  (Glimmung `409` → `glimmung.ErrCIImagePending`), the gate holds the checked-out slot and
+  re-deploys on the settle interval until the image lands, bounded by the settle cap — so
+  the race self-heals instead of failing the provision. A non-pending deploy error or the
+  image-wait timeout still releases the slot (no leak). See `deployImageWaitingForCI` and
+  `glimmung.ErrCIImagePending`; the resolution half (a clear `409` instead of a fabricated
+  registry miss) is `romaine-life/glimmung#873`.
 - **Durable source:** no new durable row — the gate is a transient in-memory
   `pgstore.CIWatch` fed to the reducer against live `mcpgithub.PullRequestState`. Outcomes
   are observable via `tank_test_slot_validate_total{outcome}` and

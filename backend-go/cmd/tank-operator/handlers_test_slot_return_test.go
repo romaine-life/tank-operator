@@ -29,6 +29,10 @@ type fakeGlimmungClient struct {
 	checkoutCalls    int
 	deployCalls      int
 	deployErr        error
+	// deployErrSeq, when non-empty, is consumed one entry per DeployImageToTestSlot
+	// call (a nil entry means that call succeeds); it falls back to deployErr once
+	// exhausted. Lets a test drive "pending, pending, success" deploy retries.
+	deployErrSeq []error
 }
 
 func (f *fakeGlimmungClient) State(_ context.Context, actorEmail string) (glimmung.StateSnapshot, error) {
@@ -62,7 +66,13 @@ func (f *fakeGlimmungClient) DeployImageToTestSlot(_ context.Context, actorEmail
 	f.deployCalls++
 	f.deployReqEmail = actorEmail
 	f.deployReq = body
-	if f.deployErr != nil {
+	if len(f.deployErrSeq) > 0 {
+		err := f.deployErrSeq[0]
+		f.deployErrSeq = f.deployErrSeq[1:]
+		if err != nil {
+			return glimmung.DeployImageToTestSlotResult{}, err
+		}
+	} else if f.deployErr != nil {
 		return glimmung.DeployImageToTestSlotResult{}, f.deployErr
 	}
 	if f.deployResult.Job == "" {
