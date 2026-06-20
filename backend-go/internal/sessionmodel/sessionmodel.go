@@ -1431,20 +1431,31 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		annotations["tank-operator/glimmung-context"] = opts.GlimmungContextJSON
 	}
 
+	// Restricted egress-proxy sessions carry a NetworkPolicy selector label so the
+	// `restricted-git-egress-wall-only` policy can confine them to the wall for
+	// GitHub egress (direct-to-GitHub-IP bypass denied). ONLY these sessions get it;
+	// unrestricted sessions stay on the direct path and are deliberately unselected,
+	// so the lockdown never touches them. The label lands only on NEW sessions, so
+	// existing restricted sessions drain before the policy applies to them.
+	podLabels := map[string]any{
+		"app.kubernetes.io/managed-by": "tank-operator",
+		"app.kubernetes.io/instance":   opts.ArgoCDTrackingApp,
+		"tank-operator/owner":          OwnerLabel(owner),
+		"tank-operator/session-id":     sessionID,
+		"tank-operator/session-scope":  opts.SessionScope,
+		"tank-operator/mode":           mode,
+	}
+	if egressProxyGit {
+		podLabels["tank-operator/git-egress"] = "proxy"
+	}
+
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Pod",
 		"metadata": map[string]any{
-			"name":      podName,
-			"namespace": opts.SessionsNamespace,
-			"labels": map[string]any{
-				"app.kubernetes.io/managed-by": "tank-operator",
-				"app.kubernetes.io/instance":   opts.ArgoCDTrackingApp,
-				"tank-operator/owner":          OwnerLabel(owner),
-				"tank-operator/session-id":     sessionID,
-				"tank-operator/session-scope":  opts.SessionScope,
-				"tank-operator/mode":           mode,
-			},
+			"name":        podName,
+			"namespace":   opts.SessionsNamespace,
+			"labels":      podLabels,
 			"annotations": annotations,
 		},
 		"spec": spec,
