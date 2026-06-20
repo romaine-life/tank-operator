@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 // Static-override receiver — the data-plane half of the live frontend preview
@@ -168,6 +171,51 @@ func (s *appServer) handleInternalDeleteStaticOverride(w http.ResponseWriter, r 
 	_ = os.RemoveAll(filepath.Join(root, staticOverrideReleasesDir))
 	recordStaticOverridePush("reverted")
 	writeJSON(w, http.StatusOK, map[string]any{"status": "reverted"})
+}
+
+// handleInternalReportLivePreviewPush records a live-preview push receipt on the
+// session's test_state.live_preview (pushed_at + pushed_build) so the test-slot
+// page can show "streaming · last pushed Ns ago" and surface a stalled daemon.
+// The in-pod live-preview daemon calls this after each successful PUT to a
+// slot's static-override receiver. It never changes the `enabled` flag — that is
+// the owner's toggle. Authorized by the caller's verified per-session service
+// subject (a pod may only report its own session), the #1207 invariant.
+func (s *appServer) handleInternalReportLivePreviewPush(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/live-preview/push")
+	if user == nil {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	if !s.internalCallerMatchesSession(user, sessionID) {
+		writeError(w, http.StatusForbidden, "live-preview push receipts require a session pod writing its own session")
+		return
+	}
+	var body struct {
+		Build string `json:"build"`
+	}
+	// Body is optional (a bare receipt is valid); ignore decode errors.
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body)
+
+	info, err := s.mgr.GetByID(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	now := time.Now()
+	build := strings.TrimSpace(body.Build)
+	updated, err := s.mgr.UpdateLivePreviewState(r.Context(), info.Owner, sessionID, sessions.LivePreviewPatch{
+		PushedAt:    &now,
+		PushedBuild: &build,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "test_state": updated.TestState})
 }
 
 // extractStaticOverrideTar streams a gzipped tar into dest with full

@@ -770,6 +770,76 @@ func (m *Manager) SetTestPullRequestURL(ctx context.Context, owner, sessionID st
 		})
 }
 
+// LivePreviewPatch carries the optional live-preview fields to merge into a
+// session's test_state.live_preview sub-document. Nil fields are left unchanged,
+// so the owner toggle (Enabled) and the in-pod daemon's push receipt (PushedAt /
+// PushedBuild) update the same sub-document independently without clobbering
+// each other.
+type LivePreviewPatch struct {
+	Enabled     *bool
+	PushedAt    *time.Time
+	PushedBuild *string
+}
+
+// applyLivePreviewPatch returns a deep-enough copy of testState with patch
+// merged into its live_preview sub-map. It copies the top-level map and the
+// live_preview sub-map (so the caller's source is never mutated), preserves
+// every existing key, and applies only the non-nil patch fields. Pure and
+// side-effect-free so the merge contract is unit-tested without a Manager.
+func applyLivePreviewPatch(testState map[string]any, patch LivePreviewPatch) map[string]any {
+	state := map[string]any{}
+	for k, v := range testState {
+		state[k] = v
+	}
+	live := map[string]any{}
+	if existing, ok := state["live_preview"].(map[string]any); ok {
+		for k, v := range existing {
+			live[k] = v
+		}
+	}
+	if patch.Enabled != nil {
+		live["enabled"] = *patch.Enabled
+	}
+	if patch.PushedAt != nil {
+		live["pushed_at"] = patch.PushedAt.UTC().Format(time.RFC3339)
+	}
+	if patch.PushedBuild != nil {
+		live["pushed_build"] = strings.TrimSpace(*patch.PushedBuild)
+	}
+	state["live_preview"] = live
+	return state
+}
+
+// UpdateLivePreviewState merges patch into test_state.live_preview, preserving
+// every other test_state key (active / url / slot_index / pull_request_url) and
+// any live_preview field the patch leaves nil. Like SetTestState it dual-writes
+// the pod annotation and the registry column (bumping the row), so the test-slot
+// page and the in-pod live-preview daemon both converge over the session SSE.
+//
+// It does not synthesize an active slot: it preserves the existing `active`
+// flag and never forces it true. Callers gate on a real active slot before
+// invoking (live preview is meaningless without one).
+func (m *Manager) UpdateLivePreviewState(ctx context.Context, owner, sessionID string, patch LivePreviewPatch) (Info, error) {
+	existing := map[string]any{}
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil && registered.TestState != nil {
+		existing = registered.TestState
+	} else if current, err := m.GetByOwner(ctx, owner, sessionID); err == nil && current.TestState != nil {
+		existing = current.TestState
+	}
+	state := applyLivePreviewPatch(existing, patch)
+
+	raw, _ := json.Marshal(state)
+	annotations := map[string]string{testStateAnnotation: string(raw)}
+	return m.patchStateAnnotations(ctx, owner, sessionID,
+		annotations,
+		func(c context.Context) error {
+			if m.registry == nil {
+				return nil
+			}
+			return m.registry.SetTestState(c, owner, sessionID, state)
+		})
+}
+
 // SetRolloutState updates the row's rollout_state column AND patches
 // the matching pod annotation. Same shape as SetTestState.
 func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, active bool) (Info, error) {
