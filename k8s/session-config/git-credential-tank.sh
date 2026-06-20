@@ -55,11 +55,13 @@ esac
 auth_tok="$(cat "$AUTH_TOKEN_PATH" 2>/dev/null || true)"
 [ -n "$auth_tok" ] || exit 0
 
-# Egress-proxy mode (restricted_git cutover). github.com is pinned at the agent
-# egress proxy, which exchanges this token, mints the GitHub App token server-side,
-# records the action, and enforces no-push-to-main / no-merge. So hand git the pod's
-# RAW auth.romaine.life token (NOT an in-pod-minted GitHub token) and let the wall do
-# the minting. No in-pod mint, no break-glass dance — the wall is the policy.
+# Egress-proxy mode (the wall fronts EVERY session now — restricted or not).
+# github.com is pinned at the agent egress proxy, which exchanges this token, mints
+# the GitHub App token server-side (least-privilege for restricted sessions, full for
+# unrestricted), records the action, and — for restricted sessions — enforces
+# no-push-to-main / no-merge. So hand git the pod's RAW auth.romaine.life token (NOT an
+# in-pod-minted GitHub token) and let the wall do the minting. No in-pod mint, no
+# break-glass dance — the wall is the policy.
 case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on)
     printf 'username=x-access-token\n'

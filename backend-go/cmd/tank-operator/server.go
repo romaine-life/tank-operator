@@ -652,9 +652,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
-	// Durable create-time repo slugs (sessions.repos) for the agent-egress proxy to
-	// scope the /graphql read mint — that endpoint carries no repo in the URL.
-	mux.HandleFunc("GET /api/internal/sessions/{session_id}/repos", s.handleInternalSessionRepos)
+	// Per-session egress context for the agent-egress proxy: durable repos (to scope
+	// the /graphql read mint) + whether the session is restricted (to pick mint scope:
+	// least-privilege vs full). Every session routes through the wall now.
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/egress-context", s.handleInternalSessionEgressContext)
 	// Pod-authenticated (SA-token) endpoint: mints a kubectl credential for the
 	// trusted cluster-admin SA, for non-restricted sessions only.
 	mux.HandleFunc("POST /api/internal/session-cluster-credential", s.handleInternalClusterCredential)

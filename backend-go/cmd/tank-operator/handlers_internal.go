@@ -493,15 +493,23 @@ func (s *appServer) handleInternalSessionTimeline(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, body)
 }
 
-// handleInternalSessionRepos returns the session's durable create-time repo
-// slugs (sessions.repos). The agent-egress proxy ("the wall") consumes this to
-// scope a READ token for POST /graphql: that endpoint carries no repo in the URL,
-// so the per-URL-repo mint cannot scope it, and the session's create-time repo
-// set is the correct least-privilege scope for gh's GraphQL reads (pr
-// list/view/status). Service-principal gated like the sibling internal session
-// endpoints; the session JWT the wall relays resolves the owner via actor_email.
-func (s *appServer) handleInternalSessionRepos(w http.ResponseWriter, r *http.Request) {
-	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/repos")
+// handleInternalSessionEgressContext returns the per-session context the
+// agent-egress proxy ("the wall") needs to govern a session's GitHub traffic now
+// that EVERY session routes through the wall (observation is universal):
+//   - repos: the durable create-time "owner/name" slugs, to scope the /graphql read
+//     mint (that endpoint carries no repo in the URL).
+//   - restricted: whether the session has the restricted_git capability. The wall
+//     uses this to pick the mint SCOPE — least-privilege for restricted sessions,
+//     FULL for unrestricted — and whether to enforce the branch lane / merge-deny.
+//
+// Observation is the same for both; only restriction differs. The wall fails CLOSED
+// to restricted if this lookup fails, so a Tank hiccup can never silently
+// un-restrict a restricted session — it can only (safely) degrade an unrestricted
+// session to read-only until the lookup recovers. Service-principal gated like the
+// sibling internal session endpoints; the relayed session JWT resolves the owner via
+// actor_email.
+func (s *appServer) handleInternalSessionEgressContext(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/egress-context")
 	if user == nil {
 		return
 	}
@@ -523,6 +531,7 @@ func (s *appServer) handleInternalSessionRepos(w http.ResponseWriter, r *http.Re
 		"session_id":    sessionID,
 		"session_scope": s.sessionScope,
 		"repos":         nonNilStrings(info.Repos),
+		"restricted":    sessionmodel.HasSessionCapability(info.Capabilities, sessionmodel.SessionCapabilityRestrictedGit),
 	})
 }
 

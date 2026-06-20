@@ -473,6 +473,19 @@ def test_evaluate_policy_scopes_mint_by_request() -> None:
         d = gg.evaluate_policy(ID, m, "api.github.com", p)
         assert d.write is False and d.full is False, f"{m} {p} must mint read-only, got write={d.write} full={d.full}"
 
+    # UNRESTRICTED session (restricted=False): full mint for EVERY request — nothing is
+    # withheld — yet it still routes through the wall and is observed by the IO shell.
+    # This is the decoupling of observation from restriction.
+    for um, ua, up in [
+        ("POST", "github.com", "/o/r/git-receive-pack"),
+        ("GET", "api.github.com", "/repos/o/r"),
+        ("POST", "api.github.com", "/graphql"),
+        ("PUT", "api.github.com", "/repos/o/r/contents/x"),
+        ("PUT", "api.github.com", "/repos/o/r/pulls/12/merge"),
+    ]:
+        d = gg.evaluate_policy(ID, um, ua, up, restricted=False)
+        assert d.allow and d.write and d.full, f"unrestricted {um} {up} must mint full, got {d}"
+
 
 def test_is_push_intent_covers_both_push_legs() -> None:
     # both legs of a push need write
@@ -508,25 +521,30 @@ def test_is_graphql_only_matches_the_graphql_endpoint() -> None:
     assert gg.is_graphql("github.com", "/graphql") is False
 
 
-def test_session_repos_url_routes_by_scope() -> None:
+def test_session_egress_url_routes_by_scope() -> None:
     # default scope -> default orchestrator
-    assert gg.session_repos_url("tank", "1166", DEFAULT_URL) == (
-        DEFAULT_URL + "/api/internal/sessions/1166/repos"
+    assert gg.session_egress_url("tank", "1166", DEFAULT_URL) == (
+        DEFAULT_URL + "/api/internal/sessions/1166/egress-context"
     )
     # slot scope -> slot orchestrator (mirrors url_for_scope / the grant URL)
-    assert gg.session_repos_url("tank-operator-slot-3", "47", DEFAULT_URL) == (
-        "http://tank-operator.tank-operator-slot-3.svc:80/api/internal/sessions/47/repos"
+    assert gg.session_egress_url("tank-operator-slot-3", "47", DEFAULT_URL) == (
+        "http://tank-operator.tank-operator-slot-3.svc:80/api/internal/sessions/47/egress-context"
     )
 
 
-def test_parse_session_repos_response_fails_closed() -> None:
-    body = json.dumps({"repos": ["o/r", "o/r2"], "session_id": "1"})
-    assert gg.parse_session_repos_response(200, body) == ["o/r", "o/r2"]
-    # blank entries are dropped; order preserved
-    assert gg.parse_session_repos_response(200, json.dumps({"repos": ["o/r", "", "  "]})) == ["o/r"]
-    # fail closed: non-2xx, empty body, non-dict, missing/!list repos -> []
-    assert gg.parse_session_repos_response(500, body) == []
-    assert gg.parse_session_repos_response(200, "") == []
-    assert gg.parse_session_repos_response(200, "not json") == []
-    assert gg.parse_session_repos_response(200, json.dumps(["o/r"])) == []
-    assert gg.parse_session_repos_response(200, json.dumps({"session_id": "1"})) == []
+def test_parse_egress_context_fails_closed() -> None:
+    body = json.dumps({"repos": ["o/r", "o/r2"], "restricted": True, "session_id": "1"})
+    assert gg.parse_egress_context(200, body) == (["o/r", "o/r2"], True)
+    # an explicit boolean restricted:false is the ONLY thing that un-restricts
+    assert gg.parse_egress_context(200, json.dumps({"repos": ["o/r"], "restricted": False})) == (["o/r"], False)
+    # blank repo entries dropped; order preserved
+    assert gg.parse_egress_context(200, json.dumps({"repos": ["o/r", "", "  "], "restricted": False})) == (["o/r"], False)
+    # fail closed to restricted=True (repos=[]): non-2xx, empty, non-json, non-dict
+    assert gg.parse_egress_context(500, body) == ([], True)
+    assert gg.parse_egress_context(200, "") == ([], True)
+    assert gg.parse_egress_context(200, "not json") == ([], True)
+    assert gg.parse_egress_context(200, json.dumps(["o/r"])) == ([], True)
+    # restricted missing / null / a string "false" / non-bool -> fail closed to True
+    assert gg.parse_egress_context(200, json.dumps({"repos": ["o/r"]})) == (["o/r"], True)
+    assert gg.parse_egress_context(200, json.dumps({"repos": ["o/r"], "restricted": None})) == (["o/r"], True)
+    assert gg.parse_egress_context(200, json.dumps({"repos": ["o/r"], "restricted": "false"})) == (["o/r"], True)

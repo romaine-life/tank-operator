@@ -27,10 +27,12 @@ mcp_url="${TANK_GIT_CRED_MCP_URL:-http://127.0.0.1:9992/}"
 auth_tok="$(cat "${AUTH_ROMAINE_TOKEN_PATH:-/var/run/secrets/auth.romaine.life/token}" 2>/dev/null || true)"
 [ -n "$auth_tok" ] || exec "$REAL_GH" "$@"
 
-# Egress-proxy mode (restricted_git via the wall). api.github.com is pinned at the
-# agent egress proxy, which exchanges this token, mints the App token server-side,
-# records the action, and rejects merges. So hand gh the pod's RAW token and let the
-# wall govern — no in-pod mint, no /create-session-pr or /pr-write brokering. gh (Go)
+# Egress-proxy mode (the wall fronts EVERY session now — restricted or not).
+# api.github.com is pinned at the agent egress proxy, which exchanges this token, mints
+# the App token server-side (least-privilege for restricted sessions, full for
+# unrestricted), records the action, and — for restricted sessions — rejects merges. So
+# hand gh the pod's RAW token and let the wall govern — no in-pod mint, no
+# /create-session-pr or /pr-write brokering. gh (Go)
 # reads SSL_CERT_FILE as its WHOLE root set, so trust the proxy leaf by combining the
 # OS roots with the gateway CA (non-proxied hosts like uploads.github.com keep working).
 case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in

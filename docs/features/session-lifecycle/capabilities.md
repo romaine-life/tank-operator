@@ -819,7 +819,12 @@ Evidence:
 
 ## Restricted Session Read-Only Git Access
 
-Status: complete
+Status: complete (in-pod path; now reached only by sessions the wall does NOT front
+— test slots, which have no per-slot wall, plus the rare wall-IP-unresolved
+fallback. Every non-slot session — restricted or not — routes through "GitHub
+Egress Proxy (the wall)" below, which observes and governs server-side and
+supersedes this in-pod minting for them. Retiring this path for slots is tracked
+under the egress lockdown work.)
 
 Intent:
 A restricted session (`TANK_RESTRICTED_GIT=true`) governs *writes* — pushes go
@@ -911,28 +916,36 @@ Evidence:
 ## GitHub Egress Proxy (the wall): server-side governed GitHub access
 
 Status: in progress (per-request mint governance, the REST/GraphQL write-hole
-closure, gh REST + GraphQL, break-glass, and asset hosts have shipped and are
-enforced by the Calico NetworkPolicy that denies direct GitHub egress; the
-remaining scope is retiring the in-pod credential-helper / `gh`-wrapper mint path
-— "Restricted Session Read-Only Git Access" above — which the wall supersedes for
-non-slot restricted sessions, tracked under the egress lockdown work).
+closure, gh REST + GraphQL, break-glass, asset hosts, and — as of the
+observation/restriction decoupling — universal observation of EVERY non-slot
+session have shipped and are enforced by the Calico NetworkPolicy that denies
+direct GitHub egress; the remaining scope is bringing test slots under a wall and
+retiring the in-pod credential-helper / `gh`-wrapper mint path — "Restricted
+Session Read-Only Git Access" above — both tracked under the egress lockdown work).
 
 Intent:
-A restricted session must reach GitHub through ONE governed outbound chokepoint:
-the agent never holds a GitHub token, every write is recorded, and policy is
-enforced server-side rather than by in-pod scripts the agent's shell could route
-around. The egress proxy ("the wall") is an Envoy listener that TLS-terminates
-`github.com` / `api.github.com` / the asset hosts (leaf cert signed by the
-cluster `claude-oauth-ca-issuer`) plus a Python ext_proc sidecar — the pure,
-unit-tested `github_governor` core and the `github_ext_proc` IO shell. Per
-request it reads the pod's relayed auth.romaine.life service JWT, picks the
-least-privilege mint scope, RELAYS that JWT to mcp-github's `mint_clone_token`
-(its actor→installation routing mints the owner's App token), overwrites
-`Authorization` with the minted token, and records `github.*` control actions.
-The agent's JWT never reaches GitHub and the minted App token never reaches the
-agent. This is the server-side evolution of the in-pod "Restricted Session
-Read-Only Git Access" model, which it supersedes for non-slot restricted sessions
-(test slots exclude the wall, so they keep the in-pod path during migration).
+EVERY session must reach GitHub through ONE governed outbound chokepoint — the
+agent never holds a GitHub token, and every PR open/merge is recorded — because
+that observation is not surveillance: it is the data source the product runs on
+(the durable PR projection → git chip / `/pull-requests` page / Merge-in-Tank, and
+the CI/mergeability wake loop). A session the wall does not see is a session the
+app cannot drive. So OBSERVATION is universal — restricted AND unrestricted
+sessions route through the wall — while RESTRICTION (least-privilege mint, branch
+lane, merge-deny) is scoped to `restricted_git` sessions. An unrestricted session
+is minted FULL and confined by nothing, but is still routed, observed, and has its
+token injected server-side. The egress proxy ("the wall") is an Envoy listener
+that TLS-terminates `github.com` / `api.github.com` / the asset hosts (leaf cert
+signed by the cluster `claude-oauth-ca-issuer`) plus a Python ext_proc sidecar —
+the pure, unit-tested `github_governor` core and the `github_ext_proc` IO shell.
+Per request it reads the pod's relayed auth.romaine.life service JWT, fetches the
+session's egress context (repos + restricted, fail-closed to restricted), picks
+the mint scope (least-privilege for restricted, full for unrestricted), RELAYS the
+JWT to mcp-github's `mint_clone_token` (actor→installation routing mints the
+owner's App token), overwrites `Authorization`, and records `github.*` control
+actions. The agent's JWT never reaches GitHub and the minted App token never
+reaches the agent. This is the server-side evolution of the in-pod "Restricted
+Session Read-Only Git Access" model, which it supersedes for non-slot sessions
+(test slots still exclude the wall and keep the in-pod path during migration).
 
 Affected contracts:
 - Session Lifecycle
@@ -940,7 +953,17 @@ Affected contracts:
 - Observability
 
 Contract impact:
-- **Per-request least privilege** (`evaluate_policy`). The agent never holds the
+- **Observation is universal; restriction is scoped.** EVERY session whose wall IP
+  resolves routes through the wall — the `egressProxyGit` gate is no longer welded to
+  `restricted_git` — so the wall records its PRs and injects its token regardless of
+  mode. The wall fetches each session's restricted status from Tank
+  (`GET /api/internal/sessions/{id}/egress-context`, cached, fail-closed to
+  restricted) and mints least-privilege for restricted sessions, FULL for
+  unrestricted ones; the merge-deny and branch-lane checks run for restricted sessions
+  only. Previously observation was welded onto `restricted_git`, so unrestricted
+  sessions bypassed the wall entirely and were invisible to the projection/CI loop the
+  product runs on — that was the bug this decoupling fixes.
+- **Per-request least privilege** (`evaluate_policy`, restricted sessions). The agent never holds the
   token, but the SCOPE still matters because a coarse token would let the agent
   reach the whole repo through the API, bypassing the lane/merge governance that
   only inspects the git transport. So write capability is granted ONLY for the
