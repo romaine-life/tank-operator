@@ -256,3 +256,171 @@ def test_pr_fields_from_response_json() -> None:
     )
     assert gg.pr_fields_from_response_json('{"merged": true, "sha": "x"}') == (0, "")
     assert gg.pr_fields_from_response_json("not json") == (0, "")
+
+
+# ---- break-glass grants (widen the lane; mirror mcp-auth-proxy) ------------
+
+def _grant(
+    kind: str,
+    *,
+    branches=None,
+    count: int = 0,
+    operations=None,
+    event_id: str = "ev-123",
+    expires_at: str = "2099-01-01T00:00:00Z",
+) -> dict:
+    """The shape handleInternalGetGitBreakGlassGrant returns for an active grant."""
+    bs: dict = {"kind": kind}
+    if branches is not None:
+        bs["branches"] = branches
+    if count:
+        bs["count"] = count
+    return {
+        "active": True,
+        "event_id": event_id,
+        "branch_scope": bs,
+        "operations": list(operations or []),
+        "expires_at": expires_at,
+    }
+
+
+def test_parse_push_commands_exposes_old_new_ref() -> None:
+    body = (
+        _pkt(_ZERO + b" " + b"a" * 40 + b" refs/heads/feature\x00 report-status\n")
+        + _pkt(b"b" * 40 + b" " + b"c" * 40 + b" refs/heads/other\n")
+        + _FLUSH
+        + b"PACK.."
+    )
+    cmds, saw_flush = gg.parse_push_commands(body)
+    assert saw_flush is True
+    assert cmds[0] == ("0" * 40, "a" * 40, "refs/heads/feature")
+    assert cmds[1] == ("b" * 40, "c" * 40, "refs/heads/other")
+    # parse_push_refs stays a thin wrapper over the same parse
+    assert gg.parse_push_refs(body) == (["refs/heads/feature", "refs/heads/other"], True)
+
+
+def test_active_grant_from_response_only_honors_active_true() -> None:
+    assert gg.active_grant_from_response(204, "") is None
+    assert gg.active_grant_from_response(200, "  ") is None
+    # a non-2xx body fails closed even if it claims active
+    assert gg.active_grant_from_response(500, '{"active": true}') is None
+    assert gg.active_grant_from_response(200, "not json") is None
+    assert gg.active_grant_from_response(200, '{"active": false, "repo": "o/r"}') is None
+    g = gg.active_grant_from_response(200, '{"active": true, "event_id": "e1"}')
+    assert g is not None and g["event_id"] == "e1"
+
+
+def test_grant_branch_allows_mirrors_in_pod_matcher() -> None:
+    # unlimited -> any ref
+    assert gg.grant_branch_allows(_grant("unlimited"), "refs/heads/main") is True
+    # named -> exact short-name match (refs/heads/ stripped both sides)
+    named = _grant("named", branches=["release-1.0", "refs/heads/hotfix"])
+    assert gg.grant_branch_allows(named, "refs/heads/release-1.0") is True
+    assert gg.grant_branch_allows(named, "refs/heads/hotfix") is True
+    assert gg.grant_branch_allows(named, "refs/heads/main") is False
+    assert gg.grant_branch_allows(named, "release-1.0") is True
+    # count -> any ref (budget enforced by the endpoint flipping active->false)
+    assert gg.grant_branch_allows(_grant("count", count=3), "refs/heads/anything") is True
+    # no grant / malformed scope / empty named set -> nothing
+    assert gg.grant_branch_allows(None, "refs/heads/main") is False
+    assert gg.grant_branch_allows({"branch_scope": "bad"}, "refs/heads/main") is False
+    assert gg.grant_branch_allows(_grant("named", branches=[]), "refs/heads/x") is False
+
+
+def test_out_of_lane_refs() -> None:
+    sid = "1166"
+    lane = "refs/heads/tank/session/1166/"
+    assert gg.out_of_lane_refs([lane + "a", lane + "b"], sid) == []
+    assert gg.out_of_lane_refs([lane + "a", "refs/heads/main"], sid) == ["refs/heads/main"]
+    # empty session -> everything is out of lane (fail closed)
+    assert gg.out_of_lane_refs(["refs/heads/x"], "") == ["refs/heads/x"]
+
+
+def test_push_violation_widens_with_grant() -> None:
+    sid = "1166"
+    lane = "refs/heads/tank/session/1166/"
+    # in-lane is always fine, grant or not
+    assert gg.push_violation([lane + "tank-operator"], sid, None) is None
+    # out-of-lane denied without a grant (unchanged no-grant behavior)
+    assert gg.push_violation(["refs/heads/release-1.0"], sid, None) == "refs/heads/release-1.0"
+    # a named grant covers exactly its branch; a different out-of-lane ref still violates
+    named = _grant("named", branches=["release-1.0"])
+    assert gg.push_violation(["refs/heads/release-1.0"], sid, named) is None
+    assert gg.push_violation(["refs/heads/release-1.0", "refs/heads/main"], sid, named) == "refs/heads/main"
+    # the session's own lane is still allowed alongside a granted branch
+    assert gg.push_violation([lane + "x", "refs/heads/release-1.0"], sid, named) is None
+    # unlimited grant covers anything (incl. main)
+    assert gg.push_violation(["refs/heads/main"], sid, _grant("unlimited")) is None
+    # count grant covers any branch
+    assert gg.push_violation(["refs/heads/wip"], sid, _grant("count", count=2)) is None
+    # empty session id fails closed without a grant (in practice ident.ok gates this
+    # path, so push_violation is only ever reached with a real session id)
+    assert gg.push_violation([lane + "x"], "", None) == lane + "x"
+
+
+def test_grant_allows_merge_only_for_full_api_grants() -> None:
+    full = _grant("unlimited", operations=["push_current_head", "full_github_api"])
+    assert gg.grant_allows_merge(full) is True
+    assert gg.grant_allows_merge(_grant("named", branches=["x"], operations=["push_current_head"])) is False
+    assert gg.grant_allows_merge(_grant("count", count=2)) is False
+    assert gg.grant_allows_merge(None) is False
+
+
+def test_grant_event_id() -> None:
+    assert gg.grant_event_id(_grant("unlimited", event_id="ev-9")) == "ev-9"
+    assert gg.grant_event_id(None) == ""
+
+
+def test_grant_servable_respects_expiry() -> None:
+    # negative result always servable within the cache TTL
+    assert gg.grant_servable(None, 1_000_000.0) is True
+    # a positive grant is servable only before its own expires_at (epoch 946684800)
+    g = _grant("unlimited", expires_at="2000-01-01T00:00:00Z")
+    assert gg.grant_servable(g, 946684700.0) is True
+    assert gg.grant_servable(g, 946684900.0) is False
+    # missing/garbage expiry -> never serve (can't bound it)
+    assert gg.grant_servable({"active": True}, 1.0) is False
+
+
+def test_build_break_glass_push_body_matches_count_tracking_shape() -> None:
+    body = gg.build_break_glass_push_body(
+        invocation_id="ctrl_abc",
+        grant_event_id="ev-123",
+        repo_owner="romaine-life",
+        repo_name="tank-operator",
+        branch="release-1.0",
+        new_sha="f" * 40,
+    )
+    assert body["action"] == "github.break_glass.push"
+    assert body["status"] == "succeeded"
+    assert body["source_service"] == "agent-egress-proxy"
+    # the two fields countBreakGlassGrantBranches keys on
+    assert body["payload"]["grant_event_id"] == "ev-123"
+    assert body["payload"]["branch"] == "release-1.0"
+    assert body["payload"]["repo_path"] == "romaine-life/tank-operator"
+    # a sha promotes the target to the commit
+    assert body["target_kind"] == "github_commit"
+    assert body["target_ref"] == "https://github.com/romaine-life/tank-operator/commit/" + "f" * 40
+    # no sha -> repository target
+    no_sha = gg.build_break_glass_push_body(
+        invocation_id="ctrl_x", grant_event_id="e", repo_owner="o", repo_name="r", branch="b",
+    )
+    assert no_sha["target_kind"] == "github_repository"
+    assert no_sha["target_ref"] == "https://github.com/o/r"
+
+
+def test_break_glass_grant_url_routes_by_scope_and_repo() -> None:
+    # default scope -> default orchestrator, repo as an encoded query param
+    url = gg.break_glass_grant_url("tank", "1166", "romaine-life/tank-operator", DEFAULT_URL)
+    assert url == (
+        DEFAULT_URL
+        + "/api/internal/sessions/1166/git-break-glass/grant?repo=romaine-life%2Ftank-operator"
+    )
+    # slot scope -> slot orchestrator (mirrors url_for_scope)
+    slot = gg.break_glass_grant_url("tank-operator-slot-3", "47", "o/r", DEFAULT_URL)
+    assert slot == (
+        "http://tank-operator.tank-operator-slot-3.svc:80"
+        + "/api/internal/sessions/47/git-break-glass/grant?repo=o%2Fr"
+    )
+    # no repo -> no query param
+    assert gg.break_glass_grant_url("tank", "1166", "", DEFAULT_URL).endswith("/git-break-glass/grant")
