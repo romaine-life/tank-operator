@@ -124,6 +124,76 @@ export interface TestSlotStatus {
   preflight: TestSlotPreflight | null;
 }
 
+// LivePreviewState is the live frontend-preview sub-document carried inside the
+// status snapshot's test_state map (test_state.live_preview). It is written by
+// two distinct backend paths and the page reads both:
+//   - `enabled` is the owner's durable toggle (the test-slot page's "Start
+//     frontend testing" control); the in-pod live-preview daemon converges its
+//     build+push loop on it over the session SSE.
+//   - `pushed_at` / `pushed_build` are push receipts the daemon reports after
+//     each successful PUT to the slot's static-override receiver. `pushed_at` is
+//     RFC3339-UTC once a push has landed and null before the first push of an
+//     enabled session (so the page can show "waiting for first push").
+export interface LivePreviewState {
+  enabled: boolean;
+  pushed_at: string | null;
+  pushed_build: string | null;
+}
+
+// readLivePreview extracts the typed live_preview sub-document from a status
+// snapshot's test_state map. The snapshot types test_state as an opaque
+// Record<string, unknown>, so this narrows it defensively: it returns null when
+// the field is absent or not an object (treat "no live preview" and "off" the
+// same), and tolerates a partial map — the backend emits an enabled-only
+// live_preview before the first push receipt lands pushed_at/pushed_build.
+export function readLivePreview(
+  status: TestSlotStatus | null,
+): LivePreviewState | null {
+  const raw = status?.test_state?.live_preview;
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  return {
+    enabled: obj.enabled === true,
+    pushed_at: typeof obj.pushed_at === "string" ? obj.pushed_at : null,
+    pushed_build:
+      typeof obj.pushed_build === "string" ? obj.pushed_build : null,
+  };
+}
+
+export function livePreviewTogglePath(sessionId: string): string {
+  return `/api/sessions/${encodeURIComponent(sessionId)}/test-slot/live-preview`;
+}
+
+// setLivePreviewEnabled flips the owner's durable live-preview intent on the
+// session's test_state.live_preview via the owner-scoped toggle endpoint
+// (POST /api/sessions/{id}/test-slot/live-preview, body {"enabled": bool}).
+// Enabling requires an already-active slot with a URL — the backend rejects
+// otherwise with a 400 whose detail this surfaces. Resolves on a 2xx; throws
+// with the server-provided detail on any error so the caller can banner it.
+export async function setLivePreviewEnabled(
+  sessionId: string,
+  enabled: boolean,
+  authedFetch: FetchLike,
+): Promise<void> {
+  const res = await authedFetch(livePreviewTogglePath(sessionId), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    let detail = `live preview toggle failed: ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data && typeof data.detail === "string" && data.detail) {
+        detail = data.detail;
+      }
+    } catch {
+      // Non-JSON body: keep the status-derived message.
+    }
+    throw new Error(detail);
+  }
+}
+
 export function testSlotStatusPath(
   sessionId: string,
   options: { repo?: string; refresh?: boolean } = {},
