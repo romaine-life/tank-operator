@@ -215,6 +215,32 @@ apiProxy:
   # Published to KV by infra/api_proxy.tf â€” separate UAMI from the
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
+
+# Agent egress proxy — the single outbound chokepoint for session pods
+# (k8s/templates/agent-egress-proxy.yaml). Reuses apiProxy.image (the ext_proc)
+# and apiProxy.envoyImage. Disabled by default: this only stands the wall up;
+# nothing routes through it until sessions opt in via a per-session hostAlias,
+# and the egress NetworkPolicy lockdown + git-smart-HTTP capture are separate,
+# later changes. enabled=true renders cert/Service/Envoy/Deployment.
+agentEgressProxy:
+  enabled: false
+  replicas: 1
+  # Plain run-as identity for the proxy pod. The handler needs NO privileged
+  # identity of its own: it relays each session pod's own auth.romaine.life
+  # role=service JWT to mcp-github (mint) and to the control-actions endpoint
+  # (record), so authority rides the caller's token, not this SA.
+  serviceAccount: agent-egress-proxy
+  # In-cluster mcp-github service (clusterIP port 80) the handler relay-calls to
+  # mint the session-owner's App token (mcp-github routes by the JWT's actor_email).
+  mcpGithubMintUrl: http://mcp-github.mcp-github.svc.cluster.local:80/
+  # ext_proc image. Empty -> defaults to apiProxy.image (same codebase; the
+  # PROXY_PROVIDER=github env selects the github handler). Override repository/tag
+  # to run the egress proxy on a proof/branch image independently of the
+  # claude/codex proxies — e.g. a dark-deploy smoke that must not roll them.
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: ""
 claudeSecondaryApiProxy:
   serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
 
