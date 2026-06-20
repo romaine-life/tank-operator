@@ -577,16 +577,23 @@ def build_break_glass_push_body(
 
 
 def jwt_from_authorization(authorization: str) -> str:
-    """The pod's credential off the request, from either auth shape git/gh present:
-    `Bearer <tok>` (gh/REST) or `Basic base64(x-access-token:<tok>)` (git smart-HTTP,
-    where the credential helper hands the token as the password). This is the pod's
-    RAW auth.romaine.life k8s SA token — the proxy exchanges it (see
-    parse_exchange_result) into the role=service JWT before minting/recording."""
+    """The pod's credential off the request, across every auth shape git/gh/REST send:
+      * ``token <tok>``  — what ``gh`` and the GitHub REST API default to;
+      * ``Bearer <tok>`` — what a raw ``curl``/REST client sends;
+      * ``Basic base64(x-access-token:<tok>)`` — git smart-HTTP, where the credential
+        helper hands the token as the password.
+    All three carry the pod's RAW auth.romaine.life k8s SA token, which the proxy
+    exchanges (see parse_exchange_result) into the role=service JWT before
+    minting/recording. NOTE: ``gh`` uses the ``token`` scheme, NOT ``Bearer`` —
+    omitting it is what left every ``gh api`` / ``gh pr view`` / ``gh run list`` call
+    unminted and 401'd in restricted sessions (the wall forwarded the raw SA token,
+    which GitHub rejects). Reads still get a read-scoped mint and writes still 403, so
+    recognizing the scheme restores gh reads without widening write capability."""
     if not authorization:
         return ""
     scheme, _, rest = authorization.partition(" ")
     s = scheme.strip().lower()
-    if s == "bearer":
+    if s in ("bearer", "token"):
         return rest.strip()
     if s == "basic":
         try:

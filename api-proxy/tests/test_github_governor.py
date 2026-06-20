@@ -228,13 +228,18 @@ def test_parse_exchange_result() -> None:
     assert gg.parse_exchange_result("nope") == ("", 0.0)
 
 
-def test_jwt_from_authorization_bearer_and_basic() -> None:
+def test_jwt_from_authorization_token_bearer_and_basic() -> None:
+    # `gh` and the GitHub REST API default to the `token` scheme — this is the leg that
+    # was missing, leaving every gh API call unminted and 401'd in restricted sessions.
+    assert gg.jwt_from_authorization("token aa.bb.cc") == "aa.bb.cc"
+    # raw curl / REST clients send Bearer.
     assert gg.jwt_from_authorization("Bearer aa.bb.cc") == "aa.bb.cc"
     # git smart-HTTP: credential helper hands the JWT as the Basic password.
     basic = base64.b64encode(b"x-access-token:aa.bb.cc").decode()
     assert gg.jwt_from_authorization(f"Basic {basic}") == "aa.bb.cc"
     assert gg.jwt_from_authorization("") == ""
     assert gg.jwt_from_authorization("Basic !!notbase64!!") == ""
+    assert gg.jwt_from_authorization("Negotiate xyz") == ""  # unknown scheme -> nothing
 
 
 def test_first_json_object_sse_and_bare() -> None:
