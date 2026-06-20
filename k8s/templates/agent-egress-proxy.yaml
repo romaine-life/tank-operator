@@ -182,17 +182,22 @@ data:
                                 auto_host_rewrite: true
                         - name: github_git
                           domains: ["github.com"]
-                          # git push (receive-pack) carries its ref-update commands at
-                          # the head of the request body; buffer the prefix so the handler
-                          # can reject pushes to main. BUFFERED_PARTIAL caps the buffer —
-                          # large packfiles still stream once the prefix is released — and
-                          # clone/fetch (upload-pack) bodies just pass through.
+                          # git push (receive-pack) carries its ref-update commands at the
+                          # head of the request body; the handler parses them to reject
+                          # out-of-lane pushes (main, stray branches). BUFFERED (not
+                          # BUFFERED_PARTIAL) so EVERY push body is delivered to the
+                          # handler and inspected before it is forwarded — partial buffering
+                          # delivered the body inconsistently, letting some pushes skip the
+                          # lane check. Bounded by per_connection_buffer_limit_bytes; a push
+                          # larger than that is refused rather than waved through (the agent
+                          # works incrementally on its branch, so packs are small). upload-pack
+                          # (clone/fetch) bodies are NONE and pass straight through.
                           typed_per_filter_config:
                             envoy.filters.http.ext_proc:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
                               overrides:
                                 processing_mode:
-                                  request_body_mode: BUFFERED_PARTIAL
+                                  request_body_mode: BUFFERED
                           routes:
                             - match: { prefix: "/" }
                               route:
