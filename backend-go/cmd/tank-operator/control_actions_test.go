@@ -2522,3 +2522,30 @@ func TestHandleListControlActionsReturnsStoreErrors(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestNormalizeBranchScopeBranchNamePreservesSlashes is the enforcement-half
+// regression for the slashed-branch bug a live restricted-agent smoke test
+// caught: a grant for "feature/x" was persisted as "x" (last "/" segment), so
+// the broker refused the granted push (branch_out_of_scope) for the real ref
+// while accepting "x". The normalizer must PRESERVE "/" so the durable scope
+// equals the pushed ref. refs/heads/ and the tank/session/<id>/<repo>/ prefix
+// are still stripped. (Prior tests only used single-segment names, hiding it.)
+func TestNormalizeBranchScopeBranchNamePreservesSlashes(t *testing.T) {
+	cases := []struct {
+		in, sessionID, repo, want string
+	}{
+		{"smoke/branch-lane-grants", "", "", "smoke/branch-lane-grants"},
+		{"feature/login", "", "", "feature/login"},
+		{"fix/auth-bug", "", "", "fix/auth-bug"},
+		{"  release/v2.1  ", "", "", "release/v2.1"},
+		{"refs/heads/feature/x", "", "", "feature/x"},
+		{"plain-branch", "", "", "plain-branch"},
+		// The targeted session-branch prefix strip is intentionally kept.
+		{"tank/session/47/glimmung/feature/y", "47", "glimmung", "feature/y"},
+	}
+	for _, c := range cases {
+		if got := normalizeBranchScopeBranchName(c.in, c.sessionID, c.repo); got != c.want {
+			t.Errorf("normalizeBranchScopeBranchName(%q, %q, %q) = %q, want %q", c.in, c.sessionID, c.repo, got, c.want)
+		}
+	}
+}

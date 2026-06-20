@@ -1859,9 +1859,13 @@ func countBreakGlassGrantBranches(rows []pgstore.ControlActionEvent, grantEventI
 
 // normalizeBranchScopeBranchNames canonicalizes the agent-supplied branch names
 // in a `named` break-glass branch scope: it strips refs/heads/ and the
-// tank/session/<id>/<repo>/ prefix, reduces any remaining path to its last
-// segment, and sanitizes to a bare branch token. (Formerly named for PR lanes,
-// which were retired and unified into the break-glass branch-lane grant.)
+// tank/session/<id>/<repo>/ prefix and sanitizes to a valid branch token,
+// PRESERVING "/" — branch names like feature/x are real, and the durable scope
+// must equal the pushed ref or _grant_branch_allows refuses the granted push.
+// (Formerly named for PR lanes, which were single-token labels; reducing to the
+// last "/" segment silently mangled slashed branch names — the enforcement half
+// of the bug a slashed-branch smoke test caught, the record/display half being
+// the proxy's _sanitize_branch_scope_name.)
 func normalizeBranchScopeBranchNames(values []string, sessionID, repo string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
@@ -1881,13 +1885,9 @@ func normalizeBranchScopeBranchName(value, sessionID, repo string) string {
 	if sessionID != "" && repo != "" {
 		trimmed = strings.TrimPrefix(trimmed, "tank/session/"+sessionID+"/"+repo+"/")
 	}
-	if strings.Contains(trimmed, "/") {
-		parts := strings.Split(trimmed, "/")
-		trimmed = parts[len(parts)-1]
-	}
 	var b strings.Builder
 	for _, ch := range trimmed {
-		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' || ch == '/' {
 			b.WriteRune(ch)
 			continue
 		}
@@ -1895,7 +1895,7 @@ func normalizeBranchScopeBranchName(value, sessionID, repo string) string {
 			b.WriteByte('-')
 		}
 	}
-	return strings.Trim(b.String(), "-._")
+	return strings.Trim(b.String(), "-._/")
 }
 
 func uniqueStrings(values []string) []string {
