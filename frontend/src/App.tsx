@@ -345,6 +345,7 @@ import {
 import {
   SessionStore,
   normalizeSessionRowUpdate,
+  parseSessionRowLineage,
   type SessionBugLabel,
   type SessionRow,
 } from "./sessionStore";
@@ -447,14 +448,8 @@ import {
   collectGlimmungRunsFromEntries,
   type GlimmungRunLink,
 } from "./glimmungRuns";
-import {
-  normalizeSpawnedSessions,
-  type SpawnedSessionRef,
-} from "./spawnedSessions";
-import {
-  normalizeSessionPullRequests,
-  type SessionPullRequestRef,
-} from "./pullRequests";
+import { type SpawnedSessionRef } from "./spawnedSessions";
+import { type SessionPullRequestRef } from "./pullRequests";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -28058,8 +28053,13 @@ function AuthenticatedApp() {
         !Array.isArray(raw.spoke_config)
           ? (raw.spoke_config as Record<string, unknown>)
           : undefined,
-      spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
-      pull_requests: normalizeSessionPullRequests(raw.pull_requests),
+      // Lineage trio (spawned_sessions / pull_requests / parent_session_id)
+      // via the shared parseSessionRowLineage — the same parser the live
+      // row-update path uses. parent_session_id was previously omitted here,
+      // which de-nested every spawned child on each snapshot until its next
+      // live row-update re-nested it (the "snap back" bug). Keep this routed
+      // through the shared helper so snapshot and SSE stay in lockstep.
+      ...parseSessionRowLineage(raw),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities)
