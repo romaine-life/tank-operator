@@ -126,6 +126,13 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         # served past its own expires_at (gg.grant_servable), so an expired/revoked
         # grant re-locks within the TTL. value: (grant_or_None, monotonic_cached_at).
         self._grants: dict[tuple[str, str], tuple[dict | None, float]] = {}
+        # Session repo-set cache, keyed by session_id. Used only to scope the /graphql
+        # READ mint (that endpoint carries no repo in the URL). sessions.repos is fixed
+        # at session-create time, so the set is immutable for a session's life — a
+        # generous TTL collapses a burst of gh GraphQL calls to one Tank lookup. Only
+        # non-empty results are cached; a transient empty/failed lookup is retried.
+        # value: (repos_list, monotonic_cached_at).
+        self._repos: dict[str, tuple[list[str], float]] = {}
         # __main__/metrics compatibility (mirrors the AuthInjector surface the
         # entrypoint wires up); this servicer has no background keeper.
         self._keeper_task = None
@@ -220,8 +227,16 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         if rec is not None:
             st.action, st.pr_number = rec
 
+        # Which repos scope the mint: the one repo in the URL for a REST/git path, or
+        # the session's whole create-time set for /graphql (which carries no repo in the
+        # URL). Anything else (/user, /meta) mints nothing and forwards untouched.
+        mint_repos: list[str] = []
         if repo is not None:
-            token = await self._mint(ident, st.repo_full, st.decision)
+            mint_repos = [st.repo_full]
+        elif gg.is_graphql(authority, path):
+            mint_repos = await self._session_repos(ident)
+        if mint_repos:
+            token = await self._mint(ident, mint_repos, st.decision)
             if token:
                 return ext_proc_pb2.ProcessingResponse(
                     request_headers=ext_proc_pb2.HeadersResponse(
@@ -232,8 +247,9 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
                         ),
                     )
                 )
-            log.warning("egress: mint returned no token for session=%s repo=%s/%s", ident.session_id, *repo)
-        # No repo in path (e.g. /user, /meta) or mint failed: forward unmodified.
+            log.warning("egress: mint returned no token for session=%s repos=%s", ident.session_id, mint_repos)
+        # No repo in path and not /graphql (e.g. /user, /meta), no session repos, or a
+        # mint failure: forward unmodified.
         return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
 
     async def _on_request_body(
@@ -319,8 +335,8 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             self._xchg[raw_token] = (token, expires_at or (time.time() + 600))
         return token
 
-    async def _mint(self, ident: gg.SessionIdentity, repo_full: str, decision: gg.Decision) -> str:
-        payload = gg.mint_call_payload(repo_full, decision)
+    async def _mint(self, ident: gg.SessionIdentity, repos: list[str], decision: gg.Decision) -> str:
+        payload = gg.mint_call_payload(repos, decision)
         try:
             r = await self._http.post(
                 self._mint_url + "/",
@@ -335,8 +351,32 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             token, _expires = gg.parse_mint_result(gg.first_json_object(r.text))
             return token
         except Exception as exc:
-            log.warning("egress: mint failed session=%s repo=%s: %s", ident.session_id, repo_full, exc)
+            log.warning("egress: mint failed session=%s repos=%s: %s", ident.session_id, repos, exc)
             return ""
+
+    async def _session_repos(self, ident: gg.SessionIdentity) -> list[str]:
+        """The session's durable create-time repo slugs (sessions.repos), for scoping
+        the /graphql READ mint. /graphql carries no repo in the URL, so the per-URL-repo
+        mint can't scope it; the session's create-time repo set is the correct, least-
+        privilege scope. Relayed with the session's own JWT to the internal repos
+        endpoint and cached per session (the set is immutable for a session's life).
+        Failure or an empty set -> [] (not cached), so the request forwards unminted
+        rather than minting an unscoped token, and a transient miss is retried."""
+        sid = ident.session_id
+        now = time.time()
+        hit = self._repos.get(sid)
+        if hit is not None and now - hit[1] < 300.0:
+            return hit[0]
+        url = gg.session_repos_url(ident.session_scope, sid, self._internal_url)
+        try:
+            r = await self._http.get(url, headers={"Authorization": f"Bearer {ident.raw_jwt}"})
+            repos = gg.parse_session_repos_response(r.status_code, r.text)
+        except Exception as exc:
+            log.warning("egress: session repos lookup failed session=%s: %s", sid, exc)
+            repos = []
+        if repos:
+            self._repos[sid] = (repos, now)
+        return repos
 
     async def _active_grant(self, ident: gg.SessionIdentity, repo_full: str) -> dict | None:
         """The session's active git break-glass grant for repo_full, or None. Reads

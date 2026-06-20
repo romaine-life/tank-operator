@@ -637,6 +637,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
+	// Durable create-time repo slugs (sessions.repos) for the agent-egress proxy to
+	// scope the /graphql read mint — that endpoint carries no repo in the URL.
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/repos", s.handleInternalSessionRepos)
 	// Pod-authenticated (SA-token) endpoint: mints a kubectl credential for the
 	// trusted cluster-admin SA, for non-restricted sessions only.
 	mux.HandleFunc("POST /api/internal/session-cluster-credential", s.handleInternalClusterCredential)

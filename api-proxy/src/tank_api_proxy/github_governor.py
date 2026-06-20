@@ -144,6 +144,16 @@ def break_glass_grant_url(
     return f"{base}/api/internal/sessions/{session_id}/git-break-glass/grant{params}"
 
 
+def session_repos_url(session_scope: str, session_id: str, default_url: str) -> str:
+    """The session's durable create-time repo list
+    (GET /api/internal/sessions/<id>/repos), routed through url_for_scope exactly like
+    the grant lookup so a slot session reads its slot orchestrator. The wall uses it to
+    scope the /graphql READ mint to the repos the session was created over
+    (sessions.repos), since /graphql carries no repo in the URL to scope by."""
+    base = url_for_scope(session_scope, default_url)
+    return f"{base}/api/internal/sessions/{session_id}/repos"
+
+
 # ---- policy ---------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -235,6 +245,17 @@ def is_rest_write(method: str, authority: str, path: str) -> bool:
     if (method or "").upper() not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
     return repo_from_path(authority, path) is not None
+
+
+def is_graphql(authority: str, path: str) -> bool:
+    """The GitHub GraphQL endpoint (POST api.github.com/graphql). It carries NO repo
+    in the URL (the repo lives in the query body), so repo_from_path can't scope a
+    mint for it — instead the IO shell scopes a READ mint to the SESSION's repos.
+    gh's pr list/view/status are GraphQL reads served by that read token; a GraphQL
+    *mutation* sent with a read token is refused by GitHub, so writes stay governed
+    exactly as on the REST surface (the read-by-default mint, no enumerated denylist)."""
+    host = (authority or "").split(":", 1)[0].lower()
+    return host == "api.github.com" and (path or "").split("?", 1)[0].rstrip("/") == "/graphql"
 
 
 def is_receive_pack(authority: str, path: str) -> bool:
@@ -353,6 +374,31 @@ def active_grant_from_response(status_code: int, body_text: str) -> dict[str, An
     return None
 
 
+def parse_session_repos_response(status_code: int, body_text: str) -> list[str]:
+    """The session's "owner/name" repo slugs from the internal repos endpoint, or [].
+    Fails closed: a non-2xx status or unparseable/missing body yields [] — and the IO
+    shell mints nothing for /graphql when the list is empty (forwarding the request
+    unminted rather than minting an unscoped token). Mirrors the defensive parsing of
+    active_grant_from_response so a Tank hiccup can never widen scope."""
+    if status_code < 200 or status_code >= 300 or not (body_text or "").strip():
+        return []
+    try:
+        value = json.loads(body_text)
+    except Exception:
+        return []
+    if not isinstance(value, dict):
+        return []
+    repos = value.get("repos")
+    if not isinstance(repos, list):
+        return []
+    out: list[str] = []
+    for item in repos:
+        slug = str(item or "").strip()
+        if slug:
+            out.append(slug)
+    return out
+
+
 def grant_branch_allows(grant: dict[str, Any] | None, ref: str) -> bool:
     """Whether an active grant's branch scope permits pushing `ref`. Byte-identical
     to mcp-auth-proxy._grant_branch_allows: unlimited -> any ref; named -> the ref's
@@ -462,12 +508,13 @@ def recordable_pr_action(method: str, authority: str, path: str) -> tuple[str, i
 
 # ---- mint (relay to mcp-github) -------------------------------------------
 
-def mint_call_payload(repo_full: str, decision: Decision, *, call_id: int = 1) -> dict[str, Any]:
-    """JSON-RPC tools/call for mcp-github's mint_clone_token, scoped to the one
-    repo this request touches, at the scope the policy granted. Relayed with the
-    session's own JWT as bearer — mcp-github's actor->installation routing picks
-    the owner's installation."""
-    args: dict[str, Any] = {"repos": [repo_full]}
+def mint_call_payload(repos: list[str], decision: Decision, *, call_id: int = 1) -> dict[str, Any]:
+    """JSON-RPC tools/call for mcp-github's mint_clone_token, scoped to the repos this
+    request touches — a single repo for a REST/git path (from the URL), or the
+    session's whole create-time set for /graphql (which carries no repo in the URL) —
+    at the scope the policy granted. Relayed with the session's own JWT as bearer, so
+    mcp-github's actor->installation routing picks the owner's installation."""
+    args: dict[str, Any] = {"repos": list(repos)}
     if decision.full:
         args["full"] = True
     elif decision.write:
