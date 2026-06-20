@@ -391,6 +391,11 @@ func main() {
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
 			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
+			// In-pod live frontend preview daemon. Off by default; the chart
+			// turns this on (livePreview.daemonEnabled) so GUI session pods get
+			// the live-preview sidecar that streams a built dist/ to the
+			// session's test slot. Gated on a real SDK runner in PodManifest.
+			LivePreviewDaemon: envBool("SESSION_LIVE_PREVIEW_DAEMON_ENABLED"),
 		},
 		OAuthGatewayHost:            os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:                os.Getenv("CLAUDE_API_PROXY_HOST"),

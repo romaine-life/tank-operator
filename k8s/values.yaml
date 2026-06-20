@@ -39,6 +39,16 @@ staticOverride:
   enabled: true
   mountPath: /var/run/tank-operator-static-override
 
+# In-pod live frontend preview daemon (the sender side). When enabled, GUI
+# session pods spawned by this orchestrator get a `live-preview` sidecar that
+# watches frontend/, builds on the owner's toggle, and streams the built dist/
+# to the session's test slot static-override receiver — agent fully out of the
+# loop. Off by default: it adds an (idle-cheap) sidecar to every GUI session
+# pod and the live push loop should be activated deliberately after an
+# end-to-end validation. Flip to true to turn the feature on fleet-wide.
+livePreview:
+  daemonEnabled: false
+
 hotSwapBackend:
   enabled: true
   mountPath: /var/run/tank-operator-hot

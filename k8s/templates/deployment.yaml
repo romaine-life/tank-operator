@@ -109,6 +109,13 @@ spec:
             - name: TANK_OPERATOR_STATIC_OVERRIDE_ROOT
               value: {{ .Values.staticOverride.mountPath | quote }}
             {{- end }}
+            {{- if .Values.livePreview.daemonEnabled }}
+            # Stamps the in-pod live-preview daemon sidecar onto GUI session
+            # pods this orchestrator spawns (sessionmodel.ManifestOptions
+            # .LivePreviewDaemon). Off by default; see values.yaml livePreview.
+            - name: SESSION_LIVE_PREVIEW_DAEMON_ENABLED
+              value: "true"
+            {{- end }}
             {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.hotSwapBackend.enabled }}
             - name: GLIMMUNG_SUPERVISOR_CHILD
               value: {{ .Values.hotSwapBackend.childCommand | quote }}
