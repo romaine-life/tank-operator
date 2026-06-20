@@ -122,7 +122,11 @@ and [../README.md](../README.md) for how capability ledgers are used.
   build succeeds or the settle cap trips (`watching_timeout`). The image-build workflow name
   is `testSlotImageBuildWorkflow` in `provision_test_slot.go`. A GitHub read error fails the
   gate closed (`error` verdict), not open. This closes the window where "some check is green"
-  let the gate provision before the deployable image was produced.
+  let the gate provision before the deployable image was produced. The build-wait is
+  **observable, not silent**: each held poll logs `provision gate awaiting image build`
+  (`session_id`, `repo`, `head_sha`, `workflow`) and increments
+  `tank_test_slot_validate_total{outcome="awaiting_image_build"}`, so a green-but-not-built
+  PR is distinguishable in prod from ordinary check-waiting.
 - **CI-image readiness (deploy-time backstop):** even past the gate's image-build
   precondition, the image's `sha-<commit>` alias can still be propagating when the deploy
   fires. When the deploy reports the CI image is not built yet (Glimmung `409` →

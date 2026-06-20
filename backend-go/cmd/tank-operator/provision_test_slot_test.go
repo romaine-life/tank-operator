@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
@@ -538,6 +539,10 @@ func TestProvisionTestSlot_ReadyButImageNeverBuiltTimesOut(t *testing.T) {
 	glim := &fakeGlimmungClient{}
 	app, _ := provisionTestApp(t, gh, glim)
 
+	// The build-wait must be observable, not a silent demotion: each held poll
+	// increments the awaiting_image_build verdict counter.
+	awaitingBefore := testutil.ToFloat64(testSlotValidateTotal.WithLabelValues(string(provisionVerdictAwaitingImageBuild)))
+
 	// Deterministic clock that jumps past the settle cap on the first watching
 	// check so the demoted-ready loop trips the timeout instead of polling forever.
 	app.provisionSettleInterval = 25 * time.Second
@@ -562,6 +567,9 @@ func TestProvisionTestSlot_ReadyButImageNeverBuiltTimesOut(t *testing.T) {
 	}
 	if gh.imageBuildCalls == 0 {
 		t.Fatalf("expected the gate to query the image-build status before refusing")
+	}
+	if after := testutil.ToFloat64(testSlotValidateTotal.WithLabelValues(string(provisionVerdictAwaitingImageBuild))); after <= awaitingBefore {
+		t.Fatalf("expected awaiting_image_build verdict counter to increment while the gate held the PR; before=%v after=%v", awaitingBefore, after)
 	}
 }
 
