@@ -110,13 +110,26 @@ and [../README.md](../README.md) for how capability ledgers are used.
   a background context, never a blocked HTTP handler. `checkoutAndDeployOrchestrationReview`
   is the first caller — its previously **ungated** checkout+deploy now runs behind this
   gate.
-- **CI-image readiness:** the `ready` verdict trusts GitHub's `mergeable_state=clean` +
-  check rollup, which can read green in the window before the commit's `docker-build-check`
-  run has published its image. When the deploy then reports the CI image is not built yet
-  (Glimmung `409` → `glimmung.ErrCIImagePending`), the gate holds the checked-out slot and
-  re-deploys on the settle interval until the image lands, bounded by the settle cap — so
-  the race self-heals instead of failing the provision. A non-pending deploy error or the
-  image-wait timeout still releases the slot (no leak). See `deployImageWaitingForCI` and
+- **Image-build precondition (gate-time):** a `ready` reducer verdict
+  (`mergeable_state=clean` + check rollup green) is necessary but **not sufficient** to
+  provision. The check rollup reads "≥1 check observed, none failing, none pending", which
+  goes green the moment a fast *unrelated* check passes — possibly before the head SHA's
+  `docker-build-check.yaml` run has even registered. Provisioning then would deploy a commit
+  whose CI image does not exist yet. So before greenlighting, the gate calls
+  `mcpgithub.ImageBuildSucceededForHead` (a GitHub `actions/workflows/docker-build-check.yaml/runs?head_sha=…&status=success`
+  lookup) and only stays `ready` once that workflow has a `conclusion=success` run for the
+  **exact** head SHA; otherwise it demotes `ready → watching` and keeps polling until the
+  build succeeds or the settle cap trips (`watching_timeout`). The image-build workflow name
+  is `testSlotImageBuildWorkflow` in `provision_test_slot.go`. A GitHub read error fails the
+  gate closed (`error` verdict), not open. This closes the window where "some check is green"
+  let the gate provision before the deployable image was produced.
+- **CI-image readiness (deploy-time backstop):** even past the gate's image-build
+  precondition, the image's `sha-<commit>` alias can still be propagating when the deploy
+  fires. When the deploy reports the CI image is not built yet (Glimmung `409` →
+  `glimmung.ErrCIImagePending`), the gate holds the checked-out slot and re-deploys on the
+  settle interval until the image lands, bounded by the settle cap — so the race self-heals
+  instead of failing the provision. A non-pending deploy error or the image-wait timeout
+  still releases the slot (no leak). See `deployImageWaitingForCI` and
   `glimmung.ErrCIImagePending`; the resolution half (a clear `409` instead of a fabricated
   registry miss) is `romaine-life/glimmung#873`.
 - **Durable source:** no new durable row — the gate is a transient in-memory

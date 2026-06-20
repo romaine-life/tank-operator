@@ -142,6 +142,58 @@ func (c *Client) ResolveOpenPullRequestState(ctx context.Context, userEmail, own
 	return c.resolvePullRequestStateWithToken(ctx, githubToken, owner, name, pr.Number)
 }
 
+// ImageBuildSucceededForHead reports whether the repo's image-build workflow has
+// a successful run for the EXACT head SHA — i.e. the deployable CI image for that
+// commit has actually been produced. The test-slot gate uses this so it only
+// provisions a PR whose image is verifiably built, not merely "some check is green"
+// (which can be true before the build workflow has even registered).
+func (c *Client) ImageBuildSucceededForHead(ctx context.Context, userEmail, owner, name, workflow, headSHA string) (bool, error) {
+	if c == nil {
+		return false, errors.New("mcpgithub: client unavailable")
+	}
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return false, errors.New("mcpgithub: user email is empty")
+	}
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSpace(name)
+	workflow = strings.TrimSpace(workflow)
+	headSHA = strings.TrimSpace(headSHA)
+	if owner == "" || name == "" || workflow == "" || headSHA == "" {
+		return false, errors.New("mcpgithub: missing image-build coordinates")
+	}
+	serviceToken, err := c.tokenFor(ctx, userEmail)
+	if err != nil {
+		return false, fmt.Errorf("mint on-behalf-of token: %w", err)
+	}
+	githubToken, err := c.mintGitHubToken(ctx, serviceToken, owner+"/"+name)
+	if err != nil {
+		return false, err
+	}
+	var body struct {
+		WorkflowRuns []struct {
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			HeadSHA    string `json:"head_sha"`
+		} `json:"workflow_runs"`
+	}
+	path := githubRepoPath(owner, name, "/actions/workflows/"+url.PathEscape(workflow)+
+		"/runs?head_sha="+url.QueryEscape(headSHA)+"&status=success&per_page=20")
+	status, err := c.githubRESTJSON(ctx, githubToken, http.MethodGet, path, &body)
+	if err != nil {
+		return false, fmt.Errorf("read %s runs for %s: %w", workflow, headSHA, err)
+	}
+	if status >= 400 {
+		return false, fmt.Errorf("read %s runs for %s: GitHub returned %d", workflow, headSHA, status)
+	}
+	for _, run := range body.WorkflowRuns {
+		if strings.EqualFold(strings.TrimSpace(run.Conclusion), "success") && strings.TrimSpace(run.HeadSHA) == headSHA {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (c *Client) resolvePullRequestStateWithToken(ctx context.Context, githubToken, owner, name string, number int) (PullRequestState, error) {
 	pr, err := c.githubPullRequest(ctx, githubToken, owner, name, number)
 	if err != nil {

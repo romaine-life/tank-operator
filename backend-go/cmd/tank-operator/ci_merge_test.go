@@ -90,6 +90,10 @@ func (f *fakeMCPGitHub) ResolveOpenPullRequestState(_ context.Context, _ string,
 	return f.resolvePullRequestState(owner, name, number)
 }
 
+func (f *fakeMCPGitHub) ImageBuildSucceededForHead(_ context.Context, _, _, _, _, _ string) (bool, error) {
+	return true, nil
+}
+
 func (f *fakeMCPGitHub) resolvePullRequestState(owner, name string, number int) (mcpgithub.PullRequestState, error) {
 	if f.prStateErr != nil {
 		return mcpgithub.PullRequestState{}, f.prStateErr
