@@ -128,14 +128,25 @@ def test_parse_push_refs_extracts_dest_refs_and_flush() -> None:
     assert saw_flush is True
 
 
-def test_push_hits_protected_blocks_main_allows_branch() -> None:
-    main_push = _pkt(_ZERO + b" " + b"d" * 40 + b" refs/heads/main\x00report-status\n") + _FLUSH + b"PACK.."
-    refs, ok = gg.parse_push_refs(main_push)
-    assert ok and gg.push_hits_protected(refs) == "refs/heads/main"
-    # a feature-branch push hits nothing protected
-    assert gg.push_hits_protected(["refs/heads/feature-x", "refs/heads/wip"]) is None
-    # force-push/delete of main is still a write to main -> blocked
-    assert gg.push_hits_protected(["refs/heads/master"]) == "refs/heads/master"
+def test_push_violation_confines_to_session_lane() -> None:
+    sid = "1166"
+    lane = "refs/heads/tank/session/1166/"
+    assert gg.session_branch_lane(sid) == lane
+    # in-lane (the session's own pre-made branch, one per repo) -> allowed
+    assert gg.push_violation([lane + "tank-operator"], sid) is None
+    assert gg.push_violation([lane + "tank-operator", lane + "glimmung"], sid) is None
+    # parse a real receive-pack push to the lane branch -> allowed
+    in_lane = _pkt(_ZERO + b" " + b"d" * 40 + b" " + (lane + "tank-operator").encode() + b"\x00report-status\n") + _FLUSH + b"PACK.."
+    refs, ok = gg.parse_push_refs(in_lane)
+    assert ok and gg.push_violation(refs, sid) is None
+    # main, a stray branch, and another session's lane are all violations
+    assert gg.push_violation(["refs/heads/main"], sid) == "refs/heads/main"
+    assert gg.push_violation(["refs/heads/feature-x"], sid) == "refs/heads/feature-x"
+    assert gg.push_violation(["refs/heads/tank/session/9999/x"], sid) == "refs/heads/tank/session/9999/x"
+    # any out-of-lane ref among several is caught
+    assert gg.push_violation([lane + "ok", "refs/heads/main"], sid) == "refs/heads/main"
+    # empty session id -> fail closed (deny everything)
+    assert gg.push_violation([lane + "x"], "") == lane + "x"
 
 
 def test_parse_push_refs_non_pktline_is_not_flushed() -> None:

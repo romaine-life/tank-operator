@@ -218,10 +218,13 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             # gzipped). Fail closed: a push we can't verify is not waved through to main.
             log.warning("egress: DENY push (refs unverifiable) session=%s", st.ident.session_id)
             return _deny("could not verify the push target branch")
-        hit = gg.push_hits_protected(refs)
-        if hit:
-            log.warning("egress: DENY push to %s session=%s", hit, st.ident.session_id)
-            return _deny(f"direct push to {hit} is not allowed; open a PR for the merge path")
+        violation = gg.push_violation(refs, st.ident.session_id)
+        if violation:
+            log.warning("egress: DENY push to %s (outside session lane) session=%s", violation, st.ident.session_id)
+            return _deny(
+                f"push to {violation} is not allowed; a restricted session may only push its own "
+                f"branch ({gg.session_branch_lane(st.ident.session_id)}*)"
+            )
         log.info("egress: allow push refs=%s session=%s", refs, st.ident.session_id)
         return passthrough
 
