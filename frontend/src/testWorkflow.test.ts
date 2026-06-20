@@ -1,5 +1,12 @@
 import { test, expect, vi } from "vitest";
-import { startTestWorkflow, testWorkflowStartPath } from "./testWorkflow";
+import {
+  livePreviewTogglePath,
+  readLivePreview,
+  setLivePreviewEnabled,
+  startTestWorkflow,
+  testWorkflowStartPath,
+  type TestSlotStatus,
+} from "./testWorkflow";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -81,4 +88,106 @@ test("startTestWorkflow falls back to a status message for non-JSON errors", asy
 
   expect(result.ok).toBe(false);
   expect(result.detail).toContain("503");
+});
+
+// --- Live frontend preview surface ---
+
+function statusWithTestState(
+  testState: Record<string, unknown> | null,
+): TestSlotStatus {
+  return {
+    repo: null,
+    repo_error: "",
+    repos: [],
+    watch: null,
+    provision: null,
+    test_state: testState,
+    preflight: null,
+  };
+}
+
+test("livePreviewTogglePath targets the owner toggle endpoint", () => {
+  expect(livePreviewTogglePath("77")).toBe(
+    "/api/sessions/77/test-slot/live-preview",
+  );
+});
+
+test("readLivePreview returns null when test_state or live_preview is absent", () => {
+  expect(readLivePreview(null)).toBeNull();
+  expect(readLivePreview(statusWithTestState(null))).toBeNull();
+  expect(readLivePreview(statusWithTestState({ active: true }))).toBeNull();
+});
+
+test("readLivePreview reads the full receipt shape", () => {
+  const lp = readLivePreview(
+    statusWithTestState({
+      active: true,
+      live_preview: {
+        enabled: true,
+        pushed_at: "2026-06-20T09:30:00Z",
+        pushed_build: "app-abc123",
+      },
+    }),
+  );
+  expect(lp).toEqual({
+    enabled: true,
+    pushed_at: "2026-06-20T09:30:00Z",
+    pushed_build: "app-abc123",
+  });
+});
+
+test("readLivePreview tolerates an enabled-only map (pre-first-push)", () => {
+  const lp = readLivePreview(
+    statusWithTestState({ live_preview: { enabled: true } }),
+  );
+  expect(lp).toEqual({ enabled: true, pushed_at: null, pushed_build: null });
+});
+
+test("readLivePreview coerces a missing/false enabled flag to off", () => {
+  expect(
+    readLivePreview(statusWithTestState({ live_preview: {} }))?.enabled,
+  ).toBe(false);
+  expect(
+    readLivePreview(statusWithTestState({ live_preview: { enabled: "yes" } }))
+      ?.enabled,
+  ).toBe(false);
+});
+
+test("setLivePreviewEnabled POSTs the toggle with the enabled flag", async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(200, { ok: true }));
+
+  await setLivePreviewEnabled("77", true, fetchMock);
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const [url, init] = fetchMock.mock.calls[0];
+  expect(url).toBe("/api/sessions/77/test-slot/live-preview");
+  expect(init?.method).toBe("POST");
+  expect(JSON.parse(String(init?.body))).toEqual({ enabled: true });
+});
+
+test("setLivePreviewEnabled posts enabled:false for the stop affordance", async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(200, { ok: true }));
+
+  await setLivePreviewEnabled("77", false, fetchMock);
+
+  const [, init] = fetchMock.mock.calls[0];
+  expect(JSON.parse(String(init?.body))).toEqual({ enabled: false });
+});
+
+test("setLivePreviewEnabled throws the server detail on rejection", async () => {
+  const fetchMock = vi.fn(async () =>
+    jsonResponse(400, { detail: "no active test slot to preview against" }),
+  );
+
+  await expect(setLivePreviewEnabled("77", true, fetchMock)).rejects.toThrow(
+    "no active test slot to preview against",
+  );
+});
+
+test("setLivePreviewEnabled falls back to a status message for non-JSON errors", async () => {
+  const fetchMock = vi.fn(async () => new Response("", { status: 503 }));
+
+  await expect(setLivePreviewEnabled("77", true, fetchMock)).rejects.toThrow(
+    "503",
+  );
 });

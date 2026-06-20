@@ -6008,6 +6008,39 @@ button:disabled {
   background: rgba(167, 139, 250, 0.07);
 }
 
+/* Live-preview fidelity guardrail. Deliberately NOT a .run-session-data-card:
+   it must read as a loud warning band, not another status row, so a viewer
+   never mistakes un-gated scratch for the gated test-slot truth. Amber, a left
+   accent bar, and a warning icon make it unmistakable. */
+.run-session-data-scratch-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  border-left-width: 4px;
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--text-body);
+}
+
+.run-session-data-scratch-banner-icon {
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.1rem;
+  color: rgb(251, 191, 36);
+}
+
+.run-session-data-scratch-banner-text {
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.run-session-data-scratch-banner-text strong {
+  color: rgb(252, 211, 77);
+}
+
 .run-session-data-card-icon {
   display: inline-flex;
   align-items: center;
