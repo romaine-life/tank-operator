@@ -449,16 +449,29 @@ def test_evaluate_policy_scopes_mint_by_request() -> None:
     assert d.write is True and d.full is False
     d = gg.evaluate_policy(ID, "GET", "github.com", "/o/r/info/refs?service=git-receive-pack")
     assert d.write is True and d.full is False
-    # PR open (POST /pulls) -> full (needs pull_requests:write); the one governed REST write
+    # PR open (POST /pulls) -> pr_write (pull_requests+issues:write, NO contents); the
+    # one governed REST write recorded as a control action. NOT full, NOT write — so a
+    # restricted session opens a PR but still cannot push/merge.
     d = gg.evaluate_policy(ID, "POST", "api.github.com", "/repos/o/r/pulls")
-    assert d.full is True
+    assert d.pr_write is True and d.write is False and d.full is False
+    # PR edit (PATCH /pulls/N) and PR comment (POST /issues/N/comments) -> pr_write
+    d = gg.evaluate_policy(ID, "PATCH", "api.github.com", "/repos/o/r/pulls/12")
+    assert d.pr_write is True and d.write is False and d.full is False
+    d = gg.evaluate_policy(ID, "POST", "api.github.com", "/repos/o/r/issues/12/comments")
+    assert d.pr_write is True and d.write is False and d.full is False
     # REST read -> read-only
     d = gg.evaluate_policy(ID, "GET", "api.github.com", "/repos/o/r")
-    assert d.write is False and d.full is False
-    # GraphQL (POST /graphql) -> read-only: gh pr list/view/status are GraphQL reads;
-    # a GraphQL mutation sent with the read token is refused by GitHub (writes governed)
+    assert d.write is False and d.full is False and d.pr_write is False
+    # GraphQL (POST /graphql) -> pr_write: it serves BOTH gh pr list/view reads AND
+    # gh pr edit/ready/comment mutations. pr_write lacks contents, so merge-via-GraphQL
+    # (mergePullRequest) still 403s — writes stay governed by capability.
     d = gg.evaluate_policy(ID, "POST", "api.github.com", "/graphql")
-    assert d.write is False and d.full is False
+    assert d.pr_write is True and d.write is False and d.full is False
+    # PR MERGE via REST (PUT /pulls/N/merge) is NOT a pr_write -> read-only mint (and it
+    # is independently denied at the wall's header phase). The missing contents perm
+    # means even if it reached GitHub it 403s.
+    d = gg.evaluate_policy(ID, "PUT", "api.github.com", "/repos/o/r/pulls/12/merge")
+    assert d.pr_write is False and d.write is False and d.full is False
     # clone/fetch (upload-pack) -> read-only
     d = gg.evaluate_policy(ID, "GET", "github.com", "/o/r/info/refs?service=git-upload-pack")
     assert d.write is False and d.full is False
@@ -508,6 +521,34 @@ def test_is_rest_write() -> None:
     # /graphql has no repo in the URL -> NOT a REST write (so it's never elevated; it
     # mints read over the session repos instead). A read token refuses any mutation.
     assert gg.is_rest_write("POST", "api.github.com", "/graphql") is False
+
+
+def test_is_pr_write_matches_expected_pr_management_only() -> None:
+    # The expected PR-management writes a restricted session may do -> pr_write mint.
+    assert gg.is_pr_write("POST", "api.github.com", "/repos/o/r/pulls") is True  # open
+    assert gg.is_pr_write("PATCH", "api.github.com", "/repos/o/r/pulls/12") is True  # edit
+    assert gg.is_pr_write("POST", "api.github.com", "/repos/o/r/issues/12/comments") is True  # comment
+    # MERGE is NOT a pr_write (it is the merge path; denied + capability-denied).
+    assert gg.is_pr_write("PUT", "api.github.com", "/repos/o/r/pulls/12/merge") is False
+    # Other REST writes stay read-only (no pr_write).
+    assert gg.is_pr_write("PUT", "api.github.com", "/repos/o/r/contents/x") is False
+    assert gg.is_pr_write("POST", "api.github.com", "/repos/o/r/merges") is False
+    assert gg.is_pr_write("DELETE", "api.github.com", "/repos/o/r/git/refs/heads/x") is False
+    # Reads are not pr_write.
+    assert gg.is_pr_write("GET", "api.github.com", "/repos/o/r/pulls/12") is False
+    # git-transport host is never a pr_write.
+    assert gg.is_pr_write("POST", "github.com", "/o/r/git-receive-pack") is False
+
+
+def test_mint_payload_pr_write_passes_pr_write_arg() -> None:
+    payload = gg.mint_call_payload(["o/r"], gg.Decision(allow=True, pr_write=True))
+    assert payload["params"]["arguments"] == {"repos": ["o/r"], "pr_write": True}
+    # /graphql pr_write mint is scoped to the session's whole repo set.
+    multi = gg.mint_call_payload(["o/r", "o/r2"], gg.Decision(allow=True, pr_write=True))
+    assert multi["params"]["arguments"] == {"repos": ["o/r", "o/r2"], "pr_write": True}
+    # full/write take precedence over pr_write in the payload (mutually exclusive scopes).
+    both = gg.mint_call_payload(["o/r"], gg.Decision(allow=True, write=True, pr_write=True))
+    assert both["params"]["arguments"] == {"repos": ["o/r"], "write": True}
 
 
 def test_is_graphql_only_matches_the_graphql_endpoint() -> None:

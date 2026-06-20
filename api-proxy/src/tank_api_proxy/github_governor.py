@@ -52,6 +52,13 @@ _RE_GIT_REPO = re.compile(
 )
 _RE_PULLS_CREATE = re.compile(r"^/repos/([^/]+)/([^/]+)/pulls/?(?:\?.*)?$")
 _RE_PULLS_MERGE = re.compile(r"^/repos/([^/]+)/([^/]+)/pulls/(\d+)/merge/?(?:\?.*)?$")
+# A PR object edit (title/body/state/base): PATCH /repos/{o}/{r}/pulls/{N}. The
+# (?!\d+/merge) lookahead keeps /pulls/{N}/merge out — that is the merge path,
+# matched by _RE_PULLS_MERGE and denied at the wall, never a pr_write edit.
+_RE_PULLS_EDIT = re.compile(r"^/repos/([^/]+)/([^/]+)/pulls/(\d+)/?(?:\?.*)?$")
+# A PR/issue comment: POST /repos/{o}/{r}/issues/{N}/comments. A PR comment is an
+# issue comment on GitHub, so `gh pr comment` POSTs here.
+_RE_ISSUE_COMMENTS = re.compile(r"^/repos/([^/]+)/([^/]+)/issues/(\d+)/comments/?(?:\?.*)?$")
 
 
 # ---- identity -------------------------------------------------------------
@@ -160,13 +167,26 @@ def session_egress_url(session_scope: str, session_id: str, default_url: str) ->
 
 @dataclass(frozen=True)
 class Decision:
-    """The grant. `allow` gates the request at the wall; `write`/`full` pick the
-    mint scope. Ref-level rules (the thing GitHub can't express) set allow=False
-    for a protected ref while leaving the token coarse — see evaluate_policy."""
+    """The grant. `allow` gates the request at the wall; `write`/`pr_write`/`full`
+    pick the mint scope. Ref-level rules (the thing GitHub can't express) set
+    allow=False for a protected ref while leaving the token coarse — see
+    evaluate_policy.
+
+    The mint scopes are mutually exclusive and ordered by blast radius:
+      * full     -> the installation's entire permission set (break-glass only).
+      * write    -> contents:write (git push; can touch any branch — lane-confined
+                    in the body phase).
+      * pr_write -> {pull_requests:write, issues:write, metadata:read}, NO
+                    contents. Lets a restricted session manage a PR
+                    (create/edit/title/body/ready/comment) but NOT merge or push —
+                    those need contents:write, which this scope withholds, so they
+                    403 by capability with no body-parsing denylist.
+      * (none)   -> read-only."""
 
     allow: bool
     write: bool = False
     full: bool = False
+    pr_write: bool = False
     reason: str = ""
 
 
@@ -202,9 +222,20 @@ def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: s
         return Decision(allow=True, write=True, full=True, reason="unrestricted: full mint; observed, not restricted")
     if is_push_intent(authority, path):
         return Decision(allow=True, write=True, reason="git push (advertisement + upload): contents:write, lane-confined in the body phase")
-    rec = recordable_pr_action(method, authority, path)
-    if rec is not None and rec[0] == "github.pull_request.open":
-        return Decision(allow=True, write=True, full=True, reason="PR open: the one governed + recorded REST write")
+    if is_pr_write(method, authority, path):
+        # Expected PR management (create/edit/title/body/comment via REST). pr_write
+        # carries pull_requests:write + issues:write but NO contents, so the agent
+        # can manage the PR yet cannot merge or push — those 403 by capability. PR
+        # open is still recorded as a control action (recordable_pr_action keys on it
+        # in the IO shell, independent of the mint scope).
+        return Decision(allow=True, pr_write=True, reason="PR-metadata write: pull_requests+issues:write, no contents (merge/push stay denied)")
+    if is_graphql(authority, path):
+        # /graphql serves BOTH gh pr list/view (reads) AND gh pr edit/ready/comment
+        # (mutations). One pr_write mint covers both: reads work, the PR mutations
+        # work, and a merge-via-GraphQL (mergePullRequest) still 403s — it needs
+        # contents, which pr_write withholds. Scoped to the session's repos by the IO
+        # shell (the /graphql URL carries no repo).
+        return Decision(allow=True, pr_write=True, reason="/graphql: pr_write covers pr reads + edit/ready/comment mutations; merge still needs contents")
     return Decision(allow=True, reason="read-only: clone/fetch + REST get no write capability; GitHub 403s ungoverned writes")
 
 
@@ -254,6 +285,33 @@ def is_rest_write(method: str, authority: str, path: str) -> bool:
     if (method or "").upper() not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
     return repo_from_path(authority, path) is not None
+
+
+def is_pr_write(method: str, authority: str, path: str) -> bool:
+    """An EXPECTED PR-management write a restricted session should be allowed to do
+    through the wall, minted pr_write (pull_requests+issues:write, no contents):
+
+      * POST  /repos/{o}/{r}/pulls                  — open a PR
+      * PATCH /repos/{o}/{r}/pulls/{N}              — edit title/body/state/base
+      * POST  /repos/{o}/{r}/issues/{N}/comments   — comment (PR comment == issue comment)
+
+    Deliberately NOT matched: PUT /pulls/{N}/merge (the merge path — denied at the
+    wall and capability-denied by the missing contents perm) and every other REST
+    write (PUT /contents, PATCH /git/refs, POST /merges, …), which stay read-only so
+    GitHub 403s them. gh pr edit/ready run as GraphQL mutations — see is_graphql,
+    which gets the same pr_write mint."""
+    host = (authority or "").split(":", 1)[0].lower()
+    if host != "api.github.com":
+        return False
+    m = (method or "").upper()
+    p = path or ""
+    if m == "POST" and _RE_PULLS_CREATE.match(p):
+        return True
+    if m == "PATCH" and _RE_PULLS_EDIT.match(p):
+        return True
+    if m == "POST" and _RE_ISSUE_COMMENTS.match(p):
+        return True
+    return False
 
 
 def is_graphql(authority: str, path: str) -> bool:
@@ -533,6 +591,8 @@ def mint_call_payload(repos: list[str], decision: Decision, *, call_id: int = 1)
         args["full"] = True
     elif decision.write:
         args["write"] = True
+    elif decision.pr_write:
+        args["pr_write"] = True
     return {
         "jsonrpc": "2.0",
         "id": call_id,
