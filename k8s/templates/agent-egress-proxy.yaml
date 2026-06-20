@@ -182,6 +182,17 @@ data:
                                 auto_host_rewrite: true
                         - name: github_git
                           domains: ["github.com"]
+                          # git push (receive-pack) carries its ref-update commands at
+                          # the head of the request body; buffer the prefix so the handler
+                          # can reject pushes to main. BUFFERED_PARTIAL caps the buffer —
+                          # large packfiles still stream once the prefix is released — and
+                          # clone/fetch (upload-pack) bodies just pass through.
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_proc:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+                              overrides:
+                                processing_mode:
+                                  request_body_mode: BUFFERED_PARTIAL
                           routes:
                             - match: { prefix: "/" }
                               route:

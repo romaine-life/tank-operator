@@ -145,15 +145,83 @@ class Decision:
 
 
 def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: str) -> Decision:
-    """Day-one policy: allow-all, mint `full` — byte-for-byte the grant today's
-    unrestricted session already gets (git-credential-tank.sh mints
-    {full:true,write:true,workflows:true} for non-restricted pods). Minting `full`
-    here is parity, not new privilege: the same token, minted at the wall instead
-    of in the pod. This is the single function a future per-session policy edits —
-    deny by ref (read the receive-pack refs and refuse refs/heads/main for a test
-    session), cap a session to read-only (full=False, write=False), etc. — none of
-    which touches identity, mint, or IO."""
-    return Decision(allow=True, write=True, full=True, reason="default: parity with unrestricted")
+    """Mint scope for a proxied (restricted) session. Mints `full` — but this is NOT
+    a loosening: the agent NEVER holds the token (the proxy injects it server-side),
+    and the actual restriction is enforced at the REQUEST level, not the mint —
+    pushes to main are rejected by inspecting the receive-pack refs
+    (push_hits_protected) and merges are rejected by path (is_merge_request). A full
+    token simply lets the agent's legitimate branch work (push, fetch, gh pr create
+    against its own branch) flow without scope friction, while the wall is the thing
+    that says no to main. Only restricted sessions ever reach this proxy; unrestricted
+    sessions keep the old direct in-pod path."""
+    return Decision(allow=True, write=True, full=True, reason="restricted: full token, main blocked at the wall")
+
+
+# ---- protected-branch enforcement (the "restricted" in restricted git) ----
+
+# Refs an agent session may never write directly. main is off-limits: code reaches
+# it only through the human/automated merge path, never the agent. master kept for
+# repos that still use it. (A future per-session policy can widen/narrow this.)
+PROTECTED_REFS = frozenset({"refs/heads/main", "refs/heads/master"})
+
+
+def is_merge_request(method: str, authority: str, path: str) -> bool:
+    """A PR-merge API call (PUT /repos/o/r/pulls/N/merge). Denied at the wall for
+    proxied (restricted) sessions — merging is the human/automated path, and the
+    sidecar already disables the merge_pull_request MCP tool in restricted mode, so
+    this just closes the raw gh/REST hole."""
+    host = (authority or "").split(":", 1)[0].lower()
+    return (
+        host == "api.github.com"
+        and (method or "").upper() == "PUT"
+        and bool(_RE_PULLS_MERGE.match(path or ""))
+    )
+
+
+def is_receive_pack(authority: str, path: str) -> bool:
+    """The git push endpoint (POST github.com/{o}/{r}(.git)/git-receive-pack), whose
+    body carries the ref-update commands we must inspect to block pushes to main."""
+    host = (authority or "").split(":", 1)[0].lower()
+    return host == "github.com" and (path or "").rstrip("/").endswith("/git-receive-pack")
+
+
+def parse_push_refs(data: bytes) -> tuple[list[str], bool]:
+    """Parse the ref-update commands at the head of a git-receive-pack request body
+    (pkt-line framed), up to the flush packet. Returns (dest_refs, saw_flush).
+
+    Each command line is ``<old-sha> <new-sha> <ref>`` (the first also carries
+    ``\\0<capabilities>``); the destination ref is the 3rd field. The commands always
+    precede the binary PACK, so the first body chunk contains them. saw_flush=True
+    means the full command list was present in `data` (ref set is complete);
+    False means more bytes are needed (or the input wasn't parseable pkt-line)."""
+    refs: list[str] = []
+    i, n = 0, len(data)
+    while i + 4 <= n:
+        try:
+            length = int(data[i : i + 4], 16)
+        except ValueError:
+            break  # not pkt-line framed (e.g. gzipped) — caller fails closed
+        if length == 0:
+            return refs, True  # flush packet: end of the command list
+        if length < 4 or i + length > n:
+            break  # truncated line: need more bytes
+        line = data[i + 4 : i + length]
+        i += length
+        nul = line.find(b"\x00")
+        if nul >= 0:
+            line = line[:nul]  # drop capabilities on the first command
+        parts = line.rstrip(b"\n").split(b" ")
+        if len(parts) >= 3:
+            refs.append(parts[2].decode("utf-8", "ignore"))
+    return refs, False
+
+
+def push_hits_protected(refs: list[str]) -> str | None:
+    """The first protected ref a push targets, or None. Used to reject the push."""
+    for r in refs:
+        if r in PROTECTED_REFS:
+            return r
+    return None
 
 
 # ---- request classification ----------------------------------------------
