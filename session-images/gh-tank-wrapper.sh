@@ -27,6 +27,30 @@ mcp_url="${TANK_GIT_CRED_MCP_URL:-http://127.0.0.1:9992/}"
 auth_tok="$(cat "${AUTH_ROMAINE_TOKEN_PATH:-/var/run/secrets/auth.romaine.life/token}" 2>/dev/null || true)"
 [ -n "$auth_tok" ] || exec "$REAL_GH" "$@"
 
+# Egress-proxy mode (restricted_git via the wall). api.github.com is pinned at the
+# agent egress proxy, which exchanges this token, mints the App token server-side,
+# records the action, and rejects merges. So hand gh the pod's RAW token and let the
+# wall govern — no in-pod mint, no /create-session-pr or /pr-write brokering. gh (Go)
+# reads SSL_CERT_FILE as its WHOLE root set, so trust the proxy leaf by combining the
+# OS roots with the gateway CA (non-proxied hosts like uploads.github.com keep working).
+case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    _ca="${TANK_GIT_PROXY_CA:-/etc/oauth-gateway-ca/ca.crt}"
+    _bundle="${TANK_GIT_PROXY_CA_BUNDLE:-$HOME/.config/tank/gh-ca-bundle.crt}"
+    if [ ! -s "$_bundle" ] && [ -s "$_ca" ]; then
+      mkdir -p "$(dirname "$_bundle")"
+      if [ -s /etc/ssl/certs/ca-certificates.crt ]; then
+        cat /etc/ssl/certs/ca-certificates.crt "$_ca" > "$_bundle" 2>/dev/null || cp "$_ca" "$_bundle"
+      else
+        cp "$_ca" "$_bundle"
+      fi
+    fi
+    [ -s "$_bundle" ] && export SSL_CERT_FILE="$_bundle" GIT_SSL_CAINFO="$_bundle"
+    export GH_TOKEN="$auth_tok"
+    exec "$REAL_GH" "$@"
+    ;;
+esac
+
 # Restricted-mode `gh pr create` on a Tank session branch is DELEGATED to the
 # in-pod governed handler (the mcp-auth-proxy sidecar at :9999/create-session-pr).
 # That handler holds the GitHub credential and opens the draft PR for the branch,

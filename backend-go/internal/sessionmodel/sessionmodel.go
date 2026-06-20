@@ -446,6 +446,10 @@ type ManifestOptions struct {
 	APIProxyIP                string
 	ClaudeSecondaryAPIProxyIP string
 	CodexAPIProxyIP           string
+	// AgentEgressProxyIP is the agent-egress-proxy Service ClusterIP. When set AND
+	// the session is restricted_git, github.com / api.github.com are pinned here so
+	// git/gh egress goes through the wall (server-side token + main/merge enforcement).
+	AgentEgressProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
 	// SDK runners use NATS JetStream for durable command/event delivery.
@@ -731,6 +735,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Build configmap volume mounts for both containers.
 	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)
 	restrictedGitEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilityRestrictedGit)
+	// Restricted-git sessions route github egress through the wall when its IP is
+	// resolved; this is the per-session cutover. Unrestricted sessions never do.
+	egressProxyGit := restrictedGitEnabled && opts.AgentEgressProxyIP != ""
 	mcpConfigKey := "mcp.json"
 	if spireLensMCPEnabled {
 		mcpConfigKey = "mcp.spirelens.json"
@@ -776,6 +783,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 	if restrictedGitEnabled {
 		env = append(env, map[string]any{"name": "TANK_RESTRICTED_GIT", "value": "true"})
+	}
+	if egressProxyGit {
+		// Switch the in-pod git credential path into proxy mode: git-credential-tank.sh
+		// and the gh wrapper present the pod's raw auth.romaine.life token instead of
+		// minting in-pod (the wall mints the App token + enforces main/merge). git's
+		// trust of the proxy leaf for github.com is set per-host in
+		// install-agent-git-template.sh, reading the already-mounted gateway CA.
+		env = append(env, map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": "true"})
 	}
 
 	claudeVolumeMounts := append([]any{}, configMounts...)
@@ -874,6 +889,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 				map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+				map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 				map[string]any{"name": "AGENT_POST_COMMIT_HOOK", "value": "/opt/tank/agent-post-commit-hook.sh"},
 				map[string]any{"name": "AGENT_PRE_PUSH_HOOK", "value": "/opt/tank/agent-pre-push-hook.sh"},
 			},
@@ -1027,6 +1043,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 		map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 		map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+		map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 		// Session identity forwarded by mcp-auth-proxy on outbound calls to
 		// Tank/Glimmung MCP servers. SESSION_ID still feeds the older
 		// X-Tank-Origin-Session-Id handoff-avatar path for mcp-tank-operator;
@@ -1138,6 +1155,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			// fetches the dead session's transcript and resumes it.
 			map[string]any{"name": "TANK_RESURRECT_SOURCE_SESSION_ID", "value": opts.ResurrectSourceSessionID},
 			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+			map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 		}
 		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude
 		// container gets, so the SDK's spawned claude binary trusts the
@@ -1275,6 +1293,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+			map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 		}
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			codexRunnerEnv = append(codexRunnerEnv,
@@ -1347,6 +1366,17 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 	if len(initContainers) > 0 {
 		spec["initContainers"] = initContainers
+	}
+	// Restricted-git cutover: pin github.com / api.github.com at the egress proxy so
+	// git + gh go through the wall (server-side token + no push-to-main / no merge).
+	// The gateway CA that signs the proxy leaf is already mounted for these
+	// (claude/codex) modes; git trusts it per-host via install-agent-git-template.sh.
+	// Unrestricted sessions skip this entirely and reach GitHub directly.
+	if egressProxyGit {
+		hostAliases = append(hostAliases,
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"github.com"}},
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"api.github.com"}},
+		)
 	}
 	if len(hostAliases) > 0 {
 		spec["hostAliases"] = hostAliases

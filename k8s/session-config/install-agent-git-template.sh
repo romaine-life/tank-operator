@@ -98,7 +98,22 @@ users:
 EOF
 }
 
-if [ "$restricted" = "true" ]; then
+proxy=false
+case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) proxy=true ;;
+esac
+
+if [ "$proxy" = "true" ]; then
+  # Egress-proxy mode (restricted_git via the wall). git pushes its branch directly
+  # through the proxy, which mints the App token server-side, records the action, and
+  # rejects pushes to main + merges. So we install NEITHER the client-side pre-push
+  # block NOR the governed post-commit publish — the wall is the boundary, and branch
+  # pushes must flow. git just has to trust the proxy's leaf for github.com (per-host,
+  # so non-github remotes keep the OS trust store); the credential helper runs in
+  # proxy mode (presents the pod's raw token). Cluster kubeconfig stays restricted-only.
+  git config --global "http.https://github.com/.sslCAInfo" "${TANK_GIT_PROXY_CA:-/etc/oauth-gateway-ca/ca.crt}"
+  install_credential_helper
+elif [ "$restricted" = "true" ]; then
   install_restricted_hook_templates
   # The credential helper is mode-aware: in restricted mode it mints a
   # read-only token, so clone/fetch/pull work for reads. Writes stay governed

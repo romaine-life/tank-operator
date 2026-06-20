@@ -104,6 +104,7 @@ type Manager struct {
 	apiProxyIP                string
 	claudeSecondaryAPIProxyIP string
 	codexAPIProxyIP           string
+	agentEgressProxyIP        string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -116,6 +117,7 @@ type ManagerOptions struct {
 	APIProxyHost                string
 	ClaudeSecondaryAPIProxyHost string
 	CodexAPIProxyHost           string
+	AgentEgressProxyHost        string
 	// ImageOverrides, when non-nil, lets the orchestrator repoint NEW session
 	// pods at a branch-built session image for its (test-slot) scope. Left nil
 	// in production. OnImageOverrideApplied is an optional metrics/log hook
@@ -153,6 +155,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	}
 	if opts.CodexAPIProxyHost != "" {
 		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
+	}
+	if opts.AgentEgressProxyHost != "" {
+		m.agentEgressProxyIP = resolveIP(opts.AgentEgressProxyHost)
 	}
 	return m
 }
@@ -328,6 +333,9 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if m.codexAPIProxyIP == "" {
 		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
 	}
+	if m.agentEgressProxyIP == "" {
+		m.agentEgressProxyIP = resolveIP(os.Getenv("AGENT_EGRESS_PROXY_HOST"))
+	}
 
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
@@ -352,6 +360,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.ClaudeSecondaryAPIProxyIP = m.claudeSecondaryAPIProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
+	manifestOpts.AgentEgressProxyIP = m.agentEgressProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
 	manifestOpts.RepoBases = repoBases
