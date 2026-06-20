@@ -10424,6 +10424,14 @@ function TestSlotScreen({
       ? { pr: selectedOption.pr_number }
       : { ref: selectedOption.ref }
     : {};
+  // Short, human label for the selected target — shown in the button so the
+  // action names what it deploys (e.g. "Create test slot from main") rather than
+  // leaving the user to trust an invisible selection.
+  const selectedShort = selectedOption
+    ? selectedOption.kind === "pr"
+      ? `PR #${selectedOption.pr_number}`
+      : selectedOption.ref ?? "main"
+    : "";
   const canCreate =
     !disabled && !readOnly && !slotActive && !repoBlocked && options.length > 0;
 
@@ -10694,8 +10702,10 @@ function TestSlotScreen({
               </div>
             )}
 
-            {/* What to deploy — open PRs the session worked on, plus main. */}
-            {options.length > 1 && (
+            {/* What to deploy — open PRs the session worked on, plus main.
+                Always shown (even for a single option) so the selected deploy
+                target is visible, never implied — visibility of system status. */}
+            {options.length > 0 && (
               <div className="run-session-data-card is-info">
                 <div className="run-session-data-card-top">
                   <span className="run-session-data-card-icon" aria-hidden="true">
@@ -10706,7 +10716,9 @@ function TestSlotScreen({
                       What to deploy
                     </span>
                     <span className="run-session-data-card-detail">
-                      Pick a branch/PR to provision — or deploy main directly.
+                      {options.length > 1
+                        ? "Pick which branch/PR to deploy — or deploy main directly."
+                        : "No open PR yet, so main (the default branch) is the deploy target."}
                     </span>
                   </span>
                 </div>
@@ -10841,8 +10853,8 @@ function TestSlotScreen({
                       {repoBlocked
                         ? "Resolve a repository above to enable provisioning."
                         : selectedIsRef
-                          ? `Deploys ${selectedOption?.label ?? "main"} straight to a slot — no open PR needed (no PR-readiness gate).`
-                          : "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict. CI validation can take several minutes."}
+                          ? "Deploying a branch directly skips the PR-readiness gate — the slot comes up from that ref."
+                          : "Provisioning re-checks the PR against GitHub, then deploys it to a slot on a green verdict. CI validation can take several minutes."}
                     </span>
                   </span>
                 </div>
@@ -10854,9 +10866,7 @@ function TestSlotScreen({
                     onClick={() => onCreateHold(selectedTarget)}
                     title={
                       canCreate
-                        ? selectedIsRef
-                          ? "Deploy main to a slot"
-                          : "Provision a test slot for the selected PR"
+                        ? `Create a test slot from ${selectedShort || "the selected target"}`
                         : repoBlocked
                           ? "Resolve a repository first"
                           : "Unavailable"
@@ -10866,7 +10876,11 @@ function TestSlotScreen({
                       className="run-session-data-action-icon"
                       aria-hidden="true"
                     />
-                    <span>Create test slot</span>
+                    <span>
+                      {selectedShort
+                        ? `Create test slot from ${selectedShort}`
+                        : "Create test slot"}
+                    </span>
                   </button>
                   <button
                     type="button"
@@ -10875,7 +10889,7 @@ function TestSlotScreen({
                     onClick={() => onCreateDrive(selectedTarget)}
                     title={
                       canCreate
-                        ? "Provision a slot, then have the agent validate it"
+                        ? `Create a slot from ${selectedShort || "the selected target"}, then have the agent validate it`
                         : "Unavailable"
                     }
                   >
@@ -10883,7 +10897,11 @@ function TestSlotScreen({
                       className="run-session-data-action-icon"
                       aria-hidden="true"
                     />
-                    <span>Create test slot and test</span>
+                    <span>
+                      {selectedShort
+                        ? `Create slot from ${selectedShort} and test`
+                        : "Create test slot and test"}
+                    </span>
                   </button>
                   {readOnly && (
                     <span className="run-session-data-readonly">
