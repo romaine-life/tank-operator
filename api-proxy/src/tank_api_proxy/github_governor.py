@@ -159,17 +159,34 @@ class Decision:
 
 
 def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: str) -> Decision:
-    """Mint scope for a proxied (restricted) session. Mints `full` — but this is NOT
-    a loosening: the agent NEVER holds the token (the proxy injects it server-side),
-    and the actual restriction is enforced at the REQUEST level, not the mint —
-    pushes outside the session's own branch lane are rejected by inspecting the
-    receive-pack refs (push_violation) and merges are rejected by path
-    (is_merge_request). A full token simply lets the agent's legitimate work on its
-    own branch (push, fetch, gh pr create against its lane) flow without scope
-    friction, while the wall is the thing that confines it to that branch. Only
-    restricted sessions ever reach this proxy; unrestricted sessions keep the old
-    direct in-pod path."""
-    return Decision(allow=True, write=True, full=True, reason="restricted: full token, confined to the session branch lane")
+    """Mint scope for a proxied (restricted) session — least privilege per request.
+
+    The agent never holds the minted token, but the SCOPE still matters: a coarse
+    token lets the agent reach the whole repo through the REST API (PUT /contents,
+    PATCH /git/refs, POST /merges, …), bypassing the lane/merge governance — which
+    only inspects the git transport. So write capability is granted ONLY for the two
+    governed write paths:
+
+      * git push (receive-pack) -> `write` (contents). The body phase confines it to
+        the session's branch lane (push_violation), widened only by a break-glass
+        grant.
+      * PR open (POST /pulls) -> `full` (needs pull_requests:write). It is the one
+        REST write the wall records as a control action; merging stays denied.
+
+    EVERYTHING ELSE — clone/fetch and the entire REST surface, GETs AND any ungoverned
+    write — is minted READ-ONLY. A read token cannot mutate the repo, so GitHub itself
+    403s those writes and the wall need not enumerate every dangerous endpoint. This is
+    the REST analog of the lane check: git is governed by inspecting refs, REST by
+    withholding the capability. (The IO shell layers the one sanctioned exception on
+    top: an active *unlimited* break-glass grant — the human-approved full-API blast
+    radius — elevates a would-be-read REST write back to `full`.) Only restricted
+    sessions reach this proxy; unrestricted sessions keep the old direct in-pod path."""
+    if is_receive_pack(authority, path):
+        return Decision(allow=True, write=True, reason="git push: contents:write, lane-confined in the body phase")
+    rec = recordable_pr_action(method, authority, path)
+    if rec is not None and rec[0] == "github.pull_request.open":
+        return Decision(allow=True, write=True, full=True, reason="PR open: the one governed + recorded REST write")
+    return Decision(allow=True, reason="read-only: clone/fetch + REST get no write capability; GitHub 403s ungoverned writes")
 
 
 # ---- branch-lane enforcement (the "restricted" in restricted git) ----------
@@ -192,6 +209,19 @@ def is_merge_request(method: str, authority: str, path: str) -> bool:
         and (method or "").upper() == "PUT"
         and bool(_RE_PULLS_MERGE.match(path or ""))
     )
+
+
+def is_rest_write(method: str, authority: str, path: str) -> bool:
+    """A mutating REST API call: POST/PUT/PATCH/DELETE to api.github.com on a repo
+    path. With the read-by-default mint these are exactly the requests GitHub 403s,
+    and the ones an active *unlimited* break-glass grant elevates back to a full
+    token. GET/HEAD reads and the git-transport host are excluded."""
+    host = (authority or "").split(":", 1)[0].lower()
+    if host != "api.github.com":
+        return False
+    if (method or "").upper() not in ("POST", "PUT", "PATCH", "DELETE"):
+        return False
+    return repo_from_path(authority, path) is not None
 
 
 def is_receive_pack(authority: str, path: str) -> bool:
