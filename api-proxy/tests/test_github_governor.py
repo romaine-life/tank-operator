@@ -434,8 +434,11 @@ def _ident() -> "gg.SessionIdentity":
 
 def test_evaluate_policy_scopes_mint_by_request() -> None:
     ID = _ident()
-    # git push (receive-pack) -> write (contents), NOT full; lane-confined in body phase
+    # git push BOTH legs -> write (the advertisement GET needs receive-pack too, or the
+    # push 403s before it starts); NOT full; lane-confined in body phase
     d = gg.evaluate_policy(ID, "POST", "github.com", "/romaine-life/tank-operator/git-receive-pack")
+    assert d.write is True and d.full is False
+    d = gg.evaluate_policy(ID, "GET", "github.com", "/o/r/info/refs?service=git-receive-pack")
     assert d.write is True and d.full is False
     # PR open (POST /pulls) -> full (needs pull_requests:write); the one governed REST write
     d = gg.evaluate_policy(ID, "POST", "api.github.com", "/repos/o/r/pulls")
@@ -456,6 +459,17 @@ def test_evaluate_policy_scopes_mint_by_request() -> None:
     ]:
         d = gg.evaluate_policy(ID, m, "api.github.com", p)
         assert d.write is False and d.full is False, f"{m} {p} must mint read-only, got write={d.write} full={d.full}"
+
+
+def test_is_push_intent_covers_both_push_legs() -> None:
+    # both legs of a push need write
+    assert gg.is_push_intent("github.com", "/o/r.git/git-receive-pack") is True
+    assert gg.is_push_intent("github.com", "/o/r/info/refs?service=git-receive-pack") is True
+    # fetch legs are reads
+    assert gg.is_push_intent("github.com", "/o/r/info/refs?service=git-upload-pack") is False
+    assert gg.is_push_intent("github.com", "/o/r.git/git-upload-pack") is False
+    # REST host is not a git push
+    assert gg.is_push_intent("api.github.com", "/repos/o/r/pulls") is False
 
 
 def test_is_rest_write() -> None:
