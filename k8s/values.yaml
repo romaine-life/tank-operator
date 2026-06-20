@@ -30,6 +30,15 @@ testEnv:
   wildcardListenerSetName: tank-operator-wildcard
   wildcardListenerSetNamespace: tank-operator
   sessionsGatewayIP: 172.179.163.96
+  # Orchestrator replica count for hot validation slots. 1 by default: a slot is
+  # a single-user, ephemeral environment that needs no HA — and live frontend
+  # preview REQUIRES a single serving pod, because the static-override bundle is
+  # a per-pod emptyDir (a push lands on one replica, so reads must hit the same
+  # one; at 2 replicas the co-watched frontend flickers ~50/50). Prod is
+  # unaffected (it uses orchestrator.replicas and has no override). Bump this
+  # (or expose it per-slot at provision time) only to validate an HA/failover
+  # feature on a slot — a case where live preview does not apply anyway.
+  orchestratorReplicas: 1
 
 # Live-preview static-override scratch volume mounted on the orchestrator in
 # test envs. The orchestrator receives pushes directly (handlers_static_override.go),

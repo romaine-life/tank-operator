@@ -7,7 +7,10 @@ metadata:
   labels:
     app.kubernetes.io/name: tank-operator
 spec:
-  replicas: {{ .Values.orchestrator.replicas }}
+  {{- /* Hot validation slots run a single orchestrator replica: the
+         live-preview static-override is a per-pod emptyDir, so push+read must
+         hit the same pod. Prod (non-test-env) keeps orchestrator.replicas. */}}
+  replicas: {{ if (eq (include "tank-operator.isTestEnv" .) "true") }}{{ .Values.testEnv.orchestratorReplicas }}{{ else }}{{ .Values.orchestrator.replicas }}{{ end }}
   revisionHistoryLimit: 0
   strategy:
     type: RollingUpdate
