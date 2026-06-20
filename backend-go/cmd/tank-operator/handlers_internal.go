@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -490,6 +491,39 @@ func (s *appServer) handleInternalSessionTimeline(w http.ResponseWriter, r *http
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// handleInternalSessionRepos returns the session's durable create-time repo
+// slugs (sessions.repos). The agent-egress proxy ("the wall") consumes this to
+// scope a READ token for POST /graphql: that endpoint carries no repo in the URL,
+// so the per-URL-repo mint cannot scope it, and the session's create-time repo
+// set is the correct least-privilege scope for gh's GraphQL reads (pr
+// list/view/status). Service-principal gated like the sibling internal session
+// endpoints; the session JWT the wall relays resolves the owner via actor_email.
+func (s *appServer) handleInternalSessionRepos(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/repos")
+	if user == nil {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	info, err := s.getRegisteredByOwnerInScope(r.Context(), user.ActorEmail, sessionID, s.sessionScope)
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":    sessionID,
+		"session_scope": s.sessionScope,
+		"repos":         nonNilStrings(info.Repos),
+	})
 }
 
 func (s *appServer) doInternalSessionCapabilities(w http.ResponseWriter, r *http.Request, email string) {

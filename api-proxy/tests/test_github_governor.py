@@ -166,16 +166,20 @@ def test_is_merge_request_and_receive_pack() -> None:
 
 
 def test_mint_payload_scopes_to_repo_and_grant() -> None:
-    write = gg.mint_call_payload("romaine-life/tank-operator", gg.Decision(allow=True, write=True))
+    write = gg.mint_call_payload(["romaine-life/tank-operator"], gg.Decision(allow=True, write=True))
     assert write["method"] == "tools/call"
     assert write["params"]["name"] == "mint_clone_token"
     assert write["params"]["arguments"] == {"repos": ["romaine-life/tank-operator"], "write": True}
 
-    full = gg.mint_call_payload("o/r", gg.Decision(allow=True, full=True))
+    full = gg.mint_call_payload(["o/r"], gg.Decision(allow=True, full=True))
     assert full["params"]["arguments"] == {"repos": ["o/r"], "full": True}
 
-    read = gg.mint_call_payload("o/r", gg.Decision(allow=True))
+    read = gg.mint_call_payload(["o/r"], gg.Decision(allow=True))
     assert read["params"]["arguments"] == {"repos": ["o/r"]}
+
+    # /graphql mints a READ token over the session's whole repo set (multi-repo).
+    graphql = gg.mint_call_payload(["o/r", "o/r2"], gg.Decision(allow=True))
+    assert graphql["params"]["arguments"] == {"repos": ["o/r", "o/r2"]}
 
 
 def test_parse_mint_result_structured_and_text() -> None:
@@ -451,6 +455,10 @@ def test_evaluate_policy_scopes_mint_by_request() -> None:
     # REST read -> read-only
     d = gg.evaluate_policy(ID, "GET", "api.github.com", "/repos/o/r")
     assert d.write is False and d.full is False
+    # GraphQL (POST /graphql) -> read-only: gh pr list/view/status are GraphQL reads;
+    # a GraphQL mutation sent with the read token is refused by GitHub (writes governed)
+    d = gg.evaluate_policy(ID, "POST", "api.github.com", "/graphql")
+    assert d.write is False and d.full is False
     # clone/fetch (upload-pack) -> read-only
     d = gg.evaluate_policy(ID, "GET", "github.com", "/o/r/info/refs?service=git-upload-pack")
     assert d.write is False and d.full is False
@@ -484,3 +492,41 @@ def test_is_rest_write() -> None:
     assert gg.is_rest_write("GET", "api.github.com", "/repos/o/r") is False  # read, not a write
     assert gg.is_rest_write("POST", "github.com", "/o/r/git-receive-pack") is False  # git transport, not REST
     assert gg.is_rest_write("POST", "api.github.com", "/zen") is False  # no repo in path
+    # /graphql has no repo in the URL -> NOT a REST write (so it's never elevated; it
+    # mints read over the session repos instead). A read token refuses any mutation.
+    assert gg.is_rest_write("POST", "api.github.com", "/graphql") is False
+
+
+def test_is_graphql_only_matches_the_graphql_endpoint() -> None:
+    assert gg.is_graphql("api.github.com", "/graphql") is True
+    assert gg.is_graphql("api.github.com", "/graphql/") is True
+    assert gg.is_graphql("api.github.com", "/graphql?foo=bar") is True
+    # not the GraphQL endpoint
+    assert gg.is_graphql("api.github.com", "/repos/o/r") is False
+    assert gg.is_graphql("api.github.com", "/graphqlx") is False
+    # GraphQL is REST-host only; the git host has no /graphql
+    assert gg.is_graphql("github.com", "/graphql") is False
+
+
+def test_session_repos_url_routes_by_scope() -> None:
+    # default scope -> default orchestrator
+    assert gg.session_repos_url("tank", "1166", DEFAULT_URL) == (
+        DEFAULT_URL + "/api/internal/sessions/1166/repos"
+    )
+    # slot scope -> slot orchestrator (mirrors url_for_scope / the grant URL)
+    assert gg.session_repos_url("tank-operator-slot-3", "47", DEFAULT_URL) == (
+        "http://tank-operator.tank-operator-slot-3.svc:80/api/internal/sessions/47/repos"
+    )
+
+
+def test_parse_session_repos_response_fails_closed() -> None:
+    body = json.dumps({"repos": ["o/r", "o/r2"], "session_id": "1"})
+    assert gg.parse_session_repos_response(200, body) == ["o/r", "o/r2"]
+    # blank entries are dropped; order preserved
+    assert gg.parse_session_repos_response(200, json.dumps({"repos": ["o/r", "", "  "]})) == ["o/r"]
+    # fail closed: non-2xx, empty body, non-dict, missing/!list repos -> []
+    assert gg.parse_session_repos_response(500, body) == []
+    assert gg.parse_session_repos_response(200, "") == []
+    assert gg.parse_session_repos_response(200, "not json") == []
+    assert gg.parse_session_repos_response(200, json.dumps(["o/r"])) == []
+    assert gg.parse_session_repos_response(200, json.dumps({"session_id": "1"})) == []
