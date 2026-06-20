@@ -346,20 +346,6 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 30
-        {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.staticOverride.enabled }}
-        - name: {{ .Values.staticOverride.writerContainerName }}
-          image: {{ .Values.staticOverride.writerImage | quote }}
-          imagePullPolicy: {{ .Values.staticOverride.writerImagePullPolicy }}
-          command:
-            - sh
-            - -c
-            - |
-              mkdir -p {{ .Values.staticOverride.mountPath | quote }}
-              while true; do sleep 3600; done
-          volumeMounts:
-            - name: static-override
-              mountPath: {{ .Values.staticOverride.mountPath | quote }}
-        {{- end }}
       volumes:
         - name: oauth-gateway-tls
           secret:
@@ -394,6 +380,11 @@ spec:
                   expirationSeconds: 3600
                   path: token
         {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.staticOverride.enabled }}
+        # Live-preview override scratch. The orchestrator receives static-override
+        # pushes directly (handlers_static_override.go writes the releases/ +
+        # current layout under the volume ROOT itself), so this emptyDir needs no
+        # writer sidecar — the orchestrator's own mount + the DIR/ROOT env above
+        # are the only load-bearing wiring.
         - name: static-override
           emptyDir: {}
         {{- end }}
