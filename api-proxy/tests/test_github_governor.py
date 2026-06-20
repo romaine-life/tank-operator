@@ -160,6 +160,16 @@ def test_record_body_matches_auditor_shape() -> None:
         assert k in body
 
 
+def test_parse_exchange_result() -> None:
+    assert gg.parse_exchange_result({"token": "svc.jwt.x", "expires_at": 1700000000}) == ("svc.jwt.x", 1700000000.0)
+    assert gg.parse_exchange_result({"token": "t", "expires_at": "1700000000"}) == ("t", 1700000000.0)
+    # missing token -> fail closed (caller gates on the empty token; expiry is moot)
+    assert gg.parse_exchange_result({"expires_at": 1})[0] == ""
+    # non-numeric expiry -> 0.0 (caller applies a default TTL)
+    assert gg.parse_exchange_result({"token": "t", "expires_at": "2026-06-20T00:00:00Z"}) == ("t", 0.0)
+    assert gg.parse_exchange_result("nope") == ("", 0.0)
+
+
 def test_jwt_from_authorization_bearer_and_basic() -> None:
     assert gg.jwt_from_authorization("Bearer aa.bb.cc") == "aa.bb.cc"
     # git smart-HTTP: credential helper hands the JWT as the Basic password.

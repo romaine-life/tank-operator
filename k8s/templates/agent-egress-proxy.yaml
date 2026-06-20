@@ -315,6 +315,12 @@ spec:
               value: {{ include "tank-operator.internalURL" . | quote }}
             - name: MCP_GITHUB_MINT_URL
               value: {{ .Values.agentEgressProxy.mcpGithubMintUrl | quote }}
+            # auth.romaine.life k8s->service exchange. The proxy POSTs the pod's raw
+            # SA token here (empty body); the IdP auto-resolves the session owner and
+            # returns the role=service JWT the handler then relays to mint + record.
+            # Mirrors the in-pod mcp-auth-proxy AuthRomaineServiceProvider.
+            - name: AUTH_ROMAINE_EXCHANGE_URL
+              value: {{ .Values.agentEgressProxy.authRomaineExchangeUrl | default "https://auth.romaine.life/api/auth/exchange/k8s" | quote }}
           readinessProbe:
             tcpSocket:
               port: 9000

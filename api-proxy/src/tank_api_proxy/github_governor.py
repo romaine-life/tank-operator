@@ -268,9 +268,11 @@ def build_record_body(
 
 
 def jwt_from_authorization(authorization: str) -> str:
-    """The relayed auth.romaine.life JWT from either auth shape git/gh present:
-    `Bearer <jwt>` (gh/REST) or `Basic base64(x-access-token:<jwt>)` (git
-    smart-HTTP, where the credential helper hands the JWT as the password)."""
+    """The pod's credential off the request, from either auth shape git/gh present:
+    `Bearer <tok>` (gh/REST) or `Basic base64(x-access-token:<tok>)` (git smart-HTTP,
+    where the credential helper hands the token as the password). This is the pod's
+    RAW auth.romaine.life k8s SA token — the proxy exchanges it (see
+    parse_exchange_result) into the role=service JWT before minting/recording."""
     if not authorization:
         return ""
     scheme, _, rest = authorization.partition(" ")
@@ -285,6 +287,30 @@ def jwt_from_authorization(authorization: str) -> str:
         _user, _, password = decoded.partition(":")
         return password.strip()
     return ""
+
+
+def parse_exchange_result(body: dict[str, Any]) -> tuple[str, float]:
+    """(role=service JWT, expires_at_epoch) from auth.romaine.life's
+    /api/auth/exchange/k8s response. The proxy POSTs the pod's RAW k8s SA token with
+    an EMPTY body; the IdP auto-resolves the session's own owner and mints a
+    role=service JWT carrying actor_email + sub=svc:tank:<session_id> — exactly the
+    token mcp-github + the control-actions endpoint require (mirrors the in-pod
+    mcp-auth-proxy's AuthRomaineServiceProvider). Returns ("", 0.0) on a missing
+    token so the caller fails closed (no exchange -> no mint -> the agent gets
+    nothing)."""
+    if not isinstance(body, dict):
+        return "", 0.0
+    token = str(body.get("token") or "")
+    raw = body.get("expires_at")
+    if isinstance(raw, bool):
+        exp = 0.0
+    elif isinstance(raw, (int, float)):
+        exp = float(raw)
+    elif isinstance(raw, str) and raw.strip().isdigit():
+        exp = float(raw.strip())
+    else:
+        exp = 0.0
+    return token, exp
 
 
 def first_json_object(text: str) -> dict[str, Any]:
