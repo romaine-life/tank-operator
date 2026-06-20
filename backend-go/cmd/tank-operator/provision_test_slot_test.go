@@ -156,6 +156,47 @@ func TestProvisionTestSlot_ReadyProvisionsAndSetsTestState(t *testing.T) {
 	}
 }
 
+// TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate proves the deploy-by-ref
+// escape hatch: a request with DeployRef set provisions the ref straight away
+// (no open PR required), never reading PR/CI state. This is what keeps the flow
+// from being a dead-end when a session's work has merged / has no obvious branch.
+func TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate(t *testing.T) {
+	// A GitHub double that errors on any read, so a stray PR-readiness read fails
+	// the test loudly instead of silently passing.
+	gh := &provisionFakeGitHub{resolveErr: errors.New("deploy-by-ref must not read PR state")}
+	glim := &fakeGlimmungClient{}
+	app, reg := provisionTestApp(t, gh, glim)
+
+	req := provisionByNumberReq()
+	req.PRNumber = 0
+	req.Branch = ""
+	req.DeployRef = "main"
+
+	out, err := app.provisionTestSlotForSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Verdict != provisionVerdictRef || !out.Provisioned {
+		t.Fatalf("verdict=%q provisioned=%v, want ref+provisioned", out.Verdict, out.Provisioned)
+	}
+	if gh.resolveCalls != 0 {
+		t.Fatalf("deploy-by-ref read PR state %d times; it must not validate a PR", gh.resolveCalls)
+	}
+	if glim.checkoutCalls != 1 || glim.deployCalls != 1 {
+		t.Fatalf("glimmung checkout=%d deploy=%d, want 1/1", glim.checkoutCalls, glim.deployCalls)
+	}
+	if glim.deployReq.GitRef != "main" {
+		t.Fatalf("deploy git_ref=%q, want main", glim.deployReq.GitRef)
+	}
+	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
+	if !ok {
+		t.Fatalf("session record missing")
+	}
+	if active, _ := rec.TestState["active"].(bool); !active {
+		t.Fatalf("SetTestState did not mark the slot active: %#v", rec.TestState)
+	}
+}
+
 func TestProvisionTestSlot_FailedRefusesWithoutGlimmung(t *testing.T) {
 	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{{
 		CheckState:       "failure",

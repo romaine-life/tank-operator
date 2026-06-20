@@ -724,7 +724,9 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                     "validate-wait-provision gate the test-slot page's button runs). "
                     "Returns immediately; the slot URL appears on the session's "
                     "test-slot page when the gate finishes. Pass drive=true to have "
-                    "Tank wake the agent to validate the running slot once it is ready."
+                    "Tank wake the agent to validate the running slot once it is ready. "
+                    "Pass ref (e.g. \"main\") to deploy a git ref directly with no "
+                    "PR-readiness gate when there is no open PR to test."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -740,6 +742,10 @@ def _append_tank_publish_tool_to_json(value) -> bool:
                         "drive": {
                             "type": "boolean",
                             "description": "Provision and then validate: on a ready slot Tank wakes the agent to exercise the running app. Defaults to false (provision only).",
+                        },
+                        "ref": {
+                            "type": "string",
+                            "description": "Optional git ref to deploy directly (for example \"main\") with NO PR-readiness gate — use when there is no open PR to test (work already merged / no obvious branch). Takes precedence over pr.",
                         },
                     },
                     "additionalProperties": False,
@@ -2411,6 +2417,9 @@ async def _handle_tank_provision_test_slot(
                 body["pr"] = pr_number
         if arguments.get("drive") is not None:
             body["drive"] = bool(arguments["drive"])
+        ref = str(arguments.get("ref") or "").strip()
+        if ref:
+            body["ref"] = ref
 
         service_token = await auth_romaine_provider.token()
         headers = {"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"}

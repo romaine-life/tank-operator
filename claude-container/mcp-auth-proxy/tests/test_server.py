@@ -1212,6 +1212,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert provision_test_slot["inputSchema"]["properties"]["repo"]["type"] == "string"
     assert provision_test_slot["inputSchema"]["properties"]["pr"]["type"] == "integer"
     assert provision_test_slot["inputSchema"]["properties"]["drive"]["type"] == "boolean"
+    assert provision_test_slot["inputSchema"]["properties"]["ref"]["type"] == "string"
     assert "test slot" in provision_test_slot["description"].lower()
     break_glass = augmented["result"]["tools"][7]
     assert "approval URL" in break_glass["description"]

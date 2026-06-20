@@ -161,6 +161,70 @@ func TestGetTestSlotStatus_ListsSessionPRs(t *testing.T) {
 	}
 }
 
+// TestGetTestSlotStatus_OptionsAlwaysIncludeMain proves the page is never a
+// dead-end: a session with no open PR (work merged / no obvious branch) still
+// gets `main` as the sole, default-selected deployable option.
+func TestGetTestSlotStatus_OptionsAlwaysIncludeMain(t *testing.T) {
+	app, _, _, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), &provisionFakeGitHub{}, &fakeGlimmungClient{})
+	app.ciWatches = &fakeCIWatchStore{} // no watches at all
+
+	rec, resp := getTestSlotStatus(t, app, provisionTestOwner, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(resp.Options) != 1 {
+		t.Fatalf("want exactly 1 option (main) with no PRs, got %d: %+v", len(resp.Options), resp.Options)
+	}
+	if o := resp.Options[0]; o.Kind != "ref" || o.Ref != "main" || !o.Default {
+		t.Fatalf("only option must be the default main ref, got %+v", o)
+	}
+}
+
+// TestGetTestSlotStatus_OptionsDefaultIsReadyPR proves the intelligent default:
+// a ready open PR is preselected over a still-watching one, merged PRs are not
+// offered as deployable, and `main` is always present as a fallback.
+func TestGetTestSlotStatus_OptionsDefaultIsReadyPR(t *testing.T) {
+	app, _, _, _ := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), &provisionFakeGitHub{}, &fakeGlimmungClient{})
+	app.ciWatches = &fakeCIWatchStore{listForSessionResult: []pgstore.CIWatch{
+		{WatchID: "w3", SessionID: "77", PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 300, Status: pgstore.CIWatchWatching},
+		{WatchID: "w2", SessionID: "77", PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 200, Status: pgstore.CIWatchReady},
+		{WatchID: "w1", SessionID: "77", PROwner: "romaine-life", PRName: "tank-operator", PRNumber: 100, Status: pgstore.CIWatchMerged},
+	}}
+
+	rec, resp := getTestSlotStatus(t, app, provisionTestOwner, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Two open PRs (watching 300, ready 200) + main; merged 100 is not deployable.
+	if len(resp.Options) != 3 {
+		t.Fatalf("want 3 options (2 open PRs + main), got %d: %+v", len(resp.Options), resp.Options)
+	}
+	var def testSlotOption
+	defaults := 0
+	hasMain := false
+	for _, o := range resp.Options {
+		if o.Default {
+			def = o
+			defaults++
+		}
+		if o.Kind == "ref" && o.Ref == "main" {
+			hasMain = true
+		}
+		if o.PRNumber == 100 {
+			t.Fatalf("merged PR #100 must not be a deployable option: %+v", resp.Options)
+		}
+	}
+	if defaults != 1 {
+		t.Fatalf("exactly one option must be the default, got %d", defaults)
+	}
+	if def.Kind != "pr" || def.PRNumber != 200 {
+		t.Fatalf("default should be the ready PR #200, got %+v", def)
+	}
+	if !hasMain {
+		t.Fatalf("main must always be an option: %+v", resp.Options)
+	}
+}
+
 func TestGetTestSlotStatus_RefreshNoOpenPR(t *testing.T) {
 	// A branch with no open PR is a first-class no_pr verdict, not an error, so
 	// the page can say "publish a PR to test" and grey out Create.

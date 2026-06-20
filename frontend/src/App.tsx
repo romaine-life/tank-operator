@@ -308,7 +308,7 @@ import {
   type TestSlotStatus,
   type TestSlotPreflight,
   type TestSlotWatch,
-  type TestSlotPR,
+  type TestSlotOption,
 } from "./testWorkflow";
 import {
   readHomeDismissedRecentRepos,
@@ -10274,6 +10274,23 @@ function formatTestSlotAsOf(iso: string | null): string {
 // last-known PR readiness from the durable snapshot (with an on-demand live
 // refresh). The "Create test slot" action runs the same deterministic,
 // server-side gate as before — this page only frames it and sets expectations.
+// testSlotOptionKey is the stable identity of a deployable option (an open PR or
+// a ref like main), used to track the selected target across re-fetches.
+function testSlotOptionKey(o: TestSlotOption): string {
+  return o.kind === "pr" ? `pr:${o.pr_number ?? 0}` : `ref:${o.ref ?? ""}`;
+}
+
+// testSlotSelectedPRForFetch maps the selected option key to the `?pr=` the live
+// preflight reads. Only a PR option carries a PR number; a ref (main) selection
+// has none, so the preflight falls back to the session's newest watch.
+function testSlotSelectedPRForFetch(key: string | null): number | undefined {
+  if (key && key.startsWith("pr:")) {
+    const n = Number(key.slice(3));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
 function TestSlotScreen({
   sessionId,
   testState,
@@ -10291,8 +10308,8 @@ function TestSlotScreen({
   authedFetch: (input: string, init?: RequestInit) => Promise<Response>;
   disabled?: boolean;
   readOnly?: boolean;
-  onCreateHold: (pr?: number) => void;
-  onCreateDrive: (pr?: number) => void;
+  onCreateHold: (target?: { pr?: number; ref?: string }) => void;
+  onCreateDrive: (target?: { pr?: number; ref?: string }) => void;
   onReturnTestSlot?: () => Promise<void>;
   onOpenReady: () => void;
   onOpenTranscript: () => void;
@@ -10311,14 +10328,15 @@ function TestSlotScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [returning, setReturning] = useState(false);
-  // Which branch/PR the user picked to provision (null = the default, newest).
-  const [selectedPR, setSelectedPR] = useState<number | null>(null);
+  // Which deployable target the user picked (option key "pr:<n>" | "ref:<name>");
+  // null = the backend's intelligent default.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // Keep the latest authedFetch / selection out of the load callback's deps (so
   // it isn't re-created every render and re-firing the load loop).
   const fetchRef = useRef(authedFetch);
   fetchRef.current = authedFetch;
-  const selectedPRRef = useRef(selectedPR);
-  selectedPRRef.current = selectedPR;
+  const selectedKeyRef = useRef(selectedKey);
+  selectedKeyRef.current = selectedKey;
 
   const load = useCallback(
     async (refresh: boolean, silent: boolean) => {
@@ -10330,7 +10348,7 @@ function TestSlotScreen({
       try {
         const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
           refresh,
-          pr: selectedPRRef.current ?? undefined,
+          pr: testSlotSelectedPRForFetch(selectedKeyRef.current),
         });
         // A durable (non-refresh) read carries no preflight; preserve the last
         // live one so the authoritative verdict doesn't flicker back to the
@@ -10392,9 +10410,22 @@ function TestSlotScreen({
   const repoSlug = status?.repo?.slug || "";
   const branch = status?.repo?.branch || "";
   const repoBlocked = Boolean(status) && !status?.repo;
-  const hasOpenPR = readiness ? readiness.hasOpenPR : true;
+  // Deployable options the page offers (open PRs + main). main is always present,
+  // so Create is never a dead-end — no open PR just means the default is "deploy
+  // main". The selected option (explicit pick, else the backend's default) is
+  // what Create acts on.
+  const options: TestSlotOption[] = status?.options ?? [];
+  const defaultOption = options.find((o) => o.default) ?? options[0] ?? null;
+  const selectedOption =
+    options.find((o) => testSlotOptionKey(o) === selectedKey) ?? defaultOption;
+  const selectedIsRef = selectedOption?.kind === "ref";
+  const selectedTarget: { pr?: number; ref?: string } = selectedOption
+    ? selectedOption.kind === "pr"
+      ? { pr: selectedOption.pr_number }
+      : { ref: selectedOption.ref }
+    : {};
   const canCreate =
-    !disabled && !readOnly && !slotActive && !repoBlocked && hasOpenPR;
+    !disabled && !readOnly && !slotActive && !repoBlocked && options.length > 0;
 
   const verdict = readiness?.verdict ?? "";
   const tone = verdict ? testSlotVerdictTone(verdict) : "info";
@@ -10433,14 +10464,11 @@ function TestSlotScreen({
   const prNumber = readiness?.prNumber || 0;
   const slotLabel = testSlotSlotLabel(testState);
 
-  // The branches/PRs the agent has worked on, and which one is effectively
-  // selected (explicit pick, else the newest). Create acts on this PR.
-  const prs: TestSlotPR[] = status?.prs ?? [];
-  const activePR = selectedPR ?? prs[0]?.pr_number ?? 0;
-  const selectPR = (n: number) => {
+  const selectOption = (o: TestSlotOption) => {
+    const key = testSlotOptionKey(o);
     // Set the ref synchronously so the immediate live reload reads the new pick.
-    selectedPRRef.current = n;
-    setSelectedPR(n);
+    selectedKeyRef.current = key;
+    setSelectedKey(key);
     void load(true, false);
   };
 
@@ -10666,8 +10694,8 @@ function TestSlotScreen({
               </div>
             )}
 
-            {/* Branch/PR picker — the branches the agent has worked on. */}
-            {prs.length > 1 && (
+            {/* What to deploy — open PRs the session worked on, plus main. */}
+            {options.length > 1 && (
               <div className="run-session-data-card is-info">
                 <div className="run-session-data-card-top">
                   <span className="run-session-data-card-icon" aria-hidden="true">
@@ -10675,39 +10703,48 @@ function TestSlotScreen({
                   </span>
                   <span className="run-session-data-card-main">
                     <span className="run-session-data-card-label">
-                      Which branch to test
+                      What to deploy
                     </span>
                     <span className="run-session-data-card-detail">
-                      This session has {prs.length} pull requests — pick which one
-                      to provision.
+                      Pick a branch/PR to provision — or deploy main directly.
                     </span>
                   </span>
                 </div>
                 <div className="run-session-data-actions">
-                  {prs.map((p) => {
-                    const sel = activePR === p.pr_number;
+                  {options.map((o) => {
+                    const key = testSlotOptionKey(o);
+                    const sel =
+                      selectedOption != null &&
+                      testSlotOptionKey(selectedOption) === key;
                     return (
                       <button
-                        key={p.pr_number}
+                        key={key}
                         type="button"
                         className="run-session-data-action"
                         aria-pressed={sel}
-                        onClick={() => selectPR(p.pr_number)}
-                        title={p.pr_url || undefined}
+                        onClick={() => selectOption(o)}
+                        title={o.pr_url || undefined}
                       >
                         {sel ? (
                           <CheckIcon
                             className="run-session-data-action-icon"
                             aria-hidden="true"
                           />
-                        ) : (
+                        ) : o.kind === "pr" ? (
                           <GitPullRequestIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <FlaskConicalIcon
                             className="run-session-data-action-icon"
                             aria-hidden="true"
                           />
                         )}
                         <span>
-                          PR #{p.pr_number} · {testSlotVerdictLabel(p.status)}
+                          {o.kind === "pr"
+                            ? `PR #${o.pr_number} · ${testSlotVerdictLabel(o.status ?? "")}`
+                            : o.label}
                         </span>
                       </button>
                     );
@@ -10803,9 +10840,9 @@ function TestSlotScreen({
                     <span className="run-session-data-card-detail">
                       {repoBlocked
                         ? "Resolve a repository above to enable provisioning."
-                        : hasOpenPR
-                          ? "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict. CI validation can take several minutes."
-                          : "No open PR for this branch yet — publish a PR to test."}
+                        : selectedIsRef
+                          ? `Deploys ${selectedOption?.label ?? "main"} straight to a slot — no open PR needed (no PR-readiness gate).`
+                          : "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict. CI validation can take several minutes."}
                     </span>
                   </span>
                 </div>
@@ -10814,15 +10851,15 @@ function TestSlotScreen({
                     type="button"
                     className="run-session-data-action"
                     disabled={!canCreate}
-                    onClick={() => onCreateHold(activePR || undefined)}
+                    onClick={() => onCreateHold(selectedTarget)}
                     title={
                       canCreate
-                        ? "Provision a test slot for this branch"
+                        ? selectedIsRef
+                          ? "Deploy main to a slot"
+                          : "Provision a test slot for the selected PR"
                         : repoBlocked
                           ? "Resolve a repository first"
-                          : hasOpenPR
-                            ? "Unavailable"
-                            : "No open PR to test"
+                          : "Unavailable"
                     }
                   >
                     <FlaskConicalIcon
@@ -10835,7 +10872,7 @@ function TestSlotScreen({
                     type="button"
                     className="run-session-data-action"
                     disabled={!canCreate}
-                    onClick={() => onCreateDrive(activePR || undefined)}
+                    onClick={() => onCreateDrive(selectedTarget)}
                     title={
                       canCreate
                         ? "Provision a slot, then have the agent validate it"
@@ -22516,9 +22553,16 @@ function ChatPane({
   // phantom-active pill. The only client-side surface is the immediate
   // pre-gate refusal (e.g. 409 already-active, ambiguous repo), which the
   // backend rejects synchronously and therefore emits no thread for.
-  function startInteractiveTestWorkflow(drive = false, pr?: number) {
+  function startInteractiveTestWorkflow(
+    drive = false,
+    target?: { pr?: number; ref?: string },
+  ) {
     if (session.status !== "Active") return;
-    void startTestWorkflow(session.id, authedFetch, { drive, pr })
+    void startTestWorkflow(session.id, authedFetch, {
+      drive,
+      pr: target?.pr,
+      ref: target?.ref,
+    })
       .then((result) => {
         if (!result.ok) {
           setEntries((prev) =>
@@ -25353,8 +25397,8 @@ function ChatPane({
                 authedFetch={authedFetch}
                 disabled={!ready}
                 readOnly={readOnly}
-                onCreateHold={(pr) => startInteractiveTestWorkflow(false, pr)}
-                onCreateDrive={(pr) => startInteractiveTestWorkflow(true, pr)}
+                onCreateHold={(target) => startInteractiveTestWorkflow(false, target)}
+                onCreateDrive={(target) => startInteractiveTestWorkflow(true, target)}
                 onReturnTestSlot={readOnly ? undefined : returnTestSlot}
                 onOpenReady={() => {
                   if (testState)

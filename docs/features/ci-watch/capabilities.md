@@ -311,6 +311,30 @@ and [../README.md](../README.md) for how capability ledgers are used.
   preflight), `TestGetTestSlotStatus_RefreshDetectsMergedFromWatchPR` (selected
   watch read by number), frontend `tsc` + `vitest` + `vite build`.
 
+- **Deploy options + main, never a dead-end (2026-06-20):** the page no longer
+  greys out Create when there is no open PR. The status endpoint returns an
+  `options[]` — every open PR the session worked on (each with its verdict) plus
+  **`main` as an always-available baseline** — with an **intelligent default**
+  marked (`buildTestSlotOptions`: a ready open PR → newest open PR → main). The
+  page renders the options and preselects the default; Create acts on the
+  selected option. Deploying `main` (or any ref) takes a new **deploy-by-ref**
+  path in the gate (`provisionTestSlotRequest.DeployRef`): there is no PR to
+  validate, so it skips the validate→wait loop and runs `CheckoutTestSlot` +
+  `DeployImageToTestSlot(GitRef=main)` straight away (verdict `ref`). The
+  triggers accept it as `{"ref":"main"}` on `.../test-workflow/start` and via the
+  `provision_test_slot` MCP tool's `ref` arg. This handles the "PR already merged
+  / no obvious branch" case the picker could not. Stage 1 hardcodes the baseline
+  as `main` (true for every governed repo today); resolving the repo's actual
+  default branch is a later refinement. **Affected contracts:** session-lifecycle
+  (provisioning a ref with no PR is still owner/service-principal gated and
+  double-trigger guarded). **Evidence:**
+  `TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate`,
+  `TestGetTestSlotStatus_OptionsAlwaysIncludeMain`,
+  `TestGetTestSlotStatus_OptionsDefaultIsReadyPR`,
+  `TestStartTestWorkflow_RefThreadsToDeployRef`, sidecar
+  `test_provision_threads_ref_for_deploy_by_ref` + the tools-list `ref`
+  assertion, frontend `tsc` + `vitest` (`startTestWorkflow` ref) + `vite build`.
+
 ## pending-provision-backstop
 
 - **Status:** shipped (durable reconcile backstop + double-trigger guard)
