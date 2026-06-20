@@ -181,8 +181,8 @@ def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: s
     top: an active *unlimited* break-glass grant — the human-approved full-API blast
     radius — elevates a would-be-read REST write back to `full`.) Only restricted
     sessions reach this proxy; unrestricted sessions keep the old direct in-pod path."""
-    if is_receive_pack(authority, path):
-        return Decision(allow=True, write=True, reason="git push: contents:write, lane-confined in the body phase")
+    if is_push_intent(authority, path):
+        return Decision(allow=True, write=True, reason="git push (advertisement + upload): contents:write, lane-confined in the body phase")
     rec = recordable_pr_action(method, authority, path)
     if rec is not None and rec[0] == "github.pull_request.open":
         return Decision(allow=True, write=True, full=True, reason="PR open: the one governed + recorded REST write")
@@ -209,6 +209,19 @@ def is_merge_request(method: str, authority: str, path: str) -> bool:
         and (method or "").upper() == "PUT"
         and bool(_RE_PULLS_MERGE.match(path or ""))
     )
+
+
+def is_push_intent(authority: str, path: str) -> bool:
+    """Any leg of a git PUSH — needs a write token. A push is TWO requests: the
+    capability advertisement (GET /{o}/{r}/info/refs?service=git-receive-pack) AND
+    the upload itself (POST /{o}/{r}/git-receive-pack); BOTH require receive-pack
+    (write) access, so a read token 403s the advertisement and the push never starts.
+    Fetch legs (service=git-upload-pack / git-upload-pack) are reads and excluded."""
+    host = (authority or "").split(":", 1)[0].lower()
+    if host != "github.com":
+        return False
+    p = (path or "").rstrip("/")
+    return p.endswith("/git-receive-pack") or "service=git-receive-pack" in p
 
 
 def is_rest_write(method: str, authority: str, path: str) -> bool:
