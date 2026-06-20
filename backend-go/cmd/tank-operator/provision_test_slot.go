@@ -278,7 +278,7 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 	if strings.TrimSpace(req.DeployRef) != "" {
 		imageSource = "chart"
 	}
-	deploy, err := s.glimmung.DeployImageToTestSlot(ctx, req.OwnerEmail, glimmung.DeployImageToTestSlotRequest{
+	deploy, err := s.deployImageWaitingForCI(ctx, req, glimmung.DeployImageToTestSlotRequest{
 		Project:     req.Project,
 		SlotIndex:   checkout.SlotIndex,
 		SlotName:    checkout.SlotName,
@@ -305,6 +305,36 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 	}
 	recordTestSlotProvision(provisionStepProvisioned)
 	return out, nil
+}
+
+// deployImageWaitingForCI dispatches the slot deploy, re-polling while Glimmung
+// reports the commit's CI image is not built yet (ErrCIImagePending). The
+// readiness gate can greenlight in the window before docker-build-check has
+// published the image's sha-<commit> alias, so a not-ready image is a transient
+// condition the gate waits out — bounded by the settle timeout — rather than a
+// terminal provision failure. The checked-out slot is held across retries; the
+// caller releases it only on the non-pending error or timeout this returns.
+func (s *appServer) deployImageWaitingForCI(ctx context.Context, req provisionTestSlotRequest, deployReq glimmung.DeployImageToTestSlotRequest) (glimmung.DeployImageToTestSlotResult, error) {
+	deadline := s.provisionNowTime().Add(s.provisionSettleTimeoutDuration())
+	for {
+		deploy, err := s.glimmung.DeployImageToTestSlot(ctx, req.OwnerEmail, deployReq)
+		if err == nil {
+			return deploy, nil
+		}
+		if !errors.Is(err, glimmung.ErrCIImagePending) {
+			return glimmung.DeployImageToTestSlotResult{}, err
+		}
+		if req.progress != nil {
+			req.progress("waiting")
+		}
+		if !s.provisionNowTime().Before(deadline) {
+			minutes := int(s.provisionSettleTimeoutDuration().Round(time.Minute) / time.Minute)
+			return glimmung.DeployImageToTestSlotResult{}, fmt.Errorf("CI image for %s did not become ready within %d min: %w", strings.TrimSpace(deployReq.GitRef), minutes, err)
+		}
+		if sleepErr := s.provisionSleep(ctx, s.provisionSettleIntervalDuration()); sleepErr != nil {
+			return glimmung.DeployImageToTestSlotResult{}, sleepErr
+		}
+	}
 }
 
 // releaseCheckedOutSlot returns a slot that was checked out but failed before

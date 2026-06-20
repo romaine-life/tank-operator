@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
@@ -153,6 +155,90 @@ func TestProvisionTestSlot_ReadyProvisionsAndSetsTestState(t *testing.T) {
 	}
 	if active, _ := rec.TestState["active"].(bool); !active {
 		t.Fatalf("SetTestState did not mark the slot active: %#v", rec.TestState)
+	}
+}
+
+// TestProvisionTestSlot_DeployRetriesWhileCIImagePending proves the gate waits
+// out a not-ready CI image instead of failing: when Glimmung reports the commit's
+// image is still building (ErrCIImagePending), the gate holds the checked-out
+// slot and re-deploys until the image lands. This is the recovery for the
+// readiness gate greenlighting in the window before docker-build-check publishes
+// the image (the 2026-06-20 incident).
+func TestProvisionTestSlot_DeployRetriesWhileCIImagePending(t *testing.T) {
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
+	glim := &fakeGlimmungClient{deployErrSeq: []error{
+		fmt.Errorf("%w: still building", glimmung.ErrCIImagePending),
+		fmt.Errorf("%w: still building", glimmung.ErrCIImagePending),
+		nil, // third deploy succeeds — the image has landed
+	}}
+	app, reg := provisionTestApp(t, gh, glim)
+
+	slept := 0
+	app.provisionSleepFunc = func(context.Context, time.Duration) error { slept++; return nil }
+
+	out, err := app.provisionTestSlotForSession(context.Background(), provisionByNumberReq())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Verdict != provisionVerdictReady || !out.Provisioned {
+		t.Fatalf("verdict=%q provisioned=%v, want ready+provisioned once the image lands", out.Verdict, out.Provisioned)
+	}
+	if glim.checkoutCalls != 1 {
+		t.Fatalf("checkout=%d, want 1 — the slot is held across deploy retries, not re-checked-out", glim.checkoutCalls)
+	}
+	if glim.deployCalls != 3 {
+		t.Fatalf("deploy=%d, want 3 (two pending, then success)", glim.deployCalls)
+	}
+	if slept != 2 {
+		t.Fatalf("slept=%d, want 2 settle waits between the 3 deploy attempts", slept)
+	}
+	if glim.returnReqEmail != "" {
+		t.Fatalf("slot must not be released while waiting out a pending image; return called for %q", glim.returnReqEmail)
+	}
+	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
+	if !ok {
+		t.Fatalf("session record missing")
+	}
+	if active, _ := rec.TestState["active"].(bool); !active {
+		t.Fatalf("SetTestState did not mark the slot active after retry: %#v", rec.TestState)
+	}
+}
+
+// TestProvisionTestSlot_DeployImagePendingTimeoutReleasesSlot proves the wait is
+// bounded: if the CI image never becomes ready within the settle cap, the gate
+// fails with a clear message and releases the slot it checked out (no leak).
+func TestProvisionTestSlot_DeployImagePendingTimeoutReleasesSlot(t *testing.T) {
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
+	glim := &fakeGlimmungClient{deployErr: fmt.Errorf("%w: still building", glimmung.ErrCIImagePending)}
+	app, _ := provisionTestApp(t, gh, glim)
+
+	// Deterministic clock that jumps past the settle cap so the image wait trips
+	// the timeout instead of polling forever.
+	app.provisionSettleInterval = 25 * time.Second
+	app.provisionSettleTimeout = 1 * time.Minute
+	base := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	step := 0
+	app.provisionNow = func() time.Time {
+		now := base.Add(time.Duration(step) * 2 * time.Minute)
+		step++
+		return now
+	}
+
+	out, err := app.provisionTestSlotForSession(context.Background(), provisionByNumberReq())
+	if err == nil {
+		t.Fatalf("want an error when the CI image never becomes ready (verdict=%q)", out.Verdict)
+	}
+	if !strings.Contains(err.Error(), "did not become ready") {
+		t.Fatalf("err=%v, want an image-not-ready timeout", err)
+	}
+	if out.Provisioned {
+		t.Fatalf("must not report provisioned when the image timed out")
+	}
+	if glim.checkoutCalls != 1 {
+		t.Fatalf("checkout=%d, want 1", glim.checkoutCalls)
+	}
+	if glim.returnReqEmail == "" {
+		t.Fatalf("slot must be released after a pending-image timeout (ReturnTestSlot not called)")
 	}
 }
 
