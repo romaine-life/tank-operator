@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate"
+  short_description: "Run a multi-slice task through delegated spoke sessions"
+  default_prompt: "Use $orchestrate to coordinate this multi-slice task with delegated sessions reporting back here."

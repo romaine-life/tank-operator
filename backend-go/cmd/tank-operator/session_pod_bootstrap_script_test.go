@@ -1322,8 +1322,19 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	skillsScript, err := filepath.Abs("../../../k8s/session-config/install-tank-skills.sh")
+	if err != nil {
+		t.Fatalf("resolve skills install script path: %v", err)
+	}
 	if _, err := os.Stat(scriptPath); err != nil {
 		t.Fatalf("script not at expected path %s: %v", scriptPath, err)
+	}
+	skillsConfigDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(skillsConfigDir, "skills__common__orchestrate__SKILL.md"), []byte("simple orchestrate"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsConfigDir, "skills__common__orchestrate__agents__openai.yaml"), []byte("orchestrate agent"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	cases := []struct {
@@ -1379,6 +1390,8 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				"INSTALL_AGENT_GIT_TEMPLATE_SCRIPT="+gitTemplateScript,
 				"AGENT_POST_COMMIT_HOOK="+hookPath,
 				"AGENT_GIT_TEMPLATE_DIR="+templateDir,
+				"INSTALL_TANK_SKILLS_SCRIPT="+skillsScript,
+				"INSTALL_TANK_SKILLS_CONFIG_DIR="+skillsConfigDir,
 			)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
@@ -1390,6 +1403,10 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 			if configured != templateDir {
 				t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
 			}
+			assertFileContains(t, filepath.Join(home, ".claude", "skills", "orchestrate", "SKILL.md"), "simple orchestrate")
+			assertFileContains(t, filepath.Join(home, ".codex", "skills", "orchestrate", "SKILL.md"), "simple orchestrate")
+			assertFileContains(t, filepath.Join(home, ".claude", "skills", "orchestrate", "agents", "openai.yaml"), "orchestrate agent")
+			assertFileContains(t, filepath.Join(home, ".codex", "skills", "orchestrate", "agents", "openai.yaml"), "orchestrate agent")
 
 			for suffix, wantSubstr := range tc.wantFiles {
 				path := filepath.Join(home, suffix)

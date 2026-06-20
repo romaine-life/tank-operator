@@ -118,6 +118,13 @@ install_agent_git_template() {
   fi
 }
 
+install_tank_skills() {
+  script="${INSTALL_TANK_SKILLS_SCRIPT:-/opt/tank/session-config/install-tank-skills.sh}"
+  if [ -f "$script" ]; then
+    sh "$script" || true
+  fi
+}
+
 write_claude_settings() {
   script="${WRITE_CLAUDE_SETTINGS_SCRIPT:-/opt/tank/session-config/write-claude-settings.sh}"
   if [ -f "$script" ]; then
@@ -139,6 +146,7 @@ fi
 
 start_spirelens_tailnet
 install_agent_git_template
+install_tank_skills
 
 case "$mode" in
   claude_cli|claude_gui|claude_secondary_cli|claude_secondary_gui)
