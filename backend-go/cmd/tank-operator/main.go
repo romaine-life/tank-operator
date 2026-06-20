@@ -396,6 +396,7 @@ func main() {
 		APIProxyHost:                os.Getenv("CLAUDE_API_PROXY_HOST"),
 		ClaudeSecondaryAPIProxyHost: os.Getenv("CLAUDE_SECONDARY_API_PROXY_HOST"),
 		CodexAPIProxyHost:           os.Getenv("CODEX_API_PROXY_HOST"),
+		AgentEgressProxyHost:        os.Getenv("AGENT_EGRESS_PROXY_HOST"),
 		ImageOverrides:              imageOverrideResolver,
 		OnImageOverrideApplied: func(scope, mode, kind string) {
 			recordSessionImageOverrideApplied(scope, kind)

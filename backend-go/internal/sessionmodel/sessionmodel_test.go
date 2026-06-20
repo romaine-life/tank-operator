@@ -467,6 +467,63 @@ func TestPodManifestRestrictedGitCapabilityWiresOptInEnv(t *testing.T) {
 	assertVolumeMount(t, cloner, "auth-romaine-sa-token")
 }
 
+func githubHostAliasIPs(spec map[string]any) map[string]string {
+	out := map[string]string{}
+	aliases, _ := spec["hostAliases"].([]any)
+	for _, a := range aliases {
+		m, _ := a.(map[string]any)
+		ip, _ := m["ip"].(string)
+		hns, _ := m["hostnames"].([]any)
+		for _, h := range hns {
+			if hn, _ := h.(string); hn == "github.com" || hn == "api.github.com" {
+				out[hn] = ip
+			}
+		}
+	}
+	return out
+}
+
+func TestPodManifestRestrictedGitRoutesGithubThroughEgressProxy(t *testing.T) {
+	const egressIP = "172.16.249.112"
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		TankOperatorInternalURL: "http://tank-operator.test",
+		Repos:                   []string{"romaine-life/tank-operator"},
+		Capabilities:            []string{SessionCapabilityRestrictedGit},
+		AgentEgressProxyIP:      egressIP,
+	})
+	spec := manifest["spec"].(map[string]any)
+	aliases := githubHostAliasIPs(spec)
+	if aliases["github.com"] != egressIP || aliases["api.github.com"] != egressIP {
+		t.Fatalf("github hostAliases = %#v, want both -> %s", aliases, egressIP)
+	}
+	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
+	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "true"; got != want {
+		t.Fatalf("codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
+	}
+}
+
+func TestPodManifestUnrestrictedGitSkipsEgressProxyEvenWhenIPSet(t *testing.T) {
+	// AgentEgressProxyIP is set, but without the restricted_git capability the
+	// session keeps the old direct in-pod path — no github routing, no proxy env.
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		TankOperatorInternalURL: "http://tank-operator.test",
+		Repos:                   []string{"romaine-life/tank-operator"},
+		AgentEgressProxyIP:      "172.16.249.112",
+	})
+	spec := manifest["spec"].(map[string]any)
+	if aliases := githubHostAliasIPs(spec); len(aliases) != 0 {
+		t.Fatalf("unrestricted session must not route github through the proxy; got %#v", aliases)
+	}
+	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
+	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "false"; got != want {
+		t.Fatalf("unrestricted codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
+	}
+}
+
 func TestRepoClonerAvoidsBraceDefaultExpansionForRepoBases(t *testing.T) {
 	script, err := os.ReadFile("../../../k8s/session-config/repo-cloner.sh")
 	if err != nil {

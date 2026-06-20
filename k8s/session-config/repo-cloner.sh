@@ -27,6 +27,17 @@ case "$(printf '%s' "$TANK_RESTRICTED_GIT" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on) restricted_git=true ;;
 esac
 
+# Egress-proxy mode (restricted_git via the wall): github.com is pinned at the agent
+# egress proxy, so the clone's TLS terminates on the proxy's leaf. Trust it per-host
+# (other remotes keep the OS store) before any clone runs. The clone still carries the
+# cloner's own minted token, which the proxy passes through unchanged (reads aren't
+# governed); the agent's later pushes go through the wall in proxy mode.
+case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    git config --global "http.https://github.com/.sslCAInfo" "${TANK_GIT_PROXY_CA:-/etc/oauth-gateway-ca/ca.crt}"
+    ;;
+esac
+
 for slug in "${REPOS[@]}"; do
   if [[ ! "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
     echo "repo-cloner: invalid repository slug: $slug" >&2
