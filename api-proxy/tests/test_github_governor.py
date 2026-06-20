@@ -424,3 +424,44 @@ def test_break_glass_grant_url_routes_by_scope_and_repo() -> None:
     )
     # no repo -> no query param
     assert gg.break_glass_grant_url("tank", "1166", "", DEFAULT_URL).endswith("/git-break-glass/grant")
+
+
+# ---- mint scope: least privilege per request (the REST write-hole closer) ---
+
+def _ident() -> "gg.SessionIdentity":
+    return gg.identity_from_jwt(_jwt({"sub": "svc:tank:1", "role": "service", "actor_email": "a@b.c"}))
+
+
+def test_evaluate_policy_scopes_mint_by_request() -> None:
+    ID = _ident()
+    # git push (receive-pack) -> write (contents), NOT full; lane-confined in body phase
+    d = gg.evaluate_policy(ID, "POST", "github.com", "/romaine-life/tank-operator/git-receive-pack")
+    assert d.write is True and d.full is False
+    # PR open (POST /pulls) -> full (needs pull_requests:write); the one governed REST write
+    d = gg.evaluate_policy(ID, "POST", "api.github.com", "/repos/o/r/pulls")
+    assert d.full is True
+    # REST read -> read-only
+    d = gg.evaluate_policy(ID, "GET", "api.github.com", "/repos/o/r")
+    assert d.write is False and d.full is False
+    # clone/fetch (upload-pack) -> read-only
+    d = gg.evaluate_policy(ID, "GET", "github.com", "/o/r/info/refs?service=git-upload-pack")
+    assert d.write is False and d.full is False
+    # THE HOLE CLOSERS: every ungoverned REST write mints READ (GitHub then 403s it)
+    for m, p in [
+        ("PUT", "/repos/o/r/contents/x"),
+        ("PATCH", "/repos/o/r/git/refs/heads/main"),
+        ("POST", "/repos/o/r/git/refs"),
+        ("POST", "/repos/o/r/merges"),
+        ("DELETE", "/repos/o/r/git/refs/heads/x"),
+    ]:
+        d = gg.evaluate_policy(ID, m, "api.github.com", p)
+        assert d.write is False and d.full is False, f"{m} {p} must mint read-only, got write={d.write} full={d.full}"
+
+
+def test_is_rest_write() -> None:
+    assert gg.is_rest_write("PUT", "api.github.com", "/repos/o/r/contents/x") is True
+    assert gg.is_rest_write("POST", "api.github.com", "/repos/o/r/merges") is True
+    assert gg.is_rest_write("DELETE", "api.github.com", "/repos/o/r/git/refs/heads/x") is True
+    assert gg.is_rest_write("GET", "api.github.com", "/repos/o/r") is False  # read, not a write
+    assert gg.is_rest_write("POST", "github.com", "/o/r/git-receive-pack") is False  # git transport, not REST
+    assert gg.is_rest_write("POST", "api.github.com", "/zen") is False  # no repo in path

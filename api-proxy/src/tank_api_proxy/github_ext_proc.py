@@ -200,6 +200,17 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
                 return _deny("merging is the human/automated path, not the agent")
             log.info("egress: ALLOW merge via break-glass grant session=%s %s", ident.session_id, path)
         st.decision = gg.evaluate_policy(ident, method, authority, path)
+        # Restricted enforcement #3 (mint scope): evaluate_policy mints READ for the
+        # whole REST surface, so an ungoverned write (PUT /contents, PATCH/POST/DELETE
+        # /git/refs, POST /merges, …) gets a read token and GitHub 403s it — that is
+        # what keeps "restricted" true for the API, not just for git. The ONE sanctioned
+        # exception: an active *unlimited* break-glass grant (the human-approved full-API
+        # blast radius) elevates a would-be-read REST write back to a full token.
+        if not st.decision.write and gg.is_rest_write(method, authority, path):
+            grant = await self._active_grant(ident, st.repo_full)
+            if gg.grant_allows_merge(grant):  # full_github_api marks the unlimited grant
+                st.decision = gg.Decision(allow=True, write=True, full=True, reason="break-glass unlimited: approved full API")
+                log.info("egress: REST write elevated to full via unlimited grant session=%s %s %s", ident.session_id, method, path)
         # Restricted enforcement #2 is in the body phase: a git push's receive-pack refs
         # are inspected against the lane (widened by any active grant). Stash that this
         # is a push so _on_request_body acts.
