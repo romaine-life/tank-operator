@@ -644,6 +644,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// its own session (verified per-session service subject), so the page can
 	// show last-pushed status. Display-only; never changes the owner toggle.
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/live-preview/push", s.handleInternalReportLivePreviewPush)
+	// In-pod live-preview daemon's control channel: a single-session SSE of the
+	// owner's enable toggle + slot URL, event-driven on the per-session row wake
+	// (no polling). Same per-session service-subject gate as the push receipt —
+	// a pod streams only its own session (#1207).
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/live-preview/stream", s.handleInternalLivePreviewStream)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
