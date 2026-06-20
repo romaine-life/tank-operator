@@ -173,6 +173,52 @@ func (s *appServer) handleInternalDeleteStaticOverride(w http.ResponseWriter, r 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "reverted"})
 }
 
+// handleSetLivePreviewEnabled is the owner's live-preview toggle behind the
+// test-slot page's "Start frontend testing" control. It records the durable
+// intent on test_state.live_preview.enabled; the in-pod live-preview daemon
+// converges on it over the session SSE — turning its build+push loop on, and on
+// disable stopping and DELETEing the slot override so the slot reverts to its
+// image-baked baseline. Owner-scoped (requireAuth + GetRegisteredByOwner).
+// Enabling requires an active slot with a URL: live preview streams scratch on
+// top of a running slot, so without one there is nothing to preview against.
+func (s *appServer) handleSetLivePreviewEnabled(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetRegisteredByOwner(r.Context(), owner, sessionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+			writeError(w, http.StatusNotFound, "session not found")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.Enabled {
+		if !boolFromState(info.TestState, "active") || stringFromState(info.TestState, "url") == "" {
+			writeError(w, http.StatusBadRequest, "no active test slot to preview against")
+			return
+		}
+	}
+	updated, err := s.mgr.UpdateLivePreviewState(r.Context(), owner, sessionID, sessions.LivePreviewPatch{Enabled: &body.Enabled})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
 // handleInternalReportLivePreviewPush records a live-preview push receipt on the
 // session's test_state.live_preview (pushed_at + pushed_build) so the test-slot
 // page can show "streaming · last pushed Ns ago" and surface a stalled daemon.
