@@ -145,13 +145,15 @@ class Decision:
 
 
 def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: str) -> Decision:
-    """Day-one policy: allow-all, mint with write — i.e. exactly today's
-    unrestricted session (push to any branch, no merges blocked), now routed
-    through the wall and recorded. This is the single function a future per-session
-    policy edits: deny by ref (read the receive-pack refs and refuse refs/heads/main
-    for a test session), cap a session to read-only (write=False), or open the
-    break-glass superset (full=True) — none of which touches identity, mint, or IO."""
-    return Decision(allow=True, write=True, reason="default: allow-all+write")
+    """Day-one policy: allow-all, mint `full` — byte-for-byte the grant today's
+    unrestricted session already gets (git-credential-tank.sh mints
+    {full:true,write:true,workflows:true} for non-restricted pods). Minting `full`
+    here is parity, not new privilege: the same token, minted at the wall instead
+    of in the pod. This is the single function a future per-session policy edits —
+    deny by ref (read the receive-pack refs and refuse refs/heads/main for a test
+    session), cap a session to read-only (full=False, write=False), etc. — none of
+    which touches identity, mint, or IO."""
+    return Decision(allow=True, write=True, full=True, reason="default: parity with unrestricted")
 
 
 # ---- request classification ----------------------------------------------
@@ -263,6 +265,46 @@ def build_record_body(
         "error": error[:1200],
         "payload": payload or {},
     }
+
+
+def jwt_from_authorization(authorization: str) -> str:
+    """The relayed auth.romaine.life JWT from either auth shape git/gh present:
+    `Bearer <jwt>` (gh/REST) or `Basic base64(x-access-token:<jwt>)` (git
+    smart-HTTP, where the credential helper hands the JWT as the password)."""
+    if not authorization:
+        return ""
+    scheme, _, rest = authorization.partition(" ")
+    s = scheme.strip().lower()
+    if s == "bearer":
+        return rest.strip()
+    if s == "basic":
+        try:
+            decoded = base64.b64decode(rest.strip()).decode()
+        except Exception:
+            return ""
+        _user, _, password = decoded.partition(":")
+        return password.strip()
+    return ""
+
+
+def first_json_object(text: str) -> dict[str, Any]:
+    """Pull the first JSON-RPC object out of an mcp-github reply, tolerating both
+    bare JSON and SSE `data: {json}` framing — the same two shapes
+    git-credential-tank.sh and the Go mcpgithub client both parse."""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("data:"):
+            line = line[len("data:"):].strip()
+        if line.startswith("{"):
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                return obj
+    return {}
 
 
 def pr_fields_from_response_json(body_text: str) -> tuple[int, str]:

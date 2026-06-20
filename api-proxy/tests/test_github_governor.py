@@ -160,6 +160,24 @@ def test_record_body_matches_auditor_shape() -> None:
         assert k in body
 
 
+def test_jwt_from_authorization_bearer_and_basic() -> None:
+    assert gg.jwt_from_authorization("Bearer aa.bb.cc") == "aa.bb.cc"
+    # git smart-HTTP: credential helper hands the JWT as the Basic password.
+    basic = base64.b64encode(b"x-access-token:aa.bb.cc").decode()
+    assert gg.jwt_from_authorization(f"Basic {basic}") == "aa.bb.cc"
+    assert gg.jwt_from_authorization("") == ""
+    assert gg.jwt_from_authorization("Basic !!notbase64!!") == ""
+
+
+def test_first_json_object_sse_and_bare() -> None:
+    sse = 'event: message\ndata: {"result": {"structuredContent": {"token": "ghs_1"}}}\n\n'
+    assert gg.first_json_object(sse) == {"result": {"structuredContent": {"token": "ghs_1"}}}
+    assert gg.first_json_object('{"a": 1}') == {"a": 1}
+    assert gg.first_json_object("nope") == {}
+    # end-to-end with the mint parser, mirroring the real reply path
+    assert gg.parse_mint_result(gg.first_json_object(sse))[0] == "ghs_1"
+
+
 def test_pr_fields_from_response_json() -> None:
     created = json.dumps(
         {"number": 1372, "html_url": "https://github.com/romaine-life/tank-operator/pull/1372", "state": "open"}

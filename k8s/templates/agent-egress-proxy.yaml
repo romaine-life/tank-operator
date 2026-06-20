@@ -70,9 +70,10 @@ spec:
 Envoy config. One HTTPS listener with the leaf (github.com + api.github.com
 SANs). Routing is by :authority to a per-host upstream cluster, so adding a
 destination later is one virtual_host + one cluster. The ext_proc filter calls
-the local sidecar (127.0.0.1:9000); unlike the Anthropic proxy it runs in BUFFERED
-body mode on both directions so the github handler can read the request body
-(git refs) and the response body (the created PR's number/url) for recording.
+the local sidecar (127.0.0.1:9000) header-only by default (mint+inject needs only
+the path); the api.github.com vhost re-enables response-body buffering per-route so
+the handler can read the created PR's number/url to record the sighting. github.com
+(git) stays header-only — never buffer a clone/fetch packfile or a push body.
 */}}
 {{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: v1
@@ -137,8 +138,14 @@ data:
                           processing_mode:
                             request_header_mode: SEND
                             response_header_mode: SEND
-                            request_body_mode: BUFFERED
-                            response_body_mode: BUFFERED
+                            # Default: buffer NOTHING. A github.com clone/fetch
+                            # response is the whole packfile and a push body is
+                            # arbitrarily large — buffering either in the proxy is a
+                            # footgun. Header-only is all mint+inject needs. The REST
+                            # vhost re-enables response buffering per-route below,
+                            # where bodies are small and carry the PR number.
+                            request_body_mode: NONE
+                            response_body_mode: NONE
                             request_trailer_mode: SKIP
                             response_trailer_mode: SKIP
                           message_timeout: 10s
@@ -150,6 +157,15 @@ data:
                       virtual_hosts:
                         - name: github_api
                           domains: ["api.github.com"]
+                          # REST responses are small and carry the created PR's
+                          # number/url, which the ext_proc needs to record the
+                          # sighting — so buffer the response body on THIS vhost only.
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_proc:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+                              overrides:
+                                processing_mode:
+                                  response_body_mode: BUFFERED
                           routes:
                             - match: { prefix: "/" }
                               route:
