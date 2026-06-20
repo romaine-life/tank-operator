@@ -1,0 +1,309 @@
+{{- /*
+Agent egress proxy — the single outbound chokepoint for session pods.
+
+Goal: a session pod can reach an external "don't-own" host (GitHub today;
+api.anthropic.com / chatgpt.com fold in later, retiring the per-provider
+claude/codex proxies) ONLY through this Envoy. The proxy TLS-terminates the
+pinned host with an in-cluster leaf, an ext_proc sidecar injects the right
+credential server-side (so the agent never holds a write token) and RECORDS the
+request as a github.* control action, and Envoy forwards to the real upstream.
+
+This is the same chassis as api-proxy.yaml (Envoy + a small ext_proc), but
+multi-destination by construction: one listener, upstream clusters per external
+host, routed by :authority, one ext_proc that dispatches on host.
+
+Migration: built here but pointed at by NOTHING until session pods opt in via a
+per-session hostAlias (sessionmodel.go). Existing pods keep the per-provider
+proxies and age out. The egress NetworkPolicy lockdown is a SEPARATE, later
+change — this template only stands the wall up; it does not yet make it the
+only door.
+
+Gated like api-proxy.yaml: excluded entirely in test-env (slots); cert/config
+on renderWarm, Service/Deployment on renderHot.
+*/}}
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
+{{- if .Values.agentEgressProxy.enabled }}
+{{- /*
+Leaf for the intercepted GitHub hosts, from the SAME issuer session pods already
+trust (claude-oauth-ca) — so no new trust-store work in the session image, the
+identical reuse the Anthropic leaf relies on.
+*/}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: agent-egress-proxy-leaf
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+spec:
+  secretName: agent-egress-proxy-leaf
+  duration: 2160h  # 90 days
+  renewBefore: 360h
+  dnsNames:
+    - github.com
+    - api.github.com
+  issuerRef:
+    name: claude-oauth-ca-issuer
+    kind: Issuer
+{{- end }}
+---
+{{- if eq (include "tank-operator.renderHot" .) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-egress-proxy
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: agent-egress-proxy
+spec:
+  selector:
+    app.kubernetes.io/name: agent-egress-proxy
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+{{- end }}
+---
+{{- /*
+Envoy config. One HTTPS listener with the leaf (github.com + api.github.com
+SANs). Routing is by :authority to a per-host upstream cluster, so adding a
+destination later is one virtual_host + one cluster. The ext_proc filter calls
+the local sidecar (127.0.0.1:9000); unlike the Anthropic proxy it runs in BUFFERED
+body mode on both directions so the github handler can read the request body
+(git refs) and the response body (the created PR's number/url) for recording.
+*/}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-egress-proxy-envoy
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address: { address: 127.0.0.1, port_value: 9901 }
+    static_resources:
+      secrets:
+        - name: egress_leaf
+          tls_certificate:
+            certificate_chain:
+              filename: /etc/envoy/tls/tls.crt
+            private_key:
+              filename: /etc/envoy/tls/tls.key
+            watched_directory:
+              path: /etc/envoy/tls
+      listeners:
+        - name: egress_listener
+          address:
+            socket_address: { address: 0.0.0.0, port_value: 8443 }
+          per_connection_buffer_limit_bytes: 8388608
+          filter_chains:
+            - transport_socket:
+                name: envoy.transport_sockets.tls
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+                  common_tls_context:
+                    tls_certificate_sds_secret_configs:
+                      - name: egress_leaf
+              filters:
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: agent_egress
+                    codec_type: AUTO
+                    stream_idle_timeout: 600s
+                    request_timeout: 600s
+                    access_log:
+                      - name: envoy.access_loggers.stdout
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                          log_format:
+                            text_format_source:
+                              inline_string: "[%START_TIME%] %REQ(:AUTHORITY)% %REQ(:METHOD)% %REQ(:PATH)% -> %RESPONSE_CODE% %RESPONSE_FLAGS% rx=%BYTES_RECEIVED% tx=%BYTES_SENT% dur_ms=%DURATION% req_id=%REQ(x-request-id)%\n"
+                    common_http_protocol_options:
+                      idle_timeout: 600s
+                    http_filters:
+                      - name: envoy.filters.http.ext_proc
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                          grpc_service:
+                            envoy_grpc:
+                              cluster_name: ext_proc_local
+                            timeout: 10s
+                          failure_mode_allow: false
+                          processing_mode:
+                            request_header_mode: SEND
+                            response_header_mode: SEND
+                            request_body_mode: BUFFERED
+                            response_body_mode: BUFFERED
+                            request_trailer_mode: SKIP
+                            response_trailer_mode: SKIP
+                          message_timeout: 10s
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                    route_config:
+                      name: egress
+                      virtual_hosts:
+                        - name: github_api
+                          domains: ["api.github.com"]
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: github_api
+                                timeout: 600s
+                                auto_host_rewrite: true
+                        - name: github_git
+                          domains: ["github.com"]
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: github_git
+                                timeout: 600s
+                                auto_host_rewrite: true
+      clusters:
+        - name: github_api
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: github_api
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address: { address: api.github.com, port_value: 443 }
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: api.github.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: github_git
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: github_git
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address: { address: github.com, port_value: 443 }
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: github.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: ext_proc_local
+          type: STATIC
+          connect_timeout: 1s
+          lb_policy: ROUND_ROBIN
+          typed_extension_protocol_options:
+            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+              explicit_http_config:
+                http2_protocol_options: {}
+          load_assignment:
+            cluster_name: ext_proc_local
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address: { address: 127.0.0.1, port_value: 9000 }
+{{- end }}
+---
+{{- if eq (include "tank-operator.renderHot" .) "true" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-egress-proxy
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: agent-egress-proxy
+spec:
+  replicas: {{ .Values.agentEgressProxy.replicas | default 1 }}
+  revisionHistoryLimit: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-egress-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-egress-proxy
+    spec:
+      serviceAccountName: {{ .Values.agentEgressProxy.serviceAccount }}
+      containers:
+        - name: envoy
+          image: {{ .Values.apiProxy.envoyImage | quote }}
+          args:
+            - "-c"
+            - "/etc/envoy/envoy.yaml"
+            - "--service-cluster"
+            - "agent-egress-proxy"
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: admin
+              containerPort: 9901
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+            - name: leaf-tls
+              mountPath: /etc/envoy/tls
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 8443
+            initialDelaySeconds: 3
+            periodSeconds: 10
+        - name: ext-proc
+          image: "{{ .Values.apiProxy.image.repository }}:{{ .Values.apiProxy.image.tag }}"
+          imagePullPolicy: {{ .Values.apiProxy.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: 9000
+            - name: metrics
+              containerPort: 9100
+          env:
+            - name: PROXY_PROVIDER
+              value: github
+            - name: METRICS_PORT
+              value: "9100"
+            # Where the github handler mints the App installation token (the
+            # in-cluster mcp-github mint) and posts the recorded control action
+            # (the orchestrator internal control-actions endpoint). The handler
+            # attributes by the per-session identity carried on the request.
+            - name: TANK_OPERATOR_INTERNAL_URL
+              value: {{ include "tank-operator.internalURL" . | quote }}
+            - name: MCP_GITHUB_MINT_URL
+              value: {{ .Values.agentEgressProxy.mcpGithubMintUrl | quote }}
+          readinessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: agent-egress-proxy-envoy
+        - name: leaf-tls
+          secret:
+            secretName: agent-egress-proxy-leaf
+            optional: true  # cert-manager hasn't issued yet on first install
+{{- end }}
+{{- end }}
+{{- end }}

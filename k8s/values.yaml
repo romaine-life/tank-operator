@@ -215,6 +215,23 @@ apiProxy:
   # Published to KV by infra/api_proxy.tf â€” separate UAMI from the
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
+
+# Agent egress proxy — the single outbound chokepoint for session pods
+# (k8s/templates/agent-egress-proxy.yaml). Reuses apiProxy.image (the ext_proc)
+# and apiProxy.envoyImage. Disabled by default: this only stands the wall up;
+# nothing routes through it until sessions opt in via a per-session hostAlias,
+# and the egress NetworkPolicy lockdown + git-smart-HTTP capture are separate,
+# later changes. enabled=true renders cert/Service/Envoy/Deployment.
+agentEgressProxy:
+  enabled: false
+  replicas: 1
+  # Identity the ext_proc uses to mint per-owner GitHub App tokens (via
+  # mcp-github) and to post the recorded control action for the attributed
+  # session. Provisioned with the egress proxy's handler PR.
+  serviceAccount: agent-egress-proxy
+  # In-cluster mcp-github mint endpoint the github handler calls to obtain the
+  # session-owner's App installation token. Confirmed/wired in the handler PR.
+  mcpGithubMintUrl: http://mcp-github.mcp-github.svc.cluster.local:9992/
 claudeSecondaryApiProxy:
   serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
 
