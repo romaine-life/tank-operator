@@ -226,7 +226,12 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         # token and GitHub 403s it — what keeps "restricted" true for the API, not just
         # git. The ONE sanctioned exception: an active *unlimited* grant elevates it back
         # to full. An unrestricted session is already full, so this is a no-op for it.
-        if st.restricted and not st.decision.write and gg.is_rest_write(method, authority, path):
+        if (
+            st.restricted
+            and not st.decision.write
+            and not st.decision.pr_write
+            and gg.is_rest_write(method, authority, path)
+        ):
             grant = await self._active_grant(ident, st.repo_full)
             if gg.grant_allows_merge(grant):  # full_github_api marks the unlimited grant
                 st.decision = gg.Decision(allow=True, write=True, full=True, reason="break-glass unlimited: approved full API")
