@@ -28,6 +28,7 @@ type fakeGlimmungClient struct {
 	deployResult     glimmung.DeployImageToTestSlotResult
 	checkoutCalls    int
 	deployCalls      int
+	deployErr        error
 }
 
 func (f *fakeGlimmungClient) State(_ context.Context, actorEmail string) (glimmung.StateSnapshot, error) {
@@ -61,6 +62,9 @@ func (f *fakeGlimmungClient) DeployImageToTestSlot(_ context.Context, actorEmail
 	f.deployCalls++
 	f.deployReqEmail = actorEmail
 	f.deployReq = body
+	if f.deployErr != nil {
+		return glimmung.DeployImageToTestSlotResult{}, f.deployErr
+	}
 	if f.deployResult.Job == "" {
 		f.deployResult = glimmung.DeployImageToTestSlotResult{Lease: "lease-1", Job: "deploy-1", Status: "running", GitRef: body.GitRef}
 	}

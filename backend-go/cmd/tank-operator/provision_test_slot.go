@@ -271,14 +271,26 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 		recordTestSlotProvision(provisionStepNoSlot)
 		return out, errors.New("glimmung checkout returned no slot identity")
 	}
+	// A deploy-by-ref (e.g. main) has no per-commit CI image, so deploy the chart
+	// at the ref with no override — its pinned production image stands. A PR
+	// deploy (no DeployRef) resolves the CI-built image as usual.
+	imageSource := ""
+	if strings.TrimSpace(req.DeployRef) != "" {
+		imageSource = "chart"
+	}
 	deploy, err := s.glimmung.DeployImageToTestSlot(ctx, req.OwnerEmail, glimmung.DeployImageToTestSlotRequest{
-		Project:   req.Project,
-		SlotIndex: checkout.SlotIndex,
-		SlotName:  checkout.SlotName,
-		GitRef:    deployRef,
+		Project:     req.Project,
+		SlotIndex:   checkout.SlotIndex,
+		SlotName:    checkout.SlotName,
+		GitRef:      deployRef,
+		ImageSource: imageSource,
 	})
 	if err != nil {
 		recordTestSlotProvision(provisionStepDeployError)
+		// A deploy failure must not leak the slot we just checked out — the pool
+		// is finite, so a leak per failed provision silently drains it. Release it
+		// best-effort before returning.
+		s.releaseCheckedOutSlot(req, checkout, "deploy failed: "+err.Error())
 		return out, err
 	}
 	out.Deploy = deploy
@@ -293,6 +305,34 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 	}
 	recordTestSlotProvision(provisionStepProvisioned)
 	return out, nil
+}
+
+// releaseCheckedOutSlot returns a slot that was checked out but failed before
+// becoming a usable deployed environment, so a failed provision does not leak
+// the lease. Best-effort on a fresh short context (the provision's ctx may be
+// canceled/timed-out): a return failure is logged + countered, never surfaced
+// (the provision already failed for its own reason).
+func (s *appServer) releaseCheckedOutSlot(req provisionTestSlotRequest, checkout glimmung.CheckoutTestSlotResult, reason string) {
+	if s.glimmung == nil || (checkout.SlotIndex == nil && checkout.SlotName == nil) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sessionID := req.SessionID
+	if _, err := s.glimmung.ReturnTestSlot(ctx, req.OwnerEmail, glimmung.ReturnTestSlotRequest{
+		Project:         req.Project,
+		SlotIndex:       checkout.SlotIndex,
+		SlotName:        checkout.SlotName,
+		CallerSessionID: &sessionID,
+		Source:          "provision-cleanup",
+		Reason:          reason,
+	}); err != nil {
+		slog.Warn("provision cleanup: return leaked slot failed",
+			"session_id", req.SessionID, "error", err)
+		recordTestSlotProvision("return_failed")
+		return
+	}
+	recordTestSlotProvision("returned_after_failure")
 }
 
 func (s *appServer) provisionSettleIntervalDuration() time.Duration {
