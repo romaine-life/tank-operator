@@ -516,6 +516,45 @@ export class SessionStore {
   }
 }
 
+// SessionRowLineage is the trio of identically-named lineage fields that BOTH
+// session-row wire shapes carry: the snapshot Info payload (GET /api/sessions)
+// and the live row-update frame (GET /api/sessions/events). They feed the
+// session-bar's parent↔child surfaces — the spawned-sessions chip
+// (spawned_sessions), the git/PR chip (pull_requests), and sidebar nesting
+// (parent_session_id).
+export interface SessionRowLineage {
+  spawned_sessions?: SpawnedSessionRef[];
+  pull_requests?: SessionPullRequestRef[];
+  parent_session_id?: string;
+}
+
+// parseSessionRowLineage is the SINGLE parser for those lineage fields, shared
+// by the snapshot parser (App.infoJSONToSessionRow) and the row-update parser
+// (normalizeSessionRowUpdate). It exists because the two parsers previously
+// mapped these fields independently and drifted: the snapshot path silently
+// dropped parent_session_id, so a spawned child de-nested to a top-level row on
+// every snapshot refresh/reconnect/tab-refocus and then "snapped back" on its
+// next live row-update — the maddening "loses what it's nested in, then snaps
+// back" bug. Routing both parsers through one function makes that divergence
+// structurally impossible: a field added here lands on both paths at once.
+// Contract: docs/features/session-bar/contract.md — "Reconnect or resync
+// produces the same session bar state as a fresh load" and "the child appears
+// already nested on its first snapshot/row-update ... it must not first render
+// as a top-level row and then reflow into place."
+export function parseSessionRowLineage(
+  rowRaw: Record<string, unknown>,
+): SessionRowLineage {
+  return {
+    spawned_sessions: normalizeSpawnedSessions(rowRaw.spawned_sessions),
+    pull_requests: normalizeSessionPullRequests(rowRaw.pull_requests),
+    parent_session_id:
+      typeof rowRaw.parent_session_id === "string" &&
+      rowRaw.parent_session_id !== ""
+        ? rowRaw.parent_session_id
+        : undefined,
+  };
+}
+
 // normalizeSessionRowUpdate parses one wire frame from
 // /api/sessions/events. Returns null on malformed input; the SSE
 // handler logs and drops.
@@ -566,13 +605,10 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       spoke_config: isRecord(rowRaw.spoke_config)
         ? (rowRaw.spoke_config as Record<string, unknown>)
         : undefined,
-      spawned_sessions: normalizeSpawnedSessions(rowRaw.spawned_sessions),
-      pull_requests: normalizeSessionPullRequests(rowRaw.pull_requests),
-      parent_session_id:
-        typeof rowRaw.parent_session_id === "string" &&
-        rowRaw.parent_session_id !== ""
-          ? rowRaw.parent_session_id
-          : undefined,
+      // Lineage trio (spawned_sessions / pull_requests / parent_session_id)
+      // parsed by the shared parseSessionRowLineage so the snapshot parser and
+      // this row-update parser can never drift on them again.
+      ...parseSessionRowLineage(rowRaw),
       repos: Array.isArray(rowRaw.repos)
         ? (rowRaw.repos as unknown[]).filter(
             (entry): entry is string => typeof entry === "string",

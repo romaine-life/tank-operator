@@ -1018,6 +1018,46 @@ test("sidebar order is not browser-local", () => {
   expect(appSource.includes("/api/sessions/order")).toBe(true);
 });
 
+test("sidebar nesting: the snapshot parser shares the lineage parser with the SSE path", () => {
+  // Regression guard for "a nested session loses what it's nested in, then
+  // snaps back". The snapshot parser (infoJSONToSessionRow) once dropped
+  // parent_session_id while the live row-update parser kept it, so a spawned
+  // child de-nested on every snapshot / refresh / reconnect / tab-refocus and
+  // only snapped back on its next live row-update. Both paths must parse the
+  // lineage trio (spawned_sessions / pull_requests / parent_session_id) through
+  // the one parseSessionRowLineage helper so they can never drift again.
+  expect(
+    appSource.includes("parseSessionRowLineage"),
+    "App.tsx must use the shared parseSessionRowLineage helper",
+  ).toBe(true);
+
+  const snapshotParser = appSource.match(
+    /function infoJSONToSessionRow\([\s\S]*?\n {2}\}/,
+  );
+  expect(
+    snapshotParser,
+    "infoJSONToSessionRow (the snapshot → SessionRow parser) should be present",
+  ).toBeTruthy();
+  const snapshotBody = snapshotParser![0];
+
+  expect(
+    snapshotBody.includes("parseSessionRowLineage(raw)"),
+    "the snapshot parser must build lineage via the shared parseSessionRowLineage helper",
+  ).toBe(true);
+  // It must NOT inline-map any lineage field — inline mapping is exactly the
+  // drift that dropped parent_session_id on the snapshot path.
+  for (const field of [
+    "parent_session_id",
+    "spawned_sessions",
+    "pull_requests",
+  ]) {
+    expect(
+      new RegExp(`${field}\\s*:`).test(snapshotBody),
+      `the snapshot parser must not inline-map ${field} (use the shared helper)`,
+    ).toBe(false);
+  }
+});
+
 test("sidebar skill-state conflicts are not repaired in the frontend", () => {
   const skillStateMatch = appSource.match(
     /function currentSessionSkillState\([\s\S]*?\n\}/,
