@@ -28,6 +28,10 @@ const (
 	provisionVerdictWatchingTimeout provisionVerdict = "watching_timeout"
 	provisionVerdictHeadMoved       provisionVerdict = "head_moved"
 	provisionVerdictError           provisionVerdict = "error"
+	// provisionVerdictRef is a direct deploy-by-ref (e.g. main) with no PR to
+	// validate — the escape hatch that keeps test-slot provisioning from being a
+	// dead-end when there is no open PR to grab. Provisions immediately.
+	provisionVerdictRef provisionVerdict = "ref"
 )
 
 // provisionProvisionOutcome is the bounded `outcome` label for the provision
@@ -73,6 +77,12 @@ type provisionTestSlotRequest struct {
 	// has moved off it, the gate refuses rather than greenlight a superseded
 	// commit. Empty disables the pin.
 	ExpectedSHA string
+	// DeployRef, when set, is a direct git ref to deploy (e.g. "main") with NO
+	// PR-readiness gate: there is no PR to validate, so the gate provisions the
+	// ref straight away. It is the "no obvious branch / PR already merged" escape
+	// hatch that keeps test-slot provisioning from being a dead-end. When set it
+	// takes precedence over the PRNumber/Branch validation path.
+	DeployRef string
 	// progress, when set, is invoked by the gate as it advances through its
 	// phases — "validating" before the first live read, "waiting" on each
 	// settle-wait. The interactive path uses it to surface intermediate
@@ -119,6 +129,15 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 	}
 	if s.glimmung == nil {
 		return provisionOutcome{Verdict: provisionVerdictError}, errors.New("glimmung client not configured")
+	}
+	// Deploy-by-ref escape hatch: a direct ref (e.g. main) has no PR to validate,
+	// so skip the validate→wait loop and provision it straight away. This is what
+	// keeps the flow from being a dead-end when there is no open PR to grab.
+	if deployRef := strings.TrimSpace(req.DeployRef); deployRef != "" {
+		recordTestSlotValidate(string(provisionVerdictRef))
+		out, err := s.provisionSlotAfterReady(ctx, req, "", deployRef)
+		out.Verdict = provisionVerdictRef
+		return out, err
 	}
 	repoOwner := strings.TrimSpace(req.RepoOwner)
 	repoName := strings.TrimSpace(req.RepoName)

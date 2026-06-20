@@ -32,7 +32,7 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export async function startTestWorkflow(
   sessionId: string,
   authedFetch: FetchLike,
-  options: { repo?: string; drive?: boolean; pr?: number } = {},
+  options: { repo?: string; drive?: boolean; pr?: number; ref?: string } = {},
 ): Promise<StartTestWorkflowResult> {
   const body: Record<string, string | boolean | number> = {};
   if (options.repo && options.repo.trim()) {
@@ -43,6 +43,9 @@ export async function startTestWorkflow(
   }
   if (options.pr && options.pr > 0) {
     body.pr = options.pr;
+  }
+  if (options.ref && options.ref.trim()) {
+    body.ref = options.ref.trim();
   }
   const res = await authedFetch(testWorkflowStartPath(sessionId), {
     method: "POST",
@@ -130,12 +133,27 @@ export interface TestSlotPR {
   has_open_pr: boolean;
 }
 
+// One deployable target the page offers — an open PR, or `main`. The page
+// renders these as the choices for what to put in the slot, preselecting the
+// one with `default: true`, so provisioning is never a dead-end (main is always
+// offered even when there is no open PR).
+export interface TestSlotOption {
+  kind: "pr" | "ref";
+  label: string;
+  pr_number?: number;
+  pr_url?: string;
+  status?: string;
+  ref?: string;
+  default: boolean;
+}
+
 export interface TestSlotStatus {
   repo: TestSlotRepo | null;
   repo_error: string;
   repos: string[];
   watch: TestSlotWatch | null;
   prs: TestSlotPR[];
+  options: TestSlotOption[];
   provision: TestSlotProvision | null;
   test_state: Record<string, unknown> | null;
   preflight: TestSlotPreflight | null;

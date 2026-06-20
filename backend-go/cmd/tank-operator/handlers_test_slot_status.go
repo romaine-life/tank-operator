@@ -103,6 +103,11 @@ func (s *appServer) handleGetTestSlotStatus(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// Deployable options the page offers: every open PR the session worked on
+	// plus `main` (always present), with the intelligent default marked — so the
+	// page is never a dead-end even when there is no open PR to grab.
+	resp.Options = buildTestSlotOptions(watches)
+
 	if s.pendingTestProvisions != nil {
 		pid := pgstore.PendingTestProvisionID(sessionID, req.RepoOwner, req.RepoName, req.Branch, pgstore.PendingTestProvisionInteractive)
 		if prov, err := s.pendingTestProvisions.Get(r.Context(), pid); err == nil {
@@ -247,6 +252,9 @@ type testSlotStatusResponse struct {
 	// PRs is every branch/PR the agent has worked on this session (newest first),
 	// so the page can list them and let the user pick which to provision.
 	PRs       []testSlotPRView       `json:"prs"`
+	// Options is the deployable target set the page offers (open PRs + main),
+	// with the intelligent default marked, so provisioning is never a dead-end.
+	Options   []testSlotOption       `json:"options"`
 	Provision *testSlotProvisionView `json:"provision"`
 	TestState map[string]any         `json:"test_state"`
 	Preflight *testSlotPreflightView `json:"preflight"`
@@ -278,6 +286,72 @@ func testSlotPRViewFrom(watch pgstore.CIWatch) testSlotPRView {
 		LastEventAt:    rfc3339Ptr(watch.LastEventAt),
 		HasOpenPR:      ciWatchStatusImpliesOpenPR(watch.Status),
 	}
+}
+
+// testSlotDefaultRef is the always-available baseline deploy target. Stage 1
+// assumes the governed repos' default branch is `main` (true for every repo
+// today); resolving the repo's actual default branch is a later refinement.
+const testSlotDefaultRef = "main"
+
+// testSlotOption is one deployable target the page offers. The page renders
+// these as the choices for "what to put in the slot," preselecting the one
+// marked Default — so provisioning is never a dead-end: even with no open PR,
+// `main` is always offered.
+type testSlotOption struct {
+	Kind     string `json:"kind"`                // "pr" | "ref"
+	Label    string `json:"label"`               // e.g. "PR #1364" / "main (default branch)"
+	PRNumber int    `json:"pr_number,omitempty"` // kind=pr
+	PRURL    string `json:"pr_url,omitempty"`     // kind=pr
+	Status   string `json:"status,omitempty"`    // kind=pr: durable watch status
+	Ref      string `json:"ref,omitempty"`       // kind=ref: git ref to deploy (e.g. "main")
+	Default  bool   `json:"default"`             // the intelligent preselection
+}
+
+// buildTestSlotOptions assembles the deployable targets the page offers: every
+// open PR the session has worked on (newest first), plus `main` as an
+// always-available baseline so there is never a dead-end. The Default marks the
+// intelligent preselection: a ready open PR, else the newest open PR, else main.
+func buildTestSlotOptions(watches []pgstore.CIWatch) []testSlotOption {
+	options := make([]testSlotOption, 0, len(watches)+1)
+	for i := range watches {
+		w := watches[i]
+		if !ciWatchStatusImpliesOpenPR(w.Status) {
+			continue
+		}
+		options = append(options, testSlotOption{
+			Kind:     "pr",
+			Label:    "PR #" + strconv.Itoa(w.PRNumber),
+			PRNumber: w.PRNumber,
+			PRURL:    strings.TrimSpace(w.PRURL),
+			Status:   string(w.Status),
+		})
+	}
+	options = append(options, testSlotOption{
+		Kind:  "ref",
+		Label: "main (default branch)",
+		Ref:   testSlotDefaultRef,
+	})
+	// Intelligent default: a ready open PR, else the newest open PR, else main.
+	def := -1
+	for i := range options {
+		if options[i].Kind == "pr" && options[i].Status == string(pgstore.CIWatchReady) {
+			def = i
+			break
+		}
+	}
+	if def < 0 {
+		for i := range options {
+			if options[i].Kind == "pr" {
+				def = i
+				break
+			}
+		}
+	}
+	if def < 0 {
+		def = len(options) - 1
+	}
+	options[def].Default = true
+	return options
 }
 
 type testSlotRepoView struct {

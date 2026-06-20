@@ -58,6 +58,15 @@ test("startTestWorkflow forwards an explicit repo override", async () => {
   });
 });
 
+test("startTestWorkflow forwards a ref to deploy directly (deploy-by-ref)", async () => {
+  const fetchMock = vi.fn(async () => jsonResponse(202, { status: "started" }));
+
+  await startTestWorkflow("77", fetchMock, { ref: "main" });
+
+  const [, init] = fetchMock.mock.calls[0];
+  expect(JSON.parse(String(init?.body))).toEqual({ ref: "main" });
+});
+
 test("startTestWorkflow surfaces the server reason on refusal", async () => {
   const fetchMock = vi.fn(async () =>
     jsonResponse(409, {

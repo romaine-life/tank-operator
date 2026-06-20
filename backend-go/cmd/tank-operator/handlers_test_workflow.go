@@ -89,6 +89,10 @@ func (s *appServer) startTestWorkflowForSession(w http.ResponseWriter, r *http.R
 		// deploys its head branch; when 0 it falls back to the session's governed
 		// branch ("latest pushed").
 		PR int `json:"pr"`
+		// Ref optionally deploys a git ref directly (e.g. "main") with NO
+		// PR-readiness gate — the page's "no obvious branch / PR already merged"
+		// option so provisioning is never a dead-end. Takes precedence over PR.
+		Ref string `json:"ref"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -102,6 +106,9 @@ func (s *appServer) startTestWorkflowForSession(w http.ResponseWriter, r *http.R
 	req.drive = body.Drive
 	if body.PR > 0 {
 		req.PRNumber = body.PR
+	}
+	if ref := strings.TrimSpace(body.Ref); ref != "" {
+		req.DeployRef = ref
 	}
 
 	// Double-trigger guard (Slice-5). A rapid double-click must not start two

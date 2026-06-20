@@ -448,6 +448,33 @@ func TestStartTestWorkflow_DefaultsDriveFalse(t *testing.T) {
 	}
 }
 
+// TestStartTestWorkflow_RefThreadsToDeployRef: {"ref":"main"} threads onto the
+// launched gate request as DeployRef, so the deploy-by-ref escape hatch fires
+// (deploy main, no PR gate) instead of the page hitting a dead-end.
+func TestStartTestWorkflow_RefThreadsToDeployRef(t *testing.T) {
+	gh := &provisionFakeGitHub{}
+	glim := &fakeGlimmungClient{}
+	app, _, _, launched := testWorkflowApp(t, testWorkflowSessionRecord("romaine-life/tank-operator"), gh, glim)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/77/test-workflow/start",
+		strings.NewReader(`{"ref":"main"}`))
+	req.SetPathValue("session_id", "77")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, provisionTestOwner, auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	app.handleStartTestWorkflow(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s, want 202", rec.Code, rec.Body.String())
+	}
+	if len(*launched) != 1 {
+		t.Fatalf("expected one launched gate run, got %d", len(*launched))
+	}
+	if (*launched)[0].DeployRef != "main" {
+		t.Fatalf("ref should thread onto the launched request as DeployRef, got %q", (*launched)[0].DeployRef)
+	}
+}
+
 func TestTestDriveWakeHelpers(t *testing.T) {
 	if got := sdkTurnSource("test-slot-drive"); got != "test-slot-drive" {
 		t.Fatalf("sdkTurnSource(test-slot-drive) = %q, want test-slot-drive", got)

@@ -106,6 +106,14 @@ def test_provision_includes_only_set_arguments() -> None:
     assert body == {"repo": "romaine-life/glimmung", "pr": 42, "drive": True}
 
 
+def test_provision_threads_ref_for_deploy_by_ref() -> None:
+    # `ref` threads through so the backend deploys the ref directly (e.g. main)
+    # with no PR-readiness gate — the "no open PR to test" escape hatch.
+    http = _ProvisionHTTP(status=202)
+    _run(http, ref="main")
+    assert _start_post(http)["json"] == {"ref": "main"}
+
+
 def test_provision_omits_unset_arguments() -> None:
     http = _ProvisionHTTP(status=202)
     _run(http)
