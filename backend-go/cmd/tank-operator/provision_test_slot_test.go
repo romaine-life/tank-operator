@@ -27,6 +27,17 @@ type provisionFakeGitHub struct {
 	states       []mcpgithub.PullRequestState
 	resolveCalls int
 	resolveErr   error
+	// imageBuilt controls the default ImageBuildSucceededForHead answer: nil
+	// means "built" (the common case — most gate tests don't exercise the
+	// image-build race). Set to a pointer to false to model a commit whose
+	// docker-build-check run has not succeeded yet.
+	imageBuilt *bool
+	// imageBuiltSeq is consumed one entry per ImageBuildSucceededForHead call
+	// before falling back to imageBuilt, so a test can model "not built on the
+	// first poll, built on the next" without a custom closure.
+	imageBuiltSeq   []bool
+	imageBuildCalls int
+	imageBuildErr   error
 }
 
 func (f *provisionFakeGitHub) nextState() (mcpgithub.PullRequestState, error) {
@@ -50,6 +61,22 @@ func (f *provisionFakeGitHub) ResolvePullRequestState(_ context.Context, _, _, _
 
 func (f *provisionFakeGitHub) ResolveOpenPullRequestState(_ context.Context, _, _, _, _, _ string) (mcpgithub.PullRequestState, error) {
 	return f.nextState()
+}
+
+func (f *provisionFakeGitHub) ImageBuildSucceededForHead(_ context.Context, _, _, _, _, _ string) (bool, error) {
+	f.imageBuildCalls++
+	if f.imageBuildErr != nil {
+		return false, f.imageBuildErr
+	}
+	if len(f.imageBuiltSeq) > 0 {
+		built := f.imageBuiltSeq[0]
+		f.imageBuiltSeq = f.imageBuiltSeq[1:]
+		return built, nil
+	}
+	if f.imageBuilt == nil {
+		return true, nil
+	}
+	return *f.imageBuilt, nil
 }
 
 func (f *provisionFakeGitHub) ListRepos(context.Context, string) ([]mcpgithub.Repo, error) {
@@ -447,6 +474,94 @@ func TestProvisionTestSlot_WatchingTimeoutRefuses(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(out.Detail), "settle") {
 		t.Fatalf("timeout detail should mention settle, got %q", out.Detail)
+	}
+}
+
+// TestProvisionTestSlot_ReadyButImageNotBuiltWaitsThenProvisions proves the
+// image-build gate: the CI-watch reducer reports `ready` (mergeable + checks
+// green) on every poll, but docker-build-check has not succeeded for the head SHA
+// on the first poll. The gate must demote that first `ready` to `watching`, sleep
+// one settle interval, and only provision once the image-build run reports success
+// — closing the window where a fast unrelated green check let the gate deploy a
+// commit whose CI image did not exist yet.
+func TestProvisionTestSlot_ReadyButImageNotBuiltWaitsThenProvisions(t *testing.T) {
+	gh := &provisionFakeGitHub{
+		states: []mcpgithub.PullRequestState{readyState("sha-ready")},
+		// First poll: reducer is green but docker-build-check has not succeeded yet.
+		// Second poll: the image-build run has landed.
+		imageBuiltSeq: []bool{false, true},
+	}
+	glim := &fakeGlimmungClient{}
+	app, reg := provisionTestApp(t, gh, glim)
+
+	slept := 0
+	app.provisionSleepFunc = func(context.Context, time.Duration) error {
+		slept++
+		return nil
+	}
+
+	out, err := app.provisionTestSlotForSession(context.Background(), provisionByNumberReq())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Verdict != provisionVerdictReady || !out.Provisioned {
+		t.Fatalf("verdict=%q provisioned=%v, want ready+provisioned once the image build succeeds", out.Verdict, out.Provisioned)
+	}
+	if slept != 1 {
+		t.Fatalf("slept=%d, want 1 settle wait while the image build had not yet succeeded", slept)
+	}
+	if gh.imageBuildCalls != 2 {
+		t.Fatalf("image-build checked %d times, want 2 (not-built then built)", gh.imageBuildCalls)
+	}
+	if glim.checkoutCalls != 1 || glim.deployCalls != 1 {
+		t.Fatalf("glimmung calls checkout=%d deploy=%d, want 1/1", glim.checkoutCalls, glim.deployCalls)
+	}
+	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
+	if !ok {
+		t.Fatalf("session record missing")
+	}
+	if active, _ := rec.TestState["active"].(bool); !active {
+		t.Fatalf("SetTestState did not mark the slot active: %#v", rec.TestState)
+	}
+}
+
+// TestProvisionTestSlot_ReadyButImageNeverBuiltTimesOut proves the image-build
+// gate is bounded: when the reducer stays `ready` but docker-build-check never
+// succeeds for the head SHA, the gate keeps watching until the settle cap and
+// refuses with watching_timeout — it never provisions a commit whose CI image was
+// not produced, and never touches glimmung.
+func TestProvisionTestSlot_ReadyButImageNeverBuiltTimesOut(t *testing.T) {
+	gh := &provisionFakeGitHub{
+		states:     []mcpgithub.PullRequestState{readyState("sha-ready")},
+		imageBuilt: provBoolPtr(false), // docker-build-check never succeeds for this head
+	}
+	glim := &fakeGlimmungClient{}
+	app, _ := provisionTestApp(t, gh, glim)
+
+	// Deterministic clock that jumps past the settle cap on the first watching
+	// check so the demoted-ready loop trips the timeout instead of polling forever.
+	app.provisionSettleInterval = 25 * time.Second
+	app.provisionSettleTimeout = 1 * time.Minute
+	base := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	step := 0
+	app.provisionNow = func() time.Time {
+		now := base.Add(time.Duration(step) * 2 * time.Minute)
+		step++
+		return now
+	}
+
+	out, err := app.provisionTestSlotForSession(context.Background(), provisionByNumberReq())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Verdict != provisionVerdictWatchingTimeout || out.Provisioned {
+		t.Fatalf("verdict=%q provisioned=%v, want watching_timeout+not-provisioned", out.Verdict, out.Provisioned)
+	}
+	if glim.checkoutCalls != 0 || glim.deployCalls != 0 {
+		t.Fatalf("glimmung must not be called when the image build never succeeds; checkout=%d deploy=%d", glim.checkoutCalls, glim.deployCalls)
+	}
+	if gh.imageBuildCalls == 0 {
+		t.Fatalf("expected the gate to query the image-build status before refusing")
 	}
 }
 

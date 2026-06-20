@@ -235,6 +235,167 @@ func TestListRepos_ReadTokenError(t *testing.T) {
 	}
 }
 
+// imageBuildServer fronts the two endpoints ImageBuildSucceededForHead exercises:
+// the auth.romaine.life k8s exchange + mcp-github mint_clone_token (to obtain the
+// GitHub installation token) and the GitHub REST workflow-runs endpoint. The
+// workflow-runs handler echoes back what it was asked and returns a configurable
+// run set so a test can model "built for this head", "built for a different head",
+// or a GitHub error.
+type imageBuildServer struct {
+	runsStatus  int
+	runsBody    string
+	lastRunsURL string
+}
+
+func (s *imageBuildServer) start(t *testing.T) (exchangeURL, mcpURL, githubURL string, stop func()) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/auth/exchange/k8s", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":       "service.jwt",
+			"expires_at":  time.Now().Add(15 * time.Minute).Unix(),
+			"actor_email": body["actor_email"],
+		})
+	})
+	// mcp-github mint_clone_token: return the GitHub installation token the REST
+	// call then carries.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"token":"gh-installation.token"}}}`))
+	})
+	// GitHub REST: the workflow-runs lookup keyed by head_sha + status=success.
+	mux.HandleFunc("/repos/", func(w http.ResponseWriter, r *http.Request) {
+		s.lastRunsURL = r.URL.String()
+		status := s.runsStatus
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(s.runsBody))
+	})
+	srv := httptest.NewServer(mux)
+	return srv.URL + "/api/auth/exchange/k8s", srv.URL, srv.URL, srv.Close
+}
+
+func newImageBuildClient(exURL, mcpURL, ghURL string) *Client {
+	return NewClient(Options{
+		ExchangeURL:  exURL,
+		MCPGitHubURL: mcpURL,
+		GitHubAPIURL: ghURL,
+		ReadToken:    func(string) (string, error) { return "sa.token", nil },
+	})
+}
+
+// TestImageBuildSucceededForHead_SuccessForExactHead is the gate's green path: a
+// docker-build-check run with conclusion=success on the EXACT head SHA means the
+// deployable image for that commit exists, so the method returns true. It also
+// asserts the request scopes by head_sha + status=success so GitHub does the
+// filtering, not the client.
+func TestImageBuildSucceededForHead_SuccessForExactHead(t *testing.T) {
+	srv := &imageBuildServer{
+		runsBody: `{"workflow_runs":[{"status":"completed","conclusion":"success","head_sha":"deadbeefcafe"}]}`,
+	}
+	exURL, mcpURL, ghURL, stop := srv.start(t)
+	defer stop()
+
+	c := newImageBuildClient(exURL, mcpURL, ghURL)
+	built, err := c.ImageBuildSucceededForHead(context.Background(), "alice@example.com", "romaine-life", "tank-operator", "docker-build-check.yaml", "deadbeefcafe")
+	if err != nil {
+		t.Fatalf("ImageBuildSucceededForHead error: %v", err)
+	}
+	if !built {
+		t.Fatal("built = false, want true (a success run exists for the exact head)")
+	}
+	if !strings.Contains(srv.lastRunsURL, "docker-build-check.yaml") {
+		t.Errorf("runs URL %q did not target the docker-build-check workflow", srv.lastRunsURL)
+	}
+	if !strings.Contains(srv.lastRunsURL, "head_sha=deadbeefcafe") {
+		t.Errorf("runs URL %q did not scope by head_sha", srv.lastRunsURL)
+	}
+	if !strings.Contains(srv.lastRunsURL, "status=success") {
+		t.Errorf("runs URL %q did not scope by status=success", srv.lastRunsURL)
+	}
+}
+
+// TestImageBuildSucceededForHead_NoRunForHead is the gate's hold path: the only
+// success run is for a DIFFERENT commit, so the image for the requested head is
+// not built and the method returns false (the gate keeps watching rather than
+// provisioning a commit whose image does not exist).
+func TestImageBuildSucceededForHead_NoRunForHead(t *testing.T) {
+	srv := &imageBuildServer{
+		runsBody: `{"workflow_runs":[{"status":"completed","conclusion":"success","head_sha":"some-other-sha"}]}`,
+	}
+	exURL, mcpURL, ghURL, stop := srv.start(t)
+	defer stop()
+
+	c := newImageBuildClient(exURL, mcpURL, ghURL)
+	built, err := c.ImageBuildSucceededForHead(context.Background(), "alice@example.com", "romaine-life", "tank-operator", "docker-build-check.yaml", "deadbeefcafe")
+	if err != nil {
+		t.Fatalf("ImageBuildSucceededForHead error: %v", err)
+	}
+	if built {
+		t.Fatal("built = true, want false (no success run matches the requested head)")
+	}
+}
+
+// TestImageBuildSucceededForHead_EmptyResult covers the post-open window where the
+// build workflow has not registered a run yet: an empty list is "not built", not
+// an error.
+func TestImageBuildSucceededForHead_EmptyResult(t *testing.T) {
+	srv := &imageBuildServer{runsBody: `{"workflow_runs":[]}`}
+	exURL, mcpURL, ghURL, stop := srv.start(t)
+	defer stop()
+
+	c := newImageBuildClient(exURL, mcpURL, ghURL)
+	built, err := c.ImageBuildSucceededForHead(context.Background(), "alice@example.com", "romaine-life", "tank-operator", "docker-build-check.yaml", "deadbeefcafe")
+	if err != nil {
+		t.Fatalf("ImageBuildSucceededForHead error: %v", err)
+	}
+	if built {
+		t.Fatal("built = true, want false (no runs yet)")
+	}
+}
+
+// TestImageBuildSucceededForHead_RejectsEmptyInputs guards the input contract so a
+// missing workflow name or head SHA fails loudly at the boundary instead of
+// issuing a malformed GitHub query that could match the wrong runs.
+func TestImageBuildSucceededForHead_RejectsEmptyInputs(t *testing.T) {
+	c := newImageBuildClient("", "", "")
+	cases := []struct {
+		name                              string
+		email, owner, repo, workflow, sha string
+	}{
+		{"empty email", "", "o", "r", "w.yaml", "sha"},
+		{"empty owner", "a@example.com", "", "r", "w.yaml", "sha"},
+		{"empty repo", "a@example.com", "o", "", "w.yaml", "sha"},
+		{"empty workflow", "a@example.com", "o", "r", "", "sha"},
+		{"empty sha", "a@example.com", "o", "r", "w.yaml", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := c.ImageBuildSucceededForHead(context.Background(), tc.email, tc.owner, tc.repo, tc.workflow, tc.sha); err == nil {
+				t.Fatalf("expected an error for %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestImageBuildSucceededForHead_GitHubError surfaces a GitHub failure as a
+// concrete error so the gate fails closed (verdict=error) rather than silently
+// treating an API outage as "not built".
+func TestImageBuildSucceededForHead_GitHubError(t *testing.T) {
+	srv := &imageBuildServer{runsStatus: http.StatusInternalServerError, runsBody: "boom"}
+	exURL, mcpURL, ghURL, stop := srv.start(t)
+	defer stop()
+
+	c := newImageBuildClient(exURL, mcpURL, ghURL)
+	if _, err := c.ImageBuildSucceededForHead(context.Background(), "alice@example.com", "romaine-life", "tank-operator", "docker-build-check.yaml", "deadbeefcafe"); err == nil {
+		t.Fatal("expected an error when GitHub returns 500")
+	}
+}
+
 // TestParseListReposResponse_SSE parses mcp-github's streamable_http
 // response shape (text/event-stream frames). The MCP SDK emits the
 // JSON-RPC envelope inside a `data:` line.

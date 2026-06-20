@@ -474,4 +474,5 @@ type AppServerMCPGitHub interface {
 	CreatePullRequest(ctx context.Context, userEmail, owner, name, title, head, base, body string, draft bool) (mcpgithub.PullRequest, error)
 	ResolvePullRequestState(ctx context.Context, userEmail, owner, name string, number int) (mcpgithub.PullRequestState, error)
 	ResolveOpenPullRequestState(ctx context.Context, userEmail, owner, name, headOwner, branch string) (mcpgithub.PullRequestState, error)
+	ImageBuildSucceededForHead(ctx context.Context, userEmail, owner, name, workflow, headSHA string) (bool, error)
 }

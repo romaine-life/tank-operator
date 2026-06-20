@@ -56,6 +56,16 @@ const (
 	provisionDeployGrace = 5 * time.Minute
 )
 
+// testSlotImageBuildWorkflow is the repo-owned image-build workflow whose
+// success on the EXACT head SHA the gate requires before provisioning. The
+// CI-watch reducer's `ready` verdict (mergeable + check rollup green) can read
+// true in the window after a PR opens but before docker-build-check has even
+// registered, when a fast unrelated check is already green — so a green reducer
+// verdict is necessary but not sufficient. Gating on this workflow's head-SHA
+// success makes "ready to provision" mean "the deployable image for this commit
+// exists", which is the gated-test-slot-provisioning intent.
+const testSlotImageBuildWorkflow = "docker-build-check.yaml"
+
 // provisionTestSlotRequest carries the coordinates the gate validates and the
 // slot it provisions on success. Built as a struct (rather than a long
 // positional signature) so Slice 2's interactive endpoint can reuse it.
@@ -191,7 +201,26 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 		}
 
 		result := classifyCIWatchState(watch, state)
-		switch result.Status {
+		// The reducer's `ready` (mergeable + check rollup green) can be true before
+		// the head SHA's image-build workflow has even registered — a fast unrelated
+		// check goes green first. Provisioning then would deploy a commit whose CI
+		// image does not exist yet. So a `ready` reducer verdict only stays `ready`
+		// once docker-build-check has actually SUCCEEDED for this exact head;
+		// otherwise demote to `watching` and keep polling (the build is still
+		// in-flight, not failed). The deploy-by-ref path returns before this loop,
+		// so it is unaffected.
+		status := result.Status
+		if status == pgstore.CIWatchReady {
+			built, buildErr := s.mcpGitHub.ImageBuildSucceededForHead(ctx, req.OwnerEmail, repoOwner, repoName, testSlotImageBuildWorkflow, result.HeadSHA)
+			if buildErr != nil {
+				recordTestSlotValidate(string(provisionVerdictError))
+				return provisionOutcome{Verdict: provisionVerdictError}, buildErr
+			}
+			if !built {
+				status = pgstore.CIWatchWatching // green per reducer, but the image for this commit isn't built yet — keep watching, don't provision
+			}
+		}
+		switch status {
 		case pgstore.CIWatchReady:
 			recordTestSlotValidate(string(provisionVerdictReady))
 			// Deploy the PR's actual head branch. For a by-branch validate that's
