@@ -580,6 +580,13 @@ All metric names are prefixed `tank_`. The full namespace:
   never fails the spawn, so a rising `error` rate is a quiet user-trust
   regression — parents are silently losing the links to their children — and
   is the signal to alert on rather than the (healthy) `ok` volume.
+- `tank_session_pull_request_link_total{result}` — `github.pull_request.*`
+  sighting writes onto the session row's durable `pull_requests` projection
+  (feeding the composer git chip and the `/pull-requests` page). `result` is
+  `ok|error` (bounded, 2 series). Best-effort like the spawn-link counter and
+  never fails the control-action write, so a rising `error` rate is the quiet
+  user-trust regression to alert on — sessions silently losing PR links so the
+  chip and page under-report which PRs the session touched.
 - `tank_session_reorder_total{result}` — outcomes of the sidebar drag-to-reorder
   write (`PUT /api/sessions/order`). `result` is `ok|conflict|error` (bounded, 3
   series). `conflict` is the benign stale-permutation rejection the SPA

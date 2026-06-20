@@ -181,6 +181,22 @@ func DecodeSpawnedSessions(raw []byte) []SpawnedSessionRef {
 	return parsed
 }
 
+// DecodeSessionPullRequests parses the sessions.pull_requests jsonb array into
+// typed refs for the snapshot/row layers. Like DecodeSpawnedSessions, a missing
+// column, NULL, or malformed payload decodes to nil ("no PR touched") rather
+// than an error — the column is a display-only projection, never load-bearing
+// for session correctness, so a bad row must not break the session list.
+func DecodeSessionPullRequests(raw []byte) []SessionPullRequestRef {
+	if len(raw) == 0 {
+		return nil
+	}
+	var parsed []SessionPullRequestRef
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil
+	}
+	return parsed
+}
+
 type SessionRecord struct {
 	ID      string
 	Email   string
@@ -221,7 +237,7 @@ type SessionRecord struct {
 	RolloutState    map[string]any // jsonb column
 	// SpokeConfig is the hub's spoke-fleet launch config, set by the orchestrate
 	// endpoint. NULL/nil until the orchestrate endpoint writes it. jsonb column.
-	SpokeConfig     map[string]any // jsonb column
+	SpokeConfig map[string]any // jsonb column
 
 	// SpawnedSessions is the durable parent→child lineage surfaced by the
 	// session-bar "spawned sessions" chip: one ref per session this
@@ -231,6 +247,15 @@ type SessionRecord struct {
 	// RowPublisher carry it verbatim so the SPA never re-derives the
 	// relationship from the event ledger. jsonb array column.
 	SpawnedSessions []SpawnedSessionRef
+
+	// PullRequests is the durable list of pull requests this session touched,
+	// surfaced by the git chip / dedicated /pull-requests page: one ref per PR
+	// (deduped by URL, latest sighting's state wins). nil/empty means none.
+	// Appended by sessionregistry.AppendSessionPullRequest when a
+	// github.pull_request.* control action is recorded; the snapshot/RowPublisher
+	// carry it verbatim so the SPA never re-derives PRs from the capped
+	// control-action feed. jsonb array column (migration 0181, backfilled 0182).
+	PullRequests []SessionPullRequestRef
 
 	// ParentSessionID is the inverse, child-side edge: the id of the origin
 	// session that spawned THIS one, stamped in the same INSERT that creates
@@ -347,6 +372,25 @@ type SpawnedSessionRef struct {
 	Repos     []string `json:"repos,omitempty"`
 	URL       string   `json:"url"`
 	CreatedAt string   `json:"created_at,omitempty"`
+}
+
+// SessionPullRequestRef is one entry of SessionRecord.PullRequests: a durable
+// handle to a pull request this session touched, surfaced by the git chip and
+// the /pull-requests page. URL is the github.com/.../pull/N link and is the
+// dedupe key. Recorded id-deduped (by URL) by
+// sessionregistry.AppendSessionPullRequest whenever a github.pull_request.*
+// control action is appended; the snapshot/RowPublisher carry it verbatim so
+// the SPA never re-derives PRs from the newest-N control-action feed (where the
+// oldest .open rows silently dropped on busy sessions). State carries the
+// latest mergeable/merged hint; Action/Status the latest sighting.
+type SessionPullRequestRef struct {
+	Repo      string `json:"repo,omitempty"`
+	Number    int    `json:"number,omitempty"`
+	URL       string `json:"url"`
+	Action    string `json:"action,omitempty"`
+	Status    string `json:"status,omitempty"`
+	State     string `json:"state,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 type SessionAvatarAssignment struct {

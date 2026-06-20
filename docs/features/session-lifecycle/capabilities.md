@@ -529,10 +529,68 @@ Open hardening:
   admin can approve another user's request without relying on the owner's
   control-action list. Approve/deny POST to
   `/api/sessions/{id}/break-glass-requests/{event_id}/{approve|deny}`. The
-  same popup also separates the two PR links the UI already tracked: the latest
-  PR the agent opened (control-action git activity) and the PR explicitly linked
-  via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
-  positioning so the composer input-group's `overflow: hidden` cannot clip it.
+  break-glass popover is portaled to `<body>` with fixed positioning so the
+  composer input-group's `overflow: hidden` cannot clip it. The composer git
+  chip, separately, is a single-click shortcut to the dedicated
+  `/pull-requests` page (the complete, durable list — see "Durable session
+  pull-request projection" below): one click opens the page — there is no PR
+  popover — and the page is where Merge in Tank lives and where a PR explicitly
+  linked via `set_pull_request_link` (test/rollout) is surfaced when it isn't in
+  the session's own durable list.
+
+## Durable session pull-request projection (git chip + /pull-requests page)
+
+- **Status:** shipped.
+- **Intent:** surface EVERY pull request a session has touched in the composer
+  git chip and the dedicated `/pull-requests` page. Before this, the SPA
+  re-derived the PR list in-browser from the newest-100 `/control-actions` feed
+  (a recent-activity list mixing commit/CI/PR-lane/break-glass rows);
+  `github.pull_request.open` rows are the *oldest* events in a session, so on a
+  commit-heavy session early PRs silently fell off the back of the window even
+  with only 2-3 PRs total. A page titled "PRs touched by this session" that
+  quietly drops PRs is the user-trust failure this closes.
+- **Durable source:** `sessions.pull_requests jsonb` on the session's own row
+  (migration `0181`, backfilled from the complete `control_action_events` ledger
+  in `0182`). One ref per PR (`{repo, number, url, action, status, state,
+  updated_at}`), deduped by url with last-sighting-wins state. NULL/absent means
+  "no PR touched" or a pre-column session; like `spawned_sessions` it is a
+  display-only projection, never load-bearing — a malformed row decodes to nil
+  rather than breaking the session list.
+- **Write path:** every `github.pull_request.*` control action flows through the
+  one internal endpoint `POST /api/internal/sessions/{id}/control-actions`
+  (`handleInternalAppendControlAction`) — even `mcp-github`'s merge posts there.
+  After the durable Append it calls `Manager.AppendSessionPullRequest`, which
+  id-deduped-upserts the ref (by url) and republishes the row. **Best-effort:** a
+  projection-write failure is logged + counted but never fails the
+  control-action write — the ledger stays the source of truth.
+- **Runtime behavior:** the append bumps `row_version` and `publishRow` fans the
+  updated row out on the per-owner session-list NATS subject, so the chip count
+  and the `/pull-requests` page converge over SSE without a manual refresh — the
+  same path `spawned_sessions` uses. The SPA reads PRs ONLY from
+  `session.pull_requests` (normalized at the store boundary); the old in-browser
+  re-derivation from the capped control-action feed is **deleted, not kept as a
+  fallback**. Page commits stay derived from the recent feed (a commit list is
+  inherently recent-activity).
+- **Observability:** `tank_session_pull_request_link_total{result=ok|error}`
+  (bounded 2 series) — a rising error rate means sessions are silently losing PR
+  links and the chip/page under-report, the same user-trust diagnostic class as
+  `tank_session_spawn_link_total`.
+- **Evidence:**
+  - migration `0181`/`0182`; `sessionmodel.SessionPullRequestRef` /
+    `DecodeSessionPullRequests` (`session_pull_requests_test.go`).
+  - `sessionregistry.AppendSessionPullRequest` (id-deduped upsert, row_version
+    bump) read back through `Get`/`List`/`fetchSessionRowsAfter` and carried on
+    the snapshot `Info` + `RowPublisher` wire shapes.
+  - `sessionPullRequestRefFromControlAction` filter + the
+    `recordSessionPullRequestSighting` hook
+    (`control_actions_pull_requests_test.go`).
+  - frontend `normalizeSessionPullRequests` (`pullRequests.test.ts`),
+    `pullRequestsFromDurable`, and the single-click `PullRequestMenuButton`
+    shortcut to the `/pull-requests` page (`AgentGitActivityScreen`, which also
+    hosts Merge in Tank).
+- **Non-goal:** PR *write* authority (opening/merging PRs) is unrelated — that is
+  the governed publish path / break-glass surface above. This projection is
+  read-side display only.
 
 ## Branch Lane Grants
 

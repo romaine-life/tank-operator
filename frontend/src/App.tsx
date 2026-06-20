@@ -451,6 +451,10 @@ import {
   normalizeSpawnedSessions,
   type SpawnedSessionRef,
 } from "./spawnedSessions";
+import {
+  normalizeSessionPullRequests,
+  type SessionPullRequestRef,
+} from "./pullRequests";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -908,6 +912,11 @@ interface Session {
   // "spawned sessions" chip lists (sessions this one spawned via
   // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
   spawned_sessions?: SpawnedSessionRef[];
+  // pull_requests is the durable list of PRs this session touched, surfaced by
+  // the composer git chip / dedicated /pull-requests page. Absent/empty when
+  // none. Sourced from the durable sessions.pull_requests column, not re-derived
+  // from the capped control-action feed.
+  pull_requests?: SessionPullRequestRef[];
   // parent_session_id is the child→parent (origin) pointer that drives sidebar
   // nesting: the id of the session that spawned this one, stamped on the child
   // row at create. Absent when this session was not spawned. arrangeSessionTree
@@ -2603,9 +2612,12 @@ interface ComposerToolButtonsProps {
     onQuickApproveMany?: (items: BreakGlassApprovalMenuItem[]) => void;
   };
   pullRequest: {
-    latestUrl?: string;
+    // The git chip is a single-click shortcut to the /pull-requests page; count
+    // drives its tooltip + enabled state, linkedUrl keeps it live for a test
+    // session whose linked PR isn't in its own durable list.
     linkedUrl?: string;
-    sessionId?: string | null;
+    count?: number;
+    onOpenPage?: () => void;
   };
   slash: {
     disabled?: boolean;
@@ -2632,199 +2644,36 @@ interface ComposerToolButtonsProps {
 // open/outside-click/escape handling mirrors BugLabelPicker so it composes
 // cleanly inside the composer toolbar.
 function PullRequestMenuButton({
-  latestUrl,
   linkedUrl,
-  sessionId,
+  count,
+  onOpenPage,
 }: ComposerToolButtonsProps["pullRequest"]) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLSpanElement | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  // The popover is portaled to <body> with fixed positioning so it escapes the
-  // composer input-group's `overflow: hidden` + `z-index` stacking context,
-  // which otherwise clips an in-flow absolutely-positioned popover (it opens in
-  // the DOM but renders behind/clipped by the composer). Anchor is the
-  // trigger's viewport rect, recomputed on open / scroll / resize.
-  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
-    null,
-  );
-
-  const computeAnchor = useCallback(() => {
-    const r = triggerRef.current?.getBoundingClientRect();
-    if (!r) return;
-    setAnchor({
-      right: Math.round(window.innerWidth - r.right),
-      bottom: Math.round(window.innerHeight - r.top + 8),
-    });
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    computeAnchor();
-    window.addEventListener("resize", computeAnchor);
-    window.addEventListener("scroll", computeAnchor, true);
-    return () => {
-      window.removeEventListener("resize", computeAnchor);
-      window.removeEventListener("scroll", computeAnchor, true);
-    };
-  }, [open, computeAnchor]);
-
-  useEffect(() => {
-    if (!open) return;
-    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        (ref.current?.contains(target) || popoverRef.current?.contains(target))
-      )
-        return;
-      setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", closeIfOutside);
-    document.addEventListener("touchstart", closeIfOutside);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("mousedown", closeIfOutside);
-      document.removeEventListener("touchstart", closeIfOutside);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  const [mergeState, setMergeState] = useState<
-    "idle" | "merging" | "merged" | "error"
-  >("idle");
-  const [mergeError, setMergeError] = useState("");
-  const doMerge = useCallback(async () => {
-    if (!sessionId || mergeState === "merging" || mergeState === "merged") return;
-    setMergeState("merging");
-    setMergeError("");
-    try {
-      const res = await authedFetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/merge-pr`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        },
-      );
-      if (!res.ok) {
-        let detail = `merge_failed_${res.status}`;
-        try {
-          const body = await res.json();
-          if (typeof body?.detail === "string") detail = body.detail;
-        } catch {
-          // keep the status-derived detail when the body is not JSON
-        }
-        setMergeState("error");
-        setMergeError(detail);
-        return;
-      }
-      setMergeState("merged");
-    } catch (err) {
-      setMergeState("error");
-      setMergeError(err instanceof Error ? err.message : "merge failed");
-    }
-  }, [sessionId, mergeState]);
-
-  const latest = latestUrl?.trim() ?? "";
+  // The composer git chip is a single-click shortcut to the dedicated
+  // /pull-requests page (AgentGitActivityScreen): one click opens the complete,
+  // durable PR list, which is also where Merge in Tank lives. It is intentionally
+  // NOT a popover menu. The chip stays live whenever the session has touched a PR
+  // (count) or carries a linked test/rollout PR the page surfaces.
   const linked = linkedUrl?.trim() ?? "";
-  const showLinkedDistinct = Boolean(linked) && linked !== latest;
-  const hasLinks = Boolean(latest || linked);
-  const title = hasLinks ? "Pull request" : "No pull request linked yet";
-
+  const prCount = typeof count === "number" ? count : 0;
+  const hasPage = Boolean(onOpenPage && (prCount > 0 || linked));
+  const title = !hasPage
+    ? "No pull request yet"
+    : prCount > 1
+      ? `View ${prCount} pull requests`
+      : "View pull request";
   return (
-    <span ref={ref} className="run-pr-menu">
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}`}
-        aria-label={title}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={title}
-        disabled={!hasLinks}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
-      </button>
-      {open &&
-        hasLinks &&
-        createPortal(
-          <div
-            ref={popoverRef}
-            className="run-pr-menu-popover"
-            role="menu"
-            aria-label="Pull request actions"
-            style={
-              anchor
-                ? { right: anchor.right, bottom: anchor.bottom }
-                : { visibility: "hidden" }
-            }
-          >
-            <div className="run-slash-palette-label">Pull request</div>
-            {latest ? (
-              <a
-                role="menuitem"
-                className="run-pr-menu-item"
-                href={latest}
-                target="_blank"
-                rel="noreferrer"
-                onClick={() => setOpen(false)}
-              >
-                <span className="run-pr-menu-name">Latest PR</span>
-                <ExternalLinkIcon
-                  className="run-pr-menu-icon"
-                  aria-hidden="true"
-                />
-              </a>
-            ) : null}
-            {showLinkedDistinct ? (
-              <a
-                role="menuitem"
-                className="run-pr-menu-item"
-                href={linked}
-                target="_blank"
-                rel="noreferrer"
-                onClick={() => setOpen(false)}
-              >
-                <span className="run-pr-menu-name">Pull request page</span>
-                <ExternalLinkIcon
-                  className="run-pr-menu-icon"
-                  aria-hidden="true"
-                />
-              </a>
-            ) : null}
-            {!hasLinks && (
-              <div className="run-slash-empty">No pull request linked yet</div>
-            )}
-            {hasLinks && sessionId ? (
-              <button
-                type="button"
-                role="menuitem"
-                className="run-pr-menu-item"
-                disabled={mergeState === "merging" || mergeState === "merged"}
-                onClick={doMerge}
-                title="Merge this PR in Tank (GitHub enforces the green/mergeable gate)"
-              >
-                <span className="run-pr-menu-name">
-                  {mergeState === "merged"
-                    ? "Merged ✓"
-                    : mergeState === "merging"
-                      ? "Merging…"
-                      : "Merge in Tank"}
-                </span>
-                {mergeState === "error" && mergeError ? (
-                  <span className="run-slash-desc">{mergeError}</span>
-                ) : null}
-              </button>
-            ) : null}
-          </div>,
-          document.body,
-        )}
-    </span>
+    <button
+      type="button"
+      className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${
+        hasPage ? " is-ready" : ""
+      }`}
+      aria-label={title}
+      title={title}
+      disabled={!hasPage}
+      onClick={() => onOpenPage?.()}
+    >
+      <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -9125,11 +8974,14 @@ function summarizeGitAction(action: string | undefined): string {
   }
 }
 
+// buildAgentGitActivity derives the COMMIT list for the /pull-requests page from
+// the recent control-action feed. PRs are NOT derived here anymore — they come
+// from the durable sessions.pull_requests projection (see pullRequestsFromDurable)
+// so the complete set survives the feed's newest-N cap. A commit list is
+// inherently recent-activity, so the capped feed remains the right source for it.
 function buildAgentGitActivity(entries: TranscriptEntry[]): {
-  pullRequests: AgentGitActivityItem[];
   commits: AgentGitActivityItem[];
 } {
-  const pullRequestsByKey = new Map<string, AgentGitActivityItem>();
   const commits: AgentGitActivityItem[] = [];
   for (const entry of entries) {
     if (!isControlActionEntry(entry)) continue;
@@ -9138,36 +8990,6 @@ function buildAgentGitActivity(entries: TranscriptEntry[]): {
     const href = entry.controlActionTarget ?? row?.target_ref ?? "";
     const repo = entry.controlActionRepo;
     const createdAt = entry.startedAt ?? entry.time;
-    if (
-      action?.startsWith("github.pull_request.") &&
-      href.includes("github.com/") &&
-      href.includes("/pull/")
-    ) {
-      const number =
-        entry.controlActionPrNumber ??
-        (typeof row?.pr_number === "number" ? row.pr_number : undefined);
-      const key = repo && number ? `${repo}#${number}` : href;
-      const state =
-        typeof row?.status === "string" && row.status !== "succeeded"
-          ? row.status
-          : payloadField(row?.payload, "mergeable_state");
-      const item: AgentGitActivityItem = {
-        id: `pr-${key}`,
-        href,
-        repo,
-        label: number ? `PR #${number}` : "Pull request",
-        detail: [repo, summarizeGitAction(action), state, formatToolFullTime(createdAt)]
-          .filter(Boolean)
-          .join(" / "),
-        action,
-        createdAt,
-      };
-      const existing = pullRequestsByKey.get(key);
-      if (!existing || (createdAt ?? "") > (existing.createdAt ?? "")) {
-        pullRequestsByKey.set(key, item);
-      }
-      continue;
-    }
     if (
       action === "github.commit.push" ||
       action === "github.commit.write" ||
@@ -9198,9 +9020,49 @@ function buildAgentGitActivity(entries: TranscriptEntry[]): {
   const byNewest = (a: AgentGitActivityItem, b: AgentGitActivityItem) =>
     (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
   return {
-    pullRequests: Array.from(pullRequestsByKey.values()).sort(byNewest),
     commits: commits.sort(byNewest),
   };
+}
+
+// pullRequestsFromDurable maps the durable sessions.pull_requests projection
+// into the AgentGitActivityItem shape the composer git chip and the dedicated
+// /pull-requests page render. This is the COMPLETE list — the backend records a
+// ref for every github.pull_request.* sighting onto the session row — replacing
+// the old in-browser re-derivation from the newest-100 control-action feed where
+// the oldest .open rows silently dropped on busy sessions.
+function pullRequestsFromDurable(
+  refs: SessionPullRequestRef[] | undefined,
+): AgentGitActivityItem[] {
+  if (!refs || refs.length === 0) return [];
+  const items = refs.flatMap((pr) => {
+    const url = pr.url?.trim();
+    if (!url) return [];
+    const number = typeof pr.number === "number" ? pr.number : undefined;
+    const key = pr.repo && number ? `${pr.repo}#${number}` : url;
+    const state =
+      pr.state || (pr.status && pr.status !== "succeeded" ? pr.status : "");
+    return [
+      {
+        id: `pr-${key}`,
+        href: url,
+        repo: pr.repo,
+        label: number ? `PR #${number}` : "Pull request",
+        detail: [
+          pr.repo,
+          summarizeGitAction(pr.action),
+          state,
+          formatToolFullTime(pr.updated_at),
+        ]
+          .filter(Boolean)
+          .join(" / "),
+        action: pr.action,
+        createdAt: pr.updated_at,
+      },
+    ];
+  });
+  return items.sort((a, b) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
 }
 
 function isShellToolEntry(entry: TranscriptEntry): boolean {
@@ -12075,10 +11937,63 @@ function BackgroundScreen({
 function AgentGitActivityScreen({
   pullRequests,
   commits,
+  sessionId,
+  linkedPullRequestUrl,
+  canMerge,
 }: {
   pullRequests: AgentGitActivityItem[];
   commits: AgentGitActivityItem[];
+  sessionId?: string | null;
+  linkedPullRequestUrl?: string;
+  canMerge?: boolean;
 }) {
+  const linked = linkedPullRequestUrl?.trim() ?? "";
+  // Surface a linked (test/rollout) PR that isn't already in the session's own
+  // durable list, so pointing the composer chip straight at this page never
+  // drops the one PR a test session most cares about.
+  const linkedListed =
+    !linked || pullRequests.some((item) => item.href === linked);
+  const [mergeState, setMergeState] = useState<
+    "idle" | "merging" | "merged" | "error"
+  >("idle");
+  const [mergeError, setMergeError] = useState("");
+  const doMerge = useCallback(async () => {
+    if (!sessionId || mergeState === "merging" || mergeState === "merged") return;
+    setMergeState("merging");
+    setMergeError("");
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/merge-pr`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      );
+      if (!res.ok) {
+        let detail = `merge_failed_${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // keep the status-derived detail when the body is not JSON
+        }
+        setMergeState("error");
+        setMergeError(detail);
+        return;
+      }
+      setMergeState("merged");
+    } catch (err) {
+      setMergeState("error");
+      setMergeError(err instanceof Error ? err.message : "merge failed");
+    }
+  }, [sessionId, mergeState]);
+  // Merge in Tank is the session's governed PR merge (GitHub still enforces the
+  // green/mergeable gate). Only offered to an acting viewer (not a read-only or
+  // public-share view) on a session that owns a PR.
+  const showMerge = Boolean(
+    canMerge && sessionId && (pullRequests.length > 0 || linked),
+  );
   return (
     <div className="run-session-data-screen run-git-activity-screen">
       <section
@@ -12089,18 +12004,64 @@ function AgentGitActivityScreen({
           <h2 className="run-session-data-title" id="run-git-activity-title">
             PRs
           </h2>
-          <span className="run-session-data-summary">
-            {pullRequests.length} PRs / {commits.length} commits
-          </span>
+          <div className="run-session-data-page-actions">
+            <span className="run-session-data-summary">
+              {pullRequests.length} PRs / {commits.length} commits
+            </span>
+            {showMerge ? (
+              <button
+                type="button"
+                className="run-pr-merge-btn"
+                disabled={mergeState === "merging" || mergeState === "merged"}
+                onClick={doMerge}
+                title="Merge this session's PR in Tank (GitHub enforces the green/mergeable gate)"
+              >
+                {mergeState === "merged"
+                  ? "Merged ✓"
+                  : mergeState === "merging"
+                    ? "Merging…"
+                    : "Merge in Tank"}
+              </button>
+            ) : null}
+          </div>
         </div>
+        {mergeState === "error" && mergeError ? (
+          <div className="run-session-data-empty run-pr-merge-error">
+            {mergeError}
+          </div>
+        ) : null}
         <div className="run-git-activity-group">
           <h3 className="run-git-activity-heading">Pull requests</h3>
-          {pullRequests.length === 0 ? (
+          {pullRequests.length === 0 && linkedListed ? (
             <div className="run-session-data-empty">
               No pull requests touched yet.
             </div>
           ) : (
             <div className="run-git-activity-list" role="list">
+              {linkedListed ? null : (
+                <a
+                  key="linked-pr"
+                  className="run-git-activity-row"
+                  href={linked}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="listitem"
+                >
+                  <span className="run-git-activity-icon" aria-hidden="true">
+                    <GitPullRequestIcon />
+                  </span>
+                  <span className="run-git-activity-main">
+                    <span className="run-git-activity-label">Linked PR</span>
+                    <span className="run-git-activity-detail">
+                      Linked to this session (test / rollout)
+                    </span>
+                  </span>
+                  <ExternalLinkIcon
+                    className="run-git-activity-external"
+                    aria-hidden="true"
+                  />
+                </a>
+              )}
               {pullRequests.map((item) => (
                 <a
                   key={item.id}
@@ -23051,8 +23012,13 @@ function ChatPane({
     [backgroundTaskLedgerEntries],
   );
   const agentGitActivity = useMemo(
-    () => buildAgentGitActivity(controlActionEntries),
-    [controlActionEntries],
+    () => ({
+      // PRs come from the durable sessions.pull_requests projection (complete and
+      // cap-proof); commits stay derived from the recent control-action feed.
+      pullRequests: pullRequestsFromDurable(session.pull_requests),
+      commits: buildAgentGitActivity(controlActionEntries).commits,
+    }),
+    [session.pull_requests, controlActionEntries],
   );
   const runningShellInvocationEntries = useMemo(
     () => renderedEntries.filter(isRunningShellInvocationEntry),
@@ -24060,11 +24026,14 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  // The composer pull-request menu surfaces two links separately: the latest PR
-  // the agent opened (derived from control-action git activity) and the PR
-  // explicitly linked to the session via set_pull_request_link (test/rollout).
-  const latestPullRequestURL = agentGitActivity.pullRequests[0]?.href ?? "";
+  // The composer git chip is a single-click shortcut to the dedicated
+  // /pull-requests page (AgentGitActivityScreen): one click opens the complete,
+  // durable PR list, which is also where Merge in Tank lives. linkedPullRequestURL
+  // is the PR explicitly linked to this session via set_pull_request_link
+  // (test/rollout); the page surfaces it when it isn't in the session's own
+  // durable list. canMergePr gates the page's Merge in Tank to acting viewers.
   const linkedPullRequestURL = testState?.pull_request_url?.trim() ?? "";
+  const canMergePr = !publicView && !readOnly;
   const sessionDataRows = useMemo(
     () =>
       buildSessionDataStatusRows({
@@ -25466,6 +25435,9 @@ function ChatPane({
               <AgentGitActivityScreen
                 pullRequests={agentGitActivity.pullRequests}
                 commits={agentGitActivity.commits}
+                sessionId={session.id}
+                linkedPullRequestUrl={linkedPullRequestURL}
+                canMerge={canMergePr}
               />
             ) : activeTab === "break-glass" ? (
               <BreakGlassRequestPage
@@ -26112,9 +26084,9 @@ function ChatPane({
                     publicView || readOnly ? undefined : quickApproveBreakGlassMenuItems,
                 }}
                 pullRequest={{
-                  latestUrl: latestPullRequestURL,
                   linkedUrl: linkedPullRequestURL,
-                  sessionId: session.id,
+                  count: agentGitActivity.pullRequests.length,
+                  onOpenPage: () => toggleRunTab("pull-requests"),
                 }}
                 slash={{
                   title: "Show slash commands",
@@ -27948,6 +27920,7 @@ function AuthenticatedApp() {
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
       spoke_config: row.spoke_config,
       spawned_sessions: row.spawned_sessions,
+      pull_requests: row.pull_requests,
       parent_session_id: row.parent_session_id,
       sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
@@ -28021,6 +27994,7 @@ function AuthenticatedApp() {
           ? (raw.spoke_config as Record<string, unknown>)
           : undefined,
       spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
+      pull_requests: normalizeSessionPullRequests(raw.pull_requests),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities)

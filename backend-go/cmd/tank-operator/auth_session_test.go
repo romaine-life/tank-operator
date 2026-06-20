@@ -477,6 +477,10 @@ func (r *testSessionRegistry) AppendSpawnedSession(_ context.Context, email, par
 	})
 	return nil
 }
+
+func (r *testSessionRegistry) AppendSessionPullRequest(_ context.Context, _, _ string, _ sessionmodel.SessionPullRequestRef) error {
+	return nil
+}
 func (r *testSessionRegistry) SetRuntimeConfig(_ context.Context, email, sessionID, model, effort string) error {
 	records := r.records[email]
 	if records == nil {

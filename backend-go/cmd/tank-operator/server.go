@@ -662,6 +662,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Read-only SQL for non-restricted sessions (backs the query_tank_db MCP tool).
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/db-read-query", s.handleInternalSessionDBReadQuery)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-slot-model-approvals/grants", s.handleInternalGrantTestSlotModelApproval)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-workflow/start", s.handleInternalStartTestWorkflow)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

@@ -165,6 +165,29 @@ and [../README.md](../README.md) for how capability ledgers are used.
   the `conversationReducer.ts` / `conversationProjection.ts` cases are intentionally
   **kept** as a read path so historical durable records still render; retiring them
   is a separate, data-aware migration (old rows must not silently stop rendering).
+- **Update (2026-06-19): agent/automation-drivable trigger.** The deterministic
+  gate is now reachable programmatically, not only via the owner's browser
+  button — closing the gap that left the flow untestable by an agent / CI (and,
+  because nothing but a human click ever exercised it, prone to silent rot). Two
+  surfaces, both **zero-LLM triggers for the same `provisionTestSlotForSession`
+  gate**. This is **not** a reintroduction of the retired LLM-orchestrated
+  provisioning wrappers (the removed mcp-glimmung checkout/deploy + mcp-tank-operator
+  pill tools): there is no agent-driven checkout/deploy/pill logic — the agent only
+  *triggers*, and the server provisions deterministically, exactly as the button
+  does. (1) `POST /api/internal/sessions/{id}/test-workflow/start` —
+  service-principal gated (`requireServicePrincipal` + `internalCallerMatchesSession`:
+  the session's own `svc:tank:<id>` or the orchestrator control plane), sharing the
+  extracted `startTestWorkflowForSession` with the browser handler so the
+  resolve→double-trigger-guard→launch→202 tail cannot drift between the two
+  triggers. (2) a `provision_test_slot` MCP tool (mcp-auth-proxy sidecar injection,
+  alongside `publish_current_head`, restricted-git sessions only) that POSTs to (1)
+  with the session's forwarded identity (`_tank_caller_session_headers`). Same
+  double-trigger guard, same 202, same `tank_test_slot_interactive_total` /
+  `tank_test_slot_validate_total` / `tank_test_slot_provision_total` counters.
+  Evidence: `TestInternalStartTestWorkflow_*` (own-session 202, cross-session 403,
+  non-service 403, missing-glimmung 503, body threading), the unchanged
+  `TestStartTestWorkflow_*` browser suite (proves the refactor is behavior-identical),
+  and the sidecar `test_provision_test_slot_tool.py` + tools-list contract test.
 
 ## interactive-test-workflow-drive
 
