@@ -516,6 +516,13 @@ func TestPodManifestRestrictedGitRoutesGithubThroughEgressProxy(t *testing.T) {
 	if !clonerHasCA {
 		t.Fatal("repo-cloner must mount oauth-gateway-ca in egress-proxy mode")
 	}
+	// The lockdown NetworkPolicy (restricted-git-egress-policy.yaml) selects this
+	// label; without it a restricted session could bypass the wall via a direct
+	// GitHub-IP connection. Restricted egress-proxy sessions MUST carry it.
+	labels := manifest["metadata"].(map[string]any)["labels"].(map[string]any)
+	if got, want := labels["tank-operator/git-egress"], "proxy"; got != want {
+		t.Fatalf("egress-proxy session must carry the lockdown selector label tank-operator/git-egress = %v, want %q", got, want)
+	}
 }
 
 func TestPodManifestUnrestrictedGitSkipsEgressProxyEvenWhenIPSet(t *testing.T) {
@@ -535,6 +542,12 @@ func TestPodManifestUnrestrictedGitSkipsEgressProxyEvenWhenIPSet(t *testing.T) {
 	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
 	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "false"; got != want {
 		t.Fatalf("unrestricted codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
+	}
+	// And it must NOT carry the lockdown selector label — the egress NetworkPolicy
+	// would otherwise confine an unrestricted session that still uses the direct path.
+	labels := manifest["metadata"].(map[string]any)["labels"].(map[string]any)
+	if got, ok := labels["tank-operator/git-egress"]; ok {
+		t.Fatalf("unrestricted session must NOT carry the git-egress lockdown label; got %v", got)
 	}
 }
 
