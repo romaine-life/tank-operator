@@ -29,6 +29,13 @@ const (
 	provisionVerdictWatchingTimeout provisionVerdict = "watching_timeout"
 	provisionVerdictHeadMoved       provisionVerdict = "head_moved"
 	provisionVerdictError           provisionVerdict = "error"
+	// provisionVerdictAwaitingImageBuild is recorded each poll the gate holds an
+	// otherwise-ready PR in `watching` because the head SHA's image-build workflow
+	// (docker-build-check) has not succeeded yet — the deployable image for this
+	// exact commit does not exist, so provisioning would deploy a phantom. It is
+	// the observable counterpart of the build-success precondition: a green
+	// reducer verdict that does NOT provision surfaces here instead of silently.
+	provisionVerdictAwaitingImageBuild provisionVerdict = "awaiting_image_build"
 	// provisionVerdictRef is a direct deploy-by-ref (e.g. main) with no PR to
 	// validate — the escape hatch that keeps test-slot provisioning from being a
 	// dead-end when there is no open PR to grab. Provisions immediately.
@@ -217,7 +224,18 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 				return provisionOutcome{Verdict: provisionVerdictError}, buildErr
 			}
 			if !built {
-				status = pgstore.CIWatchWatching // green per reducer, but the image for this commit isn't built yet — keep watching, don't provision
+				// Green per reducer, but the image for this commit isn't built yet —
+				// keep watching, don't provision. Emit an observable signal (log + the
+				// awaiting_image_build verdict counter) so this precondition is visible
+				// in prod rather than a silent demotion indistinguishable from ordinary
+				// check-waiting.
+				slog.Info("provision gate awaiting image build",
+					"session_id", req.SessionID,
+					"repo", repoOwner+"/"+repoName,
+					"head_sha", result.HeadSHA,
+					"workflow", testSlotImageBuildWorkflow)
+				recordTestSlotValidate(string(provisionVerdictAwaitingImageBuild))
+				status = pgstore.CIWatchWatching
 			}
 		}
 		switch status {
