@@ -271,11 +271,19 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 		recordTestSlotProvision(provisionStepNoSlot)
 		return out, errors.New("glimmung checkout returned no slot identity")
 	}
+	// A deploy-by-ref (e.g. main) has no per-commit CI image, so deploy the chart
+	// at the ref with no override — its pinned production image stands. A PR
+	// deploy (no DeployRef) resolves the CI-built image as usual.
+	imageSource := ""
+	if strings.TrimSpace(req.DeployRef) != "" {
+		imageSource = "chart"
+	}
 	deploy, err := s.glimmung.DeployImageToTestSlot(ctx, req.OwnerEmail, glimmung.DeployImageToTestSlotRequest{
-		Project:   req.Project,
-		SlotIndex: checkout.SlotIndex,
-		SlotName:  checkout.SlotName,
-		GitRef:    deployRef,
+		Project:     req.Project,
+		SlotIndex:   checkout.SlotIndex,
+		SlotName:    checkout.SlotName,
+		GitRef:      deployRef,
+		ImageSource: imageSource,
 	})
 	if err != nil {
 		recordTestSlotProvision(provisionStepDeployError)

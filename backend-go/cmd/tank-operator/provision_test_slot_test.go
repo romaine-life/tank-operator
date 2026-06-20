@@ -188,6 +188,9 @@ func TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate(t *testing.T) {
 	if glim.deployReq.GitRef != "main" {
 		t.Fatalf("deploy git_ref=%q, want main", glim.deployReq.GitRef)
 	}
+	if glim.deployReq.ImageSource != "chart" {
+		t.Fatalf("deploy image_source=%q, want chart (deploy-by-ref uses the chart's pinned image)", glim.deployReq.ImageSource)
+	}
 	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
 	if !ok {
 		t.Fatalf("session record missing")
