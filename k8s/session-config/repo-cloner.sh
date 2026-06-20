@@ -28,15 +28,20 @@ case "$(printf '%s' "$TANK_RESTRICTED_GIT" | tr '[:upper:]' '[:lower:]')" in
 esac
 
 # Egress-proxy mode (restricted_git via the wall): github.com is pinned at the agent
-# egress proxy, so the clone's TLS terminates on the proxy's leaf. Trust it per-host
-# (other remotes keep the OS store) before any clone runs. The clone still carries the
-# cloner's own minted token, which the proxy passes through unchanged (reads aren't
-# governed); the agent's later pushes go through the wall in proxy mode.
+# egress proxy. The cloner owns the in-pod proxy setup for each repo, because it is the
+# one place that reliably sees TANK_GIT_EGRESS_PROXY (the startup git-template script
+# can run too early to). It trusts the proxy leaf for its own clone, writes that trust
+# into the repo's LOCAL config for the agent container, and installs NO pre-push/
+# post-commit hooks — the wall is the boundary, so the agent's branch pushes flow
+# directly through it instead of being blocked client-side.
+egress_proxy_git=false
 case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in
-  1|true|yes|on)
-    git config --global "http.https://github.com/.sslCAInfo" "${TANK_GIT_PROXY_CA:-/etc/oauth-gateway-ca/ca.crt}"
-    ;;
+  1|true|yes|on) egress_proxy_git=true ;;
 esac
+PROXY_CA="${TANK_GIT_PROXY_CA:-/etc/oauth-gateway-ca/ca.crt}"
+if [ "$egress_proxy_git" = "true" ]; then
+  git config --global "http.https://github.com/.sslCAInfo" "$PROXY_CA"
+fi
 
 for slug in "${REPOS[@]}"; do
   if [[ ! "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
@@ -133,6 +138,11 @@ install_repo_agent_reminder() {
   local pre_push_src="${AGENT_PRE_PUSH_HOOK:-/opt/tank/session-config/agent-pre-push-hook.sh}"
   local git_dir
   local hook_dst
+
+  # In egress-proxy mode the wall is the boundary; the in-pod pre-push (block direct
+  # push) and post-commit (auto-publish) hooks must NOT be installed, or the agent's
+  # branch push is refused client-side and never reaches the wall.
+  [ "$egress_proxy_git" = "true" ] && return 0
 
   [ -f "$post_commit_src" ] || return 0
 
@@ -444,6 +454,13 @@ for slug in "${REPOS[@]}"; do
       # pushes and a read-only token cannot push, so the one-shot write token
       # used for this clone is not reusable from the agent shell.
       git -C "$target" config --local --unset-all credential.helper 2>/dev/null || true
+      if [ "$egress_proxy_git" = "true" ]; then
+        # The agent pushes this repo directly through the wall, so its git must trust
+        # the proxy's leaf for github.com. Write it into the repo's LOCAL config so it
+        # persists in the shared workspace for the agent container (the startup
+        # git-template script can miss this).
+        git -C "$target" config --local "http.https://github.com/.sslCAInfo" "$PROXY_CA" || true
+      fi
       if ! create_session_branch_pr "$slug" "$target"; then
         msg="governed session branch PR setup failed"
         set_repo_state "$slug" "failed" "$target" "$msg"
