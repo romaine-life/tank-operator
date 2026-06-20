@@ -198,7 +198,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-ce348aa0c560942e29742eb73eaa26ec65bde9116235a18bedbb0944acb53100"
+    tag: "api-proxy-a8b26fa3c7015a706415dd397a2c57521cd4f49174882e8b09f6624ce37261f3"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   # Replica count shared by all provider proxy Deployments. HOLD AT 1 until the refresh
@@ -239,7 +239,7 @@ agentEgressProxy:
   # claude/codex proxies — e.g. a dark-deploy smoke that must not roll them.
   image:
     repository: ""
-    tag: "api-proxy-ce348aa0c560942e29742eb73eaa26ec65bde9116235a18bedbb0944acb53100"
+    tag: "api-proxy-a8b26fa3c7015a706415dd397a2c57521cd4f49174882e8b09f6624ce37261f3"
     pullPolicy: ""
 claudeSecondaryApiProxy:
   serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
