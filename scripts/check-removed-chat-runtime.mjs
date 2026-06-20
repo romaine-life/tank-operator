@@ -12,6 +12,10 @@ import {
   collectHotSwapGateFailures,
   HOT_SWAP_GATE_FAILURE_HINT,
 } from "./check-removed-hot-swap-verify-gate.mjs";
+import {
+  collectRemovedPRLaneFailures,
+  REMOVED_PR_LANE_FAILURE_HINT,
+} from "./check-removed-pr-lane.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,6 +44,11 @@ const ignoredFiles = new Set([
 
 const ignoredRelativePaths = new Set([
   "scripts/check-removed-chat-runtime.mjs",
+  // The PR-lane reintroduction guard (merged into this script via
+  // collectRemovedPRLaneFailures) names the retired pr_lane symbols in its
+  // prose. It is documentation of the deletion target, not a resurrection —
+  // same exemption shape as the sibling check-* guards below.
+  "scripts/check-removed-pr-lane.mjs",
   "scripts/check-tank-conversation-contract.mjs",
   // The stop-request migration's completion manifest catalogues the
   // retired symbols as grep targets. Excluded so this guard doesn't
@@ -930,6 +939,16 @@ for (const failure of await collectTestSlotProvisioningFailures()) {
 // claude-container/**, docs/**, scripts/**) without a separate workflow step.
 for (const failure of await collectHotSwapGateFailures()) {
   failures.push(`${failure} — ${HOT_SWAP_GATE_FAILURE_HINT}`);
+}
+
+// Retired PR-lane surface (request_pr_lane / create_pr_lane tools,
+// github.pr_lane.* events, the proxy tool markers, and handle*PRLane handlers),
+// unified into the break-glass branch-lane grant (docs/branch-lane-grants.md).
+// Scoped scan lives in its own module; merged here so it rides this guard's CI
+// wiring (backend-go/**, claude-container/**, frontend/**, docs/**, k8s/**,
+// scripts/**) without a separate workflow step.
+for (const failure of await collectRemovedPRLaneFailures()) {
+  failures.push(`${failure} — ${REMOVED_PR_LANE_FAILURE_HINT}`);
 }
 
 if (failures.length > 0) {

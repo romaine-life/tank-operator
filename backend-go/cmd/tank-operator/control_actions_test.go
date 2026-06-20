@@ -13,6 +13,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
@@ -503,6 +504,131 @@ func TestHandleInternalAppendControlActionRejectsUnsupportedActionBeforeStore(t 
 	}
 }
 
+// TestHandleInternalAppendControlActionRejectsRetiredPRLaneActions pins the
+// retirement of the PR-lane event family: the control-action write path must
+// reject every github.pr_lane.* action so the deleted mechanism cannot be
+// reintroduced through the durable ledger. If this test fails, a retired
+// pr_lane action has been re-added to the accept-list — a counted migration bug.
+func TestHandleInternalAppendControlActionRejectsRetiredPRLaneActions(t *testing.T) {
+	for _, action := range []string{
+		"github.pr_lane.request",
+		"github.pr_lane.approve",
+		"github.pr_lane.deny",
+		"github.pr_lane.auto_approve",
+		"github.pr_lane.create",
+	} {
+		t.Run(action, func(t *testing.T) {
+			store := &fakeControlActionStore{}
+			app := controlActionTestServer(t, store)
+			body := `{
+				"event_id": "retired_1",
+				"invocation_id": "retired_invocation_1",
+				"source_service": "mcp-github",
+				"source_tool": "create_pull_request",
+				"action": "` + action + `",
+				"status": "succeeded",
+				"target_kind": "github_repository",
+				"target_ref": "https://github.com/romaine-life/tank-operator",
+				"repo_owner": "romaine-life",
+				"repo_name": "tank-operator"
+			}`
+			req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
+			req.SetPathValue("session_id", "47")
+			req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+			rec := httptest.NewRecorder()
+
+			app.handleInternalAppendControlAction(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if len(store.appendCalls) != 0 {
+				t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+			}
+		})
+	}
+}
+
+// TestHandleInternalAppendControlActionRetiredPRLaneIncrementsCounter pins the
+// observability half of the retirement: a rejected github.pr_lane.* write must
+// increment tank_break_glass_retired_path_total so TankBranchLaneRetiredPathUsed
+// can fire. Without the counter the deleted path could be exercised silently.
+func TestHandleInternalAppendControlActionRetiredPRLaneIncrementsCounter(t *testing.T) {
+	before := testutil.ToFloat64(breakGlassRetiredPathTotal)
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	body := `{
+		"event_id": "retired_counter_1",
+		"invocation_id": "retired_counter_invocation_1",
+		"source_service": "mcp-github",
+		"source_tool": "create_pull_request",
+		"action": "github.pr_lane.create",
+		"status": "succeeded",
+		"target_kind": "github_repository",
+		"target_ref": "https://github.com/romaine-life/tank-operator",
+		"repo_owner": "romaine-life",
+		"repo_name": "tank-operator"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 0 {
+		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
+	}
+	if after := testutil.ToFloat64(breakGlassRetiredPathTotal); after != before+1 {
+		t.Fatalf("tank_break_glass_retired_path_total = %v, want %v", after, before+1)
+	}
+}
+
+// TestHandleInternalAppendControlActionAcceptsBreakGlassPRWrite proves the
+// ledger admits the brokered PR-own audit action. The mcp-auth-proxy /pr-write
+// route records action=github.break_glass.pr_write for every gh pr
+// edit/ready/comment; if the accept-list omits it the audit is silently dropped
+// (the proxy logs and continues on a 4xx), breaking the audit guarantee the
+// branch-lane design relies on.
+func TestHandleInternalAppendControlActionAcceptsBreakGlassPRWrite(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	body := `{
+		"event_id": "bg_pr_write_1",
+		"invocation_id": "bg_pr_write_invocation_1",
+		"source_service": "tank-git-break-glass",
+		"source_tool": "pr_write",
+		"action": "github.break_glass.pr_write",
+		"status": "succeeded",
+		"target_kind": "github_repository",
+		"target_ref": "https://github.com/romaine-life/tank-operator",
+		"repo_owner": "romaine-life",
+		"repo_name": "tank-operator",
+		"pr_number": 1356,
+		"payload": {"pr_action": "comment", "branch": "tank/session/1145/tank-operator"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedControlActionServiceToken(t, "svc:tank:slot-3-session-47"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalAppendControlAction(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.SourceService != "tank-git-break-glass" || got.SourceTool != "pr_write" || got.Action != "github.break_glass.pr_write" || got.Status != "succeeded" {
+		t.Fatalf("audit action fields = %#v", got)
+	}
+}
+
 func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -553,30 +679,6 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			targetRef:  "https://github.com/romaine-life/tank-operator",
 		},
 		{
-			name:       "PR lane requested",
-			action:     "github.pr_lane.request",
-			targetKind: "github_repository",
-			targetRef:  "https://github.com/romaine-life/tank-operator",
-		},
-		{
-			name:       "PR lane approved",
-			action:     "github.pr_lane.approve",
-			targetKind: "github_repository",
-			targetRef:  "https://github.com/romaine-life/tank-operator",
-		},
-		{
-			name:       "PR lane denied",
-			action:     "github.pr_lane.deny",
-			targetKind: "github_repository",
-			targetRef:  "https://github.com/romaine-life/tank-operator",
-		},
-		{
-			name:       "PR lane created",
-			action:     "github.pr_lane.create",
-			targetKind: "github_pull_request",
-			targetRef:  "https://github.com/romaine-life/tank-operator/pull/999",
-		},
-		{
 			name:       "azure break glass requested",
 			action:     "azure.break_glass.request",
 			targetKind: "azure_mcp",
@@ -619,507 +721,6 @@ func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
 			}
 			if got := store.appendCalls[0].Action; got != tc.action {
 				t.Fatalf("action = %q, want %q", got, tc.action)
-			}
-		})
-	}
-}
-
-func TestHandleApprovePRLaneRequestRecordsDecision(t *testing.T) {
-	requestPayload := []byte(`{"lane_name":"docs","relationship":"parallel","reason":"split docs review"}`)
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{{
-			EventID:      "lane-request-1",
-			InvocationID: "lane-invocation-1",
-			Action:       "github.pr_lane.request",
-			Status:       "started",
-			TargetKind:   "github_repository",
-			TargetRef:    "https://github.com/romaine-life/tank-operator",
-			RepoOwner:    "romaine-life",
-			RepoName:     "tank-operator",
-			Payload:      requestPayload,
-		}},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
-		"note":"ok"
-	}`))
-	req.SetPathValue("session_id", "47")
-	req.SetPathValue("request_event_id", "lane-request-1")
-	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
-	rec := httptest.NewRecorder()
-
-	app.handleApprovePRLaneRequest(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if store.listOwner != "owner@example.test" || store.listSession != "47" {
-		t.Fatalf("list scope = owner %q session %q", store.listOwner, store.listSession)
-	}
-	if len(store.appendCalls) != 1 {
-		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
-	}
-	got := store.appendCalls[0]
-	if got.Action != "github.pr_lane.approve" || got.Status != "succeeded" {
-		t.Fatalf("decision action/status = %s/%s", got.Action, got.Status)
-	}
-	if got.InvocationID != "lane-invocation-1" || got.RepoOwner != "romaine-life" || got.RepoName != "tank-operator" {
-		t.Fatalf("decision copied request identity: %#v", got)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(got.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["request_event_id"] != "lane-request-1" || payload["note"] != "ok" {
-		t.Fatalf("payload = %#v", payload)
-	}
-}
-
-func TestHandleApprovePRLaneRequestRejectsResolvedRequest(t *testing.T) {
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{
-			{
-				EventID:      "lane-request-1",
-				InvocationID: "lane-invocation-1",
-				Action:       "github.pr_lane.request",
-				Status:       "started",
-				TargetKind:   "github_repository",
-				TargetRef:    "https://github.com/romaine-life/tank-operator",
-				RepoOwner:    "romaine-life",
-				RepoName:     "tank-operator",
-				Payload:      []byte(`{}`),
-			},
-			{
-				EventID:      "lane-approve-1",
-				InvocationID: "lane-invocation-1",
-				Action:       "github.pr_lane.approve",
-				Status:       "succeeded",
-			},
-		},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{}`))
-	req.SetPathValue("session_id", "47")
-	req.SetPathValue("request_event_id", "lane-request-1")
-	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
-	rec := httptest.NewRecorder()
-
-	app.handleApprovePRLaneRequest(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if len(store.appendCalls) != 0 {
-		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
-	}
-}
-
-func TestHandleApprovePRLaneAllocationPersistsRepoScopeOverride(t *testing.T) {
-	requestPayload := []byte(`{
-		"allocation_request":true,
-		"repo_scope":{"kind":"repos","repos":["romaine-life/tank-operator"]},
-		"branch_scope":{"kind":"count","count":5},
-		"reason":"split multi-repo work"
-	}`)
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{{
-			EventID:      "lane-request-1",
-			InvocationID: "lane-invocation-1",
-			Action:       "github.pr_lane.request",
-			Status:       "started",
-			TargetKind:   "github_repository",
-			TargetRef:    "tank://session/47/pr-lanes",
-			Payload:      requestPayload,
-		}},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
-		"note":"broaden",
-		"repo_scope":{"kind":"repos","repos":["romaine-life/auth","romaine-life/tank-operator"]},
-		"branch_scope":{"kind":"count","count":10}
-	}`))
-	req.SetPathValue("session_id", "47")
-	req.SetPathValue("request_event_id", "lane-request-1")
-	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
-	rec := httptest.NewRecorder()
-
-	app.handleApprovePRLaneRequest(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	got := store.appendCalls[0]
-	if got.Action != "github.pr_lane.auto_approve" || got.RepoOwner != "" || got.TargetRef != "tank://session/47/pr-lanes/repos" {
-		t.Fatalf("approval identity = %#v", got)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(got.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	repoScope, ok := payload["repo_scope"].(map[string]any)
-	if !ok {
-		t.Fatalf("repo_scope = %#v", payload["repo_scope"])
-	}
-	repos, ok := repoScope["repos"].([]any)
-	if !ok || len(repos) != 2 || repos[0] != "romaine-life/auth" || repos[1] != "romaine-life/tank-operator" {
-		t.Fatalf("repo_scope.repos = %#v", repoScope["repos"])
-	}
-	branchScope, ok := payload["branch_scope"].(map[string]any)
-	if !ok || branchScope["kind"] != "count" || branchScope["count"] != float64(10) {
-		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
-	}
-}
-
-func TestHandleAutoApprovePRLanesPersistsSessionGrant(t *testing.T) {
-	store := &fakeControlActionStore{}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/auto-approve", strings.NewReader(`{
-		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
-		"branch_scope": {"kind":"named","branches":["docs", "tank/session/47/tank-operator/backend"]},
-		"reason": "planned split"
-	}`))
-	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
-	rec := httptest.NewRecorder()
-
-	app.handleAutoApprovePRLanes(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if len(store.appendCalls) != 1 {
-		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
-	}
-	got := store.appendCalls[0]
-	if got.Action != "github.pr_lane.auto_approve" || got.Status != "succeeded" {
-		t.Fatalf("auto action/status = %s/%s", got.Action, got.Status)
-	}
-	if got.RepoOwner != "romaine-life" || got.RepoName != "tank-operator" {
-		t.Fatalf("repo = %s/%s", got.RepoOwner, got.RepoName)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(got.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	branchScope, ok := payload["branch_scope"].(map[string]any)
-	if !ok || branchScope["kind"] != "named" {
-		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
-	}
-	names, ok := branchScope["branches"].([]any)
-	if !ok || len(names) != 2 || names[0] != "docs" || names[1] != "backend" {
-		t.Fatalf("branch_scope.branches = %#v", branchScope["branches"])
-	}
-}
-
-func TestHandleAutoApprovePRLanesRejectsConflictingBranchScope(t *testing.T) {
-	store := &fakeControlActionStore{}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/auto-approve", strings.NewReader(`{
-		"repo_scope": {"kind":"current_repo","repo":"romaine-life/tank-operator"},
-		"branch_scope": {"kind":"unlimited","branches":["docs"]},
-		"reason": "planned split"
-	}`))
-	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
-	rec := httptest.NewRecorder()
-
-	app.handleAutoApprovePRLanes(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if len(store.appendCalls) != 0 {
-		t.Fatalf("append calls = %d, want 0", len(store.appendCalls))
-	}
-}
-
-func TestHandleInternalGetPRLaneAutoApprovalReturnsActiveGrant(t *testing.T) {
-	payload, _ := json.Marshal(map[string]any{
-		"repo_scope":   map[string]any{"kind": "current_repo", "repo": "romaine-life/tank-operator"},
-		"branch_scope": map[string]any{"kind": "count", "count": 7},
-		"scope":        "session",
-	})
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{{
-			EventID:   "auto-1",
-			Action:    "github.pr_lane.auto_approve",
-			Status:    "succeeded",
-			RepoOwner: "romaine-life",
-			RepoName:  "tank-operator",
-			Payload:   payload,
-		}},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/pr-lane-auto-approval?repo=romaine-life/tank-operator", nil)
-	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
-	rec := httptest.NewRecorder()
-
-	app.handleInternalGetPRLaneAutoApproval(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["active"] != true || body["event_id"] != "auto-1" || body["limit"] != float64(7) || body["remaining"] != float64(7) {
-		t.Fatalf("body = %#v", body)
-	}
-	if store.listOwner != "owner@example.test" || store.listSession != "47" {
-		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
-	}
-}
-
-func TestHandleInternalGetPRLaneAutoApprovalEnforcesBranchNamesAndLimit(t *testing.T) {
-	payload, _ := json.Marshal(map[string]any{
-		"repo_scope":   map[string]any{"kind": "current_repo", "repo": "romaine-life/tank-operator"},
-		"branch_scope": map[string]any{"kind": "named", "branches": []string{"docs"}},
-		"scope":        "session",
-	})
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{{
-			EventID:   "auto-1",
-			SessionID: "47",
-			Action:    "github.pr_lane.auto_approve",
-			Status:    "succeeded",
-			RepoOwner: "romaine-life",
-			RepoName:  "tank-operator",
-			Payload:   payload,
-		}},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/pr-lane-auto-approval?repo=romaine-life/tank-operator&lane_name=backend", nil)
-	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
-	rec := httptest.NewRecorder()
-
-	app.handleInternalGetPRLaneAutoApproval(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["active"] != false {
-		t.Fatalf("backend branch unexpectedly allowed: %#v", body)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/pr-lane-auto-approval?repo=romaine-life/tank-operator&lane_name=docs", nil)
-	req.SetPathValue("session_id", "47")
-	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
-	rec = httptest.NewRecorder()
-	app.handleInternalGetPRLaneAutoApproval(rec, req)
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["active"] != true || body["remaining"] != float64(1) {
-		t.Fatalf("docs branch not allowed: %#v", body)
-	}
-}
-
-func TestHandleApprovePRLaneAllocationRequestCreatesAutoApproval(t *testing.T) {
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{{
-			EventID:      "lane-request-1",
-			InvocationID: "lane-invocation-1",
-			Action:       "github.pr_lane.request",
-			Status:       "started",
-			TargetKind:   "github_repository",
-			TargetRef:    "https://github.com/romaine-life/tank-operator",
-			RepoOwner:    "romaine-life",
-			RepoName:     "tank-operator",
-			Payload: []byte(`{
-				"allocation_request":true,
-				"repo_scope":{"kind":"current_repo","repo":"romaine-life/tank-operator"},
-				"branch_scope":{"kind":"named","branches":["docs","backend"]},
-				"reason":"split review"
-			}`),
-		}},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{"note":"ok"}`))
-	req.SetPathValue("session_id", "47")
-	req.SetPathValue("request_event_id", "lane-request-1")
-	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
-	rec := httptest.NewRecorder()
-
-	app.handleApprovePRLaneRequest(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if len(store.appendCalls) != 1 {
-		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
-	}
-	got := store.appendCalls[0]
-	if got.Action != "github.pr_lane.auto_approve" || got.InvocationID != "lane-invocation-1" {
-		t.Fatalf("allocation approval = %#v", got)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(got.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	branchScope, ok := payload["branch_scope"].(map[string]any)
-	if !ok || branchScope["kind"] != "named" {
-		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
-	}
-	names, ok := branchScope["branches"].([]any)
-	if !ok || len(names) != 2 || names[0] != "docs" || names[1] != "backend" {
-		t.Fatalf("branch_scope.branches = %#v", branchScope["branches"])
-	}
-}
-
-func TestHandleApprovePRLaneAllocationRequestAllowsExplicitOverride(t *testing.T) {
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{{
-			EventID:      "lane-request-1",
-			InvocationID: "lane-invocation-1",
-			Action:       "github.pr_lane.request",
-			Status:       "started",
-			TargetKind:   "github_repository",
-			TargetRef:    "https://github.com/romaine-life/tank-operator",
-			RepoOwner:    "romaine-life",
-			RepoName:     "tank-operator",
-			Payload: []byte(`{
-				"allocation_request":true,
-				"repo_scope":{"kind":"current_repo","repo":"romaine-life/tank-operator"},
-				"branch_scope":{"kind":"named","branches":["docs","backend"]},
-				"reason":"split review"
-			}`),
-		}},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/47/pr-lane-requests/lane-request-1/approve", strings.NewReader(`{
-		"note":"override",
-		"branch_scope":{"kind":"unlimited"}
-	}`))
-	req.SetPathValue("session_id", "47")
-	req.SetPathValue("request_event_id", "lane-request-1")
-	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "owner@example.test", auth.RoleUser))
-	rec := httptest.NewRecorder()
-
-	app.handleApprovePRLaneRequest(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	got := store.appendCalls[0]
-	var payload map[string]any
-	if err := json.Unmarshal(got.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	branchScope, ok := payload["branch_scope"].(map[string]any)
-	if !ok || branchScope["kind"] != "unlimited" {
-		t.Fatalf("branch_scope = %#v", payload["branch_scope"])
-	}
-}
-
-func TestHandleInternalGetPRLaneAuthorizationAllowsApprovedRequest(t *testing.T) {
-	store := &fakeControlActionStore{
-		listRows: []pgstore.ControlActionEvent{
-			{
-				EventID:      "lane-request-1",
-				InvocationID: "lane-invocation-1",
-				Action:       "github.pr_lane.request",
-				Status:       "started",
-				TargetKind:   "github_repository",
-				TargetRef:    "https://github.com/romaine-life/tank-operator",
-				RepoOwner:    "romaine-life",
-				RepoName:     "tank-operator",
-				Payload: []byte(`{
-					"lane_name":"docs",
-					"relationship":"parallel",
-					"base":"main",
-					"scope":"docs/",
-					"reason":"split docs",
-					"proposed_branch":"tank/session/47/tank-operator/docs"
-				}`),
-			},
-			{
-				EventID:      "lane-approve-1",
-				InvocationID: "lane-invocation-1",
-				Action:       "github.pr_lane.approve",
-				Status:       "succeeded",
-			},
-		},
-	}
-	app := controlActionTestServer(t, store)
-	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/pr-lane-requests/lane-request-1/authorization", nil)
-	req.SetPathValue("session_id", "47")
-	req.SetPathValue("request_event_id", "lane-request-1")
-	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
-	rec := httptest.NewRecorder()
-
-	app.handleInternalGetPRLaneAuthorization(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var body prLaneAuthorizationResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if !body.Allowed || body.ApprovalEventID != "lane-approve-1" {
-		t.Fatalf("authorization = %#v", body)
-	}
-	if body.ProposedBranch != "tank/session/47/tank-operator/docs" || body.Repo != "romaine-life/tank-operator" {
-		t.Fatalf("authorization metadata = %#v", body)
-	}
-}
-
-func TestHandleInternalGetPRLaneAuthorizationBlocksDeniedOrCreatedRequest(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		action string
-		reason string
-	}{
-		{name: "denied", action: "github.pr_lane.deny", reason: "denied"},
-		{name: "created", action: "github.pr_lane.create", reason: "already"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			store := &fakeControlActionStore{
-				listRows: []pgstore.ControlActionEvent{
-					{
-						EventID:      "lane-request-1",
-						InvocationID: "lane-invocation-1",
-						Action:       "github.pr_lane.request",
-						Status:       "started",
-						TargetKind:   "github_repository",
-						TargetRef:    "https://github.com/romaine-life/tank-operator",
-						RepoOwner:    "romaine-life",
-						RepoName:     "tank-operator",
-						Payload:      []byte(`{"lane_name":"docs","proposed_branch":"tank/session/47/tank-operator/docs"}`),
-					},
-					{
-						EventID:      "lane-terminal-1",
-						InvocationID: "lane-invocation-1",
-						Action:       tc.action,
-						Status:       "succeeded",
-					},
-				},
-			}
-			app := controlActionTestServer(t, store)
-			req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/pr-lane-requests/lane-request-1/authorization", nil)
-			req.SetPathValue("session_id", "47")
-			req.SetPathValue("request_event_id", "lane-request-1")
-			req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
-			rec := httptest.NewRecorder()
-
-			app.handleInternalGetPRLaneAuthorization(rec, req)
-
-			if rec.Code != http.StatusConflict {
-				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-			}
-			var body prLaneAuthorizationResponse
-			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatal(err)
-			}
-			if body.Allowed || !strings.Contains(strings.Join(body.Reasons, "\n"), tc.reason) {
-				t.Fatalf("authorization = %#v", body)
 			}
 		})
 	}

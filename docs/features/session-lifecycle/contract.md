@@ -61,6 +61,31 @@ resurrection" below) — that is a new lifecycle, not a revival of the old pod.
 - Repeated actions should be idempotent or return the already-terminal durable
   state.
 
+## Governed Git Write And Branch Lane Grants
+
+- A restricted (`TANK_RESTRICTED_GIT=true`) session has exactly one git-write
+  escalation: the break-glass branch-lane grant. There is no separate PR-lane
+  mechanism. Normal commits auto-publish through `publish_current_head`; no agent
+  action is required for the session's own branch.
+- A break-glass git grant is permission to do work on a branch (existing or not):
+  create + push/force-push it **and** open + own its draft PR through review.
+  Grant scope (`named` / `count` / `unlimited`) bounds *which* branches a grant
+  covers; it must never bound *whether* push and PR-open succeed. A branch-scoped
+  grant that can push but cannot open its branch's PR is a contract violation
+  (the silent-stranding bug class).
+- The agent requests once and a human approves once. After approval, plain
+  `git push` (incl. force-push) and `gh pr create|edit|ready|comment` work for
+  the granted branches with no second request, no MCP-registry reload, and no
+  agent-visible choice between governed push/publish tools or a PR-lane tool.
+- Branch-scoped writes are brokered server-side with the branch scope enforced by
+  Tank; a raw repo+permission token is not handed to the shell for a scoped
+  grant. `unlimited` is the deliberate whole-repo / full-GitHub-API escape hatch
+  and is the only scope that mints the App's full permission set.
+- Do not reintroduce the retired PR-lane surface (`request_pr_lane` /
+  `create_pr_lane` tools, `github.pr_lane.*` events, their routes/handlers/UI, or
+  tests pinning that behavior). A reintroduction guard must fail CI if those
+  symbols return to live source.
+
 ## Observability
 
 - Metrics must cover create, load, ready, stop, delete, pod-watch, and terminal
@@ -69,6 +94,9 @@ resurrection" below) — that is a new lifecycle, not a revival of the old pod.
   runner failure, stream failure, and browser display lag.
 - Stuck loading/running/deleting states need counters or alerts once they
   exceed their product boundary.
+- Branch-lane grant, push, PR-open, and PR-write outcomes are recorded as
+  durable `github.break_glass.*` control-action events and counted; a counter
+  exists for any use of a retired PR-lane path.
 
 ## Acceptance Checks
 
@@ -80,3 +108,8 @@ resurrection" below) — that is a new lifecycle, not a revival of the old pod.
   product.
 - Repeating a lifecycle command after success returns or displays the durable
   terminal state rather than failing ambiguously.
+- A branch-scoped break-glass grant lets the session both push the branch and
+  open + own its PR after a single request and a single approval, with no second
+  request and no MCP-registry reload; an `unlimited` grant is required only for
+  whole-repo / full-GitHub-API work, and the retired PR-lane symbols are absent
+  from live source (guarded).

@@ -46,26 +46,6 @@ export type ControlActionBackgroundEntry = {
   controlActionSha?: string;
 };
 
-export type PRLaneRequest = {
-  eventId: string;
-  invocationId: string;
-  createdAt?: string;
-  repo?: string;
-  repos?: string[];
-  allRepos?: boolean;
-  laneName: string;
-  allocationRequest?: boolean;
-  laneNames?: string[];
-  proposedBranches?: string[];
-  requestedCount?: number;
-  unlimited?: boolean;
-  relationship?: string;
-  base?: string;
-  scope?: string;
-  reason?: string;
-  proposedBranch?: string;
-};
-
 export type BreakGlassRequest = {
   eventId: string;
   invocationId: string;
@@ -162,16 +142,6 @@ function actionTitle(action: string | undefined): string {
       return "Test-slot model request";
     case "tank.test_slot_model.grant":
       return "Test-slot model grant";
-    case "github.pr_lane.request":
-      return "PR lane request";
-    case "github.pr_lane.approve":
-      return "PR lane approved";
-    case "github.pr_lane.deny":
-      return "PR lane denied";
-    case "github.pr_lane.auto_approve":
-      return "PR lane auto-approval";
-    case "github.pr_lane.create":
-      return "PR lane created";
     default:
       return "Control action";
   }
@@ -211,83 +181,6 @@ export function controlActionRowsToEntries(rows: ControlActionRow[]): ControlAct
       controlActionPrNumber: typeof row.pr_number === "number" ? row.pr_number : undefined,
       controlActionSha: sha,
     }];
-  });
-}
-
-export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[] {
-  const resolvedInvocations = new Set<string>();
-  for (const row of rows) {
-    const action = nonempty(row.action);
-    if (
-      action !== "github.pr_lane.approve" &&
-      action !== "github.pr_lane.deny" &&
-      action !== "github.pr_lane.auto_approve"
-    ) {
-      continue;
-    }
-    const invocationID = nonempty(row.invocation_id);
-    if (invocationID) resolvedInvocations.add(invocationID);
-  }
-  return rows.flatMap((row) => {
-    if (nonempty(row.action) !== "github.pr_lane.request") return [];
-    if (nonempty(row.status) !== "started") return [];
-    const eventId = nonempty(row.event_id);
-    const invocationId = nonempty(row.invocation_id);
-    if (!eventId || !invocationId || resolvedInvocations.has(invocationId)) {
-      return [];
-    }
-    const payload = payloadObject(row.payload);
-    const allocationRequest = payload.allocation_request === true;
-    const branchScope = payloadObject(payload.branch_scope);
-    const repoScope = payloadObject(payload.repo_scope);
-    const laneNames = Array.isArray(branchScope.branches)
-      ? branchScope.branches.flatMap((value) => {
-          const name = nonempty(value);
-          return name ? [name] : [];
-        })
-      : [];
-    const proposedBranches = Array.isArray(payload.proposed_branches)
-      ? payload.proposed_branches.flatMap((value) => {
-          const branch = nonempty(value);
-          return branch ? [branch] : [];
-        })
-      : [];
-    const repos = Array.isArray(repoScope.repos)
-      ? repoScope.repos.flatMap((value) => {
-          const repo = nonempty(value);
-          return repo ? [repo] : [];
-        })
-      : [];
-    const laneName = nonempty(payload.lane_name) ?? (allocationRequest ? "branch allocation" : undefined);
-    if (!laneName) return [];
-    const requestedCount =
-      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
-        ? branchScope.count
-        : undefined;
-    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
-      .filter(Boolean)
-      .join("/");
-    const request: PRLaneRequest = {
-      eventId,
-      invocationId,
-      createdAt: nonempty(row.created_at),
-      repo: repo || undefined,
-      laneName,
-      relationship: nonempty(payload.relationship),
-      base: nonempty(payload.base),
-      scope: nonempty(payload.scope),
-      reason: nonempty(payload.reason),
-      proposedBranch: nonempty(payload.proposed_branch),
-    };
-    if (allocationRequest) request.allocationRequest = true;
-    if (laneNames.length > 0) request.laneNames = laneNames;
-    if (proposedBranches.length > 0) request.proposedBranches = proposedBranches;
-    if (nonempty(repoScope.repo)) request.repo = nonempty(repoScope.repo);
-    if (repos.length > 0) request.repos = repos;
-    if (repoScope.kind === "all_repos") request.allRepos = true;
-    if (branchScope.kind === "count" && requestedCount !== undefined) request.requestedCount = requestedCount;
-    if (branchScope.kind === "unlimited") request.unlimited = true;
-    return [request];
   });
 }
 

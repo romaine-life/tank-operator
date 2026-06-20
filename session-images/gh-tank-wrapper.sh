@@ -135,6 +135,135 @@ if [ "$restricted" = "true" ]; then
     printf 'tank(gh): break-glass elevation FAILED — POST %s returned an unexpected response (HTTP %s); falling back to a READ-ONLY token. If an active break-glass grant exists, gh/git writes WILL fail. Most likely the in-pod mcp-auth-proxy sidecar predates the /mint-git-token route (image/version skew) or the break-glass server errored. Response: %.300s\n' \
       "$bg_url" "$bg_code" "$bg_body" >&2
   fi
+
+  # Branch-lane PR writes (restricted, scoped/no-grant only — an unlimited grant
+  # already exec'd real gh above with a full token, so we never reach here for
+  # it). There is no branch-scoped GitHub token, so a scoped grant cannot hand
+  # the shell a credential that `gh pr create|edit|ready|comment` could use.
+  # Instead Tank brokers the PR write server-side through /pr-write: it resolves
+  # the PR to its head branch, verifies head ∈ lane scope, performs the write
+  # with Tank's credential, and audits it. Only these four write subcommands are
+  # intercepted; merge/close/view/list/checks/diff and every read stay on native
+  # gh (which the read-only token below authenticates).
+  if [ "${1:-}" = "pr" ]; then
+    pr_sub="${2:-}"
+    case "$pr_sub" in
+      create|edit|ready|comment)
+        # Parse the gh pr <sub> flags we map to /pr-write WITHOUT consuming the
+        # script's positional params ($@) — on a no_grant fall-through the
+        # original `gh pr …` invocation is re-run against native gh below, so it
+        # must stay intact. We walk a copy via `for`, skipping `pr <sub>` and
+        # tracking a one-arg-ahead state for value flags. Collected: --title/-t,
+        # --body/-b, --base/-B, --head/-H (each takes a value) and the first bare
+        # positional as the PR number (edit/ready/comment take <number|url|branch>).
+        pw_title=""
+        pw_body=""
+        pw_base=""
+        pw_head=""
+        pw_number=""
+        pw_pos=0      # how many leading positionals (pr, sub) we've skipped
+        pw_want=""    # which flag's value the next arg supplies
+        for pw_arg in "$@"; do
+          if [ "$pw_pos" -lt 2 ]; then
+            pw_pos=$((pw_pos + 1))
+            continue
+          fi
+          if [ -n "$pw_want" ]; then
+            case "$pw_want" in
+              title) pw_title="$pw_arg" ;;
+              body) pw_body="$pw_arg" ;;
+              base) pw_base="$pw_arg" ;;
+              head) pw_head="$pw_arg" ;;
+            esac
+            pw_want=""
+            continue
+          fi
+          case "$pw_arg" in
+            --title|-t) pw_want="title" ;;
+            --title=*) pw_title="${pw_arg#*=}" ;;
+            -t*) pw_title="${pw_arg#-t}" ;;
+            --body|-b) pw_want="body" ;;
+            --body=*) pw_body="${pw_arg#*=}" ;;
+            -b*) pw_body="${pw_arg#-b}" ;;
+            --base|-B) pw_want="base" ;;
+            --base=*) pw_base="${pw_arg#*=}" ;;
+            -B*) pw_base="${pw_arg#-B}" ;;
+            --head|-H) pw_want="head" ;;
+            --head=*) pw_head="${pw_arg#*=}" ;;
+            -H*) pw_head="${pw_arg#-H}" ;;
+            --) : ;;
+            -*) : ;;
+            *) [ -n "$pw_number" ] || pw_number="$pw_arg" ;;
+          esac
+        done
+
+        # The PR-write endpoint operates on a single repo; use the first repo in
+        # the resolved scope (the explicit --repo/-R if present, else the
+        # workspace repo).
+        pw_repo="$(printf '%s' "$repos" | jq -r '.[0] // empty' 2>/dev/null | head -n1 || true)"
+
+        # Map the subcommand to the /pr-write action + required fields.
+        #   create  -> open  (head defaults to the current branch)
+        #   edit    -> edit  (title and/or body, on pr_number)
+        #   ready   -> ready (on pr_number)
+        #   comment -> comment (comment text from --body, on pr_number)
+        pw_action=""
+        case "$pr_sub" in
+          create) pw_action="open" ;;
+          edit) pw_action="edit" ;;
+          ready) pw_action="ready" ;;
+          comment) pw_action="comment" ;;
+        esac
+        if [ "$pw_action" = "open" ] && [ -z "$pw_head" ]; then
+          pw_head="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+        fi
+
+        # Build the JSON body field-by-field so empty fields are omitted.
+        pw_json="$(jq -nc \
+          --arg repo "$pw_repo" \
+          --arg action "$pw_action" \
+          --arg number "$pw_number" \
+          --arg head "$pw_head" \
+          --arg base "$pw_base" \
+          --arg title "$pw_title" \
+          --arg body "$pw_body" \
+          --arg comment "$pw_body" \
+          '{repo:$repo, action:$action}
+            + (if $number != "" then {pr_number: ($number|tonumber? // $number)} else {} end)
+            + (if $head != "" then {head:$head} else {} end)
+            + (if $base != "" then {base:$base} else {} end)
+            + (if $title != "" then {title:$title} else {} end)
+            + (if $action == "comment" then (if $comment != "" then {comment:$comment} else {} end)
+               elif $body != "" then {body:$body} else {} end)' \
+          2>/dev/null || true)"
+
+        pw_url="${TANK_BREAK_GLASS_PR_WRITE_URL:-http://127.0.0.1:9999/pr-write}"
+        pw_resp="$(curl -sS -m 30 \
+          -H "Authorization: Bearer ${auth_tok}" \
+          -H "Content-Type: application/json" \
+          -X POST "$pw_url" \
+          -d "$pw_json" 2>/dev/null || true)"
+        pw_resp_ok="$(printf '%s' "$pw_resp" | jq -r '.ok // empty' 2>/dev/null | head -n1 || true)"
+        if [ "$pw_resp_ok" = "true" ]; then
+          printf '%s\n' "$(printf '%s' "$pw_resp" | jq -r '.pr_url // empty' 2>/dev/null | head -n1)"
+          exit 0
+        fi
+        pw_reason="$(printf '%s' "$pw_resp" | jq -r '.reason // empty' 2>/dev/null | head -n1 || true)"
+        if [ "$pw_reason" = "no_grant" ]; then
+          # No branch-lane grant covers this PR write. Name the escalation tool
+          # LOUDLY, then fall through to native gh so the user also sees gh's own
+          # result (typically a 403 from the read-only token).
+          printf 'tank(gh): no active break-glass grant covers this PR write — call the Tank MCP request_git_break_glass tool (once) to request a branch lane, then retry. Falling through to native gh.\n' >&2
+        else
+          # Any other ok:false (e.g. branch_out_of_scope) is a hard failure: the
+          # governed path refused and there is no native fallback that would work.
+          printf 'tank(gh): PR write refused by Tank (%s). Response: %.300s\n' "${pw_reason:-unknown}" "$pw_resp" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  fi
+
   mint_args="$(printf '{"repos":%s,"write":false,"workflows":false,"full":false}' "$repos")"
 else
   mint_args="$(printf '{"repos":%s,"full":true,"write":true,"workflows":true}' "$repos")"

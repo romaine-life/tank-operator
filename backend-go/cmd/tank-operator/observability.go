@@ -984,6 +984,26 @@ func controlActionInternalWriteResultLabel(result string) string {
 	}
 }
 
+// breakGlassRetiredPathTotal counts attempts to write a retired PR-lane control
+// action into the durable ledger. The PR-lane mechanism (its request/create
+// tools and its github.pr_lane action family) was deleted end to end and unified
+// into the break-glass branch-lane grant (docs/branch-lane-grants.md); the
+// control-action accept-list no longer admits those actions. Any increment means
+// the deleted path was exercised against the durable ledger — a counted
+// migration bug, alerted on by TankBranchLaneRetiredPathUsed. Label-less on
+// purpose: the only signal is "did the retired path fire", and the rejected
+// action string is caller-controlled, so it must never become a metric label.
+var breakGlassRetiredPathTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "tank_break_glass_retired_path_total",
+		Help: "Attempts to write a retired PR-lane control action into the durable ledger; any increment is a reintroduction of the deleted PR-lane path (a counted migration bug).",
+	},
+)
+
+func recordBreakGlassRetiredPath() {
+	breakGlassRetiredPathTotal.Inc()
+}
+
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
@@ -1453,7 +1473,7 @@ func messageLinkShareResultLabel(result string) string {
 
 func controlActionSourceServiceLabel(sourceService string) string {
 	switch sourceService {
-	case "mcp-github", "mcp-tank-operator", "mcp-azure-personal", "tank-operator", "git":
+	case "mcp-github", "mcp-tank-operator", "mcp-azure-personal", "tank-operator", "tank-git-break-glass", "git":
 		return sourceService
 	default:
 		return "unknown"
@@ -1462,7 +1482,7 @@ func controlActionSourceServiceLabel(sourceService string) string {
 
 func controlActionSourceToolLabel(sourceTool string) string {
 	switch sourceTool {
-	case "merge_pull_request", "merge_current_session_pr", "rename_current_session_pr", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_pr_lane", "create_pr_lane", "pr_lane_approval", "request_git_break_glass", "git_break_glass_approval", "break_glass_approval", "mint_full_git_token", "push_current_head", "session_repo_prepare", "request_azure_break_glass", "azure_break_glass_approval", "azure_personal_mcp", "create_session", "test_slot_model_approval":
+	case "merge_pull_request", "merge_current_session_pr", "rename_current_session_pr", "mark_pull_request_ready_for_review", "create_pull_request", "commit_to_branch", "create_or_update_file", "push", "publish_current_head", "request_git_break_glass", "git_break_glass_approval", "break_glass_approval", "mint_full_git_token", "push_current_head", "pr_write", "session_repo_prepare", "request_azure_break_glass", "azure_break_glass_approval", "azure_personal_mcp", "create_session", "test_slot_model_approval":
 		return sourceTool
 	default:
 		return "other"
@@ -1477,11 +1497,6 @@ func controlActionActionLabel(action string) string {
 		"github.pull_request.ready_for_review",
 		"github.pull_request.open",
 		"github.pull_request.mergeability",
-		"github.pr_lane.request",
-		"github.pr_lane.approve",
-		"github.pr_lane.deny",
-		"github.pr_lane.auto_approve",
-		"github.pr_lane.create",
 		"github.commit.write",
 		"github.commit.push",
 		"github.commit.ci",
@@ -1490,6 +1505,7 @@ func controlActionActionLabel(action string) string {
 		"github.break_glass.deny",
 		"github.break_glass.token",
 		"github.break_glass.push",
+		"github.break_glass.pr_write",
 		"azure.break_glass.request",
 		"azure.break_glass.grant",
 		"azure.break_glass.deny",
