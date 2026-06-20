@@ -31,12 +31,13 @@ testEnv:
   wildcardListenerSetNamespace: tank-operator
   sessionsGatewayIP: 172.179.163.96
 
+# Live-preview static-override scratch volume mounted on the orchestrator in
+# test envs. The orchestrator receives pushes directly (handlers_static_override.go),
+# so there is no writer sidecar — only the emptyDir + the orchestrator mount and
+# the TANK_OPERATOR_STATIC_OVERRIDE_DIR/ROOT env are load-bearing.
 staticOverride:
   enabled: true
   mountPath: /var/run/tank-operator-static-override
-  writerContainerName: static-writer
-  writerImage: alpine:3.20
-  writerImagePullPolicy: IfNotPresent
 
 hotSwapBackend:
   enabled: true

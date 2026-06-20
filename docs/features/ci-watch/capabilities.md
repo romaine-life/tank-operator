@@ -367,6 +367,75 @@ and [../README.md](../README.md) for how capability ledgers are used.
   `TankTestSlotProvisionStuck` alert fires on the gauge, mirroring
   `TankCIWatchStalled`.
 
+## live-frontend-preview
+
+- **Status:** in progress (backend receiver + state model + owner toggle shipped;
+  in-pod daemon + page control land in a sibling slice)
+- **Intent:** A **dev-only, test-env-gated, ephemeral** co-watching aid: while an
+  owner is iterating, the session pod builds its frontend `dist/` and streams it
+  to the session's already-provisioned test slot so the owner (and anyone they
+  share the slot URL with) watches scratch render live, without a deploy. It is a
+  *preview*, never a release. Scope guards:
+  - **Test envs only.** The receiver, the override volume, and the override env
+    only exist when `tank-operator.isTestEnv` is true and `staticOverride.enabled`
+    (`k8s/templates/deployment.yaml`, `k8s/values.yaml`). Production never mounts
+    the override or runs the receiver.
+  - **Ephemeral.** The override lives in an `emptyDir` (`releases/` + `current`
+    symlink) under `staticOverride.mountPath`; it dies with the pod and is never
+    persisted, fingerprinted, or promoted.
+  - **Explicitly distinct from the retired hot-swap / artifact / fidelity-classifier
+    surface.** That surface tried to *substitute* a built artifact for the gated
+    image and classify whether scratch matched the release — it was retired (guarded
+    by `scripts/check-session-pod-hot-swap-migration.mjs`) precisely because it let
+    unverified output stand in for verified output. Live preview makes the opposite
+    promise: it is loudly a scratch preview, it **never merges evidence**, never
+    classifies fidelity, and is **never wired into verify or promotion**. Promotion
+    stays exclusively on the deterministic image-deploy gate
+    (gated-test-slot-provisioning).
+- **Mechanism:**
+  - **Receiver** (`handlers_static_override.go`, orchestrator-side, service-principal
+    only): `PUT /api/internal/static-override` extracts the pushed tar into a new
+    `releases/<n>` dir and atomically flips the `current` symlink (a request never
+    sees a half-written bundle); `DELETE /api/internal/static-override` removes the
+    symlink + releases so the static file server reverts to the slot's image-baked
+    bundle. The orchestrator writes the override **itself** — there is no writer
+    sidecar (the previously-idle `static-writer` alpine container was retired in this
+    slice; only the `static-override` emptyDir, the orchestrator volumeMount, and the
+    `TANK_OPERATOR_STATIC_OVERRIDE_DIR`/`_ROOT` env remain load-bearing).
+  - **State** (`manager.go`): the durable intent lives on
+    `test_state.live_preview` (`enabled`, `pushed_at`, `pushed_build`), merged via
+    `UpdateLivePreviewState` so the owner toggle and the daemon's push receipt update
+    the same sub-document without clobbering each other, and without forcing the
+    slot `active` flag.
+  - **Owner toggle** (`handleSetLivePreviewEnabled`): owner-scoped control behind the
+    test-slot page; enabling requires an active slot + URL (preview streams scratch on
+    top of a running slot). It records `enabled` intent only.
+  - **In-pod daemon:** converges on `test_state.live_preview.enabled` over the
+    session SSE — on enable it runs the build+push loop (PUT per build, then reports
+    the receipt); on disable it stops and DELETEs the slot override so the slot
+    reverts to its image-baked baseline.
+  - **Auto-revert wall** (`provision_test_slot.go`, this slice): when a real gated
+    image lands on a slot (`provisionSlotAfterReady`, right after `SetTestState`
+    marks the slot active on the freshly-deployed image), the deploy path calls
+    `UpdateLivePreviewState{Enabled:false}`. The in-pod daemon then DELETEs the slot
+    override, so scratch can never masquerade as the just-deployed gated image. This
+    is the fidelity wall that keeps preview and release from ever blurring.
+- **Durable source:** `test_state.live_preview` on the session row/pod annotation
+  (dual-written like `SetTestState`); the override bundle itself is non-durable
+  pod-local scratch. Observable via `tank_static_override_push_total{result}`
+  (`stored` / `reverted` / `disabled`).
+- **Affected contracts:** test-slot-page (the toggle + status live on that page),
+  gated-test-slot-provisioning (the deploy gate stays the *only* promotion path and
+  now actively clears any preview on deploy), session-lifecycle (preview is pod-local
+  ephemeral scratch that dies with the pod — never resurrected, never promoted).
+- **Evidence:** `helm template … --set renderMode=hot` renders with the
+  `static-writer` sidecar gone and the override mount/env/volume intact;
+  `provision_test_slot_test.go` (`TestProvisionTestSlot_ReadyProvisionsAndSetsTestState`)
+  asserts the deploy path disables live preview while preserving the active slot;
+  `handlers_static_override_test.go` / `handlers_live_preview_toggle_test.go` cover the
+  receiver + toggle; `scripts/check-session-pod-hot-swap-migration.mjs` stays green
+  (the retired vocabulary is never reintroduced).
+
 ## ci-status-record
 
 - **Status:** event + webhook merge path shipped; **inline rendering NOT implemented**
