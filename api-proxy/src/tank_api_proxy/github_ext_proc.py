@@ -79,8 +79,8 @@ def _inject_auth_headers(host: str, token: str) -> list["base_pb2.HeaderValueOpt
 
 def _deny(reason: str) -> "ext_proc_pb2.ProcessingResponse":
     """Reject the request at the wall with 403 before it reaches GitHub. Because the
-    receive-pack body is buffered (BUFFERED_PARTIAL) the upstream connection is never
-    opened, so a blocked push never touches GitHub."""
+    receive-pack body is fully buffered (request_body_mode: BUFFERED) the upstream
+    connection is never opened, so a blocked push never touches GitHub."""
     return ext_proc_pb2.ProcessingResponse(
         immediate_response=ext_proc_pb2.ImmediateResponse(
             status=http_status_pb2.HttpStatus(code=403),
@@ -104,6 +104,10 @@ class _Stream:
         self.status: int = 0
         self.is_push: bool = False
 
+    @property
+    def repo_full(self) -> str:
+        return f"{self.owner}/{self.repo}" if self.owner and self.repo else ""
+
 
 class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
     def __init__(self, *, mint_url: str, internal_url: str, exchange_url: str) -> None:
@@ -115,6 +119,13 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         # exchange auto-resolves the session owner; the result is valid ~15 min, so
         # caching collapses a request burst to one exchange (mirrors the sidecar).
         self._xchg: dict[str, tuple[str, float]] = {}
+        # Active break-glass grant cache, keyed by (session_id, repo). The grant
+        # WIDENS the lane (admin-approved), and the overwhelmingly common case is NO
+        # grant, so a short TTL collapses a burst of out-of-lane attempts to one Tank
+        # lookup (mirrors the in-pod minter's 10s cache). A positive grant is never
+        # served past its own expires_at (gg.grant_servable), so an expired/revoked
+        # grant re-locks within the TTL. value: (grant_or_None, monotonic_cached_at).
+        self._grants: dict[tuple[str, str], tuple[dict | None, float]] = {}
         # __main__/metrics compatibility (mirrors the AuthInjector surface the
         # entrypoint wires up); this servicer has no background keeper.
         self._keeper_task = None
@@ -173,25 +184,33 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
         st.ident = ident
 
-        # Restricted enforcement #1 (header phase): no agent merges. Merging is the
-        # human/automated path; the merge_pull_request MCP tool is already disabled in
-        # restricted mode, so this closes the raw gh/REST merge hole.
+        repo = gg.repo_from_path(authority, path)
+        if repo is not None:
+            st.owner, st.repo = repo
+
+        # Restricted enforcement #1 (header phase): no agent merges — UNLESS an
+        # admin-approved `unlimited` break-glass grant has unlocked the full GitHub
+        # API for this session+repo (it advertises full_github_api). Merging is
+        # otherwise the human/automated path; the merge_pull_request MCP tool is
+        # already disabled in restricted mode, so this closes the raw gh/REST hole.
         if gg.is_merge_request(method, authority, path):
-            log.warning("egress: DENY merge session=%s %s", ident.session_id, path)
-            return _deny("merging is the human/automated path, not the agent")
+            grant = await self._active_grant(ident, st.repo_full)
+            if not gg.grant_allows_merge(grant):
+                log.warning("egress: DENY merge session=%s %s", ident.session_id, path)
+                return _deny("merging is the human/automated path, not the agent")
+            log.info("egress: ALLOW merge via break-glass grant session=%s %s", ident.session_id, path)
         st.decision = gg.evaluate_policy(ident, method, authority, path)
         # Restricted enforcement #2 is in the body phase: a git push's receive-pack refs
-        # are inspected for main. Stash that this is a push so _on_request_body acts.
+        # are inspected against the lane (widened by any active grant). Stash that this
+        # is a push so _on_request_body acts.
         st.is_push = gg.is_receive_pack(authority, path)
 
         rec = gg.recordable_pr_action(method, authority, path)
         if rec is not None:
             st.action, st.pr_number = rec
 
-        repo = gg.repo_from_path(authority, path)
         if repo is not None:
-            st.owner, st.repo = repo
-            token = await self._mint(ident, f"{repo[0]}/{repo[1]}", st.decision)
+            token = await self._mint(ident, st.repo_full, st.decision)
             if token:
                 return ext_proc_pb2.ProcessingResponse(
                     request_headers=ext_proc_pb2.HeadersResponse(
@@ -212,20 +231,39 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         passthrough = ext_proc_pb2.ProcessingResponse(request_body=ext_proc_pb2.BodyResponse())
         if not (st.ident and st.is_push):
             return passthrough
-        refs, saw_flush = gg.parse_push_refs(bytes(msg.body or b""))
+        cmds, saw_flush = gg.parse_push_commands(bytes(msg.body or b""))
         if not saw_flush:
             # The buffered prefix didn't yield the pkt-line command list (truncated or
             # gzipped). Fail closed: a push we can't verify is not waved through to main.
             log.warning("egress: DENY push (refs unverifiable) session=%s", st.ident.session_id)
             return _deny("could not verify the push target branch")
-        violation = gg.push_violation(refs, st.ident.session_id)
-        if violation:
-            log.warning("egress: DENY push to %s (outside session lane) session=%s", violation, st.ident.session_id)
-            return _deny(
-                f"push to {violation} is not allowed; a restricted session may only push its own "
-                f"branch ({gg.session_branch_lane(st.ident.session_id)}*)"
+        refs = [c[2] for c in cmds]
+        outside = gg.out_of_lane_refs(refs, st.ident.session_id)
+        if not outside:
+            log.info("egress: allow push refs=%s session=%s", refs, st.ident.session_id)
+            return passthrough
+        # Out-of-lane refs are allowed ONLY if an active break-glass grant covers them.
+        # Fetch the grant (cached) for this rare case; the in-lane hot path never pays
+        # for it. A grant=None (the common no-grant case) denies every out-of-lane ref.
+        grant = await self._active_grant(st.ident, st.repo_full)
+        denied = [r for r in outside if not gg.grant_branch_allows(grant, r)]
+        if denied:
+            log.warning(
+                "egress: DENY push to %s (outside session lane, no covering grant) session=%s",
+                denied[0], st.ident.session_id,
             )
-        log.info("egress: allow push refs=%s session=%s", refs, st.ident.session_id)
+            return _deny(
+                f"push to {denied[0]} is not allowed; a restricted session may only push its own "
+                f"branch ({gg.session_branch_lane(st.ident.session_id)}*) or branches covered by an "
+                f"active break-glass grant"
+            )
+        # Every out-of-lane ref is grant-covered. Record each as github.break_glass.push
+        # BEFORE waving the push through, so a `count` grant's budget is tallied (the
+        # endpoint flips active->false at the limit) and every elevated push lands in
+        # the same ledger a lane push would — the wall records what it permits.
+        outside_set = set(outside)
+        await self._record_break_glass_pushes(st, grant, [c for c in cmds if c[2] in outside_set])
+        log.info("egress: ALLOW push via break-glass grant refs=%s session=%s", outside, st.ident.session_id)
         return passthrough
 
     async def _on_response_body(
@@ -288,6 +326,73 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         except Exception as exc:
             log.warning("egress: mint failed session=%s repo=%s: %s", ident.session_id, repo_full, exc)
             return ""
+
+    async def _active_grant(self, ident: gg.SessionIdentity, repo_full: str) -> dict | None:
+        """The session's active git break-glass grant for repo_full, or None. Reads
+        the SAME endpoint the in-pod minter uses (git-break-glass/grant), relayed with
+        the session's own JWT, so the wall and the minter never disagree on what's
+        active. Cached per (session, repo) with a 10s TTL; a positive grant is never
+        served past its own expires_at, so revocation/expiry re-locks within the TTL.
+        A grant only ever WIDENS the lane, so a fetch failure -> None fails closed."""
+        if not repo_full:
+            return None
+        key = (ident.session_id, repo_full)
+        now = time.time()
+        hit = self._grants.get(key)
+        if hit is not None:
+            grant, cached_at = hit
+            if now - cached_at < 10.0 and gg.grant_servable(grant, now):
+                return grant
+        url = gg.break_glass_grant_url(
+            ident.session_scope, ident.session_id, repo_full, self._internal_url
+        )
+        try:
+            r = await self._http.get(url, headers={"Authorization": f"Bearer {ident.raw_jwt}"})
+            grant = gg.active_grant_from_response(r.status_code, r.text)
+        except Exception as exc:
+            log.warning("egress: grant lookup failed session=%s repo=%s: %s", ident.session_id, repo_full, exc)
+            grant = None
+        self._grants[key] = (grant, now)
+        return grant
+
+    async def _record_break_glass_pushes(
+        self, st: _Stream, grant: dict | None, cmds: list[tuple[str, str, str]]
+    ) -> None:
+        """Record one github.break_glass.push per grant-covered out-of-lane ref.
+        Mirrors the in-pod _record_break_glass_use shape (action + payload
+        {grant_event_id, branch}) so countBreakGlassGrantBranches tallies a `count`
+        grant identically, and so every elevated push lands in the ledger. Best-effort:
+        a record miss is logged, never fails the push (matching the in-pod path)."""
+        ident = st.ident
+        assert ident is not None
+        ev_id = gg.grant_event_id(grant)
+        url = (
+            gg.url_for_scope(ident.session_scope, self._internal_url)
+            + f"/api/internal/sessions/{ident.session_id}/control-actions"
+        )
+        for _old, new_sha, ref in cmds:
+            branch = ref.removeprefix("refs/heads/")
+            body = gg.build_break_glass_push_body(
+                invocation_id=f"ctrl_{uuid.uuid4().hex}",
+                grant_event_id=ev_id,
+                repo_owner=st.owner,
+                repo_name=st.repo,
+                branch=branch,
+                new_sha=new_sha,
+            )
+            try:
+                r = await self._http.post(
+                    url,
+                    json=body,
+                    headers={"Authorization": f"Bearer {ident.raw_jwt}", "Content-Type": "application/json"},
+                )
+                r.raise_for_status()
+                log.info("egress: recorded break_glass.push branch=%s session=%s", branch, ident.session_id)
+            except Exception as exc:
+                log.warning(
+                    "egress: record break_glass.push failed branch=%s session=%s: %s",
+                    branch, ident.session_id, exc,
+                )
 
     async def _record(self, st: _Stream, pr_number: int, target_ref: str) -> None:
         ident = st.ident
