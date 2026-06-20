@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Regenerate the GitHub egress deny CIDRs in the restricted-git egress NetworkPolicy.
 
-Stage-1 scope: deny the CIDRs that serve github.com + api.github.com (forcing those
-hosts through the wall, which is hostAlias-pinned for restricted sessions) while
-KEEPING githubusercontent / GitHub Pages (Fastly) reachable. The set is the union of
-api.github.com/meta's `git` and `api` ranges minus the Fastly CDN block.
+Scope (Stage 2b): deny the CIDRs that serve github.com + api.github.com + codeload +
+raw/objects.githubusercontent.com, forcing ALL of them through the wall (each is
+hostAlias-pinned for restricted sessions and TLS-terminated by the wall). The set is
+the union of api.github.com/meta's `git` and `api` ranges, minus the KEEP exclusions
+(empty since Stage 2b — see KEEP).
 
 The CIDRs are spliced into k8s/templates/restricted-git-egress-policy.yaml between
 `# BEGIN/END github-egress-cidrs-v{4,6}` markers, preserving the surrounding Helm
@@ -32,15 +33,14 @@ TEMPLATE = os.path.join(
 )
 META_URL = "https://api.github.com/meta"
 
-# githubusercontent / GitHub Pages (Fastly). Kept reachable in Stage 1 — github.com
-# is NOT served from this block, so excluding it from the deny set does not open a
-# bypass to the git/API surface. Stage 2 fronts these through the wall and removes it.
-KEEP = {
-    "185.199.108.0/22",
-    "185.199.109.0/24",
-    "185.199.110.0/24",
-    "185.199.111.0/24",
-}
+# Stage 2b: the wall now fronts codeload + raw/objects.githubusercontent.com
+# (agent-egress-proxy.yaml), so githubusercontent's CIDR is DENIED too — a restricted
+# session reaches it only via the wall. Empty exclusion set => deny the full git ∪ api
+# range. NOTE: the Fastly /22 (185.199.108.0/22) also serves GitHub Pages (*.github.io),
+# which the wall does NOT front, so denying it blocks direct Pages fetches from
+# restricted sessions (rare for dev work); front Pages in a follow-up if that becomes a
+# real need. Kept as an (empty) set so a future host can be re-excluded in one place.
+KEEP: set[str] = set()
 
 
 def fetch_meta() -> dict:

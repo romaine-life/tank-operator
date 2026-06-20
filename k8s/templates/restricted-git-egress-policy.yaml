@@ -12,8 +12,10 @@
 #     lockdown is strictly opt-in via the label and cannot break the direct path.
 #   * The label lands only on NEW sessions, so existing restricted sessions drain
 #     before they are ever selected (no mid-session breakage).
-#   * githubusercontent / GitHub Pages (Fastly 185.199.108.0/22) stay reachable in
-#     Stage 1; fronting those through the wall is Stage 2.
+#   * codeload + raw/objects.githubusercontent.com are fronted by the wall (Stage 2)
+#     and denied here too, so every GitHub host the wall serves is reachable only
+#     through it. The Fastly /22 also serves GitHub Pages (*.github.io), which the
+#     wall does not front, so direct Pages fetches are blocked (rare for dev work).
 #
 # The `except` CIDRs are GENERATED from api.github.com/meta — DO NOT hand-edit the
 # marker blocks. Refresh with `scripts/gen-github-egress-cidrs.py` (scheduled by
@@ -90,6 +92,7 @@ spec:
               - 20.233.83.149/32
               - 140.82.112.0/20
               - 143.55.64.0/20
+              - 185.199.108.0/22
               - 192.30.252.0/22
               # END github-egress-cidrs-v4
         - ipBlock:
