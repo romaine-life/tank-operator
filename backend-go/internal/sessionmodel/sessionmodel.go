@@ -738,6 +738,13 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Restricted-git sessions route github egress through the wall when its IP is
 	// resolved; this is the per-session cutover. Unrestricted sessions never do.
 	egressProxyGit := restrictedGitEnabled && opts.AgentEgressProxyIP != ""
+	// Combined (OS + gateway-CA) trust bundle that install-agent-git-template.sh builds
+	// at launch for egress-proxy sessions. git trusts the wall leaf per-host (sslCAInfo)
+	// and node via NODE_EXTRA_CA_CERTS, but curl/python take ONE CA file that REPLACES
+	// the default set — so they need a bundle that is OS-trust + the gateway CA. The
+	// runner env points curl-specific vars (CURL_CA_BUNDLE/REQUESTS_CA_BUNDLE, never
+	// SSL_CERT_FILE) here so the runner's own node TLS is left on NODE_EXTRA_CA_CERTS.
+	const egressCABundlePath = "/workspace/.tank/egress-ca-bundle.crt"
 	mcpConfigKey := "mcp.json"
 	if spireLensMCPEnabled {
 		mcpConfigKey = "mcp.spirelens.json"
@@ -1189,6 +1196,15 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"readOnly":  true,
 			})
 		}
+		// Egress-proxy mode: trust the wall leaf from curl/python too (Stage 2 asset
+		// hosts are raw-curled), via the combined bundle install-agent-git-template
+		// builds at launch. Curl-specific vars only — node stays on NODE_EXTRA_CA_CERTS.
+		if egressProxyGit {
+			runnerEnv = append(runnerEnv,
+				map[string]any{"name": "CURL_CA_BUNDLE", "value": egressCABundlePath},
+				map[string]any{"name": "REQUESTS_CA_BUNDLE", "value": egressCABundlePath},
+			)
+		}
 
 		runnerEnv = append(runnerEnv, map[string]any{
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AgentRunnerMetricsPort),
@@ -1320,6 +1336,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "CODEX_CA_CERTIFICATE", "value": "/etc/oauth-gateway-ca/ca.crt"},
 			)
 		}
+		// Egress-proxy mode: curl/python trust the wall leaf via the combined bundle
+		// install-agent-git-template builds at launch (Stage 2 asset hosts are raw-curled).
+		if egressProxyGit {
+			codexRunnerEnv = append(codexRunnerEnv,
+				map[string]any{"name": "CURL_CA_BUNDLE", "value": egressCABundlePath},
+				map[string]any{"name": "REQUESTS_CA_BUNDLE", "value": egressCABundlePath},
+			)
+		}
 		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(CodexRunnerMetricsPort),
 		})
@@ -1395,6 +1419,13 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		hostAliases = append(hostAliases,
 			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"github.com"}},
 			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"api.github.com"}},
+			// Asset hosts (Stage 2): clone-archive (codeload) + raw files / release
+			// assets (githubusercontent) also flow through the wall, so they are
+			// observable and can be CIDR-locked alongside git/API. The wall fronts
+			// these as TLS-terminating pass-through (the leaf cert covers them).
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"codeload.github.com"}},
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"raw.githubusercontent.com"}},
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"objects.githubusercontent.com"}},
 		)
 	}
 	if len(hostAliases) > 0 {

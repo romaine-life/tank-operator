@@ -475,7 +475,9 @@ func githubHostAliasIPs(spec map[string]any) map[string]string {
 		ip, _ := m["ip"].(string)
 		hns, _ := m["hostnames"].([]any)
 		for _, h := range hns {
-			if hn, _ := h.(string); hn == "github.com" || hn == "api.github.com" {
+			switch hn, _ := h.(string); hn {
+			case "github.com", "api.github.com", "codeload.github.com",
+				"raw.githubusercontent.com", "objects.githubusercontent.com":
 				out[hn] = ip
 			}
 		}
@@ -496,12 +498,24 @@ func TestPodManifestRestrictedGitRoutesGithubThroughEgressProxy(t *testing.T) {
 	})
 	spec := manifest["spec"].(map[string]any)
 	aliases := githubHostAliasIPs(spec)
-	if aliases["github.com"] != egressIP || aliases["api.github.com"] != egressIP {
-		t.Fatalf("github hostAliases = %#v, want both -> %s", aliases, egressIP)
+	// git/API surface + the Stage 2 asset hosts (codeload archives, raw files,
+	// release assets) all pin to the wall so none of them egress direct to GitHub.
+	for _, h := range []string{
+		"github.com", "api.github.com",
+		"codeload.github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
+	} {
+		if aliases[h] != egressIP {
+			t.Fatalf("hostAlias %s = %q, want %s", h, aliases[h], egressIP)
+		}
 	}
 	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
 	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "true"; got != want {
 		t.Fatalf("codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
+	}
+	// curl/python trust the wall leaf via the combined bundle (Stage 2 asset hosts are
+	// raw-curled). Curl-specific var only, so the runner's node TLS stays untouched.
+	if got, want := containerEnv(runner)["CURL_CA_BUNDLE"], "/workspace/.tank/egress-ca-bundle.crt"; got != want {
+		t.Fatalf("codex-runner CURL_CA_BUNDLE = %v, want %q", got, want)
 	}
 	// The repo-cloner clones github THROUGH the wall, so it must mount the gateway CA
 	// or its git TLS handshake fails ("error adding trust anchors") and the pod never

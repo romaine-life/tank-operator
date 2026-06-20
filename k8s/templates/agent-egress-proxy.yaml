@@ -41,6 +41,12 @@ spec:
   dnsNames:
     - github.com
     - api.github.com
+    # Asset hosts (Stage 2): the wall TLS-terminates these too so a restricted
+    # session's clone-archive / raw-file / release-asset fetches also flow through
+    # the chokepoint (and can be CIDR-locked like git/API). codeload is a github.com
+    # subdomain; the wildcard covers raw./objects./… githubusercontent.com.
+    - codeload.github.com
+    - "*.githubusercontent.com"
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer
@@ -204,6 +210,52 @@ data:
                                 cluster: github_git
                                 timeout: 600s
                                 auto_host_rewrite: true
+                        # Asset hosts (Stage 2) — clone-archive (codeload) + raw files /
+                        # release assets (githubusercontent). These are read-only asset
+                        # fetches, NOT the governed git/API surface, so ext_proc is disabled
+                        # (no token mint, no lane/merge checks) and the agent's credential is
+                        # stripped so the pod's SA token is never forwarded to GitHub. The
+                        # point is that the traffic flows through the wall (observable, and
+                        # CIDR-lockable in Stage 2b) instead of egressing direct to GitHub.
+                        - name: github_codeload
+                          domains: ["codeload.github.com"]
+                          request_headers_to_remove: ["authorization", "cookie"]
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_proc:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+                              disabled: true
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: github_codeload
+                                timeout: 600s
+                                auto_host_rewrite: true
+                        - name: github_raw
+                          domains: ["raw.githubusercontent.com"]
+                          request_headers_to_remove: ["authorization", "cookie"]
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_proc:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+                              disabled: true
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: github_raw
+                                timeout: 600s
+                                auto_host_rewrite: true
+                        - name: github_objects
+                          domains: ["objects.githubusercontent.com"]
+                          request_headers_to_remove: ["authorization", "cookie"]
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_proc:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+                              disabled: true
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: github_objects
+                                timeout: 600s
+                                auto_host_rewrite: true
       clusters:
         - name: github_api
           type: LOGICAL_DNS
@@ -243,6 +295,69 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
               sni: github.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: github_codeload
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: github_codeload
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address: { address: codeload.github.com, port_value: 443 }
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: codeload.github.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: github_raw
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: github_raw
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address: { address: raw.githubusercontent.com, port_value: 443 }
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: raw.githubusercontent.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: github_objects
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: github_objects
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address: { address: objects.githubusercontent.com, port_value: 443 }
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: objects.githubusercontent.com
               common_tls_context:
                 validation_context:
                   trusted_ca:
