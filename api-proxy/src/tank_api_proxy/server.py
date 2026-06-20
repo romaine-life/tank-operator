@@ -1108,6 +1108,10 @@ async def serve(port: int) -> tuple[grpc.aio.Server, AuthInjector]:
         gov = GitHubGovernor(
             mint_url=_required_env("MCP_GITHUB_MINT_URL"),
             internal_url=_required_env("TANK_OPERATOR_INTERNAL_URL"),
+            exchange_url=os.environ.get(
+                "AUTH_ROMAINE_EXCHANGE_URL",
+                "https://auth.romaine.life/api/auth/exchange/k8s",
+            ),
         )
         server = grpc.aio.server()
         ext_proc_grpc.add_ExternalProcessorServicer_to_server(gov, server)

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 import uuid
 from typing import AsyncIterator
 
@@ -91,10 +92,15 @@ class _Stream:
 
 
 class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
-    def __init__(self, *, mint_url: str, internal_url: str) -> None:
+    def __init__(self, *, mint_url: str, internal_url: str, exchange_url: str) -> None:
         self._mint_url = mint_url.rstrip("/")
         self._internal_url = internal_url.rstrip("/")
+        self._exchange_url = exchange_url
         self._http = httpx.AsyncClient(timeout=25.0)
+        # Exchanged role=service JWT cache, keyed by the pod's raw SA token. The
+        # exchange auto-resolves the session owner; the result is valid ~15 min, so
+        # caching collapses a request burst to one exchange (mirrors the sidecar).
+        self._xchg: dict[str, tuple[str, float]] = {}
         # __main__/metrics compatibility (mirrors the AuthInjector surface the
         # entrypoint wires up); this servicer has no background keeper.
         self._keeper_task = None
@@ -136,10 +142,18 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         path = _peek_header(msg, ":path")
         method = _peek_header(msg, ":method")
 
-        ident = gg.identity_from_jwt(gg.jwt_from_authorization(_peek_header(msg, "authorization")))
+        raw_token = gg.jwt_from_authorization(_peek_header(msg, "authorization"))
+        if not raw_token:
+            log.info("egress: pass-through (no credential) %s %s", method, path)
+            return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
+        # The pod presents its RAW k8s SA token; exchange it for the session's
+        # role=service JWT (auto-resolved owner) before parsing identity / minting.
+        service_jwt = await self._exchange(raw_token)
+        ident = gg.identity_from_jwt(service_jwt)
         if not ident.ok:
-            # Soft cutover: unidentified egress passes through untouched.
-            log.info("egress: pass-through (no identifiable session JWT) %s %s", method, path)
+            # Soft cutover: a credential that doesn't exchange to a session identity
+            # passes through untouched (the in-pod token still works during cutover).
+            log.info("egress: pass-through (no session identity from exchange) %s %s", method, path)
             return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
         st.ident = ident
 
@@ -196,6 +210,28 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         return passthrough
 
     # -- side effects (relayed with the session's own JWT) ------------------
+    async def _exchange(self, raw_token: str) -> str:
+        """Exchange the pod's raw k8s SA token for the session's role=service JWT.
+        Empty-body POST to /api/auth/exchange/k8s; the IdP resolves the session's own
+        owner. Cached per raw token until ~30s before expiry."""
+        hit = self._xchg.get(raw_token)
+        if hit and hit[1] > time.time() + 30:
+            return hit[0]
+        try:
+            r = await self._http.post(
+                self._exchange_url,
+                headers={"Authorization": f"Bearer {raw_token}", "Content-Type": "application/json"},
+                json={},
+            )
+            r.raise_for_status()
+            token, expires_at = gg.parse_exchange_result(r.json())
+        except Exception as exc:
+            log.warning("egress: token exchange failed: %s", exc)
+            return ""
+        if token:
+            self._xchg[raw_token] = (token, expires_at or (time.time() + 600))
+        return token
+
     async def _mint(self, ident: gg.SessionIdentity, repo_full: str, decision: gg.Decision) -> str:
         payload = gg.mint_call_payload(repo_full, decision)
         try:
