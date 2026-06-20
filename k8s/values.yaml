@@ -225,13 +225,22 @@ apiProxy:
 agentEgressProxy:
   enabled: false
   replicas: 1
-  # Identity the ext_proc uses to mint per-owner GitHub App tokens (via
-  # mcp-github) and to post the recorded control action for the attributed
-  # session. Provisioned with the egress proxy's handler PR.
+  # Plain run-as identity for the proxy pod. The handler needs NO privileged
+  # identity of its own: it relays each session pod's own auth.romaine.life
+  # role=service JWT to mcp-github (mint) and to the control-actions endpoint
+  # (record), so authority rides the caller's token, not this SA.
   serviceAccount: agent-egress-proxy
-  # In-cluster mcp-github mint endpoint the github handler calls to obtain the
-  # session-owner's App installation token. Confirmed/wired in the handler PR.
-  mcpGithubMintUrl: http://mcp-github.mcp-github.svc.cluster.local:9992/
+  # In-cluster mcp-github service (clusterIP port 80) the handler relay-calls to
+  # mint the session-owner's App token (mcp-github routes by the JWT's actor_email).
+  mcpGithubMintUrl: http://mcp-github.mcp-github.svc.cluster.local:80/
+  # ext_proc image. Empty -> defaults to apiProxy.image (same codebase; the
+  # PROXY_PROVIDER=github env selects the github handler). Override repository/tag
+  # to run the egress proxy on a proof/branch image independently of the
+  # claude/codex proxies — e.g. a dark-deploy smoke that must not roll them.
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: ""
 claudeSecondaryApiProxy:
   serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
 

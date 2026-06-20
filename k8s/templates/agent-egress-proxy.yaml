@@ -48,6 +48,14 @@ spec:
 ---
 {{- if eq (include "tank-operator.renderHot" .) "true" }}
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.agentEgressProxy.serviceAccount }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: agent-egress-proxy
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: agent-egress-proxy
@@ -287,8 +295,8 @@ spec:
             initialDelaySeconds: 3
             periodSeconds: 10
         - name: ext-proc
-          image: "{{ .Values.apiProxy.image.repository }}:{{ .Values.apiProxy.image.tag }}"
-          imagePullPolicy: {{ .Values.apiProxy.image.pullPolicy }}
+          image: "{{ .Values.agentEgressProxy.image.repository | default .Values.apiProxy.image.repository }}:{{ .Values.agentEgressProxy.image.tag | default .Values.apiProxy.image.tag }}"
+          imagePullPolicy: {{ .Values.agentEgressProxy.image.pullPolicy | default .Values.apiProxy.image.pullPolicy }}
           ports:
             - name: grpc
               containerPort: 9000
