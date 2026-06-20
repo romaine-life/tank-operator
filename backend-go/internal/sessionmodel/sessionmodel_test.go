@@ -492,6 +492,7 @@ func TestPodManifestRestrictedGitRoutesGithubThroughEgressProxy(t *testing.T) {
 		Repos:                   []string{"romaine-life/tank-operator"},
 		Capabilities:            []string{SessionCapabilityRestrictedGit},
 		AgentEgressProxyIP:      egressIP,
+		OAuthGatewayCAConfigMap: "oauth-gateway-ca",
 	})
 	spec := manifest["spec"].(map[string]any)
 	aliases := githubHostAliasIPs(spec)
@@ -501,6 +502,19 @@ func TestPodManifestRestrictedGitRoutesGithubThroughEgressProxy(t *testing.T) {
 	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
 	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "true"; got != want {
 		t.Fatalf("codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
+	}
+	// The repo-cloner clones github THROUGH the wall, so it must mount the gateway CA
+	// or its git TLS handshake fails ("error adding trust anchors") and the pod never
+	// starts (the live bug this guards against).
+	cloner := spec["initContainers"].([]any)[0].(map[string]any)
+	clonerHasCA := false
+	for _, m := range cloner["volumeMounts"].([]any) {
+		if m.(map[string]any)["mountPath"] == "/etc/oauth-gateway-ca" {
+			clonerHasCA = true
+		}
+	}
+	if !clonerHasCA {
+		t.Fatal("repo-cloner must mount oauth-gateway-ca in egress-proxy mode")
 	}
 }
 
