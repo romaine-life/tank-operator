@@ -86,6 +86,58 @@ github_write_tool_decision_total = Counter(
 )
 
 
+# Branch-lane grant brokered-path outcomes. The in-pod break-glass server's
+# /push-head (git pre-push hook) and /pr-write (gh wrapper) routes broker
+# governed pushes and PR-own writes server-side for an approved break-glass
+# grant, scope-enforced. The `result` label is the load-bearing signal: a
+# SUCCESS also lands a github.break_glass.* row in Tank's durable control-action
+# ledger, but a REFUSAL (no_grant, branch_out_of_scope, dirty, detached, ...)
+# writes no ledger row at all — so without these counters a firing scope
+# boundary, or a wave of agents tripping on the no-grant wall, is invisible to
+# operators. Named tank_break_glass_* (not the tank_mcp_auth_proxy_* sidecar
+# prefix) so the whole branch-lane feature — these plus the orchestrator's
+# tank_break_glass_retired_path_total — dashboards and alerts as one family.
+# Cardinality is bounded: `result` is drawn from the fixed _pr_write_refusal
+# reason set plus {succeeded}; `action` on pr_write is the 4 gh PR verbs.
+break_glass_push_total = Counter(
+    "tank_break_glass_push_total",
+    "Brokered governed branch pushes via the in-pod /push-head route, by outcome.",
+    ["result"],
+)
+
+break_glass_pr_open_total = Counter(
+    "tank_break_glass_pr_open_total",
+    "Brokered branch-lane draft-PR opens via the in-pod /pr-write route, by outcome.",
+    ["result"],
+)
+
+break_glass_pr_write_total = Counter(
+    "tank_break_glass_pr_write_total",
+    "Brokered branch-lane PR-own writes (edit/ready/comment) via /pr-write, by outcome.",
+    ["result"],
+)
+
+
+def record_break_glass_push(result: str) -> None:
+    """result is succeeded, error, or a _pr_write_refusal reason (no_grant,
+    branch_out_of_scope, dirty, detached, bad_repo_path, bad_origin,
+    repo_mismatch)."""
+    break_glass_push_total.labels(result=result).inc()
+
+
+def record_break_glass_pr_open(result: str) -> None:
+    """result is succeeded, error, or a _pr_write_refusal reason (no_grant,
+    branch_out_of_scope, bad_repo, bad_action, missing_head, ...)."""
+    break_glass_pr_open_total.labels(result=result).inc()
+
+
+def record_break_glass_pr_write(result: str) -> None:
+    """result is succeeded, error, or a _pr_write_refusal reason (no_grant,
+    branch_out_of_scope, missing_pr_number, pr_not_found, nothing_to_edit,
+    missing_comment, ...)."""
+    break_glass_pr_write_total.labels(result=result).inc()
+
+
 def _status_class(status: int) -> str:
     if 200 <= status < 300:
         return "2xx"
@@ -153,6 +205,9 @@ async def start_metrics_server(port: int) -> web.AppRunner:
 
 __all__ = [
     "record_auth_romaine_exchange",
+    "record_break_glass_pr_open",
+    "record_break_glass_pr_write",
+    "record_break_glass_push",
     "record_github_write_tool_decision",
     "record_proxy_request",
     "record_sa_token_read",

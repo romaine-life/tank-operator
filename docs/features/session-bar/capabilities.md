@@ -386,6 +386,24 @@ Named behaviors in the session-bar surface. See
   create error) rather than silently dropping a best-effort edge — unlike the
   parent-side chip append, which stays best-effort and counted by
   `tank_session_spawn_link_total{result}`.
+- **Snapshot/SSE lineage parity (regression guard):** `parent_session_id` rides
+  both wire shapes — the snapshot `Info` payload (`GET /api/sessions`) and the
+  live row-update frame (`GET /api/sessions/events`) — and the backend keeps them
+  the same source of truth (`sessions/sessions.go` `Info` ↔
+  `sessioncontroller.rowWireShape`). On the SPA the lineage trio
+  (`spawned_sessions`, `pull_requests`, `parent_session_id`) is parsed by ONE
+  shared `parseSessionRowLineage` (`frontend/src/sessionStore.ts`), called by both
+  the snapshot parser (`infoJSONToSessionRow`) and the row-update parser
+  (`normalizeSessionRowUpdate`). This closes the defect where the snapshot parser
+  silently dropped `parent_session_id`: a spawned child de-nested to a top-level
+  row on every snapshot / manual refresh / SSE reconnect / tab-refocus and only
+  "snapped back" on its next live row-update (a clear violation of the contract's
+  "appears already nested on its first snapshot/row-update … must not first render
+  as a top-level row and then reflow" and "reconnect or resync produces the same
+  session bar state as a fresh load"). Guarded by `migrationPolicy.test.ts` ("the
+  snapshot parser shares the lineage parser with the SSE path"), and
+  `sessionStore.test.ts` ("a spawned child is born nested from a snapshot — no
+  top-level-then-reflow" / "snapshot then live row-update keep a child nested").
 - **Non-goal (for this spawn-driven capability):** no second indent level, no
   subtree collapse/expand (it would hide the very sub-sessions this surfaces),
   no parent backlink rendered on the child beyond the visual grouping. The

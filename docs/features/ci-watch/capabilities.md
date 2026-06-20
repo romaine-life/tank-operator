@@ -165,6 +165,29 @@ and [../README.md](../README.md) for how capability ledgers are used.
   the `conversationReducer.ts` / `conversationProjection.ts` cases are intentionally
   **kept** as a read path so historical durable records still render; retiring them
   is a separate, data-aware migration (old rows must not silently stop rendering).
+- **Update (2026-06-19): agent/automation-drivable trigger.** The deterministic
+  gate is now reachable programmatically, not only via the owner's browser
+  button — closing the gap that left the flow untestable by an agent / CI (and,
+  because nothing but a human click ever exercised it, prone to silent rot). Two
+  surfaces, both **zero-LLM triggers for the same `provisionTestSlotForSession`
+  gate**. This is **not** a reintroduction of the retired LLM-orchestrated
+  provisioning wrappers (the removed mcp-glimmung checkout/deploy + mcp-tank-operator
+  pill tools): there is no agent-driven checkout/deploy/pill logic — the agent only
+  *triggers*, and the server provisions deterministically, exactly as the button
+  does. (1) `POST /api/internal/sessions/{id}/test-workflow/start` —
+  service-principal gated (`requireServicePrincipal` + `internalCallerMatchesSession`:
+  the session's own `svc:tank:<id>` or the orchestrator control plane), sharing the
+  extracted `startTestWorkflowForSession` with the browser handler so the
+  resolve→double-trigger-guard→launch→202 tail cannot drift between the two
+  triggers. (2) a `provision_test_slot` MCP tool (mcp-auth-proxy sidecar injection,
+  alongside `publish_current_head`, restricted-git sessions only) that POSTs to (1)
+  with the session's forwarded identity (`_tank_caller_session_headers`). Same
+  double-trigger guard, same 202, same `tank_test_slot_interactive_total` /
+  `tank_test_slot_validate_total` / `tank_test_slot_provision_total` counters.
+  Evidence: `TestInternalStartTestWorkflow_*` (own-session 202, cross-session 403,
+  non-service 403, missing-glimmung 503, body threading), the unchanged
+  `TestStartTestWorkflow_*` browser suite (proves the refactor is behavior-identical),
+  and the sidecar `test_provision_test_slot_tool.py` + tools-list contract test.
 
 ## interactive-test-workflow-drive
 
@@ -266,6 +289,51 @@ and [../README.md](../README.md) for how capability ledgers are used.
     a running env. The page now requires a real **URL** to show "running"; and the
     provision double-trigger guard (`handleStartTestWorkflow`) requires
     `active && url` so the empty flag no longer 409s a genuine Create.
+- **Branch/PR picker (2026-06-19, follow-up):** the page lists **every branch/PR
+  this session has worked on** and lets the user pick which one to provision
+  instead of silently assuming the session's bare branch. Tank already hooks
+  every governed commit, so each PR head it has watched is a `session_ci_watches`
+  row; the picker reads them. Backend: `ListForSession` (`pgstore`,
+  newest-first) feeds a `prs[]` array on the status response (`testSlotPRViewFrom`,
+  each row carrying `pr_number`/`pr_url`/durable `status`/`has_open_pr`); a
+  `?pr=<n>` query selects which watch the `?refresh=1` preflight reads and which
+  the `pickWatch` default falls back to (newest when unset). The interactive
+  trigger (`POST .../test-workflow/start`) accepts `{"pr":N}`, so Create
+  provisions the **selected PR's head branch** — `provisionSlotAfterReady`
+  deploys `state.PR.Head.Ref` (the resolved head), not always the bare branch.
+  The page renders the picker only when the session has **more than one** PR;
+  single-PR sessions are visually unchanged and keep provisioning their one
+  branch. **Affected contracts:** ci-watch (the picker rows are the durable
+  watches, never a parallel store), session-lifecycle (the gate still re-reads
+  the selected PR live before provisioning). **Evidence:**
+  `TestGetTestSlotStatus_ListsSessionPRs` (list order newest-first, per-row
+  `has_open_pr`, default-watch = newest, `?pr=` selection still yields a live
+  preflight), `TestGetTestSlotStatus_RefreshDetectsMergedFromWatchPR` (selected
+  watch read by number), frontend `tsc` + `vitest` + `vite build`.
+
+- **Deploy options + main, never a dead-end (2026-06-20):** the page no longer
+  greys out Create when there is no open PR. The status endpoint returns an
+  `options[]` — every open PR the session worked on (each with its verdict) plus
+  **`main` as an always-available baseline** — with an **intelligent default**
+  marked (`buildTestSlotOptions`: a ready open PR → newest open PR → main). The
+  page renders the options and preselects the default; Create acts on the
+  selected option. Deploying `main` (or any ref) takes a new **deploy-by-ref**
+  path in the gate (`provisionTestSlotRequest.DeployRef`): there is no PR to
+  validate, so it skips the validate→wait loop and runs `CheckoutTestSlot` +
+  `DeployImageToTestSlot(GitRef=main)` straight away (verdict `ref`). The
+  triggers accept it as `{"ref":"main"}` on `.../test-workflow/start` and via the
+  `provision_test_slot` MCP tool's `ref` arg. This handles the "PR already merged
+  / no obvious branch" case the picker could not. Stage 1 hardcodes the baseline
+  as `main` (true for every governed repo today); resolving the repo's actual
+  default branch is a later refinement. **Affected contracts:** session-lifecycle
+  (provisioning a ref with no PR is still owner/service-principal gated and
+  double-trigger guarded). **Evidence:**
+  `TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate`,
+  `TestGetTestSlotStatus_OptionsAlwaysIncludeMain`,
+  `TestGetTestSlotStatus_OptionsDefaultIsReadyPR`,
+  `TestStartTestWorkflow_RefThreadsToDeployRef`, sidecar
+  `test_provision_threads_ref_for_deploy_by_ref` + the tools-list `ref`
+  assertion, frontend `tsc` + `vitest` (`startTestWorkflow` ref) + `vite build`.
 
 ## pending-provision-backstop
 

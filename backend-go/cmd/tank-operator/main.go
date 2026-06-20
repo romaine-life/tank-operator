@@ -401,6 +401,7 @@ func main() {
 		APIProxyHost:                os.Getenv("CLAUDE_API_PROXY_HOST"),
 		ClaudeSecondaryAPIProxyHost: os.Getenv("CLAUDE_SECONDARY_API_PROXY_HOST"),
 		CodexAPIProxyHost:           os.Getenv("CODEX_API_PROXY_HOST"),
+		AgentEgressProxyHost:        os.Getenv("AGENT_EGRESS_PROXY_HOST"),
 		ImageOverrides:              imageOverrideResolver,
 		OnImageOverrideApplied: func(scope, mode, kind string) {
 			recordSessionImageOverrideApplied(scope, kind)
@@ -1263,6 +1264,9 @@ func (r *stubSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ ma
 	return nil
 }
 func (r *stubSessionRegistry) AppendSpawnedSession(_ context.Context, _, _ string, _ sessionmodel.SpawnedSessionRef) error {
+	return nil
+}
+func (r *stubSessionRegistry) AppendSessionPullRequest(_ context.Context, _, _ string, _ sessionmodel.SessionPullRequestRef) error {
 	return nil
 }
 func (r *stubSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {

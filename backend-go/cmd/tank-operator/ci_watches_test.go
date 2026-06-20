@@ -30,6 +30,7 @@ type fakeCIWatchStore struct {
 
 	getByPRResult          pgstore.CIWatch
 	getByPRErr             error
+	listForSessionResult   []pgstore.CIWatch
 	staleWatching          []pgstore.CIWatch
 	updateStatusCalls      []ciWatchStatusCall
 	updateObservationCalls []ciWatchObservationCall
@@ -99,6 +100,19 @@ func (s *fakeCIWatchStore) GetByPR(_ context.Context, _, _ string, _ int) (pgsto
 
 func (s *fakeCIWatchStore) GetLatestForSession(_ context.Context, _, _ string) (pgstore.CIWatch, error) {
 	return s.getByPRResult, s.getByPRErr
+}
+
+func (s *fakeCIWatchStore) ListForSession(_ context.Context, _, _ string) ([]pgstore.CIWatch, error) {
+	if s.listForSessionResult != nil {
+		return s.listForSessionResult, s.getByPRErr
+	}
+	if s.getByPRErr != nil {
+		return nil, s.getByPRErr
+	}
+	if s.getByPRResult.WatchID != "" || s.getByPRResult.PRNumber != 0 {
+		return []pgstore.CIWatch{s.getByPRResult}, nil
+	}
+	return nil, nil
 }
 
 func (s *fakeCIWatchStore) MarkMerged(_ context.Context, watchID, _ string) (pgstore.CIWatch, error) {

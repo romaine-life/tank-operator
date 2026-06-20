@@ -62,6 +62,20 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	s.startTestWorkflowForSession(w, r, owner, sessionID, info)
+}
+
+// startTestWorkflowForSession runs the shared tail of the test-workflow trigger:
+// decode the optional {repo, drive, pr} body, resolve the gate target from
+// durable session state, enforce the double-trigger guard (an active slot with a
+// URL, or an already-in-flight pending provision), launch the background gate
+// run, and return 202. It is the single implementation behind both triggers --
+// the browser owner path (handleStartTestWorkflow) and the service-principal
+// automation path (handleInternalStartTestWorkflow) -- so the resolve + guard +
+// launch behavior cannot drift between them. Both callers must have already
+// authenticated, checked glimmung/mcpGitHub availability, and resolved `info`
+// for `owner`/`sessionID`.
+func (s *appServer) startTestWorkflowForSession(w http.ResponseWriter, r *http.Request, owner, sessionID string, info sessions.Info) {
 	// Optional `repo` override disambiguates a multi-repo session. The body is
 	// optional: a single-repo session needs none. `drive` selects the
 	// "Create test slot and test" variant: provision deterministically (same
@@ -70,6 +84,15 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 	var body struct {
 		Repo  string `json:"repo"`
 		Drive bool   `json:"drive"`
+		// PR optionally selects which of the session's branches/PRs to provision
+		// (the page's picker). When set, the gate validates that PR by number and
+		// deploys its head branch; when 0 it falls back to the session's governed
+		// branch ("latest pushed").
+		PR int `json:"pr"`
+		// Ref optionally deploys a git ref directly (e.g. "main") with NO
+		// PR-readiness gate — the page's "no obvious branch / PR already merged"
+		// option so provisioning is never a dead-end. Takes precedence over PR.
+		Ref string `json:"ref"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -81,6 +104,12 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	req.drive = body.Drive
+	if body.PR > 0 {
+		req.PRNumber = body.PR
+	}
+	if ref := strings.TrimSpace(body.Ref); ref != "" {
+		req.DeployRef = ref
+	}
 
 	// Double-trigger guard (Slice-5). A rapid double-click must not start two
 	// gate runs / two glimmung checkouts. Refuse when a test environment is
@@ -129,6 +158,55 @@ func (s *appServer) handleStartTestWorkflow(w http.ResponseWriter, r *http.Reque
 		"repo":   req.RepoOwner + "/" + req.RepoName,
 		"branch": req.Branch,
 	})
+}
+
+// handleInternalStartTestWorkflow is the service-principal automation trigger for
+// the same deterministic test-slot provision the browser button drives. It lets a
+// session's own agent (through the sidecar's provision_test_slot MCP tool) start a
+// test slot for its session without a human owner JWT, so the flow is
+// agent/automation-drivable. It runs the SAME shared tail
+// (startTestWorkflowForSession) as the browser handler -- identical resolve +
+// double-trigger guard + launch + 202 -- so the two triggers cannot diverge.
+//
+// Authorization is the per-session service-principal gate, mirroring
+// handleInternalAppendControlAction: requireServicePrincipal proves role=service
+// + actor_email, then internalCallerMatchesSession confines the caller to its own
+// session's provision (the verified IdP-signed subject is the sole authorization
+// factor; no caller-asserted header). Unlike the control-action ledger, this is a
+// session-pod-only action: it has no orchestrator-control-plane writer, but
+// internalCallerMatchesSession's control-plane branch is harmless here because the
+// orchestrator never calls this route.
+func (s *appServer) handleInternalStartTestWorkflow(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/test-workflow/start")
+	if user == nil {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	if !s.internalCallerMatchesSession(user, sessionID) {
+		writeError(w, http.StatusForbidden, "test workflow can only be started by a session pod for its own session")
+		return
+	}
+	if s.glimmung == nil || s.mcpGitHub == nil {
+		writeError(w, http.StatusServiceUnavailable, "test workflow is unavailable")
+		return
+	}
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetRegisteredByOwner(r.Context(), owner, sessionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+			writeError(w, http.StatusNotFound, "session not found")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	s.startTestWorkflowForSession(w, r, owner, sessionID, info)
 }
 
 // launchInteractiveTestWorkflow starts the background gate run. Production wiring

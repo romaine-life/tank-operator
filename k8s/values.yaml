@@ -3,16 +3,16 @@ image:
   # Fingerprint-pinned. The build workflow rewrites this line on every push
   # to main via a `[skip ci]` follow-up commit, so the cluster reconciles to
   # the exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-57d020b78997fef0f502d76ebce33f9f2cf5ca1114bfb82736f874aa6e86f580"
+  tag: "app-de6085cb5875e0f997c74dd038330cea475df996c77ce7edb5f7689ebd2a8cce"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-19T16:55:13Z"
-    git_sha: "ec242772cd8984283ac3c18b4d3c1cdd1743bfbe"
+    built_at: "2026-06-20T19:50:12Z"
+    git_sha: "da8d78d9c233b78f72a29005834be6e712a50431"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/ec242772cd8984283ac3c18b4d3c1cdd1743bfbe"
-    pr_number: "1361"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1361"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27838447244"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/da8d78d9c233b78f72a29005834be6e712a50431"
+    pr_number: "1411"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1411"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27882027737"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
@@ -83,29 +83,29 @@ orchestrator:
 session:
   # Fingerprint-pinned. claude-container-build.yml rewrites these tag
   # suffixes on every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-ce7f77355f27c345abd2c671cecaf2e91c5e3f00575a2925cf9fa3741e707501"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-f2d2b33673606005824c1827e874318e41c524010d59457251983730a3f7850e"
+  image: "romainecr.azurecr.io/claude-container:claude-c4829287f5cef3e2b85c0f3413e7ad3ba3a3c8eec2dd7d3964a7444a75cab1f7"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-86dd2ef2875acd24ced59fe2a7141a1b42c4ff11b98a005b0a19a88225db0bc2"
   imageMetadata:
     claude:
-      built_at: "2026-06-19T10:50:37Z"
-      git_sha: "47490c5228de033b27038b36cc0d27dcc884d2e8"
+      built_at: "2026-06-20T05:26:45Z"
+      git_sha: "cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/47490c5228de033b27038b36cc0d27dcc884d2e8"
-      pr_number: "1351"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1351"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27821276637"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
+      pr_number: "1381"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1381"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27861435278"
       repository: "romaine-life/tank-operator"
-      actor: "nelsong6"
+      actor: "tank-operator-host[bot]"
     codex:
-      built_at: "2026-06-19T10:50:37Z"
-      git_sha: "47490c5228de033b27038b36cc0d27dcc884d2e8"
+      built_at: "2026-06-20T05:26:45Z"
+      git_sha: "cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/47490c5228de033b27038b36cc0d27dcc884d2e8"
-      pr_number: "1351"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1351"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27821276637"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/cfba579fe72e8ecc9bc11eb3a151671ce58577d2"
+      pr_number: "1381"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1381"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27861435278"
       repository: "romaine-life/tank-operator"
-      actor: "nelsong6"
+      actor: "tank-operator-host[bot]"
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -209,7 +209,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-062f136533b4a8d7568c9d786140670dc0fffe47fcc6c2eb9c8655b7c0acd2b7"
+    tag: "api-proxy-915550062a3fdeec26adcf12a0d2bdd3dbb5156354b941d3fa3ad479af614127"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   # Replica count shared by all provider proxy Deployments. HOLD AT 1 until the refresh
@@ -226,6 +226,44 @@ apiProxy:
   # Published to KV by infra/api_proxy.tf â€” separate UAMI from the
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
+
+# Agent egress proxy — the single outbound chokepoint for session pods
+# (k8s/templates/agent-egress-proxy.yaml). Reuses apiProxy.image (the ext_proc)
+# and apiProxy.envoyImage. enabled=true renders cert/Service/Envoy/Deployment.
+# Restricted sessions route github.com/api.github.com through it (per-session
+# hostAlias + repo-cloner CA); it mints the GitHub token server-side, records every
+# action, confines pushes to the session's branch lane, and honors break-glass
+# grants. The `lockdown` block below network-enforces that path for restricted
+# sessions so the wall can't be bypassed by a direct-to-GitHub-IP connection.
+agentEgressProxy:
+  enabled: true
+  replicas: 1
+  # Plain run-as identity for the proxy pod. The handler needs NO privileged
+  # identity of its own: it relays each session pod's own auth.romaine.life
+  # role=service JWT to mcp-github (mint) and to the control-actions endpoint
+  # (record), so authority rides the caller's token, not this SA.
+  serviceAccount: agent-egress-proxy
+  # In-cluster mcp-github service (clusterIP port 80) the handler relay-calls to
+  # mint the session-owner's App token (mcp-github routes by the JWT's actor_email).
+  mcpGithubMintUrl: http://mcp-github.mcp-github.svc.cluster.local:80/
+  # ext_proc image. Empty -> defaults to apiProxy.image (same codebase; the
+  # PROXY_PROVIDER=github env selects the github handler). Override repository/tag
+  # to run the egress proxy on a proof/branch image independently of the
+  # claude/codex proxies — e.g. a dark-deploy smoke that must not roll them.
+  image:
+    repository: ""
+    tag: "api-proxy-915550062a3fdeec26adcf12a0d2bdd3dbb5156354b941d3fa3ad479af614127"
+    pullPolicy: ""
+  # Stage 1 GitHub egress lockdown (k8s/templates/restricted-git-egress-policy.yaml):
+  # a NetworkPolicy denying RESTRICTED egress-proxy sessions (pods labeled
+  # tank-operator/git-egress=proxy, set by sessionmodel.go) direct egress to GitHub's
+  # published CIDRs, so the only reachable path to github.com/api.github.com is the
+  # wall (hostAlias-pinned to its ClusterIP). Unrestricted sessions carry no label and
+  # are never selected, so the direct path is untouched. githubusercontent/pages stay
+  # reachable in Stage 1. The deny CIDRs live in that template and are refreshed by
+  # scripts/gen-github-egress-cidrs.py (.github/workflows/refresh-github-egress-cidrs.yml).
+  lockdown:
+    enabled: true
 claudeSecondaryApiProxy:
   serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
 

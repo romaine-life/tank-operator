@@ -18,6 +18,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 const maxControlActionPayloadBytes = 16 << 10
@@ -67,33 +68,6 @@ type governedMergeVerificationResponse struct {
 	MergeableState   string   `json:"mergeable_state,omitempty"`
 	ValidationTarget string   `json:"validation_target,omitempty"`
 	SourceTool       string   `json:"source_tool,omitempty"`
-}
-
-type prLaneApprovalRequest struct {
-	Note        string      `json:"note"`
-	RepoScope   repoScope   `json:"repo_scope,omitempty"`
-	BranchScope branchScope `json:"branch_scope,omitempty"`
-}
-
-type prLaneAutoApprovalRequest struct {
-	RepoScope   repoScope   `json:"repo_scope,omitempty"`
-	BranchScope branchScope `json:"branch_scope,omitempty"`
-	Reason      string      `json:"reason"`
-}
-
-type prLaneAuthorizationResponse struct {
-	Allowed         bool     `json:"allowed"`
-	Reasons         []string `json:"reasons,omitempty"`
-	RequestEventID  string   `json:"request_event_id,omitempty"`
-	ApprovalEventID string   `json:"approval_event_id,omitempty"`
-	Repo            string   `json:"repo,omitempty"`
-	LaneName        string   `json:"lane_name,omitempty"`
-	Relationship    string   `json:"relationship,omitempty"`
-	Base            string   `json:"base,omitempty"`
-	Scope           string   `json:"scope,omitempty"`
-	Reason          string   `json:"reason,omitempty"`
-	ProposedBranch  string   `json:"proposed_branch,omitempty"`
-	AutoApproved    bool     `json:"auto_approved,omitempty"`
 }
 
 type repoScope struct {
@@ -167,7 +141,63 @@ func (s *appServer) handleInternalAppendControlAction(w http.ResponseWriter, r *
 		return
 	}
 	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	s.recordSessionPullRequestSighting(r.Context(), row)
 	writeJSON(w, http.StatusCreated, controlActionToJSON(row, true))
+}
+
+// recordSessionPullRequestSighting mirrors any github.pull_request.* control
+// action into the session's durable pull_requests projection so the git chip
+// and the dedicated /pull-requests page surface every PR a session touched,
+// without re-deriving the list from the capped recent-activity feed (where the
+// oldest .open rows silently dropped on busy sessions). Best-effort and
+// display-only: a failure is logged and counted but never affects the
+// already-committed control-action write — the ledger stays the source of truth.
+func (s *appServer) recordSessionPullRequestSighting(ctx context.Context, row pgstore.ControlActionEvent) {
+	if s.mgr == nil {
+		return
+	}
+	ref, ok := sessionPullRequestRefFromControlAction(row)
+	if !ok {
+		return
+	}
+	if err := s.mgr.AppendSessionPullRequest(ctx, row.OwnerEmail, row.SessionID, ref); err != nil {
+		slog.Warn("record session pull-request sighting failed",
+			"session_id", row.SessionID, "url", ref.URL, "error", err)
+		sessionPullRequestLinkTotal.WithLabelValues("error").Inc()
+		return
+	}
+	sessionPullRequestLinkTotal.WithLabelValues("ok").Inc()
+}
+
+// sessionPullRequestRefFromControlAction extracts a durable PR ref from a
+// control-action row, or (zero, false) when the row is not a github.pull_request.*
+// action carrying a real github.com/.../pull/N URL. Pure so the filter + ref
+// construction is unit-testable without a session manager.
+func sessionPullRequestRefFromControlAction(row pgstore.ControlActionEvent) (sessionmodel.SessionPullRequestRef, bool) {
+	if !strings.HasPrefix(row.Action, "github.pull_request.") {
+		return sessionmodel.SessionPullRequestRef{}, false
+	}
+	url := strings.TrimSpace(row.TargetRef)
+	if !strings.Contains(url, "github.com/") || !strings.Contains(url, "/pull/") {
+		return sessionmodel.SessionPullRequestRef{}, false
+	}
+	owner := strings.TrimSpace(row.RepoOwner)
+	name := strings.TrimSpace(row.RepoName)
+	repo := ""
+	if owner != "" && name != "" {
+		repo = owner + "/" + name
+	}
+	ref := sessionmodel.SessionPullRequestRef{
+		Repo:      repo,
+		URL:       url,
+		Action:    row.Action,
+		Status:    row.Status,
+		UpdatedAt: row.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	if row.PRNumber != nil {
+		ref.Number = *row.PRNumber
+	}
+	return ref, true
 }
 
 // internalCallerMatchesSession authorizes a session-scoped internal write by the
@@ -343,34 +373,20 @@ func (s *appServer) handleGetBreakGlassRequest(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *appServer) handleAdminBreakGlassRequests(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	if !hasAdminPower(user) {
-		writeError(w, http.StatusForbidden, "admin only")
-		return
-	}
-	if s.controlActions == nil {
-		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
-		return
-	}
+func parseBreakGlassListOptions(r *http.Request) (string, int, int, error) {
 	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
 	switch statusFilter {
 	case "", "pending":
 		statusFilter = "pending"
 	case "recent", "all":
 	default:
-		writeError(w, http.StatusBadRequest, "status must be pending, recent, or all")
-		return
+		return "", 0, 0, errors.New("status must be pending, recent, or all")
 	}
 	limit := 100
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
-			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
-			return
+			return "", 0, 0, errors.New("limit must be a positive integer")
 		}
 		limit = parsed
 	}
@@ -381,20 +397,18 @@ func (s *appServer) handleAdminBreakGlassRequests(w http.ResponseWriter, r *http
 	if statusFilter == "pending" {
 		queryLimit = 500
 	}
-	rows, err := s.controlActions.ListBreakGlassRequests(r.Context(), s.sessionScope, queryLimit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	return statusFilter, limit, queryLimit, nil
+}
+
+func (s *appServer) breakGlassRequestListItems(ctx context.Context, rows []pgstore.ControlActionEvent, statusFilter string, limit int) ([]map[string]any, error) {
 	items := make([]map[string]any, 0, len(rows))
 	for _, request := range rows {
 		if !isBreakGlassRequestAction(request.Action) {
 			continue
 		}
-		decision, err := s.controlActions.BreakGlassDecisionForRequest(r.Context(), s.sessionScope, request.SessionID, request.EventID)
+		decision, err := s.controlActions.BreakGlassDecisionForRequest(ctx, s.sessionScope, request.SessionID, request.EventID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return nil, err
 		}
 		pending := decision.EventID == ""
 		if statusFilter == "pending" && !pending {
@@ -411,6 +425,78 @@ func (s *appServer) handleAdminBreakGlassRequests(w http.ResponseWriter, r *http
 		if len(items) >= limit {
 			break
 		}
+	}
+	return items, nil
+}
+
+func (s *appServer) handleListSessionBreakGlassRequests(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin only")
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	statusFilter, limit, queryLimit, err := parseBreakGlassListOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rows, err := s.controlActions.ListBreakGlassRequestsBySession(r.Context(), s.sessionScope, sessionID, queryLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items, err := s.breakGlassRequestListItems(r.Context(), rows, statusFilter, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"requests":      items,
+		"status":        statusFilter,
+		"session_id":    sessionID,
+		"session_scope": s.sessionScope,
+	})
+}
+
+func (s *appServer) handleAdminBreakGlassRequests(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin only")
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	statusFilter, limit, queryLimit, err := parseBreakGlassListOptions(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rows, err := s.controlActions.ListBreakGlassRequests(r.Context(), s.sessionScope, queryLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items, err := s.breakGlassRequestListItems(r.Context(), rows, statusFilter, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"requests":      items,
@@ -1674,294 +1760,6 @@ func (s *appServer) handleInternalGetAzureBreakGlassGrant(w http.ResponseWriter,
 	writeJSON(w, http.StatusOK, map[string]any{"active": false, "resource": "azure-personal", "session_id": sessionID})
 }
 
-func (s *appServer) handleApprovePRLaneRequest(w http.ResponseWriter, r *http.Request) {
-	s.handlePRLaneDecision(w, r, "approve")
-}
-
-func (s *appServer) handleDenyPRLaneRequest(w http.ResponseWriter, r *http.Request) {
-	s.handlePRLaneDecision(w, r, "deny")
-}
-
-func (s *appServer) handlePRLaneDecision(w http.ResponseWriter, r *http.Request, decision string) {
-	user, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	if s.controlActions == nil {
-		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
-		return
-	}
-	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	requestEventID := strings.TrimSpace(r.PathValue("request_event_id"))
-	if sessionID == "" || requestEventID == "" {
-		writeError(w, http.StatusBadRequest, "session_id and request_event_id are required")
-		return
-	}
-	var body prLaneApprovalRequest
-	if r.Body != nil {
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&body); err != nil && !errors.Is(err, http.ErrBodyReadAfterClose) {
-			writeError(w, http.StatusBadRequest, "invalid body")
-			return
-		}
-	}
-	rows, err := s.controlActions.ListBySession(r.Context(), user.OwnerEmail(), s.sessionScope, sessionID, 200)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	request, ok := findPendingPRLaneRequest(rows, requestEventID)
-	if !ok {
-		writeError(w, http.StatusNotFound, "pending PR lane request not found")
-		return
-	}
-	var requestPayload struct {
-		AllocationRequest bool        `json:"allocation_request"`
-		RepoScope         repoScope   `json:"repo_scope"`
-		BranchScope       branchScope `json:"branch_scope"`
-		Reason            string      `json:"reason"`
-	}
-	_ = json.Unmarshal(request.Payload, &requestPayload)
-	if decision == "approve" && requestPayload.AllocationRequest {
-		requestRepoScope, err := normalizeRepoScope(requestPayload.RepoScope, rowDefaultRepo(request))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "PR lane request has invalid repo_scope")
-			return
-		}
-		requestBranchScope, err := normalizeBranchScope(requestPayload.BranchScope, sessionID, request.RepoName)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "PR lane request has invalid branch_scope")
-			return
-		}
-		resolvedRepoScope := requestRepoScope
-		resolvedBranchScope := requestBranchScope
-		if body.BranchScope.Kind != "" {
-			resolvedBranchScope, err = normalizeBranchScope(body.BranchScope, sessionID, request.RepoName)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		}
-		if body.RepoScope.Kind != "" {
-			resolvedRepoScope, err = normalizeRepoScope(body.RepoScope, "")
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		}
-		repos := repoScopeRepos(resolvedRepoScope)
-		allRepos := resolvedRepoScope.Kind == "all_repos"
-		payload, _ := json.Marshal(map[string]any{
-			"request_event_id": request.EventID,
-			"request_payload":  json.RawMessage(request.Payload),
-			"note":             strings.TrimSpace(body.Note),
-			"approved_by":      user.Email,
-			"repo_scope":       resolvedRepoScope,
-			"branch_scope":     resolvedBranchScope,
-			"reason":           firstNonEmptyControlAction(strings.TrimSpace(requestPayload.Reason), strings.TrimSpace(body.Note)),
-			"scope":            "session",
-		})
-		event := pgstore.ControlActionEvent{
-			EventID:       "tank-pr-lane-auto-approve-" + sessionID + "-" + randomHex(12),
-			InvocationID:  request.InvocationID,
-			OwnerEmail:    user.OwnerEmail(),
-			SessionScope:  s.sessionScope,
-			SessionID:     sessionID,
-			SourceService: "tank-operator",
-			SourceTool:    "pr_lane_approval",
-			Action:        "github.pr_lane.auto_approve",
-			Status:        "succeeded",
-			TargetKind:    request.TargetKind,
-			TargetRef:     repoScopeTargetRef(sessionID, resolvedRepoScope, "pr-lanes"),
-			RepoOwner:     singleRepoOwner(repos, allRepos),
-			RepoName:      singleRepoName(repos, allRepos),
-			Payload:       payload,
-		}
-		row, err := s.controlActions.Append(r.Context(), event)
-		if err != nil {
-			recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
-		writeJSON(w, http.StatusCreated, controlActionToJSON(row, false))
-		return
-	}
-	action := "github.pr_lane.approve"
-	status := "succeeded"
-	if decision == "deny" {
-		action = "github.pr_lane.deny"
-		status = "failed"
-	}
-	payload, _ := json.Marshal(map[string]any{
-		"request_event_id": request.EventID,
-		"request_payload":  json.RawMessage(request.Payload),
-		"note":             strings.TrimSpace(body.Note),
-		"decided_by":       user.Email,
-	})
-	event := pgstore.ControlActionEvent{
-		EventID:       "tank-pr-lane-" + decision + "-" + sessionID + "-" + randomHex(12),
-		InvocationID:  request.InvocationID,
-		OwnerEmail:    user.OwnerEmail(),
-		SessionScope:  s.sessionScope,
-		SessionID:     sessionID,
-		SourceService: "tank-operator",
-		SourceTool:    "pr_lane_approval",
-		Action:        action,
-		Status:        status,
-		TargetKind:    request.TargetKind,
-		TargetRef:     request.TargetRef,
-		RepoOwner:     request.RepoOwner,
-		RepoName:      request.RepoName,
-		Payload:       payload,
-	}
-	row, err := s.controlActions.Append(r.Context(), event)
-	if err != nil {
-		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
-	writeJSON(w, http.StatusCreated, controlActionToJSON(row, false))
-}
-
-func (s *appServer) handleAutoApprovePRLanes(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	if s.controlActions == nil {
-		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
-		return
-	}
-	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "session_id is required")
-		return
-	}
-	var body prLaneAutoApprovalRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	resolvedRepoScope, err := normalizeRepoScope(body.RepoScope, "")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	repos := repoScopeRepos(resolvedRepoScope)
-	allRepos := resolvedRepoScope.Kind == "all_repos"
-	owner, name := singleRepoOwner(repos, allRepos), singleRepoName(repos, allRepos)
-	resolvedBranchScope, err := normalizeBranchScope(body.BranchScope, sessionID, name)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	payload, _ := json.Marshal(map[string]any{
-		"repo_scope":   resolvedRepoScope,
-		"branch_scope": resolvedBranchScope,
-		"reason":       strings.TrimSpace(body.Reason),
-		"approved_by":  user.Email,
-		"scope":        "session",
-	})
-	targetRef := repoScopeTargetRef(sessionID, resolvedRepoScope, "pr-lanes")
-	event := pgstore.ControlActionEvent{
-		EventID:       "tank-pr-lane-auto-approve-" + sessionID + "-" + randomHex(12),
-		InvocationID:  "tank-pr-lane-auto-approve-" + randomHex(12),
-		OwnerEmail:    user.OwnerEmail(),
-		SessionScope:  s.sessionScope,
-		SessionID:     sessionID,
-		SourceService: "tank-operator",
-		SourceTool:    "pr_lane_approval",
-		Action:        "github.pr_lane.auto_approve",
-		Status:        "succeeded",
-		TargetKind:    "github_repository",
-		TargetRef:     targetRef,
-		RepoOwner:     owner,
-		RepoName:      name,
-		Payload:       payload,
-	}
-	row, err := s.controlActions.Append(r.Context(), event)
-	if err != nil {
-		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
-	writeJSON(w, http.StatusCreated, controlActionToJSON(row, false))
-}
-
-func (s *appServer) handleInternalGetPRLaneAutoApproval(w http.ResponseWriter, r *http.Request) {
-	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/pr-lane-auto-approval")
-	if user == nil {
-		return
-	}
-	if s.controlActions == nil {
-		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
-		return
-	}
-	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "session_id is required")
-		return
-	}
-	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	laneName := strings.TrimSpace(r.URL.Query().Get("lane_name"))
-	proposedBranch := strings.TrimSpace(r.URL.Query().Get("proposed_branch"))
-	grant := activePRLaneAutoApproval(rows, repo, laneName, proposedBranch)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"active":        grant.Active,
-		"event_id":      grant.EventID,
-		"limit":         grant.Limit,
-		"unlimited":     grant.Unlimited,
-		"remaining":     grant.Remaining,
-		"branch_names":  grant.BranchNames,
-		"repos":         grant.Repos,
-		"all_repos":     grant.AllRepos,
-		"repo_scope":    grant.RepoScope,
-		"branch_scope":  grant.BranchScope,
-		"repo":          repo,
-		"session_id":    sessionID,
-		"session_scope": s.sessionScope,
-	})
-}
-
-func (s *appServer) handleInternalGetPRLaneAuthorization(w http.ResponseWriter, r *http.Request) {
-	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization")
-	if user == nil {
-		return
-	}
-	if s.controlActions == nil {
-		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
-		return
-	}
-	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	requestEventID := strings.TrimSpace(r.PathValue("request_event_id"))
-	if sessionID == "" || requestEventID == "" {
-		writeError(w, http.StatusBadRequest, "session_id and request_event_id are required")
-		return
-	}
-	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	resp := evaluatePRLaneAuthorization(rows, requestEventID)
-	status := http.StatusOK
-	if !resp.Allowed {
-		status = http.StatusConflict
-	}
-	writeJSON(w, status, resp)
-}
-
 func (s *appServer) handleInternalVerifyGovernedMerge(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/governed-merge/verify")
 	if user == nil {
@@ -2042,230 +1840,6 @@ func (s *appServer) handleInternalVerifyGovernedMerge(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusConflict, resp)
 }
 
-func evaluatePRLaneAuthorization(rows []pgstore.ControlActionEvent, requestEventID string) prLaneAuthorizationResponse {
-	var request pgstore.ControlActionEvent
-	for _, row := range rows {
-		if row.EventID == requestEventID && row.Action == "github.pr_lane.request" {
-			request = row
-			break
-		}
-	}
-	if request.EventID == "" {
-		return prLaneAuthorizationResponse{Allowed: false, Reasons: []string{"PR lane request not found"}}
-	}
-	resp := prLaneAuthorizationResponse{
-		RequestEventID: request.EventID,
-		Repo:           request.RepoOwner + "/" + request.RepoName,
-	}
-	var payload struct {
-		LaneName            string `json:"lane_name"`
-		Relationship        string `json:"relationship"`
-		Base                string `json:"base"`
-		Scope               string `json:"scope"`
-		Reason              string `json:"reason"`
-		ProposedBranch      string `json:"proposed_branch"`
-		AutoApproved        bool   `json:"auto_approved"`
-		AutoApprovalEventID string `json:"auto_approval_event_id"`
-	}
-	_ = json.Unmarshal(request.Payload, &payload)
-	resp.LaneName = strings.TrimSpace(payload.LaneName)
-	resp.Relationship = strings.TrimSpace(payload.Relationship)
-	resp.Base = strings.TrimSpace(payload.Base)
-	resp.Scope = strings.TrimSpace(payload.Scope)
-	resp.Reason = strings.TrimSpace(payload.Reason)
-	resp.ProposedBranch = strings.TrimSpace(payload.ProposedBranch)
-	resp.AutoApproved = payload.AutoApproved || request.Status == "succeeded"
-	if resp.AutoApproved {
-		resp.ApprovalEventID = strings.TrimSpace(payload.AutoApprovalEventID)
-	}
-	if resp.LaneName == "" || resp.ProposedBranch == "" || request.RepoOwner == "" || request.RepoName == "" {
-		resp.Reasons = append(resp.Reasons, "PR lane request is missing lane or repository metadata")
-	}
-	for _, row := range rows {
-		if row.InvocationID != request.InvocationID {
-			continue
-		}
-		switch row.Action {
-		case "github.pr_lane.deny":
-			resp.Reasons = append(resp.Reasons, "PR lane request was denied")
-			return resp
-		case "github.pr_lane.approve":
-			if row.Status == "succeeded" {
-				resp.ApprovalEventID = row.EventID
-				resp.Allowed = len(resp.Reasons) == 0
-				return resp
-			}
-		case "github.pr_lane.create":
-			if row.Status == "succeeded" {
-				resp.Reasons = append(resp.Reasons, "PR lane request has already been created")
-				return resp
-			}
-		}
-	}
-	if resp.AutoApproved && len(resp.Reasons) == 0 {
-		if resp.ApprovalEventID != "" && !prLaneAutoApprovalGrantAllows(rows, resp.ApprovalEventID, resp.Repo, resp.LaneName, resp.ProposedBranch) {
-			resp.Reasons = append(resp.Reasons, "PR lane auto-approval no longer covers this branch")
-			return resp
-		}
-		resp.Allowed = true
-		return resp
-	}
-	resp.Reasons = append(resp.Reasons, "PR lane request is pending approval")
-	return resp
-}
-
-func findPendingPRLaneRequest(rows []pgstore.ControlActionEvent, eventID string) (pgstore.ControlActionEvent, bool) {
-	var request pgstore.ControlActionEvent
-	for _, row := range rows {
-		if row.Action == "github.pr_lane.request" && row.EventID == eventID && row.Status == "started" {
-			request = row
-			break
-		}
-	}
-	if request.EventID == "" {
-		return pgstore.ControlActionEvent{}, false
-	}
-	for _, row := range rows {
-		if row.InvocationID != request.InvocationID {
-			continue
-		}
-		switch row.Action {
-		case "github.pr_lane.approve", "github.pr_lane.deny", "github.pr_lane.auto_approve":
-			return pgstore.ControlActionEvent{}, false
-		}
-	}
-	return request, true
-}
-
-type prLaneAutoApprovalGrant struct {
-	Active      bool
-	EventID     string
-	Limit       int
-	Unlimited   bool
-	Remaining   int
-	BranchNames []string
-	Repos       []string
-	AllRepos    bool
-	RepoScope   repoScope
-	BranchScope branchScope
-}
-
-func activePRLaneAutoApproval(rows []pgstore.ControlActionEvent, repo, laneName, proposedBranch string) prLaneAutoApprovalGrant {
-	requestedLane := normalizePRLaneBranchName(firstNonEmptyControlAction(laneName, proposedBranch), "", "")
-	for _, row := range rows {
-		if row.Action != "github.pr_lane.auto_approve" || row.Status != "succeeded" {
-			continue
-		}
-		rowRepo := strings.TrimSpace(row.RepoOwner + "/" + row.RepoName)
-		if row.RepoOwner == "" || row.RepoName == "" {
-			rowRepo = ""
-		}
-		if repo != "" && rowRepo != "" && rowRepo != repo {
-			continue
-		}
-		limit := 10
-		var payload struct {
-			RepoScope   repoScope   `json:"repo_scope"`
-			BranchScope branchScope `json:"branch_scope"`
-		}
-		_ = json.Unmarshal(row.Payload, &payload)
-		repoScope, err := normalizeRepoScope(payload.RepoScope, rowDefaultRepo(row))
-		if err != nil {
-			continue
-		}
-		if !repoScopeCoversRepo(repoScope, repo) {
-			continue
-		}
-		branchScope, err := normalizeBranchScope(payload.BranchScope, row.SessionID, row.RepoName)
-		if err != nil {
-			continue
-		}
-		branchNames := branchScope.Branches
-		if requestedLane != "" && len(branchNames) > 0 && !stringInSlice(requestedLane, branchNames) {
-			continue
-		}
-		repos := repoScopeRepos(repoScope)
-		if branchScope.Kind == "unlimited" {
-			return prLaneAutoApprovalGrant{
-				Active:      true,
-				EventID:     row.EventID,
-				Unlimited:   true,
-				BranchNames: branchNames,
-				Repos:       repos,
-				AllRepos:    repoScope.Kind == "all_repos",
-				RepoScope:   repoScope,
-				BranchScope: branchScope,
-			}
-		}
-		if branchScope.Kind == "count" && branchScope.Count > 0 {
-			limit = branchScope.Count
-		} else if branchScope.Kind == "named" && len(branchNames) > 0 {
-			limit = len(branchNames)
-		}
-		used := countPRLaneAutoApprovalUses(rows, row.EventID)
-		if used >= limit {
-			continue
-		}
-		return prLaneAutoApprovalGrant{
-			Active:      true,
-			EventID:     row.EventID,
-			Limit:       limit,
-			Remaining:   limit - used,
-			BranchNames: branchNames,
-			Repos:       repos,
-			AllRepos:    repoScope.Kind == "all_repos",
-			RepoScope:   repoScope,
-			BranchScope: branchScope,
-		}
-	}
-	return prLaneAutoApprovalGrant{}
-}
-
-func prLaneAutoApprovalGrantAllows(rows []pgstore.ControlActionEvent, eventID, repo, laneName, proposedBranch string) bool {
-	if strings.TrimSpace(eventID) == "" {
-		return false
-	}
-	requestedLane := normalizePRLaneBranchName(firstNonEmptyControlAction(laneName, proposedBranch), "", "")
-	for _, row := range rows {
-		if row.EventID != eventID || row.Action != "github.pr_lane.auto_approve" || row.Status != "succeeded" {
-			continue
-		}
-		rowRepo := strings.TrimSpace(row.RepoOwner + "/" + row.RepoName)
-		if repo != "" && rowRepo != "" && rowRepo != repo {
-			return false
-		}
-		var payload struct {
-			RepoScope   repoScope   `json:"repo_scope"`
-			BranchScope branchScope `json:"branch_scope"`
-		}
-		_ = json.Unmarshal(row.Payload, &payload)
-		repoScope, err := normalizeRepoScope(payload.RepoScope, rowDefaultRepo(row))
-		if err != nil || !repoScopeCoversRepo(repoScope, repo) {
-			return false
-		}
-		branchScope, err := normalizeBranchScope(payload.BranchScope, row.SessionID, row.RepoName)
-		if err != nil {
-			return false
-		}
-		branchNames := branchScope.Branches
-		return requestedLane == "" || len(branchNames) == 0 || stringInSlice(requestedLane, branchNames)
-	}
-	return false
-}
-
-func countPRLaneAutoApprovalUses(rows []pgstore.ControlActionEvent, grantEventID string) int {
-	used := 0
-	for _, row := range rows {
-		if row.Action != "github.pr_lane.request" || row.Status != "succeeded" {
-			continue
-		}
-		if controlActionPayloadString(row.Payload, "auto_approval_event_id") == grantEventID {
-			used++
-		}
-	}
-	return used
-}
-
 func countBreakGlassGrantBranches(rows []pgstore.ControlActionEvent, grantEventID string) int {
 	branches := map[string]bool{}
 	for _, row := range rows {
@@ -2283,17 +1857,26 @@ func countBreakGlassGrantBranches(rows []pgstore.ControlActionEvent, grantEventI
 	return len(branches)
 }
 
-func normalizePRLaneBranchNames(values []string, sessionID, repo string) []string {
+// normalizeBranchScopeBranchNames canonicalizes the agent-supplied branch names
+// in a `named` break-glass branch scope: it strips refs/heads/ and the
+// tank/session/<id>/<repo>/ prefix and sanitizes to a valid branch token,
+// PRESERVING "/" — branch names like feature/x are real, and the durable scope
+// must equal the pushed ref or _grant_branch_allows refuses the granted push.
+// (Formerly named for PR lanes, which were single-token labels; reducing to the
+// last "/" segment silently mangled slashed branch names — the enforcement half
+// of the bug a slashed-branch smoke test caught, the record/display half being
+// the proxy's _sanitize_branch_scope_name.)
+func normalizeBranchScopeBranchNames(values []string, sessionID, repo string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		if normalized := normalizePRLaneBranchName(value, sessionID, repo); normalized != "" {
+		if normalized := normalizeBranchScopeBranchName(value, sessionID, repo); normalized != "" {
 			out = append(out, normalized)
 		}
 	}
 	return uniqueStrings(out)
 }
 
-func normalizePRLaneBranchName(value, sessionID, repo string) string {
+func normalizeBranchScopeBranchName(value, sessionID, repo string) string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return ""
@@ -2302,13 +1885,9 @@ func normalizePRLaneBranchName(value, sessionID, repo string) string {
 	if sessionID != "" && repo != "" {
 		trimmed = strings.TrimPrefix(trimmed, "tank/session/"+sessionID+"/"+repo+"/")
 	}
-	if strings.Contains(trimmed, "/") {
-		parts := strings.Split(trimmed, "/")
-		trimmed = parts[len(parts)-1]
-	}
 	var b strings.Builder
 	for _, ch := range trimmed {
-		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' || ch == '/' {
 			b.WriteRune(ch)
 			continue
 		}
@@ -2316,7 +1895,7 @@ func normalizePRLaneBranchName(value, sessionID, repo string) string {
 			b.WriteByte('-')
 		}
 	}
-	return strings.Trim(b.String(), "-._")
+	return strings.Trim(b.String(), "-._/")
 }
 
 func uniqueStrings(values []string) []string {
@@ -2686,7 +2265,7 @@ func normalizeBranchScope(scope branchScope, sessionID, repo string) (branchScop
 		if scope.Count != 0 {
 			return branchScope{}, errors.New("branch_scope named rejects count")
 		}
-		branches := normalizePRLaneBranchNames(scope.Branches, sessionID, repo)
+		branches := normalizeBranchScopeBranchNames(scope.Branches, sessionID, repo)
 		if len(branches) == 0 {
 			return branchScope{}, errors.New("branch_scope named requires branches")
 		}
@@ -2817,11 +2396,6 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		"github.pull_request.ready_for_review",
 		"github.pull_request.open",
 		"github.pull_request.mergeability",
-		"github.pr_lane.request",
-		"github.pr_lane.approve",
-		"github.pr_lane.deny",
-		"github.pr_lane.auto_approve",
-		"github.pr_lane.create",
 		"github.commit.write",
 		"github.commit.push",
 		"github.commit.ci",
@@ -2830,6 +2404,7 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		"github.break_glass.deny",
 		"github.break_glass.token",
 		"github.break_glass.push",
+		"github.break_glass.pr_write",
 		"azure.break_glass.request",
 		"azure.break_glass.grant",
 		"azure.break_glass.deny",
@@ -2837,6 +2412,18 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 		testSlotModelRequestAction,
 		testSlotModelGrantAction:
 	default:
+		// The PR-lane mechanism was retired and unified into the break-glass
+		// branch-lane grant (docs/branch-lane-grants.md). A retired PR-lane
+		// control action reaching the ledger is a reintroduction of the deleted
+		// path — reject it and count it loudly so TankBranchLaneRetiredPathUsed
+		// fires. The prefix literal is assembled from two pieces so this live
+		// file stays fully scanned by the migration grep guard
+		// (scripts/check-removed-pr-lane.mjs) without it misreading this
+		// rejection site as a resurrection of the deleted symbol.
+		if strings.HasPrefix(action, "github.pr_lane"+".") {
+			recordBreakGlassRetiredPath()
+			return pgstore.ControlActionEvent{}, errors.New("retired PR-lane control actions are not accepted; PR lanes were unified into the break-glass branch-lane grant")
+		}
 		return pgstore.ControlActionEvent{}, errors.New("unsupported control action")
 	}
 	return pgstore.ControlActionEvent{

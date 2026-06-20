@@ -145,6 +145,13 @@ spec:
               value: {{ include "tank-operator.claudeSecondaryApiProxyHost" . | quote }}
             - name: CODEX_API_PROXY_HOST
               value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
+            {{- if .Values.agentEgressProxy.enabled }}
+            # Restricted-git sessions pin github.com / api.github.com at this Service so
+            # git/gh egress goes through the wall. Resolved to a ClusterIP at
+            # session-create time (sessions/manager.go); absent -> no github routing.
+            - name: AGENT_EGRESS_PROXY_HOST
+              value: "agent-egress-proxy.{{ include "tank-operator.orchestratorNamespace" . }}.svc.cluster.local"
+            {{- end }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state

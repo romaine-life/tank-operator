@@ -32,14 +32,20 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export async function startTestWorkflow(
   sessionId: string,
   authedFetch: FetchLike,
-  options: { repo?: string; drive?: boolean } = {},
+  options: { repo?: string; drive?: boolean; pr?: number; ref?: string } = {},
 ): Promise<StartTestWorkflowResult> {
-  const body: Record<string, string | boolean> = {};
+  const body: Record<string, string | boolean | number> = {};
   if (options.repo && options.repo.trim()) {
     body.repo = options.repo.trim();
   }
   if (options.drive) {
     body.drive = true;
+  }
+  if (options.pr && options.pr > 0) {
+    body.pr = options.pr;
+  }
+  if (options.ref && options.ref.trim()) {
+    body.ref = options.ref.trim();
   }
   const res = await authedFetch(testWorkflowStartPath(sessionId), {
     method: "POST",
@@ -114,11 +120,40 @@ export interface TestSlotPreflight {
   has_open_pr: boolean;
 }
 
+// One branch/PR the session has worked on, for the page's picker.
+export interface TestSlotPR {
+  pr_number: number;
+  pr_url: string;
+  status: string;
+  mergeable_state: string;
+  check_state: string;
+  detail: string;
+  head_sha: string;
+  last_event_at: string | null;
+  has_open_pr: boolean;
+}
+
+// One deployable target the page offers — an open PR, or `main`. The page
+// renders these as the choices for what to put in the slot, preselecting the
+// one with `default: true`, so provisioning is never a dead-end (main is always
+// offered even when there is no open PR).
+export interface TestSlotOption {
+  kind: "pr" | "ref";
+  label: string;
+  pr_number?: number;
+  pr_url?: string;
+  status?: string;
+  ref?: string;
+  default: boolean;
+}
+
 export interface TestSlotStatus {
   repo: TestSlotRepo | null;
   repo_error: string;
   repos: string[];
   watch: TestSlotWatch | null;
+  prs: TestSlotPR[];
+  options: TestSlotOption[];
   provision: TestSlotProvision | null;
   test_state: Record<string, unknown> | null;
   preflight: TestSlotPreflight | null;
@@ -196,11 +231,12 @@ export async function setLivePreviewEnabled(
 
 export function testSlotStatusPath(
   sessionId: string,
-  options: { repo?: string; refresh?: boolean } = {},
+  options: { repo?: string; refresh?: boolean; pr?: number } = {},
 ): string {
   const params = new URLSearchParams();
   if (options.repo && options.repo.trim()) params.set("repo", options.repo.trim());
   if (options.refresh) params.set("refresh", "1");
+  if (options.pr && options.pr > 0) params.set("pr", String(options.pr));
   const qs = params.toString();
   return `/api/sessions/${encodeURIComponent(sessionId)}/test-slot${qs ? `?${qs}` : ""}`;
 }
@@ -211,7 +247,7 @@ export function testSlotStatusPath(
 export async function fetchTestSlotStatus(
   sessionId: string,
   authedFetch: FetchLike,
-  options: { repo?: string; refresh?: boolean } = {},
+  options: { repo?: string; refresh?: boolean; pr?: number } = {},
 ): Promise<TestSlotStatus> {
   const res = await authedFetch(testSlotStatusPath(sessionId, options));
   if (!res.ok) {

@@ -2,123 +2,10 @@ import { describe, expect, test } from "vitest";
 import {
   controlActionRowsToEntries,
   pendingBreakGlassRequests,
-  pendingPRLaneRequests,
   type ControlActionRow,
 } from "./controlActions";
 
-describe("pendingPRLaneRequests", () => {
-  test("returns started PR lane requests until a decision resolves the invocation", () => {
-    const rows: ControlActionRow[] = [
-      {
-        event_id: "request-2",
-        invocation_id: "inv-2",
-        created_at: "2026-06-13T07:00:00Z",
-        action: "github.pr_lane.request",
-        status: "started",
-        repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: {
-          lane_name: "docs",
-          relationship: "parallel",
-          base: "main",
-          scope: "docs/",
-          reason: "split docs review",
-          proposed_branch: "tank/session/47/tank-operator/docs",
-        },
-      },
-      {
-        event_id: "request-1",
-        invocation_id: "inv-1",
-        action: "github.pr_lane.request",
-        status: "started",
-        repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: { lane_name: "backend", reason: "split backend" },
-      },
-      {
-        event_id: "approve-1",
-        invocation_id: "inv-1",
-        action: "github.pr_lane.approve",
-        status: "succeeded",
-      },
-    ];
-
-    expect(pendingPRLaneRequests(rows)).toEqual([
-      {
-        eventId: "request-2",
-        invocationId: "inv-2",
-        createdAt: "2026-06-13T07:00:00Z",
-        repo: "romaine-life/tank-operator",
-        laneName: "docs",
-        relationship: "parallel",
-        base: "main",
-        scope: "docs/",
-        reason: "split docs review",
-        proposedBranch: "tank/session/47/tank-operator/docs",
-      },
-    ]);
-  });
-
-  test("returns allocation requests and resolves them after auto-approval", () => {
-    const rows: ControlActionRow[] = [
-      {
-        event_id: "allocation-1",
-        invocation_id: "alloc-inv-1",
-        action: "github.pr_lane.request",
-        status: "started",
-        repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: {
-          allocation_request: true,
-          repo_scope: { kind: "current_repo", repo: "romaine-life/tank-operator" },
-          branch_scope: { kind: "named", branches: ["docs", "backend"] },
-          reason: "split review",
-        },
-      },
-      {
-        event_id: "allocation-2",
-        invocation_id: "alloc-inv-2",
-        action: "github.pr_lane.request",
-        status: "started",
-        repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: {
-          allocation_request: true,
-          repo_scope: { kind: "current_repo", repo: "romaine-life/tank-operator" },
-          branch_scope: { kind: "unlimited" },
-          reason: "large migration",
-        },
-      },
-      {
-        event_id: "auto-2",
-        invocation_id: "alloc-inv-2",
-        action: "github.pr_lane.auto_approve",
-        status: "succeeded",
-      },
-    ];
-
-    expect(pendingPRLaneRequests(rows)).toEqual([
-      {
-        eventId: "allocation-1",
-        invocationId: "alloc-inv-1",
-        createdAt: undefined,
-        repo: "romaine-life/tank-operator",
-        laneName: "branch allocation",
-        allocationRequest: true,
-        laneNames: ["docs", "backend"],
-        relationship: undefined,
-        base: undefined,
-        scope: undefined,
-        reason: "split review",
-        proposedBranch: undefined,
-      },
-    ]);
-  });
-});
-
 describe("pendingBreakGlassRequests", () => {
-  const NOW = Date.parse("2026-06-13T08:00:00Z");
-
   test("returns started break-glass requests with no active grant", () => {
     const rows: ControlActionRow[] = [
       {
@@ -143,7 +30,7 @@ describe("pendingBreakGlassRequests", () => {
       },
     ];
 
-    expect(pendingBreakGlassRequests(rows, NOW)).toEqual([
+    expect(pendingBreakGlassRequests(rows)).toEqual([
       {
         eventId: "bg-2",
         invocationId: "bg-inv-2",
@@ -159,16 +46,25 @@ describe("pendingBreakGlassRequests", () => {
     ]);
   });
 
-  test("clears a request once an unexpired grant exists for the repo", () => {
+  test("keeps a same-repo request pending when a grant does not reference that request", () => {
     const rows: ControlActionRow[] = [
       {
-        event_id: "bg-1",
-        invocation_id: "bg-inv-1",
+        event_id: "bg-full-api",
+        invocation_id: "bg-inv-full-api",
+        created_at: "2026-06-13T07:30:00Z",
         action: "github.break_glass.request",
         status: "started",
         repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: {},
+        repo_name: "glimmung",
+        payload: {
+          reason: "open missing PR",
+          branch_scope: { kind: "unlimited" },
+          operations: [
+            "mint_full_git_token",
+            "push_current_head",
+            "full_github_api",
+          ],
+        },
       },
       {
         event_id: "grant-1",
@@ -176,39 +72,32 @@ describe("pendingBreakGlassRequests", () => {
         action: "github.break_glass.grant",
         status: "succeeded",
         repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: { expires_at: "2026-06-13T09:00:00Z" },
+        repo_name: "glimmung",
+        payload: {
+          request_event_id: "bg-scoped",
+          expires_at: "2026-06-13T09:00:00Z",
+          branch_scope: {
+            kind: "named",
+            branches: ["tank/session/1147/glimmung"],
+          },
+          operations: ["mint_full_git_token", "push_current_head"],
+        },
       },
     ];
 
-    expect(pendingBreakGlassRequests(rows, NOW)).toEqual([]);
-  });
-
-  test("keeps the request pending when the grant has expired", () => {
-    const rows: ControlActionRow[] = [
+    expect(pendingBreakGlassRequests(rows)).toEqual([
       {
-        event_id: "bg-1",
-        invocation_id: "bg-inv-1",
-        created_at: "2026-06-13T07:00:00Z",
-        action: "github.break_glass.request",
-        status: "started",
-        repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: {},
+        eventId: "bg-full-api",
+        invocationId: "bg-inv-full-api",
+        createdAt: "2026-06-13T07:30:00Z",
+        repo: "romaine-life/glimmung",
+        repoOwner: "romaine-life",
+        repoName: "glimmung",
+        kind: "git",
+        target: "romaine-life/glimmung",
+        reason: "open missing PR",
+        source: undefined,
       },
-      {
-        event_id: "grant-1",
-        invocation_id: "grant-inv-1",
-        action: "github.break_glass.grant",
-        status: "succeeded",
-        repo_owner: "romaine-life",
-        repo_name: "tank-operator",
-        payload: { expires_at: "2026-06-13T07:45:00Z" },
-      },
-    ];
-
-    expect(pendingBreakGlassRequests(rows, NOW).map((r) => r.eventId)).toEqual([
-      "bg-1",
     ]);
   });
 
@@ -235,7 +124,7 @@ describe("pendingBreakGlassRequests", () => {
         },
       ];
 
-      expect(pendingBreakGlassRequests(rows, NOW)).toEqual([]);
+      expect(pendingBreakGlassRequests(rows)).toEqual([]);
     }
   });
 
@@ -253,7 +142,7 @@ describe("pendingBreakGlassRequests", () => {
       },
     ];
 
-    expect(pendingBreakGlassRequests(rows, NOW)).toEqual([
+    expect(pendingBreakGlassRequests(rows)).toEqual([
       {
         eventId: "azure-bg-1",
         invocationId: "azure-inv-1",
@@ -271,23 +160,6 @@ describe("pendingBreakGlassRequests", () => {
 });
 
 describe("controlActionRowsToEntries", () => {
-  test("labels PR lane events in the control-action ledger", () => {
-    const entries = controlActionRowsToEntries([
-      {
-        event_id: "request-1",
-        invocation_id: "inv-1",
-        created_at: "2026-06-13T07:00:00Z",
-        action: "github.pr_lane.request",
-        status: "started",
-        target_ref: "https://github.com/romaine-life/tank-operator",
-        target_kind: "github_repository",
-      },
-    ]);
-
-    expect(entries[0]?.taskSummary).toBe("PR lane request");
-    expect(entries[0]?.taskStatus).toBe("running");
-  });
-
   test("labels governed PR rename events", () => {
     const entries = controlActionRowsToEntries([
       {
@@ -301,6 +173,29 @@ describe("controlActionRowsToEntries", () => {
 
     expect(entries[0]?.taskSummary).toBe("GitHub PR renamed");
     expect(entries[0]?.taskStatus).toBe("completed");
+  });
+
+  test("retires the github.pr_lane.* action labels", () => {
+    // The PR-lane mechanism is folded into break-glass branch-lane grants, so
+    // its dedicated ledger labels are gone. Any stray retired-path row must
+    // fall through to the generic label rather than re-introduce "PR lane *".
+    for (const action of [
+      "github.pr_lane.request",
+      "github.pr_lane.approve",
+      "github.pr_lane.deny",
+      "github.pr_lane.auto_approve",
+      "github.pr_lane.create",
+    ]) {
+      const entries = controlActionRowsToEntries([
+        {
+          event_id: `evt-${action}`,
+          invocation_id: `inv-${action}`,
+          action,
+          status: "started",
+        },
+      ]);
+      expect(entries[0]?.taskSummary).toBe("Control action");
+    }
   });
 
   test("labels azure break-glass events", () => {

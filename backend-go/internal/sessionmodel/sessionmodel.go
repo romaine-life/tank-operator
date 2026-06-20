@@ -45,7 +45,8 @@ const (
 	SessionCapabilitySpireLensMCP = "spirelens_mcp"
 	// SessionCapabilityRestrictedGit opts a pod into the experimental
 	// governed Git surface: Tank-owned session branches, guarded MCP writes,
-	// post-commit publishing, and PR lane approvals. Service-created
+	// post-commit publishing, and branch-lane break-glass grants (one grant =
+	// push + open/own a branch's PR). Service-created
 	// repo-capable sessions are defaulted into this capability by the
 	// orchestrator; sessions without it are the explicit unrestricted
 	// exception and keep the historical direct Git/GitHub behavior.
@@ -180,6 +181,22 @@ func DecodeSpawnedSessions(raw []byte) []SpawnedSessionRef {
 	return parsed
 }
 
+// DecodeSessionPullRequests parses the sessions.pull_requests jsonb array into
+// typed refs for the snapshot/row layers. Like DecodeSpawnedSessions, a missing
+// column, NULL, or malformed payload decodes to nil ("no PR touched") rather
+// than an error — the column is a display-only projection, never load-bearing
+// for session correctness, so a bad row must not break the session list.
+func DecodeSessionPullRequests(raw []byte) []SessionPullRequestRef {
+	if len(raw) == 0 {
+		return nil
+	}
+	var parsed []SessionPullRequestRef
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil
+	}
+	return parsed
+}
+
 type SessionRecord struct {
 	ID      string
 	Email   string
@@ -230,6 +247,15 @@ type SessionRecord struct {
 	// RowPublisher carry it verbatim so the SPA never re-derives the
 	// relationship from the event ledger. jsonb array column.
 	SpawnedSessions []SpawnedSessionRef
+
+	// PullRequests is the durable list of pull requests this session touched,
+	// surfaced by the git chip / dedicated /pull-requests page: one ref per PR
+	// (deduped by URL, latest sighting's state wins). nil/empty means none.
+	// Appended by sessionregistry.AppendSessionPullRequest when a
+	// github.pull_request.* control action is recorded; the snapshot/RowPublisher
+	// carry it verbatim so the SPA never re-derives PRs from the capped
+	// control-action feed. jsonb array column (migration 0181, backfilled 0182).
+	PullRequests []SessionPullRequestRef
 
 	// ParentSessionID is the inverse, child-side edge: the id of the origin
 	// session that spawned THIS one, stamped in the same INSERT that creates
@@ -348,6 +374,25 @@ type SpawnedSessionRef struct {
 	CreatedAt string   `json:"created_at,omitempty"`
 }
 
+// SessionPullRequestRef is one entry of SessionRecord.PullRequests: a durable
+// handle to a pull request this session touched, surfaced by the git chip and
+// the /pull-requests page. URL is the github.com/.../pull/N link and is the
+// dedupe key. Recorded id-deduped (by URL) by
+// sessionregistry.AppendSessionPullRequest whenever a github.pull_request.*
+// control action is appended; the snapshot/RowPublisher carry it verbatim so
+// the SPA never re-derives PRs from the newest-N control-action feed (where the
+// oldest .open rows silently dropped on busy sessions). State carries the
+// latest mergeable/merged hint; Action/Status the latest sighting.
+type SessionPullRequestRef struct {
+	Repo      string `json:"repo,omitempty"`
+	Number    int    `json:"number,omitempty"`
+	URL       string `json:"url"`
+	Action    string `json:"action,omitempty"`
+	Status    string `json:"status,omitempty"`
+	State     string `json:"state,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
 type SessionAvatarAssignment struct {
 	AgentAvatarID  string
 	SystemAvatarID string
@@ -401,6 +446,10 @@ type ManifestOptions struct {
 	APIProxyIP                string
 	ClaudeSecondaryAPIProxyIP string
 	CodexAPIProxyIP           string
+	// AgentEgressProxyIP is the agent-egress-proxy Service ClusterIP. When set AND
+	// the session is restricted_git, github.com / api.github.com are pinned here so
+	// git/gh egress goes through the wall (server-side token + main/merge enforcement).
+	AgentEgressProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
 	// SDK runners use NATS JetStream for durable command/event delivery.
@@ -700,6 +749,16 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Build configmap volume mounts for both containers.
 	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)
 	restrictedGitEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilityRestrictedGit)
+	// Restricted-git sessions route github egress through the wall when its IP is
+	// resolved; this is the per-session cutover. Unrestricted sessions never do.
+	egressProxyGit := restrictedGitEnabled && opts.AgentEgressProxyIP != ""
+	// Combined (OS + gateway-CA) trust bundle that install-agent-git-template.sh builds
+	// at launch for egress-proxy sessions. git trusts the wall leaf per-host (sslCAInfo)
+	// and node via NODE_EXTRA_CA_CERTS, but curl/python take ONE CA file that REPLACES
+	// the default set — so they need a bundle that is OS-trust + the gateway CA. The
+	// runner env points curl-specific vars (CURL_CA_BUNDLE/REQUESTS_CA_BUNDLE, never
+	// SSL_CERT_FILE) here so the runner's own node TLS is left on NODE_EXTRA_CA_CERTS.
+	const egressCABundlePath = "/workspace/.tank/egress-ca-bundle.crt"
 	mcpConfigKey := "mcp.json"
 	if spireLensMCPEnabled {
 		mcpConfigKey = "mcp.spirelens.json"
@@ -745,6 +804,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 	if restrictedGitEnabled {
 		env = append(env, map[string]any{"name": "TANK_RESTRICTED_GIT", "value": "true"})
+	}
+	if egressProxyGit {
+		// Switch the in-pod git credential path into proxy mode: git-credential-tank.sh
+		// and the gh wrapper present the pod's raw auth.romaine.life token instead of
+		// minting in-pod (the wall mints the App token + enforces main/merge). git's
+		// trust of the proxy leaf for github.com is set per-host in
+		// install-agent-git-template.sh, reading the already-mounted gateway CA.
+		env = append(env, map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": "true"})
 	}
 
 	claudeVolumeMounts := append([]any{}, configMounts...)
@@ -843,6 +910,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 				map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+				map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 				map[string]any{"name": "AGENT_POST_COMMIT_HOOK", "value": "/opt/tank/agent-post-commit-hook.sh"},
 				map[string]any{"name": "AGENT_PRE_PUSH_HOOK", "value": "/opt/tank/agent-pre-push-hook.sh"},
 			},
@@ -877,6 +945,25 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			},
 			"resources": sandboxAgentResources(),
 		})
+	}
+
+	// Egress-proxy mode: the repo-cloner clones github.com THROUGH the wall, so its
+	// git must trust the proxy's leaf. Mount the same gateway CA the agent containers
+	// get (the claude/codex CA blocks below add the oauth-gateway-ca volume; we
+	// reference it by name). Without this the cloner's git fails the TLS handshake
+	// ("error adding trust anchors") and the pod never starts.
+	if egressProxyGit && opts.OAuthGatewayCAConfigMap != "" {
+		for _, ic := range initContainers {
+			if c, ok := ic.(map[string]any); ok && c["name"] == "repo-cloner" {
+				if mounts, ok := c["volumeMounts"].([]any); ok {
+					c["volumeMounts"] = append(mounts, map[string]any{
+						"name":      "oauth-gateway-ca",
+						"mountPath": "/etc/oauth-gateway-ca",
+						"readOnly":  true,
+					})
+				}
+			}
+		}
 	}
 
 	// OAuth gateway + API proxy host aliases and CA cert.
@@ -996,6 +1083,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 		map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 		map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+		map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 		// Session identity forwarded by mcp-auth-proxy on outbound calls to
 		// Tank/Glimmung MCP servers. SESSION_ID still feeds the older
 		// X-Tank-Origin-Session-Id handoff-avatar path for mcp-tank-operator;
@@ -1107,6 +1195,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			// fetches the dead session's transcript and resumes it.
 			map[string]any{"name": "TANK_RESURRECT_SOURCE_SESSION_ID", "value": opts.ResurrectSourceSessionID},
 			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+			map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 		}
 		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude
 		// container gets, so the SDK's spawned claude binary trusts the
@@ -1120,6 +1209,15 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"mountPath": "/etc/oauth-gateway-ca",
 				"readOnly":  true,
 			})
+		}
+		// Egress-proxy mode: trust the wall leaf from curl/python too (Stage 2 asset
+		// hosts are raw-curled), via the combined bundle install-agent-git-template
+		// builds at launch. Curl-specific vars only — node stays on NODE_EXTRA_CA_CERTS.
+		if egressProxyGit {
+			runnerEnv = append(runnerEnv,
+				map[string]any{"name": "CURL_CA_BUNDLE", "value": egressCABundlePath},
+				map[string]any{"name": "REQUESTS_CA_BUNDLE", "value": egressCABundlePath},
+			)
 		}
 
 		runnerEnv = append(runnerEnv, map[string]any{
@@ -1244,11 +1342,20 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},
+			map[string]any{"name": "TANK_GIT_EGRESS_PROXY", "value": boolEnv(egressProxyGit)},
 		}
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			codexRunnerEnv = append(codexRunnerEnv,
 				map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"},
 				map[string]any{"name": "CODEX_CA_CERTIFICATE", "value": "/etc/oauth-gateway-ca/ca.crt"},
+			)
+		}
+		// Egress-proxy mode: curl/python trust the wall leaf via the combined bundle
+		// install-agent-git-template builds at launch (Stage 2 asset hosts are raw-curled).
+		if egressProxyGit {
+			codexRunnerEnv = append(codexRunnerEnv,
+				map[string]any{"name": "CURL_CA_BUNDLE", "value": egressCABundlePath},
+				map[string]any{"name": "REQUESTS_CA_BUNDLE", "value": egressCABundlePath},
 			)
 		}
 		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
@@ -1385,6 +1492,24 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	if len(initContainers) > 0 {
 		spec["initContainers"] = initContainers
 	}
+	// Restricted-git cutover: pin github.com / api.github.com at the egress proxy so
+	// git + gh go through the wall (server-side token + no push-to-main / no merge).
+	// The gateway CA that signs the proxy leaf is already mounted for these
+	// (claude/codex) modes; git trusts it per-host via install-agent-git-template.sh.
+	// Unrestricted sessions skip this entirely and reach GitHub directly.
+	if egressProxyGit {
+		hostAliases = append(hostAliases,
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"github.com"}},
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"api.github.com"}},
+			// Asset hosts (Stage 2): clone-archive (codeload) + raw files / release
+			// assets (githubusercontent) also flow through the wall, so they are
+			// observable and can be CIDR-locked alongside git/API. The wall fronts
+			// these as TLS-terminating pass-through (the leaf cert covers them).
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"codeload.github.com"}},
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"raw.githubusercontent.com"}},
+			map[string]any{"ip": opts.AgentEgressProxyIP, "hostnames": []any{"objects.githubusercontent.com"}},
+		)
+	}
 	if len(hostAliases) > 0 {
 		spec["hostAliases"] = hostAliases
 	}
@@ -1419,20 +1544,31 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		annotations["tank-operator/glimmung-context"] = opts.GlimmungContextJSON
 	}
 
+	// Restricted egress-proxy sessions carry a NetworkPolicy selector label so the
+	// `restricted-git-egress-wall-only` policy can confine them to the wall for
+	// GitHub egress (direct-to-GitHub-IP bypass denied). ONLY these sessions get it;
+	// unrestricted sessions stay on the direct path and are deliberately unselected,
+	// so the lockdown never touches them. The label lands only on NEW sessions, so
+	// existing restricted sessions drain before the policy applies to them.
+	podLabels := map[string]any{
+		"app.kubernetes.io/managed-by": "tank-operator",
+		"app.kubernetes.io/instance":   opts.ArgoCDTrackingApp,
+		"tank-operator/owner":          OwnerLabel(owner),
+		"tank-operator/session-id":     sessionID,
+		"tank-operator/session-scope":  opts.SessionScope,
+		"tank-operator/mode":           mode,
+	}
+	if egressProxyGit {
+		podLabels["tank-operator/git-egress"] = "proxy"
+	}
+
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Pod",
 		"metadata": map[string]any{
-			"name":      podName,
-			"namespace": opts.SessionsNamespace,
-			"labels": map[string]any{
-				"app.kubernetes.io/managed-by": "tank-operator",
-				"app.kubernetes.io/instance":   opts.ArgoCDTrackingApp,
-				"tank-operator/owner":          OwnerLabel(owner),
-				"tank-operator/session-id":     sessionID,
-				"tank-operator/session-scope":  opts.SessionScope,
-				"tank-operator/mode":           mode,
-			},
+			"name":        podName,
+			"namespace":   opts.SessionsNamespace,
+			"labels":      podLabels,
 			"annotations": annotations,
 		},
 		"spec": spec,

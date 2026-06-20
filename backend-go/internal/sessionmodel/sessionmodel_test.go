@@ -467,6 +467,104 @@ func TestPodManifestRestrictedGitCapabilityWiresOptInEnv(t *testing.T) {
 	assertVolumeMount(t, cloner, "auth-romaine-sa-token")
 }
 
+func githubHostAliasIPs(spec map[string]any) map[string]string {
+	out := map[string]string{}
+	aliases, _ := spec["hostAliases"].([]any)
+	for _, a := range aliases {
+		m, _ := a.(map[string]any)
+		ip, _ := m["ip"].(string)
+		hns, _ := m["hostnames"].([]any)
+		for _, h := range hns {
+			switch hn, _ := h.(string); hn {
+			case "github.com", "api.github.com", "codeload.github.com",
+				"raw.githubusercontent.com", "objects.githubusercontent.com":
+				out[hn] = ip
+			}
+		}
+	}
+	return out
+}
+
+func TestPodManifestRestrictedGitRoutesGithubThroughEgressProxy(t *testing.T) {
+	const egressIP = "172.16.249.112"
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		TankOperatorInternalURL: "http://tank-operator.test",
+		Repos:                   []string{"romaine-life/tank-operator"},
+		Capabilities:            []string{SessionCapabilityRestrictedGit},
+		AgentEgressProxyIP:      egressIP,
+		OAuthGatewayCAConfigMap: "oauth-gateway-ca",
+	})
+	spec := manifest["spec"].(map[string]any)
+	aliases := githubHostAliasIPs(spec)
+	// git/API surface + the Stage 2 asset hosts (codeload archives, raw files,
+	// release assets) all pin to the wall so none of them egress direct to GitHub.
+	for _, h := range []string{
+		"github.com", "api.github.com",
+		"codeload.github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
+	} {
+		if aliases[h] != egressIP {
+			t.Fatalf("hostAlias %s = %q, want %s", h, aliases[h], egressIP)
+		}
+	}
+	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
+	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "true"; got != want {
+		t.Fatalf("codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
+	}
+	// curl/python trust the wall leaf via the combined bundle (Stage 2 asset hosts are
+	// raw-curled). Curl-specific var only, so the runner's node TLS stays untouched.
+	if got, want := containerEnv(runner)["CURL_CA_BUNDLE"], "/workspace/.tank/egress-ca-bundle.crt"; got != want {
+		t.Fatalf("codex-runner CURL_CA_BUNDLE = %v, want %q", got, want)
+	}
+	// The repo-cloner clones github THROUGH the wall, so it must mount the gateway CA
+	// or its git TLS handshake fails ("error adding trust anchors") and the pod never
+	// starts (the live bug this guards against).
+	cloner := spec["initContainers"].([]any)[0].(map[string]any)
+	clonerHasCA := false
+	for _, m := range cloner["volumeMounts"].([]any) {
+		if m.(map[string]any)["mountPath"] == "/etc/oauth-gateway-ca" {
+			clonerHasCA = true
+		}
+	}
+	if !clonerHasCA {
+		t.Fatal("repo-cloner must mount oauth-gateway-ca in egress-proxy mode")
+	}
+	// The lockdown NetworkPolicy (restricted-git-egress-policy.yaml) selects this
+	// label; without it a restricted session could bypass the wall via a direct
+	// GitHub-IP connection. Restricted egress-proxy sessions MUST carry it.
+	labels := manifest["metadata"].(map[string]any)["labels"].(map[string]any)
+	if got, want := labels["tank-operator/git-egress"], "proxy"; got != want {
+		t.Fatalf("egress-proxy session must carry the lockdown selector label tank-operator/git-egress = %v, want %q", got, want)
+	}
+}
+
+func TestPodManifestUnrestrictedGitSkipsEgressProxyEvenWhenIPSet(t *testing.T) {
+	// AgentEgressProxyIP is set, but without the restricted_git capability the
+	// session keeps the old direct in-pod path — no github routing, no proxy env.
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		TankOperatorInternalURL: "http://tank-operator.test",
+		Repos:                   []string{"romaine-life/tank-operator"},
+		AgentEgressProxyIP:      "172.16.249.112",
+	})
+	spec := manifest["spec"].(map[string]any)
+	if aliases := githubHostAliasIPs(spec); len(aliases) != 0 {
+		t.Fatalf("unrestricted session must not route github through the proxy; got %#v", aliases)
+	}
+	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
+	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "false"; got != want {
+		t.Fatalf("unrestricted codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
+	}
+	// And it must NOT carry the lockdown selector label — the egress NetworkPolicy
+	// would otherwise confine an unrestricted session that still uses the direct path.
+	labels := manifest["metadata"].(map[string]any)["labels"].(map[string]any)
+	if got, ok := labels["tank-operator/git-egress"]; ok {
+		t.Fatalf("unrestricted session must NOT carry the git-egress lockdown label; got %v", got)
+	}
+}
+
 func TestRepoClonerAvoidsBraceDefaultExpansionForRepoBases(t *testing.T) {
 	script, err := os.ReadFile("../../../k8s/session-config/repo-cloner.sh")
 	if err != nil {

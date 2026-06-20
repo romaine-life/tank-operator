@@ -2,8 +2,10 @@ import { beforeEach, test, expect } from "vitest";
 import {
   SessionStore,
   normalizeSessionRowUpdate,
+  parseSessionRowLineage,
   type SessionRow,
 } from "./sessionStore";
+import { arrangeSessionTree } from "./sessionTree";
 import {
   getSessionListDebugSnapshot,
   resetSessionListDebugForTest,
@@ -367,4 +369,145 @@ test("subscribers receive row-added / row-replaced / row-removed events", () => 
 
   unsub();
   expect(events).toEqual(["row-added", "row-replaced", "row-removed"]);
+});
+
+// --- Sidebar nesting: snapshot/SSE lineage parity -------------------------
+//
+// Regression coverage for the "a nested session loses what it's nested in,
+// then snaps back" bug. Root cause: the snapshot parser
+// (App.infoJSONToSessionRow) dropped parent_session_id while the live
+// row-update parser (normalizeSessionRowUpdate) kept it. So every snapshot
+// (cold load, manual refresh, SSE reconnect, tab-refocus) de-nested every
+// spawned child to a top-level row, and the child only "snapped back" when its
+// next live row-update happened to carry parent_session_id again. Both parsers
+// now route the lineage trio through the one parseSessionRowLineage helper, so
+// they cannot drift on these fields again. Contract:
+// docs/features/session-bar/contract.md.
+
+test("parseSessionRowLineage keeps parent_session_id (the field the snapshot path dropped)", () => {
+  const lineage = parseSessionRowLineage({
+    parent_session_id: "100",
+    spawned_sessions: [{ id: "201", url: "https://tank/201", name: "child" }],
+    pull_requests: [{ url: "https://github.com/o/r/pull/7", number: 7 }],
+  });
+  expect(lineage.parent_session_id).toBe("100");
+  expect(lineage.spawned_sessions?.map((s) => s.id)).toEqual(["201"]);
+  expect(lineage.pull_requests?.map((p) => p.url)).toEqual([
+    "https://github.com/o/r/pull/7",
+  ]);
+});
+
+test("parseSessionRowLineage treats empty/missing/non-string parent_session_id as a root", () => {
+  expect(parseSessionRowLineage({}).parent_session_id).toBeUndefined();
+  expect(parseSessionRowLineage({ parent_session_id: "" }).parent_session_id).toBeUndefined();
+  expect(
+    parseSessionRowLineage({ parent_session_id: 123 as unknown }).parent_session_id,
+  ).toBeUndefined();
+  // Non-array lineage collections degrade to empty, never throw.
+  expect(parseSessionRowLineage({ spawned_sessions: "nope" }).spawned_sessions).toEqual([]);
+  expect(parseSessionRowLineage({ pull_requests: 5 as unknown }).pull_requests).toEqual([]);
+});
+
+test("normalizeSessionRowUpdate carries parent_session_id through the SSE wire", () => {
+  const update = normalizeSessionRowUpdate({
+    cursor: "3",
+    row: {
+      id: "201",
+      owner: "u@example.com",
+      session_scope: "default",
+      name: "spawned child",
+      visible: true,
+      status: "Active",
+      parent_session_id: "100",
+      sidebar_position: 1,
+      row_version: 3,
+    },
+  });
+  expect(update, "valid row update must parse").toBeTruthy();
+  expect(update!.row.parent_session_id).toBe("100");
+
+  // An empty parent_session_id on the wire is a root, not the string "".
+  const rootUpdate = normalizeSessionRowUpdate({
+    cursor: "4",
+    row: {
+      id: "100",
+      owner: "u@example.com",
+      session_scope: "default",
+      name: "origin",
+      visible: true,
+      status: "Active",
+      parent_session_id: "",
+      sidebar_position: 2,
+      row_version: 4,
+    },
+  });
+  expect(rootUpdate!.row.parent_session_id).toBeUndefined();
+});
+
+test("a spawned child is born nested from a snapshot — no top-level-then-reflow", () => {
+  // The contract: "the child appears already nested on its first
+  // snapshot/row-update ... it must not first render as a top-level row and
+  // then reflow into place." applySnapshot is the cold-load / refresh /
+  // reconnect path that used to strip the parent pointer.
+  const store = new SessionStore();
+  store.applySnapshot(
+    [
+      row("100", { sidebar_position: 2, row_version: 1 }),
+      row("101", {
+        sidebar_position: 1,
+        row_version: 1,
+        parent_session_id: "100",
+      }),
+    ],
+    "1",
+  );
+
+  const arranged = arrangeSessionTree(store.list());
+  expect(arranged.map((r) => [r.session.id, r.depth, r.parentId])).toEqual([
+    ["100", 0, null],
+    ["101", 1, "100"],
+  ]);
+});
+
+test("snapshot then live row-update keep a child nested (no lose-then-snap-back)", () => {
+  const store = new SessionStore();
+  // First snapshot already nests the child.
+  store.applySnapshot(
+    [
+      row("100", { sidebar_position: 2, row_version: 5 }),
+      row("101", {
+        sidebar_position: 1,
+        row_version: 5,
+        parent_session_id: "100",
+      }),
+    ],
+    "5",
+  );
+  expect(
+    arrangeSessionTree(store.list()).find((r) => r.session.id === "101")?.depth,
+  ).toBe(1);
+
+  // An unrelated live row-update for the child (e.g. a status change) must not
+  // drop the parent — it carries parent_session_id like every real row-update.
+  const update = normalizeSessionRowUpdate({
+    cursor: "6",
+    row: {
+      id: "101",
+      owner: "u@example.com",
+      session_scope: "default",
+      name: "101",
+      visible: true,
+      status: "Failed",
+      parent_session_id: "100",
+      sidebar_position: 1,
+      row_version: 6,
+    },
+  });
+  store.applyRowUpdate(update!);
+
+  const child = arrangeSessionTree(store.list()).find(
+    (r) => r.session.id === "101",
+  );
+  expect(child?.depth, "child stays nested across the live update").toBe(1);
+  expect(child?.parentId).toBe("100");
 });

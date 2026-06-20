@@ -55,6 +55,19 @@ esac
 auth_tok="$(cat "$AUTH_TOKEN_PATH" 2>/dev/null || true)"
 [ -n "$auth_tok" ] || exit 0
 
+# Egress-proxy mode (restricted_git cutover). github.com is pinned at the agent
+# egress proxy, which exchanges this token, mints the GitHub App token server-side,
+# records the action, and enforces no-push-to-main / no-merge. So hand git the pod's
+# RAW auth.romaine.life token (NOT an in-pod-minted GitHub token) and let the wall do
+# the minting. No in-pod mint, no break-glass dance — the wall is the policy.
+case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    printf 'username=x-access-token\n'
+    printf 'password=%s\n' "$auth_tok"
+    exit 0
+    ;;
+esac
+
 # Scope is mode-aware. Restricted sessions mint a read-only token so reads work
 # without a push-capable credential in the shell; non-restricted sessions mint
 # the App's full permission set (write+workflows belt-and-suspenders) so

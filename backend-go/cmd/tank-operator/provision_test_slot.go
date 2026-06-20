@@ -29,6 +29,10 @@ const (
 	provisionVerdictWatchingTimeout provisionVerdict = "watching_timeout"
 	provisionVerdictHeadMoved       provisionVerdict = "head_moved"
 	provisionVerdictError           provisionVerdict = "error"
+	// provisionVerdictRef is a direct deploy-by-ref (e.g. main) with no PR to
+	// validate — the escape hatch that keeps test-slot provisioning from being a
+	// dead-end when there is no open PR to grab. Provisions immediately.
+	provisionVerdictRef provisionVerdict = "ref"
 )
 
 // provisionProvisionOutcome is the bounded `outcome` label for the provision
@@ -74,6 +78,12 @@ type provisionTestSlotRequest struct {
 	// has moved off it, the gate refuses rather than greenlight a superseded
 	// commit. Empty disables the pin.
 	ExpectedSHA string
+	// DeployRef, when set, is a direct git ref to deploy (e.g. "main") with NO
+	// PR-readiness gate: there is no PR to validate, so the gate provisions the
+	// ref straight away. It is the "no obvious branch / PR already merged" escape
+	// hatch that keeps test-slot provisioning from being a dead-end. When set it
+	// takes precedence over the PRNumber/Branch validation path.
+	DeployRef string
 	// progress, when set, is invoked by the gate as it advances through its
 	// phases — "validating" before the first live read, "waiting" on each
 	// settle-wait. The interactive path uses it to surface intermediate
@@ -120,6 +130,15 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 	}
 	if s.glimmung == nil {
 		return provisionOutcome{Verdict: provisionVerdictError}, errors.New("glimmung client not configured")
+	}
+	// Deploy-by-ref escape hatch: a direct ref (e.g. main) has no PR to validate,
+	// so skip the validate→wait loop and provision it straight away. This is what
+	// keeps the flow from being a dead-end when there is no open PR to grab.
+	if deployRef := strings.TrimSpace(req.DeployRef); deployRef != "" {
+		recordTestSlotValidate(string(provisionVerdictRef))
+		out, err := s.provisionSlotAfterReady(ctx, req, "", deployRef)
+		out.Verdict = provisionVerdictRef
+		return out, err
 	}
 	repoOwner := strings.TrimSpace(req.RepoOwner)
 	repoName := strings.TrimSpace(req.RepoName)
@@ -175,7 +194,15 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 		switch result.Status {
 		case pgstore.CIWatchReady:
 			recordTestSlotValidate(string(provisionVerdictReady))
-			return s.provisionSlotAfterReady(ctx, req, result.HeadSHA)
+			// Deploy the PR's actual head branch. For a by-branch validate that's
+			// the same as req.Branch; for a by-PR validate (the page's branch/PR
+			// picker) it's the selected PR's branch, which is what we want to ship
+			// to the slot.
+			deployRef := strings.TrimSpace(state.PR.Head.Ref)
+			if deployRef == "" {
+				deployRef = req.Branch
+			}
+			return s.provisionSlotAfterReady(ctx, req, result.HeadSHA, deployRef)
 		case pgstore.CIWatchFailed:
 			detail := "CI failed on " + repoPR
 			if len(result.FailingChecks) > 0 {
@@ -222,8 +249,11 @@ func (s *appServer) resolveProvisionState(ctx context.Context, req provisionTest
 // provisionSlotAfterReady runs the checkout → deploy → SetTestState provision
 // sequence, mirroring checkoutAndDeployOrchestrationReview. Only reached on a
 // ready verdict.
-func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTestSlotRequest, headSHA string) (provisionOutcome, error) {
+func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTestSlotRequest, headSHA, deployRef string) (provisionOutcome, error) {
 	out := provisionOutcome{Verdict: provisionVerdictReady, HeadSHA: headSHA}
+	if strings.TrimSpace(deployRef) == "" {
+		deployRef = req.Branch
+	}
 	workflow := strings.TrimSpace(req.Workflow)
 	checkoutReq := glimmung.CheckoutTestSlotRequest{
 		Project:       req.Project,
@@ -242,14 +272,26 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 		recordTestSlotProvision(provisionStepNoSlot)
 		return out, errors.New("glimmung checkout returned no slot identity")
 	}
+	// A deploy-by-ref (e.g. main) has no per-commit CI image, so deploy the chart
+	// at the ref with no override — its pinned production image stands. A PR
+	// deploy (no DeployRef) resolves the CI-built image as usual.
+	imageSource := ""
+	if strings.TrimSpace(req.DeployRef) != "" {
+		imageSource = "chart"
+	}
 	deploy, err := s.glimmung.DeployImageToTestSlot(ctx, req.OwnerEmail, glimmung.DeployImageToTestSlotRequest{
-		Project:   req.Project,
-		SlotIndex: checkout.SlotIndex,
-		SlotName:  checkout.SlotName,
-		GitRef:    req.Branch,
+		Project:     req.Project,
+		SlotIndex:   checkout.SlotIndex,
+		SlotName:    checkout.SlotName,
+		GitRef:      deployRef,
+		ImageSource: imageSource,
 	})
 	if err != nil {
 		recordTestSlotProvision(provisionStepDeployError)
+		// A deploy failure must not leak the slot we just checked out — the pool
+		// is finite, so a leak per failed provision silently drains it. Release it
+		// best-effort before returning.
+		s.releaseCheckedOutSlot(req, checkout, "deploy failed: "+err.Error())
 		return out, err
 	}
 	out.Deploy = deploy
@@ -276,6 +318,34 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 	}
 	recordTestSlotProvision(provisionStepProvisioned)
 	return out, nil
+}
+
+// releaseCheckedOutSlot returns a slot that was checked out but failed before
+// becoming a usable deployed environment, so a failed provision does not leak
+// the lease. Best-effort on a fresh short context (the provision's ctx may be
+// canceled/timed-out): a return failure is logged + countered, never surfaced
+// (the provision already failed for its own reason).
+func (s *appServer) releaseCheckedOutSlot(req provisionTestSlotRequest, checkout glimmung.CheckoutTestSlotResult, reason string) {
+	if s.glimmung == nil || (checkout.SlotIndex == nil && checkout.SlotName == nil) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sessionID := req.SessionID
+	if _, err := s.glimmung.ReturnTestSlot(ctx, req.OwnerEmail, glimmung.ReturnTestSlotRequest{
+		Project:         req.Project,
+		SlotIndex:       checkout.SlotIndex,
+		SlotName:        checkout.SlotName,
+		CallerSessionID: &sessionID,
+		Source:          "provision-cleanup",
+		Reason:          reason,
+	}); err != nil {
+		slog.Warn("provision cleanup: return leaked slot failed",
+			"session_id", req.SessionID, "error", err)
+		recordTestSlotProvision("return_failed")
+		return
+	}
+	recordTestSlotProvision("returned_after_failure")
 }
 
 func (s *appServer) provisionSettleIntervalDuration() time.Duration {

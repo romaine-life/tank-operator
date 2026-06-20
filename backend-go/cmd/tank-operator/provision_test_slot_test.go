@@ -167,6 +167,77 @@ func TestProvisionTestSlot_ReadyProvisionsAndSetsTestState(t *testing.T) {
 	}
 }
 
+// TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate proves the deploy-by-ref
+// escape hatch: a request with DeployRef set provisions the ref straight away
+// (no open PR required), never reading PR/CI state. This is what keeps the flow
+// from being a dead-end when a session's work has merged / has no obvious branch.
+func TestProvisionTestSlot_DeployRefProvisionsWithoutPRGate(t *testing.T) {
+	// A GitHub double that errors on any read, so a stray PR-readiness read fails
+	// the test loudly instead of silently passing.
+	gh := &provisionFakeGitHub{resolveErr: errors.New("deploy-by-ref must not read PR state")}
+	glim := &fakeGlimmungClient{}
+	app, reg := provisionTestApp(t, gh, glim)
+
+	req := provisionByNumberReq()
+	req.PRNumber = 0
+	req.Branch = ""
+	req.DeployRef = "main"
+
+	out, err := app.provisionTestSlotForSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.Verdict != provisionVerdictRef || !out.Provisioned {
+		t.Fatalf("verdict=%q provisioned=%v, want ref+provisioned", out.Verdict, out.Provisioned)
+	}
+	if gh.resolveCalls != 0 {
+		t.Fatalf("deploy-by-ref read PR state %d times; it must not validate a PR", gh.resolveCalls)
+	}
+	if glim.checkoutCalls != 1 || glim.deployCalls != 1 {
+		t.Fatalf("glimmung checkout=%d deploy=%d, want 1/1", glim.checkoutCalls, glim.deployCalls)
+	}
+	if glim.deployReq.GitRef != "main" {
+		t.Fatalf("deploy git_ref=%q, want main", glim.deployReq.GitRef)
+	}
+	if glim.deployReq.ImageSource != "chart" {
+		t.Fatalf("deploy image_source=%q, want chart (deploy-by-ref uses the chart's pinned image)", glim.deployReq.ImageSource)
+	}
+	rec, ok, _ := reg.Get(context.Background(), provisionTestOwner, "77")
+	if !ok {
+		t.Fatalf("session record missing")
+	}
+	if active, _ := rec.TestState["active"].(bool); !active {
+		t.Fatalf("SetTestState did not mark the slot active: %#v", rec.TestState)
+	}
+}
+
+// TestProvisionTestSlot_DeployFailureReleasesSlot proves a deploy failure does
+// not leak the checked-out slot: the gate returns it so the finite pool is not
+// silently drained by failed provisions (the exact leak the live smoke test hit).
+func TestProvisionTestSlot_DeployFailureReleasesSlot(t *testing.T) {
+	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
+	glim := &fakeGlimmungClient{deployErr: errors.New("glimmung deploy-image returned 422")}
+	app, _ := provisionTestApp(t, gh, glim)
+
+	out, err := app.provisionTestSlotForSession(context.Background(), provisionByNumberReq())
+	if err == nil {
+		t.Fatalf("expected a deploy error, got nil (out=%+v)", out)
+	}
+	if out.Provisioned {
+		t.Fatalf("a failed deploy must not report provisioned")
+	}
+	if glim.checkoutCalls != 1 || glim.deployCalls != 1 {
+		t.Fatalf("checkout=%d deploy=%d, want 1/1", glim.checkoutCalls, glim.deployCalls)
+	}
+	// The checked-out slot must be returned, not leaked.
+	if glim.returnReq.SlotIndex == nil && glim.returnReq.SlotName == nil {
+		t.Fatalf("deploy failure must release the checked-out slot (ReturnTestSlot not called)")
+	}
+	if glim.returnReq.SlotName != nil && *glim.returnReq.SlotName != "tank-operator-slot-1" {
+		t.Fatalf("released the wrong slot: %q", *glim.returnReq.SlotName)
+	}
+}
+
 func TestProvisionTestSlot_FailedRefusesWithoutGlimmung(t *testing.T) {
 	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{{
 		CheckState:       "failure",

@@ -1099,6 +1099,27 @@ async def serve(port: int) -> tuple[grpc.aio.Server, AuthInjector]:
     the orchestrator's poller reads that snapshot to drive the
     transcript-surfaced provider-credential banner.
     """
+    # The github provider is a different beast from claude/codex: it injects no
+    # token of its own, runs no refresh keeper, and governs per-session by relaying
+    # the caller's JWT. It lives in its own servicer; serve() just dispatches.
+    if _required_env("PROXY_PROVIDER").strip().lower() == "github":
+        from .github_ext_proc import GitHubGovernor
+
+        gov = GitHubGovernor(
+            mint_url=_required_env("MCP_GITHUB_MINT_URL"),
+            internal_url=_required_env("TANK_OPERATOR_INTERNAL_URL"),
+            exchange_url=os.environ.get(
+                "AUTH_ROMAINE_EXCHANGE_URL",
+                "https://auth.romaine.life/api/auth/exchange/k8s",
+            ),
+        )
+        server = grpc.aio.server()
+        ext_proc_grpc.add_ExternalProcessorServicer_to_server(gov, server)
+        server.add_insecure_port(f"0.0.0.0:{port}")
+        await server.start()
+        log.info("github egress ext_proc listening on 0.0.0.0:%d", port)
+        return server, gov
+
     config = _config_from_env()
     server = grpc.aio.server()
     injector = AuthInjector(config)

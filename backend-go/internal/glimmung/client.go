@@ -100,6 +100,11 @@ type DeployImageToTestSlotRequest struct {
 	SlotIndex *int    `json:"slot_index,omitempty"`
 	SlotName  *string `json:"slot_name,omitempty"`
 	GitRef    string  `json:"git_ref"`
+	// ImageSource selects what the slot runs: "" / "ci" (default) deploys the
+	// CI-built image for the commit; "chart" deploys the chart at GitRef with no
+	// override (its pinned production image) — used for default-branch/main
+	// deploys that have no per-commit CI proof image.
+	ImageSource string `json:"image_source,omitempty"`
 }
 
 type DeployImageToTestSlotResult struct {

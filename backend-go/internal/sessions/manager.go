@@ -59,6 +59,7 @@ type SessionRegistry interface {
 	SetSpokeConfig(ctx context.Context, email, sessionID string, config map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
 	AppendSpawnedSession(ctx context.Context, email, parentSessionID string, ref sessionmodel.SpawnedSessionRef) error
+	AppendSessionPullRequest(ctx context.Context, email, sessionID string, ref sessionmodel.SessionPullRequestRef) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
 	SetParentSession(ctx context.Context, email, sessionID, parentID string) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
@@ -103,6 +104,7 @@ type Manager struct {
 	apiProxyIP                string
 	claudeSecondaryAPIProxyIP string
 	codexAPIProxyIP           string
+	agentEgressProxyIP        string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -115,6 +117,7 @@ type ManagerOptions struct {
 	APIProxyHost                string
 	ClaudeSecondaryAPIProxyHost string
 	CodexAPIProxyHost           string
+	AgentEgressProxyHost        string
 	// ImageOverrides, when non-nil, lets the orchestrator repoint NEW session
 	// pods at a branch-built session image for its (test-slot) scope. Left nil
 	// in production. OnImageOverrideApplied is an optional metrics/log hook
@@ -152,6 +155,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	}
 	if opts.CodexAPIProxyHost != "" {
 		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
+	}
+	if opts.AgentEgressProxyHost != "" {
+		m.agentEgressProxyIP = resolveIP(opts.AgentEgressProxyHost)
 	}
 	return m
 }
@@ -327,6 +333,9 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if m.codexAPIProxyIP == "" {
 		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
 	}
+	if m.agentEgressProxyIP == "" {
+		m.agentEgressProxyIP = resolveIP(os.Getenv("AGENT_EGRESS_PROXY_HOST"))
+	}
 
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
@@ -351,6 +360,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.ClaudeSecondaryAPIProxyIP = m.claudeSecondaryAPIProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
+	manifestOpts.AgentEgressProxyIP = m.agentEgressProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
 	manifestOpts.RepoBases = repoBases
@@ -906,6 +916,24 @@ func (m *Manager) AppendSpawnedSession(ctx context.Context, owner, parentSession
 		return err
 	}
 	m.publishRow(ctx, owner, parentSessionID)
+	return nil
+}
+
+// AppendSessionPullRequest records one PR sighting on the session row's durable
+// pull_requests projection and republishes the row so the git chip /
+// /pull-requests page converge over SSE without a manual refresh. Like
+// AppendSpawnedSession this is best-effort, display-only lineage: it patches no
+// pod annotation and the control-action ledger remains the source of truth; the
+// projection only spares the SPA from re-deriving PRs out of the capped
+// recent-activity feed (where the oldest .open rows silently dropped).
+func (m *Manager) AppendSessionPullRequest(ctx context.Context, owner, sessionID string, ref sessionmodel.SessionPullRequestRef) error {
+	if m.registry == nil {
+		return nil
+	}
+	if err := m.registry.AppendSessionPullRequest(ctx, owner, sessionID, ref); err != nil {
+		return err
+	}
+	m.publishRow(ctx, owner, sessionID)
 	return nil
 }
 

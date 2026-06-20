@@ -5954,6 +5954,47 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* Right-aligned actions group in a session-data page head (summary + an action
+   button such as the /pull-requests page's "Merge in Tank"). */
+.run-session-data-page-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* "Merge in Tank" on the /pull-requests page (moved off the composer chip, which
+   is now a single-click shortcut to this page). Mirrors the primary action btn. */
+.run-pr-merge-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.7rem;
+  border: 1px solid #2563eb;
+  border-radius: var(--radius-sm, 0.35rem);
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.74rem;
+  font-weight: 500;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.run-pr-merge-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.run-pr-merge-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.run-pr-merge-error {
+  color: #f87171;
+}
+
 .run-session-data-page-list {
   display: grid;
   gap: var(--space-2);
@@ -7290,6 +7331,152 @@ button:disabled {
 .break-glass-empty {
   color: var(--text-muted);
   font-size: var(--text-sm);
+}
+
+/* Orchestrate launch form + status — reuses the break-glass page chrome
+   (.break-glass-page / -main / -head / -facts / -reason) and mirrors its
+   form-control design language for the orchestrate-specific rows. */
+.orchestrate-form {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.orchestrate-fieldset {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.orchestrate-fieldset:disabled {
+  opacity: 0.55;
+}
+
+.orchestrate-row {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 9rem) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.orchestrate-label {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.orchestrate-radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.orchestrate-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.32rem 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--radius-sm, 0.35rem);
+  background: rgba(4, 8, 14, 0.4);
+  color: var(--text-body);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.orchestrate-radio:has(input:checked) {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.08);
+  color: var(--text-primary);
+}
+
+.orchestrate-radio input {
+  accent-color: #fbbf24;
+}
+
+.orchestrate-select {
+  width: 100%;
+  min-height: 2rem;
+  padding: 0 0.55rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--radius-sm, 0.35rem);
+  background: rgba(4, 8, 14, 0.52);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+}
+
+.orchestrate-blast-radius {
+  border-color: rgba(251, 191, 36, 0.22);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.orchestrate-error {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fecaca;
+}
+
+.orchestrate-spokes {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.orchestrate-spoke-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.orchestrate-spoke-item {
+  min-width: 0;
+}
+
+.orchestrate-spoke-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm, 0.35rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.orchestrate-spoke-link:hover {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.orchestrate-spoke-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+
+.orchestrate-spoke-link .run-slash-desc {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .orchestrate-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
 }
 
 @media (max-width: 640px) {

@@ -98,7 +98,41 @@ users:
 EOF
 }
 
-if [ "$restricted" = "true" ]; then
+proxy=false
+case "$(printf '%s' "${TANK_GIT_EGRESS_PROXY:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) proxy=true ;;
+esac
+
+if [ "$proxy" = "true" ]; then
+  # Egress-proxy mode (restricted_git via the wall). git pushes its branch directly
+  # through the proxy, which mints the App token server-side, records the action, and
+  # rejects pushes to main + merges. So we install NEITHER the client-side pre-push
+  # block NOR the governed post-commit publish — the wall is the boundary, and branch
+  # pushes must flow. git just has to trust the proxy's leaf for github.com (per-host,
+  # so non-github remotes keep the OS trust store); the credential helper runs in
+  # proxy mode (presents the pod's raw token). Cluster kubeconfig stays restricted-only.
+  git config --global "http.https://github.com/.sslCAInfo" "${TANK_GIT_PROXY_CA:-/etc/oauth-gateway-ca/ca.crt}"
+  # curl/python take ONE CA file that REPLACES the OS set (unlike git's per-host
+  # sslCAInfo or node's NODE_EXTRA_CA_CERTS), so the Stage 2 asset hosts that get
+  # raw-curled (raw.githubusercontent.com pinned to the wall) would cert-fail. Build a
+  # combined bundle = OS trust + the gateway CA; the runner env (CURL_CA_BUNDLE /
+  # REQUESTS_CA_BUNDLE, set by sessionmodel) points here. Built before the agent runs,
+  # and curl-only, so the runner's own node TLS stays on NODE_EXTRA_CA_CERTS. Path must
+  # match egressCABundlePath in sessionmodel.go. Falls back to OS-only if the gateway CA
+  # is absent (degrades to "asset curl fails" rather than breaking ALL curl).
+  _egress_ca_bundle="/workspace/.tank/egress-ca-bundle.crt"
+  _gw_ca="${TANK_GIT_PROXY_CA:-/etc/oauth-gateway-ca/ca.crt}"
+  _os_ca="/etc/ssl/certs/ca-certificates.crt"
+  if [ -s "$_os_ca" ]; then
+    mkdir -p "$(dirname "$_egress_ca_bundle")"
+    if [ -s "$_gw_ca" ]; then
+      cat "$_os_ca" "$_gw_ca" > "$_egress_ca_bundle"
+    else
+      cp "$_os_ca" "$_egress_ca_bundle"
+    fi
+  fi
+  install_credential_helper
+elif [ "$restricted" = "true" ]; then
   install_restricted_hook_templates
   # The credential helper is mode-aware: in restricted mode it mints a
   # read-only token, so clone/fetch/pull work for reads. Writes stay governed

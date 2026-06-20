@@ -248,14 +248,12 @@ import {
   type ScheduledWakeupStatus,
 } from "./scheduledWakeups";
 import {
+  breakGlassRequestFromControlAction,
   controlActionRowsToEntries,
   controlActionStatusLabel,
-  pendingBreakGlassRequests,
-  pendingPRLaneRequests,
   type BreakGlassRequest,
   type ControlActionRow,
   type ControlActionStatus,
-  type PRLaneRequest,
 } from "./controlActions";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
@@ -312,6 +310,7 @@ import {
   type TestSlotStatus,
   type TestSlotPreflight,
   type TestSlotWatch,
+  type TestSlotOption,
 } from "./testWorkflow";
 import {
   readHomeDismissedRecentRepos,
@@ -348,6 +347,7 @@ import {
 import {
   SessionStore,
   normalizeSessionRowUpdate,
+  parseSessionRowLineage,
   type SessionBugLabel,
   type SessionRow,
 } from "./sessionStore";
@@ -450,10 +450,8 @@ import {
   collectGlimmungRunsFromEntries,
   type GlimmungRunLink,
 } from "./glimmungRuns";
-import {
-  normalizeSpawnedSessions,
-  type SpawnedSessionRef,
-} from "./spawnedSessions";
+import { type SpawnedSessionRef } from "./spawnedSessions";
+import { type SessionPullRequestRef } from "./pullRequests";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -911,6 +909,11 @@ interface Session {
   // "spawned sessions" chip lists (sessions this one spawned via
   // spawn_run_session / spawn_test_slot_session). Absent/empty when none.
   spawned_sessions?: SpawnedSessionRef[];
+  // pull_requests is the durable list of PRs this session touched, surfaced by
+  // the composer git chip / dedicated /pull-requests page. Absent/empty when
+  // none. Sourced from the durable sessions.pull_requests column, not re-derived
+  // from the capped control-action feed.
+  pull_requests?: SessionPullRequestRef[];
   // parent_session_id is the child→parent (origin) pointer that drives sidebar
   // nesting: the id of the session that spawned this one, stamped on the child
   // row at create. Absent when this session was not spawned. arrangeSessionTree
@@ -1799,7 +1802,7 @@ interface AdminBreakGlassListBody {
   requests?: AdminBreakGlassListItem[];
 }
 
-type BreakGlassApprovalMenuKind = "github" | "azure" | "model" | "pr-lane";
+type BreakGlassApprovalMenuKind = "github" | "azure" | "model";
 const BREAK_GLASS_BATCH_BUSY_ID = "__break_glass_batch__";
 
 interface BreakGlassApprovalMenuItem {
@@ -1810,7 +1813,6 @@ interface BreakGlassApprovalMenuItem {
   target: string;
   reason?: string;
   createdAt?: string;
-  prLaneRequest?: PRLaneRequest;
 }
 
 interface TestSlotSessionDefaults {
@@ -2605,16 +2607,14 @@ interface ComposerToolButtonsProps {
     approvingId?: string | null;
     onQuickApprove?: (item: BreakGlassApprovalMenuItem) => void;
     onQuickApproveMany?: (items: BreakGlassApprovalMenuItem[]) => void;
-    onApprovePRLane?: (
-      request: PRLaneRequest,
-      override?: "listed" | "count" | "unlimited",
-    ) => void;
-    onDenyPRLane?: (request: PRLaneRequest) => void;
   };
   pullRequest: {
-    latestUrl?: string;
+    // The git chip is a single-click shortcut to the /pull-requests page; count
+    // drives its tooltip + enabled state, linkedUrl keeps it live for a test
+    // session whose linked PR isn't in its own durable list.
     linkedUrl?: string;
-    sessionId?: string | null;
+    count?: number;
+    onOpenPage?: () => void;
   };
   slash: {
     disabled?: boolean;
@@ -2641,209 +2641,44 @@ interface ComposerToolButtonsProps {
 // open/outside-click/escape handling mirrors BugLabelPicker so it composes
 // cleanly inside the composer toolbar.
 function PullRequestMenuButton({
-  latestUrl,
   linkedUrl,
-  sessionId,
+  count,
+  onOpenPage,
 }: ComposerToolButtonsProps["pullRequest"]) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLSpanElement | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  // The popover is portaled to <body> with fixed positioning so it escapes the
-  // composer input-group's `overflow: hidden` + `z-index` stacking context,
-  // which otherwise clips an in-flow absolutely-positioned popover (it opens in
-  // the DOM but renders behind/clipped by the composer). Anchor is the
-  // trigger's viewport rect, recomputed on open / scroll / resize.
-  const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(
-    null,
-  );
-
-  const computeAnchor = useCallback(() => {
-    const r = triggerRef.current?.getBoundingClientRect();
-    if (!r) return;
-    setAnchor({
-      right: Math.round(window.innerWidth - r.right),
-      bottom: Math.round(window.innerHeight - r.top + 8),
-    });
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    computeAnchor();
-    window.addEventListener("resize", computeAnchor);
-    window.addEventListener("scroll", computeAnchor, true);
-    return () => {
-      window.removeEventListener("resize", computeAnchor);
-      window.removeEventListener("scroll", computeAnchor, true);
-    };
-  }, [open, computeAnchor]);
-
-  useEffect(() => {
-    if (!open) return;
-    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        (ref.current?.contains(target) || popoverRef.current?.contains(target))
-      )
-        return;
-      setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", closeIfOutside);
-    document.addEventListener("touchstart", closeIfOutside);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("mousedown", closeIfOutside);
-      document.removeEventListener("touchstart", closeIfOutside);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  const [mergeState, setMergeState] = useState<
-    "idle" | "merging" | "merged" | "error"
-  >("idle");
-  const [mergeError, setMergeError] = useState("");
-  const doMerge = useCallback(async () => {
-    if (!sessionId || mergeState === "merging" || mergeState === "merged") return;
-    setMergeState("merging");
-    setMergeError("");
-    try {
-      const res = await authedFetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/merge-pr`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        },
-      );
-      if (!res.ok) {
-        let detail = `merge_failed_${res.status}`;
-        try {
-          const body = await res.json();
-          if (typeof body?.detail === "string") detail = body.detail;
-        } catch {
-          // keep the status-derived detail when the body is not JSON
-        }
-        setMergeState("error");
-        setMergeError(detail);
-        return;
-      }
-      setMergeState("merged");
-    } catch (err) {
-      setMergeState("error");
-      setMergeError(err instanceof Error ? err.message : "merge failed");
-    }
-  }, [sessionId, mergeState]);
-
-  const latest = latestUrl?.trim() ?? "";
+  // The composer git chip is a single-click shortcut to the dedicated
+  // /pull-requests page (AgentGitActivityScreen): one click opens the complete,
+  // durable PR list, which is also where Merge in Tank lives. It is intentionally
+  // NOT a popover menu. As a navigation control it is ALWAYS clickable whenever
+  // the page is reachable (onOpenPage) — even with zero PRs it opens the page
+  // (which shows its own empty state) rather than dead-ending as a greyed icon.
+  // The "is-ready" highlight still reflects whether the session has touched a PR.
   const linked = linkedUrl?.trim() ?? "";
-  const showLinkedDistinct = Boolean(linked) && linked !== latest;
-  const hasLinks = Boolean(latest || linked);
-  const title = hasLinks ? "Pull request" : "No pull request linked yet";
-
+  const prCount = typeof count === "number" ? count : 0;
+  const hasPrs = prCount > 0 || Boolean(linked);
+  const title =
+    prCount > 1
+      ? `View ${prCount} pull requests`
+      : hasPrs
+        ? "View pull request"
+        : "Pull requests";
   return (
-    <span ref={ref} className="run-pr-menu">
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${hasLinks ? " is-ready" : ""}`}
-        aria-label={title}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={title}
-        disabled={!hasLinks}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
-      </button>
-      {open &&
-        hasLinks &&
-        createPortal(
-          <div
-            ref={popoverRef}
-            className="run-pr-menu-popover"
-            role="menu"
-            aria-label="Pull request actions"
-            style={
-              anchor
-                ? { right: anchor.right, bottom: anchor.bottom }
-                : { visibility: "hidden" }
-            }
-          >
-            <div className="run-slash-palette-label">Pull request</div>
-            {latest ? (
-              <a
-                role="menuitem"
-                className="run-pr-menu-item"
-                href={latest}
-                target="_blank"
-                rel="noreferrer"
-                onClick={() => setOpen(false)}
-              >
-                <span className="run-pr-menu-name">Latest PR</span>
-                <ExternalLinkIcon
-                  className="run-pr-menu-icon"
-                  aria-hidden="true"
-                />
-              </a>
-            ) : null}
-            {showLinkedDistinct ? (
-              <a
-                role="menuitem"
-                className="run-pr-menu-item"
-                href={linked}
-                target="_blank"
-                rel="noreferrer"
-                onClick={() => setOpen(false)}
-              >
-                <span className="run-pr-menu-name">Pull request page</span>
-                <ExternalLinkIcon
-                  className="run-pr-menu-icon"
-                  aria-hidden="true"
-                />
-              </a>
-            ) : null}
-            {!hasLinks && (
-              <div className="run-slash-empty">No pull request linked yet</div>
-            )}
-            {hasLinks && sessionId ? (
-              <button
-                type="button"
-                role="menuitem"
-                className="run-pr-menu-item"
-                disabled={mergeState === "merging" || mergeState === "merged"}
-                onClick={doMerge}
-                title="Merge this PR in Tank (GitHub enforces the green/mergeable gate)"
-              >
-                <span className="run-pr-menu-name">
-                  {mergeState === "merged"
-                    ? "Merged ✓"
-                    : mergeState === "merging"
-                      ? "Merging…"
-                      : "Merge in Tank"}
-                </span>
-                {mergeState === "error" && mergeError ? (
-                  <span className="run-slash-desc">{mergeError}</span>
-                ) : null}
-              </button>
-            ) : null}
-          </div>,
-          document.body,
-        )}
-    </span>
+    <button
+      type="button"
+      className={`run-composer-icon-btn run-composer-action-btn run-pr-action-btn${
+        hasPrs ? " is-ready" : ""
+      }`}
+      aria-label={title}
+      title={title}
+      disabled={!onOpenPage}
+      onClick={() => onOpenPage?.()}
+    >
+      <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+    </button>
   );
 }
 
 function BreakGlassMenuIcon({ kind }: { kind: BreakGlassApprovalMenuKind }) {
-  const Icon =
-    kind === "model"
-      ? FlaskConicalIcon
-      : kind === "pr-lane"
-        ? GitBranchIcon
-        : ShieldAlertIcon;
+  const Icon = kind === "model" ? FlaskConicalIcon : ShieldAlertIcon;
   return <Icon className="run-pr-menu-glyph" size={14} aria-hidden="true" />;
 }
 
@@ -2856,8 +2691,6 @@ function BreakGlassApprovalMenuButton({
   approvingId,
   onQuickApprove,
   onQuickApproveMany,
-  onApprovePRLane,
-  onDenyPRLane,
 }: ComposerToolButtonsProps["breakGlass"]) {
   const [open, setOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -3035,7 +2868,6 @@ function BreakGlassApprovalMenuButton({
               </div>
             )}
             {items.map((item) => {
-              const prLane = item.prLaneRequest;
               const isBatchable = isBatchableBreakGlassMenuItem(item);
               const busy = approvingId === item.id || batchBusy;
               const selected = selectedIds.has(item.id);
@@ -3075,100 +2907,34 @@ function BreakGlassApprovalMenuButton({
                       </span>
                     </span>
                   </span>
-                  {item.kind === "pr-lane" && prLane ? (
-                    <span className="run-pr-menu-actions">
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="run-pr-menu-action-btn"
-                        disabled={!onApprovePRLane || busy}
-                        onClick={() => onApprovePRLane?.(prLane)}
-                      >
-                        <CheckIcon aria-hidden="true" />
-                        <span>
-                          {busy
-                            ? "Approving"
-                            : prLane.allocationRequest
-                              ? "Approve request"
-                              : "Approve"}
-                        </span>
-                      </button>
-                      {prLane.allocationRequest &&
-                        (prLane.laneNames?.length ||
-                        prLane.proposedBranches?.length ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="run-pr-menu-action-btn"
-                            disabled={!onApprovePRLane || busy}
-                            onClick={() => onApprovePRLane?.(prLane, "listed")}
-                          >
-                            Listed only
-                          </button>
-                        ) : null)}
-                      {prLane.allocationRequest && (
-                        <>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="run-pr-menu-action-btn"
-                            disabled={!onApprovePRLane || busy}
-                            onClick={() => onApprovePRLane?.(prLane, "count")}
-                          >
-                            10
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            className="run-pr-menu-action-btn"
-                            disabled={!onApprovePRLane || busy}
-                            onClick={() => onApprovePRLane?.(prLane, "unlimited")}
-                          >
-                            Unlimited
-                          </button>
-                        </>
-                      )}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="run-pr-menu-action-btn"
-                        disabled={!onDenyPRLane || busy}
-                        onClick={() => onDenyPRLane?.(prLane)}
-                      >
-                        <XIcon aria-hidden="true" />
-                        <span>Deny</span>
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="run-pr-menu-actions">
-                      <a
-                        role="menuitem"
-                        className="run-pr-menu-action-link"
-                        href={item.href}
-                        onClick={(event) => {
-                          if (!isPlainLeftClick(event)) {
-                            setOpen(false);
-                            return;
-                          }
-                          event.preventDefault();
+                  <span className="run-pr-menu-actions">
+                    <a
+                      role="menuitem"
+                      className="run-pr-menu-action-link"
+                      href={item.href}
+                      onClick={(event) => {
+                        if (!isPlainLeftClick(event)) {
                           setOpen(false);
-                          navigateToSessionRoute(new URL(item.href, window.location.href).href);
-                        }}
-                      >
-                        Details
-                      </a>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="run-pr-menu-action-btn"
-                        disabled={!onQuickApprove || busy}
-                        onClick={() => onQuickApprove?.(item)}
-                      >
-                        <CheckIcon aria-hidden="true" />
-                        <span>{busy ? "Approving" : "Quick approve"}</span>
-                      </button>
-                    </span>
-                  )}
+                          return;
+                        }
+                        event.preventDefault();
+                        setOpen(false);
+                        navigateToSessionRoute(new URL(item.href, window.location.href).href);
+                      }}
+                    >
+                      Details
+                    </a>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="run-pr-menu-action-btn"
+                      disabled={!onQuickApprove || busy}
+                      onClick={() => onQuickApprove?.(item)}
+                    >
+                      <CheckIcon aria-hidden="true" />
+                      <span>{busy ? "Approving" : "Quick approve"}</span>
+                    </button>
+                  </span>
                 </div>
               );
             })}
@@ -9208,11 +8974,14 @@ function summarizeGitAction(action: string | undefined): string {
   }
 }
 
+// buildAgentGitActivity derives the COMMIT list for the /pull-requests page from
+// the recent control-action feed. PRs are NOT derived here anymore — they come
+// from the durable sessions.pull_requests projection (see pullRequestsFromDurable)
+// so the complete set survives the feed's newest-N cap. A commit list is
+// inherently recent-activity, so the capped feed remains the right source for it.
 function buildAgentGitActivity(entries: TranscriptEntry[]): {
-  pullRequests: AgentGitActivityItem[];
   commits: AgentGitActivityItem[];
 } {
-  const pullRequestsByKey = new Map<string, AgentGitActivityItem>();
   const commits: AgentGitActivityItem[] = [];
   for (const entry of entries) {
     if (!isControlActionEntry(entry)) continue;
@@ -9221,36 +8990,6 @@ function buildAgentGitActivity(entries: TranscriptEntry[]): {
     const href = entry.controlActionTarget ?? row?.target_ref ?? "";
     const repo = entry.controlActionRepo;
     const createdAt = entry.startedAt ?? entry.time;
-    if (
-      action?.startsWith("github.pull_request.") &&
-      href.includes("github.com/") &&
-      href.includes("/pull/")
-    ) {
-      const number =
-        entry.controlActionPrNumber ??
-        (typeof row?.pr_number === "number" ? row.pr_number : undefined);
-      const key = repo && number ? `${repo}#${number}` : href;
-      const state =
-        typeof row?.status === "string" && row.status !== "succeeded"
-          ? row.status
-          : payloadField(row?.payload, "mergeable_state");
-      const item: AgentGitActivityItem = {
-        id: `pr-${key}`,
-        href,
-        repo,
-        label: number ? `PR #${number}` : "Pull request",
-        detail: [repo, summarizeGitAction(action), state, formatToolFullTime(createdAt)]
-          .filter(Boolean)
-          .join(" / "),
-        action,
-        createdAt,
-      };
-      const existing = pullRequestsByKey.get(key);
-      if (!existing || (createdAt ?? "") > (existing.createdAt ?? "")) {
-        pullRequestsByKey.set(key, item);
-      }
-      continue;
-    }
     if (
       action === "github.commit.push" ||
       action === "github.commit.write" ||
@@ -9281,9 +9020,49 @@ function buildAgentGitActivity(entries: TranscriptEntry[]): {
   const byNewest = (a: AgentGitActivityItem, b: AgentGitActivityItem) =>
     (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
   return {
-    pullRequests: Array.from(pullRequestsByKey.values()).sort(byNewest),
     commits: commits.sort(byNewest),
   };
+}
+
+// pullRequestsFromDurable maps the durable sessions.pull_requests projection
+// into the AgentGitActivityItem shape the composer git chip and the dedicated
+// /pull-requests page render. This is the COMPLETE list — the backend records a
+// ref for every github.pull_request.* sighting onto the session row — replacing
+// the old in-browser re-derivation from the newest-100 control-action feed where
+// the oldest .open rows silently dropped on busy sessions.
+function pullRequestsFromDurable(
+  refs: SessionPullRequestRef[] | undefined,
+): AgentGitActivityItem[] {
+  if (!refs || refs.length === 0) return [];
+  const items = refs.flatMap((pr) => {
+    const url = pr.url?.trim();
+    if (!url) return [];
+    const number = typeof pr.number === "number" ? pr.number : undefined;
+    const key = pr.repo && number ? `${pr.repo}#${number}` : url;
+    const state =
+      pr.state || (pr.status && pr.status !== "succeeded" ? pr.status : "");
+    return [
+      {
+        id: `pr-${key}`,
+        href: url,
+        repo: pr.repo,
+        label: number ? `PR #${number}` : "Pull request",
+        detail: [
+          pr.repo,
+          summarizeGitAction(pr.action),
+          state,
+          formatToolFullTime(pr.updated_at),
+        ]
+          .filter(Boolean)
+          .join(" / "),
+        action: pr.action,
+        createdAt: pr.updated_at,
+      },
+    ];
+  });
+  return items.sort((a, b) =>
+    (b.createdAt ?? "").localeCompare(a.createdAt ?? ""),
+  );
 }
 
 function isShellToolEntry(entry: TranscriptEntry): boolean {
@@ -10509,6 +10288,23 @@ function formatTestSlotRelative(iso: string | null | undefined): string {
 // last-known PR readiness from the durable snapshot (with an on-demand live
 // refresh). The "Create test slot" action runs the same deterministic,
 // server-side gate as before — this page only frames it and sets expectations.
+// testSlotOptionKey is the stable identity of a deployable option (an open PR or
+// a ref like main), used to track the selected target across re-fetches.
+function testSlotOptionKey(o: TestSlotOption): string {
+  return o.kind === "pr" ? `pr:${o.pr_number ?? 0}` : `ref:${o.ref ?? ""}`;
+}
+
+// testSlotSelectedPRForFetch maps the selected option key to the `?pr=` the live
+// preflight reads. Only a PR option carries a PR number; a ref (main) selection
+// has none, so the preflight falls back to the session's newest watch.
+function testSlotSelectedPRForFetch(key: string | null): number | undefined {
+  if (key && key.startsWith("pr:")) {
+    const n = Number(key.slice(3));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
 function TestSlotScreen({
   sessionId,
   testState,
@@ -10526,8 +10322,8 @@ function TestSlotScreen({
   authedFetch: (input: string, init?: RequestInit) => Promise<Response>;
   disabled?: boolean;
   readOnly?: boolean;
-  onCreateHold: () => void;
-  onCreateDrive: () => void;
+  onCreateHold: (target?: { pr?: number; ref?: string }) => void;
+  onCreateDrive: (target?: { pr?: number; ref?: string }) => void;
   onReturnTestSlot?: () => Promise<void>;
   onOpenReady: () => void;
   onOpenTranscript: () => void;
@@ -10553,10 +10349,15 @@ function TestSlotScreen({
   // the moment a slot becomes active (the slot is minutes away and arrives via
   // the session SSE, so the enable POST is deferred to an effect below).
   const [pendingEnableOnActive, setPendingEnableOnActive] = useState(false);
-  // Keep the latest authedFetch without making it an effect dependency (it may
-  // be re-created each render; depending on it would re-fire the load loop).
+  // Which deployable target the user picked (option key "pr:<n>" | "ref:<name>");
+  // null = the backend's intelligent default.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Keep the latest authedFetch / selection out of the load callback's deps (so
+  // it isn't re-created every render and re-firing the load loop).
   const fetchRef = useRef(authedFetch);
   fetchRef.current = authedFetch;
+  const selectedKeyRef = useRef(selectedKey);
+  selectedKeyRef.current = selectedKey;
 
   const load = useCallback(
     async (refresh: boolean, silent: boolean) => {
@@ -10568,6 +10369,7 @@ function TestSlotScreen({
       try {
         const next = await fetchTestSlotStatus(sessionId, fetchRef.current, {
           refresh,
+          pr: testSlotSelectedPRForFetch(selectedKeyRef.current),
         });
         // A durable (non-refresh) read carries no preflight; preserve the last
         // live one so the authoritative verdict doesn't flicker back to the
@@ -10651,9 +10453,30 @@ function TestSlotScreen({
   const repoSlug = status?.repo?.slug || "";
   const branch = status?.repo?.branch || "";
   const repoBlocked = Boolean(status) && !status?.repo;
-  const hasOpenPR = readiness ? readiness.hasOpenPR : true;
+  // Deployable options the page offers (open PRs + main). main is always present,
+  // so Create is never a dead-end — no open PR just means the default is "deploy
+  // main". The selected option (explicit pick, else the backend's default) is
+  // what Create acts on.
+  const options: TestSlotOption[] = status?.options ?? [];
+  const defaultOption = options.find((o) => o.default) ?? options[0] ?? null;
+  const selectedOption =
+    options.find((o) => testSlotOptionKey(o) === selectedKey) ?? defaultOption;
+  const selectedIsRef = selectedOption?.kind === "ref";
+  const selectedTarget: { pr?: number; ref?: string } = selectedOption
+    ? selectedOption.kind === "pr"
+      ? { pr: selectedOption.pr_number }
+      : { ref: selectedOption.ref }
+    : {};
+  // Short, human label for the selected target — shown in the button so the
+  // action names what it deploys (e.g. "Create test slot from main") rather than
+  // leaving the user to trust an invisible selection.
+  const selectedShort = selectedOption
+    ? selectedOption.kind === "pr"
+      ? `PR #${selectedOption.pr_number}`
+      : selectedOption.ref ?? "main"
+    : "";
   const canCreate =
-    !disabled && !readOnly && !slotActive && !repoBlocked && hasOpenPR;
+    !disabled && !readOnly && !slotActive && !repoBlocked && options.length > 0;
   // "Start frontend testing": with a slot already up it is a plain enable POST
   // (needs only a writable, ready session); with no slot it first runs the
   // provision flow, so it inherits the same create gate as "Create test slot".
@@ -10705,6 +10528,14 @@ function TestSlotScreen({
   const prUrl = readiness?.prUrl || "";
   const prNumber = readiness?.prNumber || 0;
   const slotLabel = testSlotSlotLabel(testState);
+
+  const selectOption = (o: TestSlotOption) => {
+    const key = testSlotOptionKey(o);
+    // Set the ref synchronously so the immediate live reload reads the new pick.
+    selectedKeyRef.current = key;
+    setSelectedKey(key);
+    void load(true, false);
+  };
 
   const doReturn = async () => {
     if (!onReturnTestSlot || returning) return;
@@ -10982,6 +10813,69 @@ function TestSlotScreen({
               </div>
             )}
 
+            {/* What to deploy — open PRs the session worked on, plus main.
+                Always shown (even for a single option) so the selected deploy
+                target is visible, never implied — visibility of system status. */}
+            {options.length > 0 && (
+              <div className="run-session-data-card is-info">
+                <div className="run-session-data-card-top">
+                  <span className="run-session-data-card-icon" aria-hidden="true">
+                    <GitPullRequestIcon />
+                  </span>
+                  <span className="run-session-data-card-main">
+                    <span className="run-session-data-card-label">
+                      What to deploy
+                    </span>
+                    <span className="run-session-data-card-detail">
+                      {options.length > 1
+                        ? "Pick which branch/PR to deploy — or deploy main directly."
+                        : "No open PR yet, so main (the default branch) is the deploy target."}
+                    </span>
+                  </span>
+                </div>
+                <div className="run-session-data-actions">
+                  {options.map((o) => {
+                    const key = testSlotOptionKey(o);
+                    const sel =
+                      selectedOption != null &&
+                      testSlotOptionKey(selectedOption) === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className="run-session-data-action"
+                        aria-pressed={sel}
+                        onClick={() => selectOption(o)}
+                        title={o.pr_url || undefined}
+                      >
+                        {sel ? (
+                          <CheckIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        ) : o.kind === "pr" ? (
+                          <GitPullRequestIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <FlaskConicalIcon
+                            className="run-session-data-action-icon"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span>
+                          {o.kind === "pr"
+                            ? `PR #${o.pr_number} · ${testSlotVerdictLabel(o.status ?? "")}`
+                            : o.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* PR readiness */}
             <div className={`run-session-data-card is-${tone}`}>
               <div className="run-session-data-card-top">
@@ -11069,9 +10963,9 @@ function TestSlotScreen({
                     <span className="run-session-data-card-detail">
                       {repoBlocked
                         ? "Resolve a repository above to enable provisioning."
-                        : hasOpenPR
-                          ? "Provisioning re-checks the PR against GitHub, then deploys your branch to a slot on a green verdict. CI validation can take several minutes."
-                          : "No open PR for this branch yet — publish a PR to test."}
+                        : selectedIsRef
+                          ? "Deploying a branch directly skips the PR-readiness gate — the slot comes up from that ref."
+                          : "Provisioning re-checks the PR against GitHub, then deploys it to a slot on a green verdict. CI validation can take several minutes."}
                     </span>
                   </span>
                 </div>
@@ -11080,31 +10974,33 @@ function TestSlotScreen({
                     type="button"
                     className="run-session-data-action"
                     disabled={!canCreate}
-                    onClick={onCreateHold}
+                    onClick={() => onCreateHold(selectedTarget)}
                     title={
                       canCreate
-                        ? "Provision a test slot for this branch"
+                        ? `Create a test slot from ${selectedShort || "the selected target"}`
                         : repoBlocked
                           ? "Resolve a repository first"
-                          : hasOpenPR
-                            ? "Unavailable"
-                            : "No open PR to test"
+                          : "Unavailable"
                     }
                   >
                     <FlaskConicalIcon
                       className="run-session-data-action-icon"
                       aria-hidden="true"
                     />
-                    <span>Create test slot</span>
+                    <span>
+                      {selectedShort
+                        ? `Create test slot from ${selectedShort}`
+                        : "Create test slot"}
+                    </span>
                   </button>
                   <button
                     type="button"
                     className="run-session-data-action"
                     disabled={!canCreate}
-                    onClick={onCreateDrive}
+                    onClick={() => onCreateDrive(selectedTarget)}
                     title={
                       canCreate
-                        ? "Provision a slot, then have the agent validate it"
+                        ? `Create a slot from ${selectedShort || "the selected target"}, then have the agent validate it`
                         : "Unavailable"
                     }
                   >
@@ -11112,7 +11008,11 @@ function TestSlotScreen({
                       className="run-session-data-action-icon"
                       aria-hidden="true"
                     />
-                    <span>Create test slot and test</span>
+                    <span>
+                      {selectedShort
+                        ? `Create slot from ${selectedShort} and test`
+                        : "Create test slot and test"}
+                    </span>
                   </button>
                   {readOnly && (
                     <span className="run-session-data-readonly">
@@ -11189,7 +11089,7 @@ function TestSlotScreen({
                             : "Provision a slot, then start streaming the frontend onto it"
                           : repoBlocked
                             ? "Resolve a repository first"
-                            : hasOpenPR
+                            : options.length > 0
                               ? "Unavailable"
                               : "No open PR to test"
                       }
@@ -11948,61 +11848,10 @@ function pendingTestSlotModelApprovalMenuItems(
     });
 }
 
-function prLaneRepoScopeLabel(request: PRLaneRequest): string {
-  if (request.allRepos) return "all repos";
-  if (request.repos && request.repos.length > 0) {
-    return request.repos.join(", ");
-  }
-  return request.repo ?? "current repo";
-}
-
-function prLaneBranchScopeLabel(request: PRLaneRequest): string {
-  if (!request.allocationRequest) return request.laneName;
-  if (request.unlimited) return "unlimited governed lanes";
-  if (request.requestedCount) {
-    return `${request.requestedCount} governed lane${
-      request.requestedCount === 1 ? "" : "s"
-    }`;
-  }
-  const namedCount =
-    request.laneNames?.length || request.proposedBranches?.length || 0;
-  return `${namedCount} named lane${namedCount === 1 ? "" : "s"}`;
-}
-
-function prLaneApprovalMenuItems(
-  sessionId: string,
-  requests: PRLaneRequest[],
-): BreakGlassApprovalMenuItem[] {
-  return requests.map((request) => {
-    const branchScope = prLaneBranchScopeLabel(request);
-    const meta = [
-      request.allocationRequest ? branchScope : request.relationship,
-      request.base ? `from ${request.base}` : "",
-      prLaneRepoScopeLabel(request),
-      request.scope,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return {
-      id: request.eventId,
-      kind: "pr-lane" as const,
-      href: sessionUrl(sessionId),
-      label: request.allocationRequest ? "PR lane allocation" : "PR lane",
-      target: request.allocationRequest
-        ? meta
-        : `${request.laneName}${meta ? ` · ${meta}` : ""}`,
-      reason: request.reason,
-      createdAt: request.createdAt,
-      prLaneRequest: request,
-    };
-  });
-}
-
 function breakGlassApprovalMenuItemsForSession(
   sessionId: string,
   breakGlassRequests: BreakGlassRequest[],
   testSlotModelRows: ControlActionRow[],
-  prLaneRequests: PRLaneRequest[],
 ): BreakGlassApprovalMenuItem[] {
   const breakGlassItems = breakGlassRequests.map((request) => ({
     id: request.eventId,
@@ -12019,7 +11868,6 @@ function breakGlassApprovalMenuItemsForSession(
   return [
     ...breakGlassItems,
     ...pendingTestSlotModelApprovalMenuItems(sessionId, testSlotModelRows),
-    ...prLaneApprovalMenuItems(sessionId, prLaneRequests),
   ].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
 }
 
@@ -12353,10 +12201,63 @@ function BackgroundScreen({
 function AgentGitActivityScreen({
   pullRequests,
   commits,
+  sessionId,
+  linkedPullRequestUrl,
+  canMerge,
 }: {
   pullRequests: AgentGitActivityItem[];
   commits: AgentGitActivityItem[];
+  sessionId?: string | null;
+  linkedPullRequestUrl?: string;
+  canMerge?: boolean;
 }) {
+  const linked = linkedPullRequestUrl?.trim() ?? "";
+  // Surface a linked (test/rollout) PR that isn't already in the session's own
+  // durable list, so pointing the composer chip straight at this page never
+  // drops the one PR a test session most cares about.
+  const linkedListed =
+    !linked || pullRequests.some((item) => item.href === linked);
+  const [mergeState, setMergeState] = useState<
+    "idle" | "merging" | "merged" | "error"
+  >("idle");
+  const [mergeError, setMergeError] = useState("");
+  const doMerge = useCallback(async () => {
+    if (!sessionId || mergeState === "merging" || mergeState === "merged") return;
+    setMergeState("merging");
+    setMergeError("");
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/merge-pr`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        },
+      );
+      if (!res.ok) {
+        let detail = `merge_failed_${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // keep the status-derived detail when the body is not JSON
+        }
+        setMergeState("error");
+        setMergeError(detail);
+        return;
+      }
+      setMergeState("merged");
+    } catch (err) {
+      setMergeState("error");
+      setMergeError(err instanceof Error ? err.message : "merge failed");
+    }
+  }, [sessionId, mergeState]);
+  // Merge in Tank is the session's governed PR merge (GitHub still enforces the
+  // green/mergeable gate). Only offered to an acting viewer (not a read-only or
+  // public-share view) on a session that owns a PR.
+  const showMerge = Boolean(
+    canMerge && sessionId && (pullRequests.length > 0 || linked),
+  );
   return (
     <div className="run-session-data-screen run-git-activity-screen">
       <section
@@ -12367,18 +12268,64 @@ function AgentGitActivityScreen({
           <h2 className="run-session-data-title" id="run-git-activity-title">
             PRs
           </h2>
-          <span className="run-session-data-summary">
-            {pullRequests.length} PRs / {commits.length} commits
-          </span>
+          <div className="run-session-data-page-actions">
+            <span className="run-session-data-summary">
+              {pullRequests.length} PRs / {commits.length} commits
+            </span>
+            {showMerge ? (
+              <button
+                type="button"
+                className="run-pr-merge-btn"
+                disabled={mergeState === "merging" || mergeState === "merged"}
+                onClick={doMerge}
+                title="Merge this session's PR in Tank (GitHub enforces the green/mergeable gate)"
+              >
+                {mergeState === "merged"
+                  ? "Merged ✓"
+                  : mergeState === "merging"
+                    ? "Merging…"
+                    : "Merge in Tank"}
+              </button>
+            ) : null}
+          </div>
         </div>
+        {mergeState === "error" && mergeError ? (
+          <div className="run-session-data-empty run-pr-merge-error">
+            {mergeError}
+          </div>
+        ) : null}
         <div className="run-git-activity-group">
           <h3 className="run-git-activity-heading">Pull requests</h3>
-          {pullRequests.length === 0 ? (
+          {pullRequests.length === 0 && linkedListed ? (
             <div className="run-session-data-empty">
               No pull requests touched yet.
             </div>
           ) : (
             <div className="run-git-activity-list" role="list">
+              {linkedListed ? null : (
+                <a
+                  key="linked-pr"
+                  className="run-git-activity-row"
+                  href={linked}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="listitem"
+                >
+                  <span className="run-git-activity-icon" aria-hidden="true">
+                    <GitPullRequestIcon />
+                  </span>
+                  <span className="run-git-activity-main">
+                    <span className="run-git-activity-label">Linked PR</span>
+                    <span className="run-git-activity-detail">
+                      Linked to this session (test / rollout)
+                    </span>
+                  </span>
+                  <ExternalLinkIcon
+                    className="run-git-activity-external"
+                    aria-hidden="true"
+                  />
+                </a>
+              )}
               {pullRequests.map((item) => (
                 <a
                   key={item.id}
@@ -18761,12 +18708,11 @@ function ChatPane({
   const [focusedBreakGlassRows, setFocusedBreakGlassRows] = useState<
     ControlActionRow[]
   >([]);
+  const [sessionBreakGlassRequestItems, setSessionBreakGlassRequestItems] =
+    useState<AdminBreakGlassListItem[]>([]);
   const [focusedTestSlotModelRows, setFocusedTestSlotModelRows] = useState<
     ControlActionRow[]
   >([]);
-  const [prLaneApprovalBusyId, setPRLaneApprovalBusyId] = useState<
-    string | null
-  >(null);
   const [breakGlassApprovalBusyId, setBreakGlassApprovalBusyId] = useState<
     string | null
   >(null);
@@ -18944,6 +18890,30 @@ function ChatPane({
     scopedSessionPathForPane,
     session.id,
   ]);
+  const fetchSessionBreakGlassRequests = useCallback(async () => {
+    if (publicView || readOnly) {
+      setSessionBreakGlassRequestItems([]);
+      return;
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/break-glass-requests?status=pending`,
+      ),
+    );
+    if (!res.ok) {
+      setSessionBreakGlassRequestItems([]);
+      return;
+    }
+    const body = (await res.json()) as AdminBreakGlassListBody;
+    setSessionBreakGlassRequestItems(
+      (body.requests ?? []).filter((item) => item.pending !== false),
+    );
+  }, [
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const fetchFocusedTestSlotModelRequest = useCallback(async () => {
     if (publicView || readOnly || !activeTestSlotModelRequestId) {
       setFocusedTestSlotModelRows([]);
@@ -18978,13 +18948,14 @@ function ChatPane({
     () => [...controlActionRows, ...focusedTestSlotModelRows],
     [controlActionRows, focusedTestSlotModelRows],
   );
-  const prLaneRequests = useMemo(
-    () => pendingPRLaneRequests(controlActionRows),
-    [controlActionRows],
-  );
   const breakGlassRequests = useMemo(
-    () => pendingBreakGlassRequests(breakGlassActionRows),
-    [breakGlassActionRows],
+    () =>
+      sessionBreakGlassRequestItems.flatMap((item) => {
+        if (item.pending === false) return [];
+        const request = breakGlassRequestFromControlAction(item.request);
+        return request ? [request] : [];
+      }),
+    [sessionBreakGlassRequestItems],
   );
   const breakGlassApprovalMenuItems = useMemo(
     () =>
@@ -18992,61 +18963,8 @@ function ChatPane({
         session.id,
         breakGlassRequests,
         testSlotModelActionRows,
-        prLaneRequests,
       ),
-    [breakGlassRequests, prLaneRequests, session.id, testSlotModelActionRows],
-  );
-  const postPRLaneDecision = useCallback(
-    async (
-      request: PRLaneRequest,
-      decision: "approve" | "deny",
-      override?: "listed" | "count" | "unlimited",
-    ) => {
-      if (publicView || readOnly) return;
-      setPRLaneApprovalBusyId(request.eventId);
-      try {
-        const requestedBranches = [
-          ...(request.laneNames ?? []),
-          ...(request.proposedBranches ?? []),
-        ];
-        const body =
-          decision === "approve" && request.allocationRequest
-            ? {
-                note: override
-                  ? `agent-requested allocation approved with ${override} override`
-                  : "agent-requested allocation approved",
-                branch_scope:
-                  override === "unlimited" || (override === undefined && request.unlimited === true)
-                    ? { kind: "unlimited" }
-                    : override === "count"
-                      ? { kind: "count", count: 10 }
-                      : requestedBranches.length > 0
-                        ? { kind: "named", branches: requestedBranches }
-                        : { kind: "count", count: request.requestedCount ?? 10 },
-              }
-            : {};
-        await authedFetch(
-          scopedSessionPathForPane(
-            `/api/sessions/${encodeURIComponent(session.id)}/pr-lane-requests/${encodeURIComponent(request.eventId)}/${decision}`,
-          ),
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          },
-        );
-        await fetchControlActionEntries();
-      } finally {
-        setPRLaneApprovalBusyId(null);
-      }
-    },
-    [
-      fetchControlActionEntries,
-      publicView,
-      readOnly,
-      scopedSessionPathForPane,
-      session.id,
-    ],
+    [breakGlassRequests, session.id, testSlotModelActionRows],
   );
   const postBreakGlassDecision = useCallback(
     async (
@@ -19073,6 +18991,7 @@ function ChatPane({
           if (turnId) setPendingApprovalTurnOpenId(turnId);
         }
         await fetchControlActionEntries();
+        await fetchSessionBreakGlassRequests();
         await fetchFocusedBreakGlassRequest();
       } finally {
         setBreakGlassApprovalBusyId(null);
@@ -19081,6 +19000,7 @@ function ChatPane({
     [
       fetchControlActionEntries,
       fetchFocusedBreakGlassRequest,
+      fetchSessionBreakGlassRequests,
       publicView,
       readOnly,
       scopedSessionPathForPane,
@@ -19110,6 +19030,7 @@ function ChatPane({
         const turnId = approvalNotificationTurnId(responseBody);
         if (turnId) setPendingApprovalTurnOpenId(turnId);
         await fetchControlActionEntries();
+        await fetchSessionBreakGlassRequests();
         await fetchFocusedBreakGlassRequest();
       } finally {
         setBreakGlassApprovalBusyId(null);
@@ -19118,6 +19039,7 @@ function ChatPane({
     [
       fetchControlActionEntries,
       fetchFocusedBreakGlassRequest,
+      fetchSessionBreakGlassRequests,
       publicView,
       readOnly,
       scopedSessionPathForPane,
@@ -19163,15 +19085,9 @@ function ChatPane({
         void postTestSlotModelApproval({ eventId: item.id }, "");
         return;
       }
-      if (item.kind === "pr-lane") {
-        if (item.prLaneRequest) {
-          void postPRLaneDecision(item.prLaneRequest, "approve");
-        }
-        return;
-      }
       void postBreakGlassDecision({ eventId: item.id }, "approve", { note: "" });
     },
-    [postBreakGlassDecision, postPRLaneDecision, postTestSlotModelApproval],
+    [postBreakGlassDecision, postTestSlotModelApproval],
   );
   const quickApproveBreakGlassMenuItems = useCallback(
     (items: BreakGlassApprovalMenuItem[]) => {
@@ -22861,9 +22777,16 @@ function ChatPane({
   // phantom-active pill. The only client-side surface is the immediate
   // pre-gate refusal (e.g. 409 already-active, ambiguous repo), which the
   // backend rejects synchronously and therefore emits no thread for.
-  function startInteractiveTestWorkflow(drive = false) {
+  function startInteractiveTestWorkflow(
+    drive = false,
+    target?: { pr?: number; ref?: string },
+  ) {
     if (session.status !== "Active") return;
-    void startTestWorkflow(session.id, authedFetch, { drive })
+    void startTestWorkflow(session.id, authedFetch, {
+      drive,
+      pr: target?.pr,
+      ref: target?.ref,
+    })
       .then((result) => {
         if (!result.ok) {
           setEntries((prev) =>
@@ -23310,6 +23233,7 @@ function ChatPane({
       setControlActionEntries([]);
       setControlActionRows([]);
       setFocusedBreakGlassRows([]);
+      setSessionBreakGlassRequestItems([]);
       setFocusedTestSlotModelRows([]);
       setBackgroundTaskLedgerEntries([]);
       return;
@@ -23324,6 +23248,9 @@ function ChatPane({
       });
       void fetchFocusedBreakGlassRequest().catch(() => {
         if (!cancelled) setFocusedBreakGlassRows([]);
+      });
+      void fetchSessionBreakGlassRequests().catch(() => {
+        if (!cancelled) setSessionBreakGlassRequestItems([]);
       });
       void fetchFocusedTestSlotModelRequest().catch(() => {
         if (!cancelled) setFocusedTestSlotModelRows([]);
@@ -23342,6 +23269,7 @@ function ChatPane({
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
     fetchFocusedBreakGlassRequest,
+    fetchSessionBreakGlassRequests,
     fetchFocusedTestSlotModelRequest,
     publicView,
     readOnly,
@@ -23355,8 +23283,13 @@ function ChatPane({
     [backgroundTaskLedgerEntries],
   );
   const agentGitActivity = useMemo(
-    () => buildAgentGitActivity(controlActionEntries),
-    [controlActionEntries],
+    () => ({
+      // PRs come from the durable sessions.pull_requests projection (complete and
+      // cap-proof); commits stay derived from the recent control-action feed.
+      pullRequests: pullRequestsFromDurable(session.pull_requests),
+      commits: buildAgentGitActivity(controlActionEntries).commits,
+    }),
+    [session.pull_requests, controlActionEntries],
   );
   const runningShellInvocationEntries = useMemo(
     () => renderedEntries.filter(isRunningShellInvocationEntry),
@@ -24364,11 +24297,14 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  // The composer pull-request menu surfaces two links separately: the latest PR
-  // the agent opened (derived from control-action git activity) and the PR
-  // explicitly linked to the session via set_pull_request_link (test/rollout).
-  const latestPullRequestURL = agentGitActivity.pullRequests[0]?.href ?? "";
+  // The composer git chip is a single-click shortcut to the dedicated
+  // /pull-requests page (AgentGitActivityScreen): one click opens the complete,
+  // durable PR list, which is also where Merge in Tank lives. linkedPullRequestURL
+  // is the PR explicitly linked to this session via set_pull_request_link
+  // (test/rollout); the page surfaces it when it isn't in the session's own
+  // durable list. canMergePr gates the page's Merge in Tank to acting viewers.
   const linkedPullRequestURL = testState?.pull_request_url?.trim() ?? "";
+  const canMergePr = !publicView && !readOnly;
   const sessionDataRows = useMemo(
     () =>
       buildSessionDataStatusRows({
@@ -25685,8 +25621,8 @@ function ChatPane({
                 authedFetch={authedFetch}
                 disabled={!ready}
                 readOnly={readOnly}
-                onCreateHold={() => startInteractiveTestWorkflow(false)}
-                onCreateDrive={() => startInteractiveTestWorkflow(true)}
+                onCreateHold={(target) => startInteractiveTestWorkflow(false, target)}
+                onCreateDrive={(target) => startInteractiveTestWorkflow(true, target)}
                 onReturnTestSlot={readOnly ? undefined : returnTestSlot}
                 onOpenReady={() => {
                   if (testState)
@@ -25770,6 +25706,9 @@ function ChatPane({
               <AgentGitActivityScreen
                 pullRequests={agentGitActivity.pullRequests}
                 commits={agentGitActivity.commits}
+                sessionId={session.id}
+                linkedPullRequestUrl={linkedPullRequestURL}
+                canMerge={canMergePr}
               />
             ) : activeTab === "break-glass" ? (
               <BreakGlassRequestPage
@@ -26409,30 +26348,16 @@ function ChatPane({
                 breakGlass={{
                   items: breakGlassApprovalMenuItems,
                   approvingId:
-                    breakGlassApprovalBusyId ??
-                    testSlotModelApprovalBusyId ??
-                    prLaneApprovalBusyId,
+                    breakGlassApprovalBusyId ?? testSlotModelApprovalBusyId,
                   onQuickApprove:
                     publicView || readOnly ? undefined : quickApproveBreakGlassMenuItem,
                   onQuickApproveMany:
                     publicView || readOnly ? undefined : quickApproveBreakGlassMenuItems,
-                  onApprovePRLane:
-                    publicView || readOnly
-                      ? undefined
-                      : (request, override) => {
-                          void postPRLaneDecision(request, "approve", override);
-                        },
-                  onDenyPRLane:
-                    publicView || readOnly
-                      ? undefined
-                      : (request) => {
-                          void postPRLaneDecision(request, "deny");
-                        },
                 }}
                 pullRequest={{
-                  latestUrl: latestPullRequestURL,
                   linkedUrl: linkedPullRequestURL,
-                  sessionId: session.id,
+                  count: agentGitActivity.pullRequests.length,
+                  onOpenPage: () => toggleRunTab("pull-requests"),
                 }}
                 slash={{
                   title: "Show slash commands",
@@ -28266,6 +28191,7 @@ function AuthenticatedApp() {
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
       spoke_config: row.spoke_config,
       spawned_sessions: row.spawned_sessions,
+      pull_requests: row.pull_requests,
       parent_session_id: row.parent_session_id,
       sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
@@ -28338,7 +28264,13 @@ function AuthenticatedApp() {
         !Array.isArray(raw.spoke_config)
           ? (raw.spoke_config as Record<string, unknown>)
           : undefined,
-      spawned_sessions: normalizeSpawnedSessions(raw.spawned_sessions),
+      // Lineage trio (spawned_sessions / pull_requests / parent_session_id)
+      // via the shared parseSessionRowLineage — the same parser the live
+      // row-update path uses. parent_session_id was previously omitted here,
+      // which de-nested every spawned child on each snapshot until its next
+      // live row-update re-nested it (the "snap back" bug). Keep this routed
+      // through the shared helper so snapshot and SSE stay in lockstep.
+      ...parseSessionRowLineage(raw),
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities)

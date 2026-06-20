@@ -2221,6 +2221,54 @@ var schemaMigrations = []migration{
 	// as rollout_state (0176) and spawned_sessions (0178).
 	{ID: "0180", SQL: `ALTER TABLE sessions
 	ADD COLUMN IF NOT EXISTS spoke_config jsonb`},
+
+	// Durable "pull requests touched by this session" projection, surfaced by
+	// the git chip / dedicated /pull-requests page. One entry per PR the
+	// session opened/renamed/merged/etc., recorded as a durable fact when the
+	// matching github.pull_request.* control action is appended (mirrors the
+	// spawned_sessions projection in 0178). Before this, the SPA re-derived the
+	// list in-browser from the newest-100 /control-actions feed, where the
+	// oldest github.pull_request.open rows silently fell off on busy sessions.
+	// NULL/absent means "no PR touched" or a pre-column session. jsonb array.
+	{ID: "0181", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS pull_requests jsonb`},
+
+	// One-shot backfill: populate pull_requests for every existing session from
+	// the COMPLETE (uncapped) control_action_events ledger, so old sessions get
+	// their full PR list immediately rather than depending on a runtime
+	// re-derivation (the capped feed is exactly what dropped PRs). DISTINCT ON
+	// (target_ref) keeps the latest sighting per PR URL; ORDER BY created_at
+	// gives a stable oldest→newest array. Runs once per database via the
+	// schema_migrations ledger, like the status-event backfills above.
+	{ID: "0182", SQL: `UPDATE sessions s
+		SET pull_requests = sub.arr
+		FROM (
+			SELECT owner_email, session_scope, session_id,
+				jsonb_agg(
+					jsonb_build_object(
+						'repo', NULLIF(concat_ws('/', repo_owner, repo_name), ''),
+						'number', pr_number,
+						'url', target_ref,
+						'action', action,
+						'status', status,
+						'updated_at', to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+					)
+					ORDER BY created_at
+				) AS arr
+			FROM (
+				SELECT DISTINCT ON (owner_email, session_scope, session_id, target_ref)
+					owner_email, session_scope, session_id, target_ref,
+					repo_owner, repo_name, pr_number, action, status, created_at
+				FROM control_action_events
+				WHERE action LIKE 'github.pull_request.%'
+				  AND target_ref LIKE '%github.com/%/pull/%'
+				ORDER BY owner_email, session_scope, session_id, target_ref, created_at DESC
+			) latest
+			GROUP BY owner_email, session_scope, session_id
+		) sub
+		WHERE s.email = sub.owner_email
+		  AND s.session_scope = sub.session_scope
+		  AND s.session_id = sub.session_id`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

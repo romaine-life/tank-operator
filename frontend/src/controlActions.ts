@@ -46,26 +46,6 @@ export type ControlActionBackgroundEntry = {
   controlActionSha?: string;
 };
 
-export type PRLaneRequest = {
-  eventId: string;
-  invocationId: string;
-  createdAt?: string;
-  repo?: string;
-  repos?: string[];
-  allRepos?: boolean;
-  laneName: string;
-  allocationRequest?: boolean;
-  laneNames?: string[];
-  proposedBranches?: string[];
-  requestedCount?: number;
-  unlimited?: boolean;
-  relationship?: string;
-  base?: string;
-  scope?: string;
-  reason?: string;
-  proposedBranch?: string;
-};
-
 export type BreakGlassRequest = {
   eventId: string;
   invocationId: string;
@@ -162,16 +142,6 @@ function actionTitle(action: string | undefined): string {
       return "Test-slot model request";
     case "tank.test_slot_model.grant":
       return "Test-slot model grant";
-    case "github.pr_lane.request":
-      return "PR lane request";
-    case "github.pr_lane.approve":
-      return "PR lane approved";
-    case "github.pr_lane.deny":
-      return "PR lane denied";
-    case "github.pr_lane.auto_approve":
-      return "PR lane auto-approval";
-    case "github.pr_lane.create":
-      return "PR lane created";
     default:
       return "Control action";
   }
@@ -214,93 +184,47 @@ export function controlActionRowsToEntries(rows: ControlActionRow[]): ControlAct
   });
 }
 
-export function pendingPRLaneRequests(rows: ControlActionRow[]): PRLaneRequest[] {
-  const resolvedInvocations = new Set<string>();
-  for (const row of rows) {
-    const action = nonempty(row.action);
-    if (
-      action !== "github.pr_lane.approve" &&
-      action !== "github.pr_lane.deny" &&
-      action !== "github.pr_lane.auto_approve"
-    ) {
-      continue;
-    }
-    const invocationID = nonempty(row.invocation_id);
-    if (invocationID) resolvedInvocations.add(invocationID);
+export function breakGlassRequestFromControlAction(
+  row: ControlActionRow,
+): BreakGlassRequest | null {
+  const action = nonempty(row.action);
+  if (
+    action !== "github.break_glass.request" &&
+    action !== "azure.break_glass.request"
+  ) {
+    return null;
   }
-  return rows.flatMap((row) => {
-    if (nonempty(row.action) !== "github.pr_lane.request") return [];
-    if (nonempty(row.status) !== "started") return [];
-    const eventId = nonempty(row.event_id);
-    const invocationId = nonempty(row.invocation_id);
-    if (!eventId || !invocationId || resolvedInvocations.has(invocationId)) {
-      return [];
-    }
-    const payload = payloadObject(row.payload);
-    const allocationRequest = payload.allocation_request === true;
-    const branchScope = payloadObject(payload.branch_scope);
-    const repoScope = payloadObject(payload.repo_scope);
-    const laneNames = Array.isArray(branchScope.branches)
-      ? branchScope.branches.flatMap((value) => {
-          const name = nonempty(value);
-          return name ? [name] : [];
-        })
-      : [];
-    const proposedBranches = Array.isArray(payload.proposed_branches)
-      ? payload.proposed_branches.flatMap((value) => {
-          const branch = nonempty(value);
-          return branch ? [branch] : [];
-        })
-      : [];
-    const repos = Array.isArray(repoScope.repos)
-      ? repoScope.repos.flatMap((value) => {
-          const repo = nonempty(value);
-          return repo ? [repo] : [];
-        })
-      : [];
-    const laneName = nonempty(payload.lane_name) ?? (allocationRequest ? "branch allocation" : undefined);
-    if (!laneName) return [];
-    const requestedCount =
-      typeof branchScope.count === "number" && Number.isFinite(branchScope.count)
-        ? branchScope.count
-        : undefined;
-    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
-      .filter(Boolean)
-      .join("/");
-    const request: PRLaneRequest = {
-      eventId,
-      invocationId,
-      createdAt: nonempty(row.created_at),
-      repo: repo || undefined,
-      laneName,
-      relationship: nonempty(payload.relationship),
-      base: nonempty(payload.base),
-      scope: nonempty(payload.scope),
-      reason: nonempty(payload.reason),
-      proposedBranch: nonempty(payload.proposed_branch),
-    };
-    if (allocationRequest) request.allocationRequest = true;
-    if (laneNames.length > 0) request.laneNames = laneNames;
-    if (proposedBranches.length > 0) request.proposedBranches = proposedBranches;
-    if (nonempty(repoScope.repo)) request.repo = nonempty(repoScope.repo);
-    if (repos.length > 0) request.repos = repos;
-    if (repoScope.kind === "all_repos") request.allRepos = true;
-    if (branchScope.kind === "count" && requestedCount !== undefined) request.requestedCount = requestedCount;
-    if (branchScope.kind === "unlimited") request.unlimited = true;
-    return [request];
-  });
+  if (nonempty(row.status) !== "started") return null;
+  const eventId = nonempty(row.event_id);
+  const invocationId = nonempty(row.invocation_id);
+  if (!eventId || !invocationId) return null;
+  const repoOwner = nonempty(row.repo_owner);
+  const repoName = nonempty(row.repo_name);
+  const repo = [repoOwner, repoName].filter(Boolean).join("/");
+  const kind = action === "azure.break_glass.request" ? "azure" : "git";
+  if (kind === "git" && !repo) return null;
+  const payload = payloadObject(row.payload);
+  const target = kind === "azure" ? "azure-personal" : repo;
+  return {
+    eventId,
+    invocationId,
+    kind,
+    createdAt: nonempty(row.created_at),
+    target,
+    repo,
+    repoOwner,
+    repoName,
+    reason: nonempty(payload.reason),
+    source: nonempty(payload.source),
+  };
 }
 
 // pendingBreakGlassRequests surfaces break-glass requests that are still
-// awaiting an admin decision. A grant or deny with payload.request_event_id
-// resolves the exact request; older grant rows without that field also clear
-// matching git repo requests until they expire.
-export function pendingBreakGlassRequests(
-  rows: ControlActionRow[],
-  now: number = Date.now(),
-): BreakGlassRequest[] {
+// awaiting an admin decision. A grant or deny resolves only the exact
+// payload.request_event_id it records; capability grants are not inferred as
+// decisions for other requests.
+export function pendingBreakGlassRequests(rows: ControlActionRow[]): BreakGlassRequest[] {
   const resolvedRequests = new Set<string>();
-  const grantedRepos = new Set<string>();
   for (const row of rows) {
     const action = nonempty(row.action);
     if (
@@ -313,49 +237,14 @@ export function pendingBreakGlassRequests(
     const payload = payloadObject(row.payload);
     const requestEventId = nonempty(payload.request_event_id);
     if (requestEventId) resolvedRequests.add(requestEventId);
-    if (action !== "github.break_glass.grant") continue;
-    if (nonempty(row.status) !== "succeeded") continue;
-    const repo = [nonempty(row.repo_owner), nonempty(row.repo_name)]
-      .filter(Boolean)
-      .join("/");
-    if (!repo) continue;
-    const expiresAt = nonempty(payload.expires_at);
-    if (!expiresAt) continue;
-    const expiry = Date.parse(expiresAt);
-    if (Number.isNaN(expiry) || expiry <= now) continue;
-    grantedRepos.add(repo);
   }
   const byTarget = new Map<string, BreakGlassRequest>();
   for (const row of rows) {
-    const action = nonempty(row.action);
-    if (action !== "github.break_glass.request" && action !== "azure.break_glass.request") continue;
-    if (nonempty(row.status) !== "started") continue;
-    const eventId = nonempty(row.event_id);
-    const invocationId = nonempty(row.invocation_id);
-    if (!eventId || !invocationId) continue;
-    if (resolvedRequests.has(eventId)) continue;
-    const repoOwner = nonempty(row.repo_owner);
-    const repoName = nonempty(row.repo_name);
-    const repo = [repoOwner, repoName].filter(Boolean).join("/");
-    const kind = action === "azure.break_glass.request" ? "azure" : "git";
-    if (kind === "git" && (!repo || grantedRepos.has(repo))) continue;
-    const payload = payloadObject(row.payload);
-    const target = kind === "azure" ? "azure-personal" : repo;
-    const request: BreakGlassRequest = {
-      eventId,
-      invocationId,
-      kind,
-      createdAt: nonempty(row.created_at),
-      target,
-      repo,
-      repoOwner,
-      repoName,
-      reason: nonempty(payload.reason),
-      source: nonempty(payload.source),
-    };
-    const existing = byTarget.get(target);
+    const request = breakGlassRequestFromControlAction(row);
+    if (!request || resolvedRequests.has(request.eventId)) continue;
+    const existing = byTarget.get(request.target);
     if (!existing || (request.createdAt ?? "") > (existing.createdAt ?? "")) {
-      byTarget.set(target, request);
+      byTarget.set(request.target, request);
     }
   }
   return Array.from(byTarget.values()).sort((a, b) =>

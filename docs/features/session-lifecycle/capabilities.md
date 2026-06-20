@@ -399,7 +399,11 @@ watch checks. For selected GitHub repos, session startup creates a
 Tank-owned `tank/session/<session-id>/<repo>` branch and draft PR. Every local
 commit is auto-published through the Tank MCP `publish_current_head` path,
 which owns the GitHub write token inside the session sidecar, records the
-commit in the control-action ledger, and starts CI/mergeability watching.
+commit in the control-action ledger, and starts CI/mergeability watching. When
+an agent opens a PR itself, `gh pr create` on a session branch is delegated to
+the same governed sidecar path (it is not blocked) — see "Governed
+`gh pr create`" below — so the agent uses normal `git`/`gh` verbs and never
+holds a write credential.
 
 Affected contracts:
 - Session Lifecycle
@@ -422,9 +426,32 @@ Contract impact:
   fails loudly, and the localhost GitHub MCP proxy denies write-capable
   `mint_clone_token` and file/PR write tools in restricted mode (a read-only
   `mint_clone_token` is allowed through so reads keep working — see "Restricted
-  Session Read-Only Git Access").
+  Session Read-Only Git Access"). The one write an agent routinely needs —
+  opening its PR — is **delegated, not denied**: see "Governed `gh pr create`".
 - The `post-commit` hook calls the Tank MCP publish tool rather than printing
   reminder-only guidance.
+- **Governed `gh pr create`.** The in-pod `gh` wrapper detects `gh pr create`
+  on a session branch and delegates it to a governed sidecar endpoint
+  (`POST /create-session-pr` on the break-glass listener,
+  `_handle_create_session_pr_wrapper`). That handler holds the GitHub credential,
+  ensures an open **draft** PR for the branch (idempotent on an existing open PR
+  and on GitHub's "already exists" 422; a `no commits between` create is a clean
+  422, not a crash), recomputes the base from the repo's default branch, records
+  the `github.pull_request.open` control-action event, sets the session PR link,
+  and returns the PR URL to the wrapper. The agent uses the normal `gh pr create`
+  verb and **never receives a write token** — the credential and policy stay in
+  the sidecar, the same boundary as the read-only mint. This is the explicit-verb
+  counterpart to commit-auto-publish (`git commit` publishes the branch,
+  `gh pr create` opens its PR, both through the governed path) and it removes the
+  post-merge stranding where a squash-merge deletes the branch and nothing
+  re-opened a PR — the next `gh pr create` re-opens one. This transparent,
+  no-grant path covers the session's **own** branch; a genuinely *parallel* PR
+  (on a different branch) and PR-own writes (`gh pr edit/ready/comment`) go
+  through the unified branch-lane break-glass grant, which brokers
+  `gh pr create|edit|ready|comment` on its scoped branches via `/pr-write` (see
+  "Branch Lane Grants" — this replaces the retired `create_pr_lane`). Every other
+  `gh` verb (e.g. `gh pr merge`, issues) still falls through to the read-only /
+  break-glass path unchanged.
 - Commit publication, CI state, PR creation, and mergeability are durable
   `control_action_events`, so the UI can show PR/commit evidence after reload.
 - Control-action ledger writes (`POST /api/internal/sessions/{id}/control-actions`)
@@ -467,22 +494,31 @@ Open hardening:
   operation, and `mint_full_git_token(workflows=true)` is refused unless the
   active grant includes it. Branch/count-scoped break-glass git tokens are
   contents(+workflows)-write only, not full App-scope tokens, and stay on the
-  governed push path. An **unlimited-branch** grant is different: it carries the
-  `full_github_api` operation and mints the App's FULL permission set (pull
-  requests, issues, merges) so the agent's `gh`/`git` get full raw GitHub API
-  write automatically — see "Break-glass full GitHub API elevation (unlimited
+  governed (brokered, scope-enforced) write path rather than handing a raw token
+  to the shell. An **unlimited-branch** grant is the wide escape hatch: it
+  carries the `full_github_api` operation and mints the App's FULL permission set
+  (pull requests, issues, merges) so the agent's `gh`/`git` get full raw GitHub
+  API write automatically — see "Break-glass full GitHub API elevation (unlimited
   grants)" below.
-  Once an active grant exists, calling
-  `request_git_break_glass` again activates a separate `tank-git-break-glass`
-  MCP server for the session/repo and writes runtime MCP config for Codex and
-  Claude. That privileged server lists no tools before activation, rechecks the
-  grant on every list/call, and records token/push use as
-  `github.break_glass.token` or `github.break_glass.push`. Tank's browser UI
-  renders the approval panel and writes the grant or denial. auth.romaine.life
-  only authenticates the admin JWT that Tank verifies. When a grant is
-  persisted, Tank starts a system-authored follow-up turn telling the agent the
-  user approved the request and to call `request_git_break_glass` again to
-  activate the privileged MCP server.
+
+  **Unified by Branch Lane Grants (see that capability below).** The branch-lane
+  unification makes a single `request_git_break_glass` grant cover the whole life
+  of a branch's work — push (fast-forward) **and** open + own its draft PR
+  (`gh pr create|edit|ready|comment`) — for the scoped branches, brokered
+  server-side. The agent asks once and a human approves once; after approval
+  plain `git push` and `gh pr …` just work for the granted branches. The prior
+  two-call activation ritual — "calling `request_git_break_glass` again activates
+  a separate `tank-git-break-glass` MCP server and an agent may need to reload its
+  MCP registry before it sees `mint_full_git_token` / `push_current_head`" — is
+  **retired**: there is no second `request_*` call, no MCP-registry reload, and no
+  agent-visible choice between `push_current_head` / `publish_current_head` / a
+  separate PR-lane tool. The grant's scope (`named` / `count` / `unlimited`)
+  bounds *which* branches may be touched, never *whether* push and PR-open work.
+  Brokered use is still audited (`github.break_glass.*` control-action events);
+  Tank's browser UI renders the approval panel and writes the grant or denial,
+  and auth.romaine.life only authenticates the admin JWT that Tank verifies. When
+  a grant is persisted, Tank writes the activation state itself so the privileged
+  path is live with no follow-up agent action.
 - Break-glass approval chip + panel (added 2026-06-14). A started
   `github.break_glass.request` with no unexpired grant for its repo is surfaced
   as a "chip": the composer pull-request button turns amber with an alert dot,
@@ -493,10 +529,159 @@ Open hardening:
   admin can approve another user's request without relying on the owner's
   control-action list. Approve/deny POST to
   `/api/sessions/{id}/break-glass-requests/{event_id}/{approve|deny}`. The
-  same popup also separates the two PR links the UI already tracked: the latest
-  PR the agent opened (control-action git activity) and the PR explicitly linked
-  via `set_pull_request_link`. The popover is portaled to `<body>` with fixed
-  positioning so the composer input-group's `overflow: hidden` cannot clip it.
+  break-glass popover is portaled to `<body>` with fixed positioning so the
+  composer input-group's `overflow: hidden` cannot clip it. The composer git
+  chip, separately, is a single-click shortcut to the dedicated
+  `/pull-requests` page (the complete, durable list — see "Durable session
+  pull-request projection" below): one click opens the page — there is no PR
+  popover — and the page is where Merge in Tank lives and where a PR explicitly
+  linked via `set_pull_request_link` (test/rollout) is surfaced when it isn't in
+  the session's own durable list.
+
+## Durable session pull-request projection (git chip + /pull-requests page)
+
+- **Status:** shipped.
+- **Intent:** surface EVERY pull request a session has touched in the composer
+  git chip and the dedicated `/pull-requests` page. Before this, the SPA
+  re-derived the PR list in-browser from the newest-100 `/control-actions` feed
+  (a recent-activity list mixing commit/CI/PR-lane/break-glass rows);
+  `github.pull_request.open` rows are the *oldest* events in a session, so on a
+  commit-heavy session early PRs silently fell off the back of the window even
+  with only 2-3 PRs total. A page titled "PRs touched by this session" that
+  quietly drops PRs is the user-trust failure this closes.
+- **Durable source:** `sessions.pull_requests jsonb` on the session's own row
+  (migration `0181`, backfilled from the complete `control_action_events` ledger
+  in `0182`). One ref per PR (`{repo, number, url, action, status, state,
+  updated_at}`), deduped by url with last-sighting-wins state. NULL/absent means
+  "no PR touched" or a pre-column session; like `spawned_sessions` it is a
+  display-only projection, never load-bearing — a malformed row decodes to nil
+  rather than breaking the session list.
+- **Write path:** every `github.pull_request.*` control action flows through the
+  one internal endpoint `POST /api/internal/sessions/{id}/control-actions`
+  (`handleInternalAppendControlAction`) — even `mcp-github`'s merge posts there.
+  After the durable Append it calls `Manager.AppendSessionPullRequest`, which
+  id-deduped-upserts the ref (by url) and republishes the row. **Best-effort:** a
+  projection-write failure is logged + counted but never fails the
+  control-action write — the ledger stays the source of truth.
+- **Runtime behavior:** the append bumps `row_version` and `publishRow` fans the
+  updated row out on the per-owner session-list NATS subject, so the chip count
+  and the `/pull-requests` page converge over SSE without a manual refresh — the
+  same path `spawned_sessions` uses. The SPA reads PRs ONLY from
+  `session.pull_requests` (normalized at the store boundary); the old in-browser
+  re-derivation from the capped control-action feed is **deleted, not kept as a
+  fallback**. Page commits stay derived from the recent feed (a commit list is
+  inherently recent-activity).
+- **Observability:** `tank_session_pull_request_link_total{result=ok|error}`
+  (bounded 2 series) — a rising error rate means sessions are silently losing PR
+  links and the chip/page under-report, the same user-trust diagnostic class as
+  `tank_session_spawn_link_total`.
+- **Evidence:**
+  - migration `0181`/`0182`; `sessionmodel.SessionPullRequestRef` /
+    `DecodeSessionPullRequests` (`session_pull_requests_test.go`).
+  - `sessionregistry.AppendSessionPullRequest` (id-deduped upsert, row_version
+    bump) read back through `Get`/`List`/`fetchSessionRowsAfter` and carried on
+    the snapshot `Info` + `RowPublisher` wire shapes.
+  - `sessionPullRequestRefFromControlAction` filter + the
+    `recordSessionPullRequestSighting` hook
+    (`control_actions_pull_requests_test.go`).
+  - frontend `normalizeSessionPullRequests` (`pullRequests.test.ts`),
+    `pullRequestsFromDurable`, and the single-click `PullRequestMenuButton`
+    shortcut to the `/pull-requests` page (`AgentGitActivityScreen`, which also
+    hosts Merge in Tank).
+- **Non-goal:** PR *write* authority (opening/merging PRs) is unrelated — that is
+  the governed publish path / break-glass surface above. This projection is
+  read-side display only.
+
+## Branch Lane Grants
+
+Status: complete (Stages 0–3 — unified model + brokering primitives, the atomic
+cutover that retired the separate PR-lane surface, and observability). Full
+design: [docs/branch-lane-grants.md](../../branch-lane-grants.md).
+
+Intent:
+Unify the two parallel governed-write mechanisms a restricted
+(`TANK_RESTRICTED_GIT=true`) session used to expose — break-glass git
+(`request_git_break_glass` → push) and PR lanes (`request_pr_lane` →
+`create_pr_lane`) — into **one** grant. A break-glass git grant is permission to
+do work on a branch (existing or not): create + push (fast-forward) it **and** open &
+own its draft PR (edit title/body, mark ready, comment) through review. The
+agent asks once (`request_git_break_glass`), a human approves once, and then
+plain `git push` and `gh pr create|edit|ready|comment` just
+work for the scoped branches — brokered server-side, scope-enforced, audited.
+This closes the core defect of the old split: a branch-scoped break-glass grant
+could push a branch but not open its PR (the PR half lived only in the separate
+`create_pr_lane` mechanism the agent had no signal to use), so an agent taking
+the least-privilege instinct got approved, pushed, and was silently stranded
+with commits and no PR. Scope (`named` / `count` / `unlimited`) bounds *which*
+branches a grant covers; it never bounds *whether* the grant works. `unlimited`
+is simply the widest version — the whole-repo / full-GitHub-API escape hatch —
+not a different mechanism and not a precondition for basic branch work.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- A single `request_git_break_glass` grant authorizes **push + PR open/own** for
+  the branches in its scope. On approval Tank provisions the lane (creates or
+  adopts the branch and opens its draft PR, reusing the old PR-lane branch+PR
+  provisioning) and writes the activation state itself, so the privileged path
+  is live with **no second `request_*` call and no MCP-registry reload**. The
+  agent never names `push_current_head` / `publish_current_head` /
+  `create_pr_lane` / a branch scope it has to reason about — it states *why*, the
+  human decides *how much*, and `git`/`gh` do the rest.
+- GitHub installation tokens are scoped by repo+permission, never by branch, so a
+  branch-scoped grant cannot be honored by handing a raw token to the shell
+  (that token would push every branch and edit every PR). Tank **brokers** the
+  writes server-side and enforces the branch scope itself: `git push` goes
+  through a governed push (create-if-absent, **fast-forward only**) for in-scope
+  branches; `gh pr create|edit|ready|comment` route through a governed PR-write
+  endpoint that resolves the PR to its head branch, verifies head ∈ lane scope,
+  performs the write with Tank's credential, and audits it. No raw token and no
+  denylist wall for the scoped case. **Force-push / history rewrite is not
+  available on a scoped grant** (the brokered push is fast-forward only) — it
+  requires an `unlimited` grant (native token); with squash-merge, scoped work
+  forward-fixes or merges instead of rewriting. `unlimited` grants additionally
+  surface the whole-repo GitHub API (the `full_github_api` / full-maintainer
+  escape hatch).
+- The control-action audit ledger is **kept**; every brokered operation records a
+  `github.break_glass.*` event (`request` / `grant` / `push` / `pr_write`, plus
+  `github.pull_request.open` for opens), with `operations` as the explicit
+  audited capability set (`push_current_head`, `mint_full_git_token`, and
+  `full_github_api` present only on `unlimited` grants). The
+  `unlimited` / `full_api` whole-repo escape hatch, server-side branch-scope
+  enforcement, `publish_current_head` normal session-branch auto-publish, and the
+  restricted-mode raw-mcp-github write denylist are all unchanged.
+- **Retired (no live route, tool, event, UI, or test may remain):** the
+  `request_pr_lane` / `create_pr_lane` MCP tools + handlers + routes; the
+  `github.pr_lane.*` event family and its reader/writer/auto-approval logic; the
+  "scoped grant returns `{"active": false}` / `full_github_api` only on
+  `unlimited`" split that made scoped grants useless for branch work; the
+  separate PR-lane approval UI surface; and the old PR-lane / two-call-activation
+  tests. Merge-to-base stays the separate, CI-gated step
+  (`merge_current_session_pr`) — a branch lane gets work *to* review, not
+  *through* it.
+
+Acceptance evidence (the contract this capability must prove):
+- A **branch-scoped** grant can **push the branch AND open + own its PR** — no
+  `unlimited` required, and the agent is never silently stranded with commits and
+  no PR.
+- The agent reaches it in **one request + one approval**, with **no second
+  `request_*` call and no MCP-registry reload**; `git push` / `gh pr …` are the
+  only commands it runs, and no governed-tool names leak into its workflow.
+- The retired `request_pr_lane` / `create_pr_lane` / `github.pr_lane.*` paths are
+  gone from live code, tests, and UI, and the reintroduction guard
+  `scripts/check-removed-pr-lane.mjs` (merged into
+  `scripts/check-removed-chat-runtime.mjs`'s CI run) fails if
+  `request_pr_lane`, `create_pr_lane`, `github.pr_lane.`, `_TANK_PR_LANE_TOOL`,
+  `_TANK_CREATE_PR_LANE_TOOL`, or a `handle*PRLane` handler reappears in live
+  source.
+- Observability: `tank_break_glass_grant_total{result}`,
+  `tank_break_glass_push_total{result}`, `tank_break_glass_pr_open_total{result}`,
+  `tank_break_glass_pr_write_total{result}`, and
+  `tank_break_glass_retired_path_total` (any increment means a retired `pr_lane`
+  path was exercised and is a counted bug).
 
 ## Locked-by-default Azure MCP (break-glass)
 
@@ -667,6 +852,15 @@ Contract impact:
   the endpoint returns `{"active": false}` and the wrappers keep the read-only
   default unchanged. See "Break-glass full GitHub API elevation (unlimited
   grants)" below.
+  **Retired by Branch Lane Grants (see below):** the description that a
+  *branch-scoped* grant stays read-only for raw `git`/`gh` and only an
+  unlimited-branch grant lets a session push or run `gh pr edit|ready` no longer
+  holds. Under the unified branch lane, a branch-scoped grant pushes
+  (fast-forward) and opens + owns its PR for the granted branches through Tank's
+  server-side brokering — no raw token required for the scoped case. `unlimited`
+  is reserved for the whole-repo / full raw GitHub API need, not as the
+  precondition for branch work. With no grant at all, restricted sessions remain
+  read-only exactly as described here.
 - **Fail loud, never silent (elevation).** The wrappers treat only a clean
   `{"active": true, "token": …}` (elevate) or `{"active": false}` over HTTP 200
   (quiet, expected no-grant) as recognized answers. Any other shape — a JSON-RPC
@@ -713,6 +907,98 @@ Evidence:
   fallback), no grant → quiet read-only fallback, and `error mint response fails
   loud and falls back to read-only` (the JSON-RPC `invalid MCP request` shape →
   stderr diagnostic + read-only fallback, the fail-loud guard).
+
+## GitHub Egress Proxy (the wall): server-side governed GitHub access
+
+Status: in progress (per-request mint governance, the REST/GraphQL write-hole
+closure, gh REST + GraphQL, break-glass, and asset hosts have shipped and are
+enforced by the Calico NetworkPolicy that denies direct GitHub egress; the
+remaining scope is retiring the in-pod credential-helper / `gh`-wrapper mint path
+— "Restricted Session Read-Only Git Access" above — which the wall supersedes for
+non-slot restricted sessions, tracked under the egress lockdown work).
+
+Intent:
+A restricted session must reach GitHub through ONE governed outbound chokepoint:
+the agent never holds a GitHub token, every write is recorded, and policy is
+enforced server-side rather than by in-pod scripts the agent's shell could route
+around. The egress proxy ("the wall") is an Envoy listener that TLS-terminates
+`github.com` / `api.github.com` / the asset hosts (leaf cert signed by the
+cluster `claude-oauth-ca-issuer`) plus a Python ext_proc sidecar — the pure,
+unit-tested `github_governor` core and the `github_ext_proc` IO shell. Per
+request it reads the pod's relayed auth.romaine.life service JWT, picks the
+least-privilege mint scope, RELAYS that JWT to mcp-github's `mint_clone_token`
+(its actor→installation routing mints the owner's App token), overwrites
+`Authorization` with the minted token, and records `github.*` control actions.
+The agent's JWT never reaches GitHub and the minted App token never reaches the
+agent. This is the server-side evolution of the in-pod "Restricted Session
+Read-Only Git Access" model, which it supersedes for non-slot restricted sessions
+(test slots exclude the wall, so they keep the in-pod path during migration).
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- **Per-request least privilege** (`evaluate_policy`). The agent never holds the
+  token, but the SCOPE still matters because a coarse token would let the agent
+  reach the whole repo through the API, bypassing the lane/merge governance that
+  only inspects the git transport. So write capability is granted ONLY for the
+  two governed write paths: git push (receive-pack — BOTH the `info/refs?service=
+  git-receive-pack` advertisement leg and the `git-receive-pack` upload leg, or
+  the push 403s before it starts) mints `contents:write`, lane-confined in the
+  body phase; PR open (`POST /pulls`) mints the App's full set (needs
+  `pull_requests:write`) and is the one REST write the wall records. EVERYTHING
+  else — clone/fetch and the entire REST + GraphQL surface, reads and ungoverned
+  writes alike — mints READ.
+- **Read is broad by GitHub's design, write is withheld.** A `{contents:read,
+  metadata:read}` installation token reads pulls/actions/issues/checks AND serves
+  GraphQL queries, but cannot mutate. So GitHub itself 403s an ungoverned REST
+  write and refuses a GraphQL mutation: the read mint IS the enforcement, not an
+  endpoint denylist. This is the REST/GraphQL analog of the git lane check (git
+  governed by inspecting refs; the API governed by withholding write capability),
+  and it closes the ungoverned REST API write hole.
+- **`gh` works** (the regression closer). `gh` authenticates with the `token`
+  scheme (not `Bearer`); the wall extracts the pod credential from `token`,
+  `Bearer`, and Basic `x-access-token`. gh REST (`gh api`, `gh run list`) mints
+  read scoped to the URL's repo. gh GraphQL (`gh pr list` / `view` / `status`)
+  POSTs to `/graphql`, which carries no repo in the URL, so the wall scopes a
+  READ mint to the session's durable create-time repos (`sessions.repos`, read
+  from `GET /api/internal/sessions/{id}/repos` and cached per session). A GraphQL
+  mutation gets that read token and is refused, so writes stay governed.
+- **Break-glass through the wall.** An out-of-lane push or a would-be-denied API
+  write (merge, raw REST write) is allowed only when an active, repo-covering
+  break-glass grant covers it, read through the SAME `git-break-glass/grant`
+  endpoint the in-pod minter used (so the wall and the minter never diverge). An
+  `unlimited` grant (advertising `full_github_api`) elevates a read REST write
+  back to a full token and unlocks merge; every grant-covered out-of-lane push is
+  recorded as `github.break_glass.push` so a `count` grant's budget is tallied.
+- **100% capture.** A raw `gh` / `git` PR open or merge through the wall records
+  the same `github.pull_request.*` control action an mcp-github PR would, so the
+  durable PR projection captures agent PRs the agent cannot skip.
+- **Asset hosts.** `codeload.github.com` and `*.githubusercontent.com` are
+  fronted by the wall with `Authorization` / `Cookie` stripped (public asset
+  fetches need no mint), so clone and release-asset paths work end to end.
+- **Fail-soft during cutover.** A request with no parseable credential, or whose
+  credential does not exchange to a session identity, passes through untouched;
+  enforcement that unidentified egress is rejected is the NetworkPolicy layer.
+
+Evidence:
+- `api-proxy/tests/test_github_governor.py` — the pure governor contract:
+  identity parse, per-request mint scope (push both legs → write, PR open → full,
+  REST/GraphQL → read, every ungoverned REST write → read), `is_graphql`,
+  `is_rest_write` excluding `/graphql`, `session_repos_url`,
+  `parse_session_repos_response` (fail-closed), multi-repo mint payload, the
+  `token`/`Bearer`/Basic auth schemes, and break-glass grant matching.
+- `backend-go/cmd/tank-operator/handlers_internal_test.go`
+  (`TestHandleInternalSessionReposReturnsDurableRepos`,
+  `TestHandleInternalSessionReposNotFoundForUnknownSession`) — the session-repos
+  endpoint returns the durable create-time set and 404s unknown sessions.
+- The IO shell is validated by live deploy (it injects real tokens and walls real
+  egress, which a unit test cannot prove): each stage is validated in a restricted
+  session against the deployed wall — gh REST + GraphQL succeed, an ungoverned
+  REST write and a GraphQL mutation are refused, in-lane push succeeds and
+  out-of-lane is denied absent a grant.
 
 ## Break-glass full GitHub API elevation (unlimited grants)
 

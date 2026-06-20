@@ -100,7 +100,7 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
     ];
     if (includeGitHub) {
       lines.push(
-        "GitHub: your gh/git are now elevated to full GitHub API write (gh pr edit/ready/merge, issues, …) automatically for the approved repo scope. Optionally call request_git_break_glass again to also activate tank-git-break-glass (mint_full_git_token / push_current_head), then continue the approved work.",
+        "GitHub: this branch-lane grant is live — your git push / git push -f and gh pr create/edit/ready/comment just work for the approved branch scope, no second request and no MCP reload. Continue the approved work directly.",
       );
     }
     if (includeAzure) {
@@ -147,7 +147,7 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
           expiresAt: String(response.expires_at ?? ""),
           detail:
             kind === "github"
-              ? "Agent was notified to activate GitHub break glass."
+              ? "Branch-lane grant recorded: the session can push the scoped branches and open/own their PRs."
               : kind === "azure"
                 ? "Azure MCP grant was recorded and activation was requested."
                 : "Model selection grant was recorded.",
@@ -172,9 +172,10 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
               ? { kind: "all_repos" }
               : { kind: "current_repo", repo: repo.trim() },
           branch_scope: { kind: "unlimited" },
-          // Unlimited-branch grants carry the App's full GitHub API write; Tank
-          // canonicalizes this on the server, but send it explicitly so the
-          // approval intent is unambiguous.
+          // This admin panel grants the widest branch lane (unlimited branch
+          // scope): push + PR-own for the scoped repo PLUS the App's full
+          // GitHub API write. Tank canonicalizes the operations on the server,
+          // but send them explicitly so the approval intent is unambiguous.
           operations: ["mint_full_git_token", "push_current_head", "full_github_api"],
         },
       );
@@ -259,7 +260,7 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
             checked={includeGitHub}
             onChange={(event) => setIncludeGitHub(event.target.checked)}
           />
-          <span>GitHub break glass</span>
+          <span>GitHub branch lane (break glass)</span>
         </label>
         <label className="run-settings-toggle break-glass-check">
           <input
@@ -307,11 +308,14 @@ export function AdminBreakGlassPanel({ initialSessionId = "", sessionScope }: Pr
             )}
           </div>
           <p className="break-glass-warning" role="note">
-            ⚠️ This grant is unlimited-branch, so it carries <strong>full GitHub
-            API write</strong> (pull requests, issues, merges — the App's entire
-            permission set) for {repoScope === "all_repos" ? "every repo the installation can reach" : "the selected repo"} until it expires.
-            The session's <code>gh</code>/<code>git</code> use it automatically
-            and it <strong>bypasses the governed PR ledger</strong>
+            ⚠️ This is the <strong>widest branch lane</strong>: an
+            unlimited-branch grant. The session's <code>git push</code> and
+            <code>gh pr</code> just work for {repoScope === "all_repos" ? "every repo the installation can reach" : "the selected repo"},
+            and because the branch scope is unlimited it also carries{" "}
+            <strong>full GitHub API write</strong> (pull requests, issues, merges
+            — the App's entire permission set) until it expires. The session's{" "}
+            <code>gh</code>/<code>git</code> use it automatically and it{" "}
+            <strong>bypasses the governed PR ledger</strong>
             (rename/update-body/merge). Approve only if you accept that blast
             radius.
           </p>

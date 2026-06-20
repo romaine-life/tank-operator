@@ -308,6 +308,7 @@ type ciWatchStore interface {
 	Get(context.Context, string) (pgstore.CIWatch, error)
 	GetByPR(context.Context, string, string, int) (pgstore.CIWatch, error)
 	GetLatestForSession(context.Context, string, string) (pgstore.CIWatch, error)
+	ListForSession(context.Context, string, string) ([]pgstore.CIWatch, error)
 	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
 	HasActiveForSession(context.Context, string, string) (bool, error)
 	ListStaleWatching(context.Context, time.Duration, int) ([]pgstore.CIWatch, error)
@@ -365,6 +366,7 @@ type controlActionStore interface {
 	Append(context.Context, pgstore.ControlActionEvent) (pgstore.ControlActionEvent, error)
 	ListBySession(context.Context, string, string, string, int) ([]pgstore.ControlActionEvent, error)
 	ListBreakGlassRequests(context.Context, string, int) ([]pgstore.ControlActionEvent, error)
+	ListBreakGlassRequestsBySession(context.Context, string, string, int) ([]pgstore.ControlActionEvent, error)
 	GetBySessionEvent(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 	BreakGlassDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
 	TestSlotModelDecisionForRequest(context.Context, string, string, string) (pgstore.ControlActionEvent, error)
@@ -588,15 +590,13 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
 	mux.HandleFunc("POST /api/sessions/{session_id}/scheduled-wakeups/cancel", s.handleCancelScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
+	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests", s.handleListSessionBreakGlassRequests)
 	mux.HandleFunc("GET /api/sessions/{session_id}/break-glass-requests/{request_event_id}", s.handleGetBreakGlassRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/batch/approve", s.handleApproveBreakGlassRequestsBatch)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/approve", s.handleApproveBreakGlassRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/break-glass-requests/{request_event_id}/deny", s.handleDenyBreakGlassRequest)
 	mux.HandleFunc("GET /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}", s.handleGetTestSlotModelApprovalRequest)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot-model-requests/{request_event_id}/approve", s.handleApproveTestSlotModelApprovalRequest)
-	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/approve", s.handleApprovePRLaneRequest)
-	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/{request_event_id}/deny", s.handleDenyPRLaneRequest)
-	mux.HandleFunc("POST /api/sessions/{session_id}/pr-lane-requests/auto-approve", s.handleAutoApprovePRLanes)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	// Durable turn directory: the COMPLETE submission-ordered turn set so the
 	// Turns selector lists every turn independent of the bounded /timeline
@@ -652,6 +652,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
+	// Durable create-time repo slugs (sessions.repos) for the agent-egress proxy to
+	// scope the /graphql read mint — that endpoint carries no repo in the URL.
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/repos", s.handleInternalSessionRepos)
 	// Pod-authenticated (SA-token) endpoint: mints a kubectl credential for the
 	// trusted cluster-admin SA, for non-restricted sessions only.
 	mux.HandleFunc("POST /api/internal/session-cluster-credential", s.handleInternalClusterCredential)
@@ -672,13 +675,12 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/governed-merge/verify", s.handleInternalVerifyGovernedMerge)
-	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-auto-approval", s.handleInternalGetPRLaneAutoApproval)
-	mux.HandleFunc("GET /api/internal/sessions/{session_id}/pr-lane-requests/{request_event_id}/authorization", s.handleInternalGetPRLaneAuthorization)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/azure-break-glass/grant", s.handleInternalGetAzureBreakGlassGrant)
 	// Read-only SQL for non-restricted sessions (backs the query_tank_db MCP tool).
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/db-read-query", s.handleInternalSessionDBReadQuery)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-slot-model-approvals/grants", s.handleInternalGrantTestSlotModelApproval)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-workflow/start", s.handleInternalStartTestWorkflow)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

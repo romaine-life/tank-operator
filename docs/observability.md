@@ -580,6 +580,13 @@ All metric names are prefixed `tank_`. The full namespace:
   never fails the spawn, so a rising `error` rate is a quiet user-trust
   regression — parents are silently losing the links to their children — and
   is the signal to alert on rather than the (healthy) `ok` volume.
+- `tank_session_pull_request_link_total{result}` — `github.pull_request.*`
+  sighting writes onto the session row's durable `pull_requests` projection
+  (feeding the composer git chip and the `/pull-requests` page). `result` is
+  `ok|error` (bounded, 2 series). Best-effort like the spawn-link counter and
+  never fails the control-action write, so a rising `error` rate is the quiet
+  user-trust regression to alert on — sessions silently losing PR links so the
+  chip and page under-report which PRs the session touched.
 - `tank_session_reorder_total{result}` — outcomes of the sidebar drag-to-reorder
   write (`PUT /api/sessions/order`). `result` is `ok|conflict|error` (bounded, 3
   series). `conflict` is the benign stale-permutation rejection the SPA
@@ -1014,6 +1021,11 @@ Current producers:
 - `mcp-github` records `github.pull_request.ready_for_review` and
   `github.pull_request.merge` around the MCP tools
   `mark_pull_request_ready_for_review` and `merge_pull_request`.
+- `tank-git-break-glass` (the in-pod break-glass server in the mcp-auth-proxy
+  sidecar) records `github.break_glass.push` around a brokered `/push-head`
+  governed push, and `github.break_glass.pr_write` + `github.pull_request.open`
+  around brokered `/pr-write` PR-own writes, for an approved branch-lane grant
+  (see "Branch-lane grants" below and `docs/branch-lane-grants.md`).
 
 Each invocation writes immutable events sharing one `invocation_id`:
 
@@ -1073,6 +1085,67 @@ Loki remains useful for raw HTTP evidence, for example:
 Loki is not the source of truth for attribution. It does not carry the complete
 session identity/tool/action contract and may age out. The durable ledger is
 the traceable product model.
+
+### Branch-lane grants (break-glass git/PR brokering)
+
+A break-glass grant is permission to do work on a branch: push/force-push it and
+open & own its PR, brokered server-side and scope-enforced
+(`docs/branch-lane-grants.md`). The brokering lives in the in-pod break-glass
+server (`tank-git-break-glass`, in the mcp-auth-proxy sidecar) behind two routes,
+`/push-head` (the `git` pre-push hook) and `/pr-write` (the `gh` wrapper).
+
+The load-bearing observability fact: a **successful** brokered op lands a
+`github.break_glass.*` / `github.pull_request.open` row in the durable
+control-action ledger (above), but a **refusal** — `no_grant`,
+`branch_out_of_scope`, `dirty`, `detached`, `pr_not_found`, … — writes **no
+ledger row at all** (it is a normal protocol answer the wrapper acts on). So the
+proxy-side counters below are the *only* signal for refusals, including the
+branch/PR scope boundary firing (`branch_out_of_scope`) and agents tripping on
+the grant wall (`no_grant`) — the exact symptom this feature exists to kill.
+
+Prometheus counters (emitted by the mcp-auth-proxy sidecar, scraped via the
+sessions PodMonitor; the whole family is named `tank_break_glass_*` regardless of
+emitting service so it dashboards and alerts together):
+
+- `tank_break_glass_push_total{result}` — `/push-head` governed-push outcomes.
+- `tank_break_glass_pr_open_total{result}` — `/pr-write` draft-PR opens.
+- `tank_break_glass_pr_write_total{result}` — `/pr-write` PR-own writes
+  (edit/ready/comment).
+  `result` is `succeeded`, `error` (a genuine 500 broker fault — mint/push/GitHub
+  API failure), or a bounded refusal reason (`no_grant`, `branch_out_of_scope`,
+  `dirty`, `detached`, `repo_mismatch`, `bad_repo`, `bad_action`, `missing_head`,
+  `missing_pr_number`, `pr_not_found`, `nothing_to_edit`, `missing_comment`, …).
+- `tank_break_glass_retired_path_total` (orchestrator-emitted) — attempts to
+  write a retired `github.pr_lane.*` control action into the durable ledger. The
+  PR-lane mechanism was deleted and unified into the branch-lane grant;
+  `controlActionFromJSON` rejects `github.pr_lane.*` and increments this counter.
+  **Steady-state is exactly zero**; any increment is a migration reintroduction.
+
+**Grant lifecycle** outcomes are *not* given a dedicated counter — they are
+already fully observable via the existing
+`tank_control_action_events_total{action="github.break_glass.request"|"github.break_glass.grant"|"github.break_glass.deny", status}`,
+so a separate `tank_break_glass_grant_total` would only duplicate series. The
+dashboard "Branch-lane grants & retired-path guard" panel reads exactly those.
+
+Alerts (`tank-operator.branch-lane` group):
+
+- `TankBranchLaneRetiredPathUsed` (critical) — `increase(tank_break_glass_retired_path_total[15m]) > 0`.
+  A deleted PR-lane path was exercised against the ledger.
+- `TankBranchLaneBrokerErrors` (warning) — `result="error"` on any of the three
+  brokered-path counters: a granted agent's push/PR write is failing on the
+  governed rail (infrastructure, not the agent). Refusals are excluded by design.
+
+Cost/scale note: the brokered push and PR-write paths are **event-driven**, not
+polling — each call does O(1) GitHub API work (an installation-token mint plus
+one push or one-to-two REST calls; `/pr-write` edit/ready/comment first does a
+single PR GET to resolve the head ref for scope enforcement). Volume is bounded
+by agent `git push` / `gh pr` activity, which is human-paced and far below the
+denylist-read and proxy-request rates already carried by this sidecar; the only
+unbounded-cardinality risk (labeling by the caller-controlled rejected action
+string) is deliberately avoided by keeping `tank_break_glass_retired_path_total`
+label-less. No new background loop, timer, or watch is introduced beyond the
+existing post-push CI/mergeability watch that the normal session-branch publish
+already starts.
 
 ## Session List Capture Debug Surface
 

@@ -41,6 +41,7 @@ const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
+const adminBreakGlassPanelSource = readSource("./AdminBreakGlassPanel.tsx");
 const styleguideIndexSource = readSource("./styleguide/index.tsx");
 const styleguideSessionLauncherSource = readSource(
   "./styleguide/new-session-row.tsx",
@@ -1017,6 +1018,46 @@ test("sidebar order is not browser-local", () => {
   expect(appSource.includes("/api/sessions/order")).toBe(true);
 });
 
+test("sidebar nesting: the snapshot parser shares the lineage parser with the SSE path", () => {
+  // Regression guard for "a nested session loses what it's nested in, then
+  // snaps back". The snapshot parser (infoJSONToSessionRow) once dropped
+  // parent_session_id while the live row-update parser kept it, so a spawned
+  // child de-nested on every snapshot / refresh / reconnect / tab-refocus and
+  // only snapped back on its next live row-update. Both paths must parse the
+  // lineage trio (spawned_sessions / pull_requests / parent_session_id) through
+  // the one parseSessionRowLineage helper so they can never drift again.
+  expect(
+    appSource.includes("parseSessionRowLineage"),
+    "App.tsx must use the shared parseSessionRowLineage helper",
+  ).toBe(true);
+
+  const snapshotParser = appSource.match(
+    /function infoJSONToSessionRow\([\s\S]*?\n {2}\}/,
+  );
+  expect(
+    snapshotParser,
+    "infoJSONToSessionRow (the snapshot → SessionRow parser) should be present",
+  ).toBeTruthy();
+  const snapshotBody = snapshotParser![0];
+
+  expect(
+    snapshotBody.includes("parseSessionRowLineage(raw)"),
+    "the snapshot parser must build lineage via the shared parseSessionRowLineage helper",
+  ).toBe(true);
+  // It must NOT inline-map any lineage field — inline mapping is exactly the
+  // drift that dropped parent_session_id on the snapshot path.
+  for (const field of [
+    "parent_session_id",
+    "spawned_sessions",
+    "pull_requests",
+  ]) {
+    expect(
+      new RegExp(`${field}\\s*:`).test(snapshotBody),
+      `the snapshot parser must not inline-map ${field} (use the shared helper)`,
+    ).toBe(false);
+  }
+});
+
 test("sidebar skill-state conflicts are not repaired in the frontend", () => {
   const skillStateMatch = appSource.match(
     /function currentSessionSkillState\([\s\S]*?\n\}/,
@@ -1085,15 +1126,19 @@ test("home splash test action stays disabled on the splash page", () => {
 
 test("break-glass composer action owns approval links and quick approval", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
-  // The PR control is a self-contained popup menu, not a single hard-coded link.
+  // The PR chip is a single-click shortcut to the dedicated /pull-requests page,
+  // NOT a popover menu: clicking the chip opens the page directly.
   expect(appSource).toMatch(/function PullRequestMenuButton\(/);
   expect(appSource).toMatch(/<PullRequestMenuButton \{\.\.\.pullRequest\} \/>/);
+  expect(appSource).toMatch(/onClick=\{\(\) => onOpenPage\?\.\(\)\}/);
   expect(appSource).toMatch(/function BreakGlassApprovalMenuButton\(/);
   expect(appSource).toMatch(/<BreakGlassApprovalMenuButton \{\.\.\.breakGlass\} \/>/);
-  // Latest PR and the linked PR are computed as distinct menu entries.
+  // Merge in Tank moved off the composer popover onto the /pull-requests page.
   expect(appSource).toMatch(
-    /const latestPullRequestURL = agentGitActivity\.pullRequests\[0\]\?\.href \?\? "";/,
+    /\/api\/sessions\/\$\{encodeURIComponent\(sessionId\)\}\/merge-pr/,
   );
+  expect(appSource).toMatch(/Merge in Tank/);
+  // The linked (test/rollout) PR is still computed and surfaced on the page.
   expect(appSource).toMatch(
     /const linkedPullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \?\? "";/,
   );
@@ -1111,16 +1156,27 @@ test("break-glass composer action owns approval links and quick approval", () =>
   expect(appSource).toMatch(/quickApproveBreakGlassMenuItem/);
   expect(appSource.includes("function BreakGlassApprovalIndicator")).toBe(false);
   expect(appSource.includes("<BreakGlassApprovalIndicator")).toBe(false);
+  // The PR-lane mechanism was folded into break-glass branch-lane grants; its
+  // separate approval surface, request parsing, menu kind, and decision
+  // endpoint are retired (docs/branch-lane-grants.md). One break-glass surface
+  // remains.
   expect(appSource.includes("function PRLaneApprovalIndicator")).toBe(false);
   expect(appSource.includes("<PRLaneApprovalIndicator")).toBe(false);
-  expect(appSource).toMatch(/type BreakGlassApprovalMenuKind = "github" \| "azure" \| "model" \| "pr-lane";/);
-  expect(appSource).toMatch(/pendingPRLaneRequests\(controlActionRows\)/);
-  expect(appSource).toMatch(/prLaneApprovalMenuItems\(sessionId, prLaneRequests\)/);
-  expect(appSource).toMatch(/onApprovePRLane/);
+  expect(appSource).toMatch(/type BreakGlassApprovalMenuKind = "github" \| "azure" \| "model";/);
+  expect(appSource.includes("pendingPRLaneRequests")).toBe(false);
+  expect(appSource.includes("prLaneApprovalMenuItems")).toBe(false);
+  expect(appSource.includes("PRLaneRequest")).toBe(false);
+  expect(appSource.includes("onApprovePRLane")).toBe(false);
+  expect(appSource.includes("onDenyPRLane")).toBe(false);
+  expect(appSource.includes("postPRLaneDecision")).toBe(false);
+  expect(appSource.includes("pr-lane-requests")).toBe(false);
+  expect(appSource.includes("\"pr-lane\"")).toBe(false);
   expect(indexCssSource.includes(".pr-lane-approval")).toBe(false);
   expect(appSource).toMatch(/\/break-glass-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/\$\{decision\}/);
   expect(appSource).toMatch(/\/test-slot-model-requests\/\$\{encodeURIComponent\(request\.eventId\)\}\/approve/);
-  expect(appSource).toMatch(/pendingBreakGlassRequests\(breakGlassActionRows\)/);
+  expect(appSource).toMatch(/fetchSessionBreakGlassRequests/);
+  expect(appSource).toMatch(/\/break-glass-requests\?status=pending/);
+  expect(appSource.includes("pendingBreakGlassRequests(breakGlassActionRows)")).toBe(false);
   expect(appSource.includes("request.approvalUrl")).toBe(false);
   expect(appSource.includes("auth.romaine.life/admin")).toBe(false);
   // The retired pre-Tank endpoint shape must not return.
@@ -1129,6 +1185,30 @@ test("break-glass composer action owns approval links and quick approval", () =>
   // Disabled placeholder composers still omit a live PR menu.
   expect((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length).toBe(2);
   expect(appSource.includes("testState?.active && testState.pull_request_url")).toBe(false);
+});
+
+test("admin break-glass grant describes the unified branch-lane capability", () => {
+  // A break-glass git grant unifies push + PR-own (docs/branch-lane-grants.md).
+  // The admin agent note must reflect "approve once → git push / gh pr just
+  // work", not the retired multi-step ritual of calling request_git_break_glass
+  // a second time to activate a separate tank-git-break-glass server.
+  expect(adminBreakGlassPanelSource.includes("request_git_break_glass again")).toBe(
+    false,
+  );
+  expect(adminBreakGlassPanelSource.includes("activate tank-git-break-glass")).toBe(
+    false,
+  );
+  expect(
+    adminBreakGlassPanelSource.includes("mint_full_git_token / push_current_head"),
+  ).toBe(false);
+  // The unified message: one approval, then plain git push / gh pr work for the
+  // scoped branches — push AND PR-own, not push only.
+  expect(adminBreakGlassPanelSource).toMatch(/git push/);
+  expect(adminBreakGlassPanelSource).toMatch(/gh pr/);
+  expect(adminBreakGlassPanelSource.toLowerCase()).toContain("branch lane");
+  expect(adminBreakGlassPanelSource).toMatch(/no second request and no MCP reload/);
+  // The repo-scope control stays; the grant is still admin-issued.
+  expect(adminBreakGlassPanelSource).toMatch(/repo_scope:/);
 });
 
 test("splash and transcript composers share the same tool button component", () => {
