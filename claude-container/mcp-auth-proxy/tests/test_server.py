@@ -40,6 +40,8 @@ from mcp_auth_proxy.server import (
     _effective_listeners,
     _feature_contracts_body_status,
     _first_pr_from_response,
+    _grant_branch_allows,
+    _sanitize_branch_scope_name,
     _filter_github_write_tools,
     _github_tool_block_response,
     _is_read_only_clone_token_request,
@@ -2616,3 +2618,28 @@ def test_handler_returns_json_502_on_transport_error() -> None:
     assert payload["error"] == "upstream_unavailable"
     assert payload["attempts"] == _MAX_UPSTREAM_ATTEMPTS
     assert "transport error" in payload["error_description"]
+
+
+def test_branch_scope_named_preserves_slashes() -> None:
+    # Regression (found by a live restricted-agent smoke test): branch names
+    # contain "/" (feature/x, fix/y, smoke/z), so the scoped-grant name sanitizer
+    # must NOT drop the slash segment. The logic was inherited from the retired
+    # single-token PR-lane labels and did rsplit("/")[-1] + slash-stripping, so a
+    # grant for "feature/x" recorded "x"; _grant_branch_allows then compared the
+    # raw pushed ref against it and refused the legitimate push
+    # (branch_out_of_scope) — the "grant a branch, push fails" bug. Earlier tests
+    # only used single-segment branch names, so it slipped through.
+    for branch in (
+        "smoke/branch-lane-grants",
+        "feature/login",
+        "fix/auth-bug",
+        "release/v2.1",
+    ):
+        assert _sanitize_branch_scope_name(branch) == branch
+        grant = {"branch_scope": {"kind": "named", "branches": [_sanitize_branch_scope_name(branch)]}}
+        assert _grant_branch_allows(grant, branch) is True
+    # refs/heads/ is still normalized away on both sides.
+    assert _sanitize_branch_scope_name("refs/heads/feature/x") == "feature/x"
+    # An out-of-scope branch is still refused (scope enforcement intact).
+    out_of_scope = {"branch_scope": {"kind": "named", "branches": [_sanitize_branch_scope_name("feature/login")]}}
+    assert _grant_branch_allows(out_of_scope, "feature/other") is False

@@ -1286,12 +1286,16 @@ def _repo_path_from_arguments(arguments: dict) -> Path:
 
 
 def _sanitize_branch_scope_name(value: object) -> str:
+    # Branch names legitimately contain "/" (feature/x, fix/y, smoke/z), so the
+    # branch SCOPE must preserve it. This sanitizer was inherited from the retired
+    # single-token PR-lane *labels*, whose rsplit("/")[-1] + slash-stripping
+    # silently mangled a scoped branch name — a grant for "feature/x" recorded
+    # "x", and _grant_branch_allows then compared the raw pushed ref against it
+    # and refused the legitimate push (branch_out_of_scope). Keep "/" intact.
     raw = str(value or "").strip()
     if raw.startswith("refs/heads/"):
         raw = raw.removeprefix("refs/heads/")
-    if "/" in raw:
-        raw = raw.rsplit("/", 1)[-1]
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._")
+    return re.sub(r"[^A-Za-z0-9._/-]+", "-", raw).strip("-._/")
 
 
 def _rewrite_mcp_tool_arguments(body: bytes, arguments: dict) -> bytes:
