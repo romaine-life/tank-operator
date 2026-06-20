@@ -144,14 +144,16 @@ def break_glass_grant_url(
     return f"{base}/api/internal/sessions/{session_id}/git-break-glass/grant{params}"
 
 
-def session_repos_url(session_scope: str, session_id: str, default_url: str) -> str:
-    """The session's durable create-time repo list
-    (GET /api/internal/sessions/<id>/repos), routed through url_for_scope exactly like
-    the grant lookup so a slot session reads its slot orchestrator. The wall uses it to
-    scope the /graphql READ mint to the repos the session was created over
-    (sessions.repos), since /graphql carries no repo in the URL to scope by."""
+def session_egress_url(session_scope: str, session_id: str, default_url: str) -> str:
+    """The session's egress-governance context
+    (GET /api/internal/sessions/<id>/egress-context), routed through url_for_scope like
+    the grant lookup so a slot session reads its slot orchestrator. It carries the
+    durable repos (to scope the /graphql READ mint, since /graphql has no repo in the
+    URL) AND whether the session is restricted (to pick the mint scope: least-privilege
+    vs full). Every session routes through the wall now, so the wall needs both for
+    every session it serves."""
     base = url_for_scope(session_scope, default_url)
-    return f"{base}/api/internal/sessions/{session_id}/repos"
+    return f"{base}/api/internal/sessions/{session_id}/egress-context"
 
 
 # ---- policy ---------------------------------------------------------------
@@ -168,8 +170,8 @@ class Decision:
     reason: str = ""
 
 
-def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: str) -> Decision:
-    """Mint scope for a proxied (restricted) session — least privilege per request.
+def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: str, restricted: bool = True) -> Decision:
+    """Mint scope for a proxied session — least privilege per request (when restricted).
 
     The agent never holds the minted token, but the SCOPE still matters: a coarse
     token lets the agent reach the whole repo through the REST API (PUT /contents,
@@ -189,8 +191,15 @@ def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: s
     the REST analog of the lane check: git is governed by inspecting refs, REST by
     withholding the capability. (The IO shell layers the one sanctioned exception on
     top: an active *unlimited* break-glass grant — the human-approved full-API blast
-    radius — elevates a would-be-read REST write back to `full`.) Only restricted
-    sessions reach this proxy; unrestricted sessions keep the old direct in-pod path."""
+    radius — elevates a would-be-read REST write back to `full`.)
+
+    `restricted` is the session's restricted_git status (from the egress-context
+    lookup, fail-closed to True). EVERY session routes through the wall now; an
+    UNRESTRICTED session is minted FULL for every request — nothing withheld — but is
+    still observed (the IO shell keeps the PR-open/merge recording and skips the
+    merge/lane checks for it). Observation is universal; only restriction is scoped."""
+    if not restricted:
+        return Decision(allow=True, write=True, full=True, reason="unrestricted: full mint; observed, not restricted")
     if is_push_intent(authority, path):
         return Decision(allow=True, write=True, reason="git push (advertisement + upload): contents:write, lane-confined in the body phase")
     rec = recordable_pr_action(method, authority, path)
@@ -374,29 +383,34 @@ def active_grant_from_response(status_code: int, body_text: str) -> dict[str, An
     return None
 
 
-def parse_session_repos_response(status_code: int, body_text: str) -> list[str]:
-    """The session's "owner/name" repo slugs from the internal repos endpoint, or [].
-    Fails closed: a non-2xx status or unparseable/missing body yields [] — and the IO
-    shell mints nothing for /graphql when the list is empty (forwarding the request
-    unminted rather than minting an unscoped token). Mirrors the defensive parsing of
-    active_grant_from_response so a Tank hiccup can never widen scope."""
+def parse_egress_context(status_code: int, body_text: str) -> tuple[list[str], bool]:
+    """(repos, restricted) from the internal egress-context endpoint.
+
+    Fails CLOSED to restricted: a non-2xx status or unparseable/missing body yields
+    ([], True). restricted=True means a Tank hiccup can never silently un-restrict a
+    restricted session (the wall keeps minting least-privilege); the cost is that an
+    unrestricted session is briefly degraded to read-only until the lookup recovers —
+    the safe direction. []-repos means the /graphql mint is skipped (forward unminted)
+    rather than minting an unscoped token. `restricted` is True unless the body
+    explicitly says false, so only a clean, current answer un-restricts."""
     if status_code < 200 or status_code >= 300 or not (body_text or "").strip():
-        return []
+        return [], True
     try:
         value = json.loads(body_text)
     except Exception:
-        return []
+        return [], True
     if not isinstance(value, dict):
-        return []
-    repos = value.get("repos")
-    if not isinstance(repos, list):
-        return []
-    out: list[str] = []
-    for item in repos:
-        slug = str(item or "").strip()
-        if slug:
-            out.append(slug)
-    return out
+        return [], True
+    repos_raw = value.get("repos")
+    repos: list[str] = []
+    if isinstance(repos_raw, list):
+        for item in repos_raw:
+            slug = str(item or "").strip()
+            if slug:
+                repos.append(slug)
+    # Only an explicit boolean false un-restricts; true/missing/null/non-bool -> True.
+    restricted = value.get("restricted") is not False
+    return repos, restricted
 
 
 def grant_branch_allows(grant: dict[str, Any] | None, ref: str) -> bool:

@@ -539,29 +539,46 @@ func TestPodManifestRestrictedGitRoutesGithubThroughEgressProxy(t *testing.T) {
 	}
 }
 
-func TestPodManifestUnrestrictedGitSkipsEgressProxyEvenWhenIPSet(t *testing.T) {
-	// AgentEgressProxyIP is set, but without the restricted_git capability the
-	// session keeps the old direct in-pod path — no github routing, no proxy env.
+func TestPodManifestUnrestrictedGitStillRoutesThroughWallForObservation(t *testing.T) {
+	// Observation is universal. Even WITHOUT restricted_git, a session whose wall IP
+	// resolves routes github through the wall so the wall records its PRs into the
+	// durable projection and injects the token. restricted_git gates only RESTRICTION
+	// (mint scope / lane / merge), never whether the wall sees the session. (Before,
+	// unrestricted sessions bypassed the wall entirely and were invisible to the
+	// projection/CI loop — the bug this guards against.)
+	const egressIP = "172.16.249.112"
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:            "claude-image",
 		CodexSessionImage:       "codex-image",
 		TankOperatorInternalURL: "http://tank-operator.test",
 		Repos:                   []string{"romaine-life/tank-operator"},
-		AgentEgressProxyIP:      "172.16.249.112",
+		AgentEgressProxyIP:      egressIP,
+		OAuthGatewayCAConfigMap: "oauth-gateway-ca",
 	})
 	spec := manifest["spec"].(map[string]any)
-	if aliases := githubHostAliasIPs(spec); len(aliases) != 0 {
-		t.Fatalf("unrestricted session must not route github through the proxy; got %#v", aliases)
+	aliases := githubHostAliasIPs(spec)
+	for _, h := range []string{
+		"github.com", "api.github.com",
+		"codeload.github.com", "raw.githubusercontent.com", "objects.githubusercontent.com",
+	} {
+		if aliases[h] != egressIP {
+			t.Fatalf("unrestricted session must STILL route %s through the wall; got %q want %s", h, aliases[h], egressIP)
+		}
 	}
 	runner := findContainer(t, spec["containers"].([]any), "codex-runner")
-	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "false"; got != want {
+	if got, want := containerEnv(runner)["TANK_GIT_EGRESS_PROXY"], "true"; got != want {
 		t.Fatalf("unrestricted codex-runner TANK_GIT_EGRESS_PROXY = %v, want %q", got, want)
 	}
-	// And it must NOT carry the lockdown selector label — the egress NetworkPolicy
-	// would otherwise confine an unrestricted session that still uses the direct path.
+	// It carries the lockdown selector label too: the wall is the single egress path
+	// for EVERY session now, so direct github is denied and traffic is observed. The
+	// wall mints full for it (it is unrestricted) but still records.
 	labels := manifest["metadata"].(map[string]any)["labels"].(map[string]any)
-	if got, ok := labels["tank-operator/git-egress"]; ok {
-		t.Fatalf("unrestricted session must NOT carry the git-egress lockdown label; got %v", got)
+	if got, want := labels["tank-operator/git-egress"], "proxy"; got != want {
+		t.Fatalf("every wall-routed session must carry the git-egress lockdown label; got %v want %q", got, want)
+	}
+	// But it is NOT restricted: TANK_RESTRICTED_GIT stays false (restriction != observation).
+	if got, want := containerEnv(runner)["TANK_RESTRICTED_GIT"], "false"; got != want {
+		t.Fatalf("unrestricted session TANK_RESTRICTED_GIT = %v, want %q", got, want)
 	}
 }
 

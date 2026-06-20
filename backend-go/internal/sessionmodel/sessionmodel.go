@@ -749,9 +749,16 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Build configmap volume mounts for both containers.
 	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)
 	restrictedGitEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilityRestrictedGit)
-	// Restricted-git sessions route github egress through the wall when its IP is
-	// resolved; this is the per-session cutover. Unrestricted sessions never do.
-	egressProxyGit := restrictedGitEnabled && opts.AgentEgressProxyIP != ""
+	// EVERY session routes github egress through the wall when its IP is resolved.
+	// Observation is universal and independent of restriction: the wall records PR
+	// opens/merges into the durable projection (git chip / CI surface) and injects the
+	// token so the agent never holds one — for restricted AND unrestricted sessions
+	// alike. restrictedGitEnabled gates only whether the wall RESTRICTS (least-privilege
+	// mint, branch lane, merge-deny); an unrestricted session still routes through the
+	// wall but is minted full. Previously this was `&& restrictedGitEnabled`, which
+	// welded observation onto restriction and left unrestricted sessions bypassing the
+	// wall entirely — invisible to the projection/CI loop the product runs on.
+	egressProxyGit := opts.AgentEgressProxyIP != ""
 	// Combined (OS + gateway-CA) trust bundle that install-agent-git-template.sh builds
 	// at launch for egress-proxy sessions. git trusts the wall leaf per-host (sslCAInfo)
 	// and node via NODE_EXTRA_CA_CERTS, but curl/python take ONE CA file that REPLACES

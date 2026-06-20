@@ -92,7 +92,7 @@ def _deny(reason: str) -> "ext_proc_pb2.ProcessingResponse":
 class _Stream:
     """Per-request state carried from the request phase to the response phase."""
 
-    __slots__ = ("ident", "decision", "action", "pr_number", "owner", "repo", "status", "is_push")
+    __slots__ = ("ident", "decision", "action", "pr_number", "owner", "repo", "status", "is_push", "restricted")
 
     def __init__(self) -> None:
         self.ident: gg.SessionIdentity | None = None
@@ -103,6 +103,10 @@ class _Stream:
         self.repo: str = ""
         self.status: int = 0
         self.is_push: bool = False
+        # restricted_git status (from the egress-context lookup, fail-closed to True).
+        # Gates the mint scope + whether the wall enforces merge-deny/lane. Observation
+        # (recording) does NOT depend on it — every session is observed.
+        self.restricted: bool = True
 
     @property
     def repo_full(self) -> str:
@@ -126,13 +130,15 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         # served past its own expires_at (gg.grant_servable), so an expired/revoked
         # grant re-locks within the TTL. value: (grant_or_None, monotonic_cached_at).
         self._grants: dict[tuple[str, str], tuple[dict | None, float]] = {}
-        # Session repo-set cache, keyed by session_id. Used only to scope the /graphql
-        # READ mint (that endpoint carries no repo in the URL). sessions.repos is fixed
-        # at session-create time, so the set is immutable for a session's life — a
-        # generous TTL collapses a burst of gh GraphQL calls to one Tank lookup. Only
-        # non-empty results are cached; a transient empty/failed lookup is retried.
-        # value: (repos_list, monotonic_cached_at).
-        self._repos: dict[str, tuple[list[str], float]] = {}
+        # Per-session egress-context cache (repos + restricted), keyed by session_id.
+        # The wall fetches it for EVERY served request now: `restricted` picks the mint
+        # scope (least-privilege vs full) and whether to enforce merge/lane; `repos`
+        # scopes the /graphql mint. Both are fixed at session-create time, so a generous
+        # TTL collapses a burst to one Tank lookup. Cached only on a clean 2xx; a failed
+        # lookup yields {repos: [], restricted: True} (fail-closed) and is NOT cached, so
+        # a hiccup never un-restricts a restricted session and self-heals for an
+        # unrestricted one. value: ({"repos": [...], "restricted": bool}, cached_at).
+        self._egress: dict[str, tuple[dict, float]] = {}
         # __main__/metrics compatibility (mirrors the AuthInjector surface the
         # entrypoint wires up); this servicer has no background keeper.
         self._keeper_task = None
@@ -191,29 +197,36 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
         st.ident = ident
 
+        # EVERY session routes through the wall now. Fetch its egress context (repos +
+        # restricted), cached, fail-closed to restricted. `restricted` gates the mint
+        # scope and the merge/lane enforcement below; observation (recording) does NOT
+        # depend on it — every session is observed. `repos` scopes the /graphql mint.
+        ctx = await self._egress_context(ident)
+        st.restricted = ctx["restricted"]
+
         repo = gg.repo_from_path(authority, path)
         if repo is not None:
             st.owner, st.repo = repo
 
-        # Restricted enforcement #1 (header phase): no agent merges — UNLESS an
-        # admin-approved `unlimited` break-glass grant has unlocked the full GitHub
-        # API for this session+repo (it advertises full_github_api). Merging is
-        # otherwise the human/automated path; the merge_pull_request MCP tool is
-        # already disabled in restricted mode, so this closes the raw gh/REST hole.
-        if gg.is_merge_request(method, authority, path):
+        # Restricted enforcement #1 (header phase): no agent merges — but ONLY for a
+        # RESTRICTED session, and UNLESS an admin-approved `unlimited` grant unlocked the
+        # full API (it advertises full_github_api). An UNRESTRICTED session is full by
+        # definition, so its merges pass — and are still recorded below (observed, not
+        # confined). Merging is otherwise the human/automated path.
+        if st.restricted and gg.is_merge_request(method, authority, path):
             grant = await self._active_grant(ident, st.repo_full)
             if not gg.grant_allows_merge(grant):
                 log.warning("egress: DENY merge session=%s %s", ident.session_id, path)
                 return _deny("merging is the human/automated path, not the agent")
             log.info("egress: ALLOW merge via break-glass grant session=%s %s", ident.session_id, path)
-        st.decision = gg.evaluate_policy(ident, method, authority, path)
-        # Restricted enforcement #3 (mint scope): evaluate_policy mints READ for the
-        # whole REST surface, so an ungoverned write (PUT /contents, PATCH/POST/DELETE
-        # /git/refs, POST /merges, …) gets a read token and GitHub 403s it — that is
-        # what keeps "restricted" true for the API, not just for git. The ONE sanctioned
-        # exception: an active *unlimited* break-glass grant (the human-approved full-API
-        # blast radius) elevates a would-be-read REST write back to a full token.
-        if not st.decision.write and gg.is_rest_write(method, authority, path):
+        st.decision = gg.evaluate_policy(ident, method, authority, path, restricted=st.restricted)
+        # Restricted enforcement #3 (mint scope, RESTRICTED only): for a restricted
+        # session evaluate_policy mints READ for the whole REST surface, so an ungoverned
+        # write (PUT /contents, PATCH/POST/DELETE /git/refs, POST /merges, …) gets a read
+        # token and GitHub 403s it — what keeps "restricted" true for the API, not just
+        # git. The ONE sanctioned exception: an active *unlimited* grant elevates it back
+        # to full. An unrestricted session is already full, so this is a no-op for it.
+        if st.restricted and not st.decision.write and gg.is_rest_write(method, authority, path):
             grant = await self._active_grant(ident, st.repo_full)
             if gg.grant_allows_merge(grant):  # full_github_api marks the unlimited grant
                 st.decision = gg.Decision(allow=True, write=True, full=True, reason="break-glass unlimited: approved full API")
@@ -234,7 +247,7 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         if repo is not None:
             mint_repos = [st.repo_full]
         elif gg.is_graphql(authority, path):
-            mint_repos = await self._session_repos(ident)
+            mint_repos = ctx["repos"]
         if mint_repos:
             token = await self._mint(ident, mint_repos, st.decision)
             if token:
@@ -257,6 +270,11 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
     ) -> "ext_proc_pb2.ProcessingResponse":
         passthrough = ext_proc_pb2.ProcessingResponse(request_body=ext_proc_pb2.BodyResponse())
         if not (st.ident and st.is_push):
+            return passthrough
+        # Branch-lane confinement is a RESTRICTION — restricted sessions only. An
+        # unrestricted session was minted full and pushes any branch freely; the wall
+        # already observed the push intent (header phase), so wave the body through.
+        if not st.restricted:
             return passthrough
         cmds, saw_flush = gg.parse_push_commands(bytes(msg.body or b""))
         if not saw_flush:
@@ -354,29 +372,33 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             log.warning("egress: mint failed session=%s repos=%s: %s", ident.session_id, repos, exc)
             return ""
 
-    async def _session_repos(self, ident: gg.SessionIdentity) -> list[str]:
-        """The session's durable create-time repo slugs (sessions.repos), for scoping
-        the /graphql READ mint. /graphql carries no repo in the URL, so the per-URL-repo
-        mint can't scope it; the session's create-time repo set is the correct, least-
-        privilege scope. Relayed with the session's own JWT to the internal repos
-        endpoint and cached per session (the set is immutable for a session's life).
-        Failure or an empty set -> [] (not cached), so the request forwards unminted
-        rather than minting an unscoped token, and a transient miss is retried."""
+    async def _egress_context(self, ident: gg.SessionIdentity) -> dict:
+        """The session's egress-governance context: {"repos": [...], "restricted": bool}.
+        `restricted` picks the mint scope (least-privilege vs full) AND whether the wall
+        enforces merge-deny/lane; `repos` scopes the /graphql mint. Relayed with the
+        session's own JWT to the internal egress-context endpoint and cached per session
+        (both fields are immutable for a session's life). Fails CLOSED: a failed/empty
+        lookup yields {"repos": [], "restricted": True} and is NOT cached — so a Tank
+        hiccup never un-restricts a restricted session, and an unrestricted session
+        retries (briefly read-only) until the lookup recovers."""
         sid = ident.session_id
         now = time.time()
-        hit = self._repos.get(sid)
+        hit = self._egress.get(sid)
         if hit is not None and now - hit[1] < 300.0:
             return hit[0]
-        url = gg.session_repos_url(ident.session_scope, sid, self._internal_url)
+        url = gg.session_egress_url(ident.session_scope, sid, self._internal_url)
+        ok = False
         try:
             r = await self._http.get(url, headers={"Authorization": f"Bearer {ident.raw_jwt}"})
-            repos = gg.parse_session_repos_response(r.status_code, r.text)
+            repos, restricted = gg.parse_egress_context(r.status_code, r.text)
+            ok = 200 <= r.status_code < 300
         except Exception as exc:
-            log.warning("egress: session repos lookup failed session=%s: %s", sid, exc)
-            repos = []
-        if repos:
-            self._repos[sid] = (repos, now)
-        return repos
+            log.warning("egress: egress-context lookup failed session=%s: %s", sid, exc)
+            repos, restricted = [], True
+        ctx = {"repos": repos, "restricted": restricted}
+        if ok:
+            self._egress[sid] = (ctx, now)
+        return ctx
 
     async def _active_grant(self, ident: gg.SessionIdentity, repo_full: str) -> dict | None:
         """The session's active git break-glass grant for repo_full, or None. Reads

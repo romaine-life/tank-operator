@@ -246,32 +246,34 @@ func TestHandleInternalGitHubInstallationRejectsNonService(t *testing.T) {
 	}
 }
 
-// The agent-egress proxy reads this to scope the /graphql read mint to the
-// session's durable create-time repo set. A service principal whose actor_email
-// owns the session gets exactly sessions.repos back, in order.
-func TestHandleInternalSessionReposReturnsDurableRepos(t *testing.T) {
+// The agent-egress proxy reads this to scope the /graphql read mint (repos) and to
+// pick mint scope (restricted). A restricted session reports restricted=true plus
+// its durable repos, in order.
+func TestHandleInternalSessionEgressContextRestricted(t *testing.T) {
 	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
-		ID:      "1185",
-		Email:   otherUser,
-		Scope:   prodSessionScope,
-		Mode:    sessionmodel.ClaudeGUIMode,
-		Visible: true,
-		Status:  "Running",
-		Repos:   []string{"romaine-life/tank-operator", "romaine-life/auth"},
+		ID:           "1185",
+		Email:        otherUser,
+		Scope:        prodSessionScope,
+		Mode:         sessionmodel.ClaudeGUIMode,
+		Visible:      true,
+		Status:       "Running",
+		Repos:        []string{"romaine-life/tank-operator", "romaine-life/auth"},
+		Capabilities: []string{sessionmodel.SessionCapabilityRestrictedGit},
 	})
-	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/1185/repos", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/1185/egress-context", nil)
 	req.SetPathValue("session_id", "1185")
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-1185@service.tank.romaine.life", otherUser))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalSessionRepos(rec, req)
+	app.handleInternalSessionEgressContext(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	var body struct {
-		Repos     []string `json:"repos"`
-		SessionID string   `json:"session_id"`
+		Repos      []string `json:"repos"`
+		SessionID  string   `json:"session_id"`
+		Restricted bool     `json:"restricted"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -279,19 +281,56 @@ func TestHandleInternalSessionReposReturnsDurableRepos(t *testing.T) {
 	if len(body.Repos) != 2 || body.Repos[0] != "romaine-life/tank-operator" || body.Repos[1] != "romaine-life/auth" {
 		t.Fatalf("repos = %v, want the durable create-time set in order", body.Repos)
 	}
+	if !body.Restricted {
+		t.Fatalf("restricted = false, want true for a restricted_git session")
+	}
 	if body.SessionID != "1185" {
 		t.Fatalf("session_id = %q, want 1185", body.SessionID)
 	}
 }
 
-func TestHandleInternalSessionReposNotFoundForUnknownSession(t *testing.T) {
+// An unrestricted session still routes through the wall (observation is universal) but
+// reports restricted=false, so the wall mints FULL rather than least-privilege.
+func TestHandleInternalSessionEgressContextUnrestricted(t *testing.T) {
+	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
+		ID:      "1186",
+		Email:   otherUser,
+		Scope:   prodSessionScope,
+		Mode:    sessionmodel.ClaudeGUIMode,
+		Visible: true,
+		Status:  "Running",
+		Repos:   []string{"romaine-life/tank-operator"},
+		// no restricted_git capability
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/1186/egress-context", nil)
+	req.SetPathValue("session_id", "1186")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-1186@service.tank.romaine.life", otherUser))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalSessionEgressContext(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Restricted bool `json:"restricted"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Restricted {
+		t.Fatalf("restricted = true, want false for an unrestricted session")
+	}
+}
+
+func TestHandleInternalSessionEgressContextNotFoundForUnknownSession(t *testing.T) {
 	app := registryOnlyAuthTestServer(t) // empty registry
-	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/9999/repos", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/9999/egress-context", nil)
 	req.SetPathValue("session_id", "9999")
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-9999@service.tank.romaine.life", otherUser))
 	rec := httptest.NewRecorder()
 
-	app.handleInternalSessionRepos(rec, req)
+	app.handleInternalSessionEgressContext(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())

@@ -1,17 +1,23 @@
 {{- if and .Values.agentEgressProxy.enabled .Values.agentEgressProxy.lockdown.enabled }}
-# Stage 1 GitHub egress lockdown for RESTRICTED sessions — see values.yaml
-# agentEgressProxy.lockdown. Confines pods labeled `tank-operator/git-egress=proxy`
-# (set by sessionmodel.go only for restricted egress-proxy sessions) to the wall for
-# GitHub: egress is allowed EVERYWHERE EXCEPT GitHub's published CIDRs. Because a
-# restricted session's github.com / api.github.com are hostAlias-pinned to the wall's
-# ClusterIP (a non-GitHub IP), the wall path is unaffected, while a direct-to-GitHub-IP
-# bypass (curl 140.82.x, a hardcoded resolver, etc.) is denied at the network layer.
+# GitHub egress lockdown — see values.yaml agentEgressProxy.lockdown. Confines pods
+# labeled `tank-operator/git-egress=proxy` (set by sessionmodel.go for EVERY session
+# whose wall IP resolves — restricted AND unrestricted alike, because observation is
+# universal) to the wall for GitHub: egress is allowed EVERYWHERE EXCEPT GitHub's
+# published CIDRs. Because a wall-routed session's github.com / api.github.com are
+# hostAlias-pinned to the wall's ClusterIP (a non-GitHub IP), the wall path is
+# unaffected, while a direct-to-GitHub-IP bypass (curl 140.82.x, a hardcoded resolver,
+# etc.) is denied at the network layer. The wall mints least-privilege for restricted
+# sessions and FULL for unrestricted ones — the lockdown is about ROUTING (observe-all),
+# not scope. (The resource name keeps the historical "restricted-" prefix to avoid a
+# rename that would delete+recreate a deny policy and open a momentary direct-egress
+# window; read it as "git egress restricted to wall-only", which now holds for all.)
 #
 # Properties this relies on:
-#   * Unrestricted sessions carry NO label, so the policy never selects them — the
-#     lockdown is strictly opt-in via the label and cannot break the direct path.
-#   * The label lands only on NEW sessions, so existing restricted sessions drain
-#     before they are ever selected (no mid-session breakage).
+#   * The label lands on every wall-routed session (restricted or not), so the lockdown
+#     forces ALL of them through the wall — that is what makes observation airtight: an
+#     unrestricted session can no longer egress direct and skip the projection/CI loop.
+#   * The label lands only on NEW sessions, so existing sessions drain before they are
+#     ever selected (no mid-session breakage).
 #   * codeload + raw/objects.githubusercontent.com are fronted by the wall (Stage 2)
 #     and denied here too, so every GitHub host the wall serves is reachable only
 #     through it. The Fastly /22 also serves GitHub Pages (*.github.io), which the
