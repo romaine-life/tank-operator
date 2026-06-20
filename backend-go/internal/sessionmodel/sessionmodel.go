@@ -926,6 +926,25 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		})
 	}
 
+	// Egress-proxy mode: the repo-cloner clones github.com THROUGH the wall, so its
+	// git must trust the proxy's leaf. Mount the same gateway CA the agent containers
+	// get (the claude/codex CA blocks below add the oauth-gateway-ca volume; we
+	// reference it by name). Without this the cloner's git fails the TLS handshake
+	// ("error adding trust anchors") and the pod never starts.
+	if egressProxyGit && opts.OAuthGatewayCAConfigMap != "" {
+		for _, ic := range initContainers {
+			if c, ok := ic.(map[string]any); ok && c["name"] == "repo-cloner" {
+				if mounts, ok := c["volumeMounts"].([]any); ok {
+					c["volumeMounts"] = append(mounts, map[string]any{
+						"name":      "oauth-gateway-ca",
+						"mountPath": "/etc/oauth-gateway-ca",
+						"readOnly":  true,
+					})
+				}
+			}
+		}
+	}
+
 	// OAuth gateway + API proxy host aliases and CA cert.
 	var hostAliases []any
 	if !noClaudeHijackModes[mode] && (opts.OAuthGatewayIP != "" || opts.APIProxyIP != "") {
