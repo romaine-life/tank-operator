@@ -191,7 +191,7 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         repo = gg.repo_from_path(authority, path)
         if repo is not None:
             st.owner, st.repo = repo
-            token = await self._mint(ident, f"{repo[0]}/{repo[1]}", decision)
+            token = await self._mint(ident, f"{repo[0]}/{repo[1]}", st.decision)
             if token:
                 return ext_proc_pb2.ProcessingResponse(
                     request_headers=ext_proc_pb2.HeadersResponse(
