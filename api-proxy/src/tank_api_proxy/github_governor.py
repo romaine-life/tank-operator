@@ -148,21 +148,23 @@ def evaluate_policy(ident: SessionIdentity, method: str, authority: str, path: s
     """Mint scope for a proxied (restricted) session. Mints `full` — but this is NOT
     a loosening: the agent NEVER holds the token (the proxy injects it server-side),
     and the actual restriction is enforced at the REQUEST level, not the mint —
-    pushes to main are rejected by inspecting the receive-pack refs
-    (push_hits_protected) and merges are rejected by path (is_merge_request). A full
-    token simply lets the agent's legitimate branch work (push, fetch, gh pr create
-    against its own branch) flow without scope friction, while the wall is the thing
-    that says no to main. Only restricted sessions ever reach this proxy; unrestricted
-    sessions keep the old direct in-pod path."""
-    return Decision(allow=True, write=True, full=True, reason="restricted: full token, main blocked at the wall")
+    pushes outside the session's own branch lane are rejected by inspecting the
+    receive-pack refs (push_violation) and merges are rejected by path
+    (is_merge_request). A full token simply lets the agent's legitimate work on its
+    own branch (push, fetch, gh pr create against its lane) flow without scope
+    friction, while the wall is the thing that confines it to that branch. Only
+    restricted sessions ever reach this proxy; unrestricted sessions keep the old
+    direct in-pod path."""
+    return Decision(allow=True, write=True, full=True, reason="restricted: full token, confined to the session branch lane")
 
 
-# ---- protected-branch enforcement (the "restricted" in restricted git) ----
-
-# Refs an agent session may never write directly. main is off-limits: code reaches
-# it only through the human/automated merge path, never the agent. master kept for
-# repos that still use it. (A future per-session policy can widen/narrow this.)
-PROTECTED_REFS = frozenset({"refs/heads/main", "refs/heads/master"})
+# ---- branch-lane enforcement (the "restricted" in restricted git) ----------
+#
+# A restricted session may write ONLY its own pre-made branch lane —
+# refs/heads/tank/session/<session_id>/<repo> (the repo-cloner creates one per
+# cloned repo). Not main, not a stray new branch, not another session's lane. main
+# reaches code only through the human/automated merge path. The lane is derived from
+# the session id on the relayed JWT, so the wall needs no extra state.
 
 
 def is_merge_request(method: str, authority: str, path: str) -> bool:
@@ -216,10 +218,23 @@ def parse_push_refs(data: bytes) -> tuple[list[str], bool]:
     return refs, False
 
 
-def push_hits_protected(refs: list[str]) -> str | None:
-    """The first protected ref a push targets, or None. Used to reject the push."""
+def session_branch_lane(session_id: str) -> str:
+    """The ref prefix a session is allowed to push. Matches the repo-cloner's
+    `tank/session/<id>/<repo>` naming (one branch per cloned repo)."""
+    return f"refs/heads/tank/session/{session_id}/"
+
+
+def push_violation(refs: list[str], session_id: str) -> str | None:
+    """The first pushed ref OUTSIDE the session's own branch lane, or None if every
+    ref is in-lane. This is the whole 'restricted' rule: a session writes its own
+    pre-made branch freely and nothing else — so main, stray branches, and other
+    sessions' lanes are all rejected. Fails closed: an empty session_id (or empty
+    push) allows nothing."""
+    if not session_id:
+        return refs[0] if refs else ""
+    lane = session_branch_lane(session_id)
     for r in refs:
-        if r in PROTECTED_REFS:
+        if not r.startswith(lane):
             return r
     return None
 
