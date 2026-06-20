@@ -908,6 +908,98 @@ Evidence:
   loud and falls back to read-only` (the JSON-RPC `invalid MCP request` shape →
   stderr diagnostic + read-only fallback, the fail-loud guard).
 
+## GitHub Egress Proxy (the wall): server-side governed GitHub access
+
+Status: in progress (per-request mint governance, the REST/GraphQL write-hole
+closure, gh REST + GraphQL, break-glass, and asset hosts have shipped and are
+enforced by the Calico NetworkPolicy that denies direct GitHub egress; the
+remaining scope is retiring the in-pod credential-helper / `gh`-wrapper mint path
+— "Restricted Session Read-Only Git Access" above — which the wall supersedes for
+non-slot restricted sessions, tracked under the egress lockdown work).
+
+Intent:
+A restricted session must reach GitHub through ONE governed outbound chokepoint:
+the agent never holds a GitHub token, every write is recorded, and policy is
+enforced server-side rather than by in-pod scripts the agent's shell could route
+around. The egress proxy ("the wall") is an Envoy listener that TLS-terminates
+`github.com` / `api.github.com` / the asset hosts (leaf cert signed by the
+cluster `claude-oauth-ca-issuer`) plus a Python ext_proc sidecar — the pure,
+unit-tested `github_governor` core and the `github_ext_proc` IO shell. Per
+request it reads the pod's relayed auth.romaine.life service JWT, picks the
+least-privilege mint scope, RELAYS that JWT to mcp-github's `mint_clone_token`
+(its actor→installation routing mints the owner's App token), overwrites
+`Authorization` with the minted token, and records `github.*` control actions.
+The agent's JWT never reaches GitHub and the minted App token never reaches the
+agent. This is the server-side evolution of the in-pod "Restricted Session
+Read-Only Git Access" model, which it supersedes for non-slot restricted sessions
+(test slots exclude the wall, so they keep the in-pod path during migration).
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- **Per-request least privilege** (`evaluate_policy`). The agent never holds the
+  token, but the SCOPE still matters because a coarse token would let the agent
+  reach the whole repo through the API, bypassing the lane/merge governance that
+  only inspects the git transport. So write capability is granted ONLY for the
+  two governed write paths: git push (receive-pack — BOTH the `info/refs?service=
+  git-receive-pack` advertisement leg and the `git-receive-pack` upload leg, or
+  the push 403s before it starts) mints `contents:write`, lane-confined in the
+  body phase; PR open (`POST /pulls`) mints the App's full set (needs
+  `pull_requests:write`) and is the one REST write the wall records. EVERYTHING
+  else — clone/fetch and the entire REST + GraphQL surface, reads and ungoverned
+  writes alike — mints READ.
+- **Read is broad by GitHub's design, write is withheld.** A `{contents:read,
+  metadata:read}` installation token reads pulls/actions/issues/checks AND serves
+  GraphQL queries, but cannot mutate. So GitHub itself 403s an ungoverned REST
+  write and refuses a GraphQL mutation: the read mint IS the enforcement, not an
+  endpoint denylist. This is the REST/GraphQL analog of the git lane check (git
+  governed by inspecting refs; the API governed by withholding write capability),
+  and it closes the ungoverned REST API write hole.
+- **`gh` works** (the regression closer). `gh` authenticates with the `token`
+  scheme (not `Bearer`); the wall extracts the pod credential from `token`,
+  `Bearer`, and Basic `x-access-token`. gh REST (`gh api`, `gh run list`) mints
+  read scoped to the URL's repo. gh GraphQL (`gh pr list` / `view` / `status`)
+  POSTs to `/graphql`, which carries no repo in the URL, so the wall scopes a
+  READ mint to the session's durable create-time repos (`sessions.repos`, read
+  from `GET /api/internal/sessions/{id}/repos` and cached per session). A GraphQL
+  mutation gets that read token and is refused, so writes stay governed.
+- **Break-glass through the wall.** An out-of-lane push or a would-be-denied API
+  write (merge, raw REST write) is allowed only when an active, repo-covering
+  break-glass grant covers it, read through the SAME `git-break-glass/grant`
+  endpoint the in-pod minter used (so the wall and the minter never diverge). An
+  `unlimited` grant (advertising `full_github_api`) elevates a read REST write
+  back to a full token and unlocks merge; every grant-covered out-of-lane push is
+  recorded as `github.break_glass.push` so a `count` grant's budget is tallied.
+- **100% capture.** A raw `gh` / `git` PR open or merge through the wall records
+  the same `github.pull_request.*` control action an mcp-github PR would, so the
+  durable PR projection captures agent PRs the agent cannot skip.
+- **Asset hosts.** `codeload.github.com` and `*.githubusercontent.com` are
+  fronted by the wall with `Authorization` / `Cookie` stripped (public asset
+  fetches need no mint), so clone and release-asset paths work end to end.
+- **Fail-soft during cutover.** A request with no parseable credential, or whose
+  credential does not exchange to a session identity, passes through untouched;
+  enforcement that unidentified egress is rejected is the NetworkPolicy layer.
+
+Evidence:
+- `api-proxy/tests/test_github_governor.py` — the pure governor contract:
+  identity parse, per-request mint scope (push both legs → write, PR open → full,
+  REST/GraphQL → read, every ungoverned REST write → read), `is_graphql`,
+  `is_rest_write` excluding `/graphql`, `session_repos_url`,
+  `parse_session_repos_response` (fail-closed), multi-repo mint payload, the
+  `token`/`Bearer`/Basic auth schemes, and break-glass grant matching.
+- `backend-go/cmd/tank-operator/handlers_internal_test.go`
+  (`TestHandleInternalSessionReposReturnsDurableRepos`,
+  `TestHandleInternalSessionReposNotFoundForUnknownSession`) — the session-repos
+  endpoint returns the durable create-time set and 404s unknown sessions.
+- The IO shell is validated by live deploy (it injects real tokens and walls real
+  egress, which a unit test cannot prove): each stage is validated in a restricted
+  session against the deployed wall — gh REST + GraphQL succeed, an ungoverned
+  REST write and a GraphQL mutation are refused, in-lane push succeeds and
+  out-of-lane is denied absent a grant.
+
 ## Break-glass full GitHub API elevation (unlimited grants)
 
 Status: complete
