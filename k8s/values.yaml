@@ -223,7 +223,7 @@ apiProxy:
 # and the egress NetworkPolicy lockdown + git-smart-HTTP capture are separate,
 # later changes. enabled=true renders cert/Service/Envoy/Deployment.
 agentEgressProxy:
-  enabled: false
+  enabled: true
   replicas: 1
   # Plain run-as identity for the proxy pod. The handler needs NO privileged
   # identity of its own: it relays each session pod's own auth.romaine.life
