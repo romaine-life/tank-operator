@@ -6,13 +6,13 @@ image:
   tag: "app-194b885465d148c3faa890806a8e4813a9e75530d1724d4ed0596fa0b38b5b52"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-21T03:49:08Z"
-    git_sha: "8255b967688a8b0e00efc615aab4f0e9f59d859a"
+    built_at: "2026-06-21T04:02:33Z"
+    git_sha: "4c44076420ade8ca391c00a10519d741e1709cee"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/8255b967688a8b0e00efc615aab4f0e9f59d859a"
-    pr_number: "1434"
-    pr_url: "https://github.com/romaine-life/tank-operator/pull/1434"
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27892648961"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/4c44076420ade8ca391c00a10519d741e1709cee"
+    pr_number: "1436"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1436"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27892934043"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
