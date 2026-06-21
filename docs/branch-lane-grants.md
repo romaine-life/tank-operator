@@ -150,7 +150,9 @@ wrapper/hooks do the plumbing.
 - **`git push` / `git push -f`** → the pre-push hook performs a governed push for
   any branch in the lane scope (creating it if absent), instead of `exit 1`.
   Scope checked server-side. (Extends `push_current_head` with create-if-absent;
-  `publish_current_head` still owns the normal session-branch auto-publish.)
+  the wall governs the normal session-branch `git push` — the `publish_current_head`
+  auto-publish it once relied on was retired when the wall became the one
+  governed egress path.)
 - **`gh pr create|edit|ready|comment`, issue comments on the PR** → the `gh`
   wrapper routes through a new governed PR-write endpoint that resolves the PR to
   its head branch, verifies head ∈ lane scope, performs the write with Tank's
@@ -174,7 +176,9 @@ Per `docs/migration-policy.md`: the old path is deleted, not wrapped.
 - The control-action audit ledger (new event names only).
 - The `unlimited` / `full_api` whole-repo escape hatch.
 - Server-side branch-scope enforcement.
-- `publish_current_head` normal session-branch auto-publish (post-commit hook).
+- The normal session-branch push path — now governed by the wall (plain
+  `git push`); the `publish_current_head` post-commit auto-publish it replaced
+  is retired.
 - `_GITHUB_WRITE_TOOL_DENYLIST` for restricted mode (raw mcp-github writes stay
   off; writes flow through the governed brokering).
 

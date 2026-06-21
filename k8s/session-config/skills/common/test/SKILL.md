@@ -33,8 +33,9 @@ The gate only provisions when the branch is legitimately deployable, so make
 that true:
 
 - Make sure the code addressing the user's objective is actually written.
-- Commit and push the branch (the governed `publish_current_head` path runs on
-  every commit) so GitHub CI builds the proof image for the head commit. The
+- Commit and push the branch (`git push` flows through the agent-egress proxy,
+  which records the commit and starts CI watching) so GitHub CI builds the proof
+  image for the head commit. The
   deploy step uses that CI-built image — unpushed working-tree code can never
   reach a slot.
 - Open a draft PR from the branch immediately so CI runs and the PR exists for

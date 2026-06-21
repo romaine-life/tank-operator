@@ -216,7 +216,7 @@ and [../README.md](../README.md) for how capability ledgers are used.
   extracted `startTestWorkflowForSession` with the browser handler so the
   resolve→double-trigger-guard→launch→202 tail cannot drift between the two
   triggers. (2) a `provision_test_slot` MCP tool (mcp-auth-proxy sidecar injection,
-  alongside `publish_current_head`, restricted-git sessions only) that POSTs to (1)
+  alongside `watch_current_session_pr`, restricted-git sessions only) that POSTs to (1)
   with the session's forwarded identity (`_tank_caller_session_headers`). Same
   double-trigger guard, same 202, same `tank_test_slot_interactive_total` /
   `tank_test_slot_validate_total` / `tank_test_slot_provision_total` counters.
