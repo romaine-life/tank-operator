@@ -275,6 +275,7 @@ func main() {
 	var controlActionStore *pgstore.ControlActionStore
 	var pendingLaunchStore *pgstore.PendingLaunchStore
 	var ciWatchStore *pgstore.CIWatchStore
+	var ciImageAvailableStore *pgstore.CIImageAvailableStore
 	var pendingTestProvisionStore *pgstore.PendingTestProvisionStore
 	var orchestrationStore *pgstore.OrchestrationStore
 	if pgPool != nil {
@@ -283,12 +284,14 @@ func main() {
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
 		ciWatchStore = pgstore.NewCIWatchStore(pgPool, sessionScope)
+		ciImageAvailableStore = pgstore.NewCIImageAvailableStore(pgPool)
 		pendingTestProvisionStore = pgstore.NewPendingTestProvisionStore(pgPool, sessionScope)
 		// The orchestration store carries no session scope — a run is owned by an
 		// email and targets a repo, not bound to a session_scope.
 		orchestrationStore = pgstore.NewOrchestrationStore(pgPool)
 	}
 	githubWebhookSecret := strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET"))
+	acrWebhookSecret := strings.TrimSpace(os.Getenv("ACR_WEBHOOK_SECRET"))
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
 	// NATS session bus (per-email subject), replacing the prior
@@ -664,6 +667,7 @@ func main() {
 		scheduledWakeups:         scheduledWakeupStore,
 		ciWatches:                ciWatchStore,
 		githubWebhookSecret:      githubWebhookSecret,
+		acrWebhookSecret:         acrWebhookSecret,
 		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
 		deploymentVersions:       deploymentVersionStore,
@@ -688,6 +692,11 @@ func main() {
 	// Same typed-nil-interface guard for the durable pending-provision backstop.
 	if pendingTestProvisionStore != nil {
 		srv.pendingTestProvisions = pendingTestProvisionStore
+	}
+	// Same typed-nil-interface guard for the durable image-readiness signal store
+	// the ACR webhook receiver writes to.
+	if ciImageAvailableStore != nil {
+		srv.ciImageAvailable = ciImageAvailableStore
 	}
 	// The deterministic orchestration advance engine: bound to the durable
 	// store and the real spoke spawner (mgr.Create + enqueueSDKTurn). The

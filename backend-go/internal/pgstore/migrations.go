@@ -2269,6 +2269,27 @@ var schemaMigrations = []migration{
 		WHERE s.email = sub.owner_email
 		  AND s.session_scope = sub.session_scope
 		  AND s.session_id = sub.session_id`},
+
+	// ci_image_available — the durable "the deployable image for this commit now
+	// exists in the registry" signal (docs/event-driven-rollout.md, deferred
+	// "deploy / image" hop). Azure ACR fires a `push` webhook the instant a
+	// `sha-<commit>` image tag lands; the public POST /webhooks/acr receiver
+	// (backend-go/cmd/tank-operator/acr_webhook.go) records one row per
+	// (registry, repo_name, commit_sha). This is the event-driven replacement for
+	// the test-slot provisioning gate's image-build polling wait. Stage 1 is
+	// additive: the table is written by the receiver but nothing reads it yet —
+	// the provisioning gate cutover is a later stage. Idempotent and safe to
+	// re-deliver: ACR delivery is at-least-once, so the upsert on the PK refreshes
+	// the digest/tag/observed_at on a repeat push of the same commit.
+	{ID: "0183", SQL: `CREATE TABLE IF NOT EXISTS ci_image_available (
+		registry     text NOT NULL,
+		repo_name    text NOT NULL,        -- ACR repository, e.g. "chess-tactics"
+		commit_sha   text NOT NULL,        -- parsed from the sha-<commit> tag
+		image_tag    text NOT NULL,        -- the full tag, e.g. "sha-<commit>"
+		image_digest text NOT NULL DEFAULT '',
+		observed_at  timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (registry, repo_name, commit_sha)
+	)`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

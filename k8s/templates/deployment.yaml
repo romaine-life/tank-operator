@@ -276,6 +276,17 @@ spec:
                   name: {{ .Values.externalSecret.githubWebhook.secretName | quote }}
                   key: {{ .Values.externalSecret.githubWebhook.secretKey | quote }}
                   optional: true
+            # Static bearer secret for the inbound Azure ACR image-readiness
+            # webhook (POST /webhooks/acr). Mirrored from KV into a Secret by
+            # externalsecret-acr-webhook.yaml (production only). Marked optional
+            # so test-slot pods, which receive no ACR deliveries and have no such
+            # Secret, start cleanly with the receiver disabled.
+            - name: ACR_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalSecret.acrWebhook.secretName | quote }}
+                  key: {{ .Values.externalSecret.acrWebhook.secretKey | quote }}
+                  optional: true
             # Cluster operator email used when Tank mints GitHub MCP
             # attestations for the host's sessions.
             - name: HOST_EMAIL
