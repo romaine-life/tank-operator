@@ -63,13 +63,15 @@ the test directly proves the contract invariant. Do not mark a PR ready, ask
 for merge, or merge it yourself when the Feature Contracts section is missing
 or incomplete.
 
-In restricted Git mode (`TANK_RESTRICTED_GIT=true`) the PR body is not directly
-editable through the raw GitHub MCP tools. Set it — including the filled Feature
-Contracts section — with the Tank MCP `update_current_session_pr_body` tool,
-which writes the body of this session's governed PR and previews whether the
-`check-pr-body` workflow will pass. A PR comment does not satisfy that check; it
-only reads `pull_request.body`. Do not file a break-glass request just to edit
-the PR body.
+Set the PR body — including the filled Feature Contracts section — with
+`gh pr edit --body` (or `--body-file`). It flows through the agent-egress proxy
+(the wall), which mints the credential server-side and records the edit, so it
+works for this session's in-lane PR with no break-glass. Match the PR template's
+Feature Contracts section exactly — an `Affected contracts:` list with a checked
+`- [x]` box and an `Evidence:` block — so the `check-pr-body` workflow passes;
+the markers are literal and `gh pr edit` does not preview the result. A PR
+comment does not satisfy that check; it only reads `pull_request.body`. Do not
+file a break-glass request just to edit the PR body or title.
 
 Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main. This includes the PR body checklist check (check-pr-body) — do not bypass or ignore these failures.
 
@@ -81,10 +83,12 @@ auth.romaine.life token, and the wall mints the right-scoped GitHub credential
 server-side, lane-confines it to `tank/session/<id>/<repo>`, records the commit
 as a control action, and starts Tank's CI/mergeability watching from the first
 SHA. There is no separate publish step and no in-pod write token.
-The governed PR itself is mutated only through Tank MCP tools, each recorded in
-the control-action ledger: `rename_current_session_pr` (title),
-`update_current_session_pr_body` (body/description), and
-`merge_current_session_pr` (merge after CI/mergeability verification).
+The governed PR's title and body are edited with `gh pr create` / `gh pr edit`
+through the wall (which records each write in the control-action ledger as a
+`github.pull_request.*` event); merging stays on the Tank MCP
+`merge_current_session_pr` tool (merge after CI/mergeability verification). The
+retired `rename_current_session_pr` / `update_current_session_pr_body` MCP tools
+are no longer the path — use `gh pr edit`.
 For ad-hoc existing worktrees that predate the template, run:
 
 ```sh
@@ -111,10 +115,10 @@ the whole life of a branch's work. Pick the row that matches what you need:
   this branch's PR needs no grant either: `gh pr create` on the session branch
   goes through the same wall, which holds the credential and opens (or
   idempotently re-opens — e.g. after a squash-merge deletes the branch) its draft
-  PR, so the agent never receives a write token. The governed PR's
-  title/body/merge are still mutated only through the Tank MCP tools above
-  (`rename_current_session_pr` / `update_current_session_pr_body` /
-  `merge_current_session_pr`) — do **not** break-glass just to edit the PR body.
+  PR, so the agent never receives a write token. The PR's title and body are
+  edited the same way — `gh pr edit` through the wall — and merging stays on the
+  Tank MCP `merge_current_session_pr` tool; do **not** break-glass just to edit
+  the PR title or body.
 
 - **Need to work on a branch — push it and open or edit its PR** → call the Tank
   MCP `request_git_break_glass` tool **once**. It

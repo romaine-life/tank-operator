@@ -1005,8 +1005,8 @@ automatically, with no manual `GH_TOKEN` juggling. Branch/count-scoped grants
 are unchanged — they stay least-privilege on the governed push path.
 
 This is a deliberate, admin-consented blast-radius widening: a full raw GitHub
-App token bypasses the governed PR ledger (the `rename_current_session_pr` /
-`update_current_session_pr_body` / `merge_current_session_pr` Tank tools and
+App token bypasses the governed PR ledger (the wall-recorded `gh pr create` /
+`gh pr edit` title/body writes and the `merge_current_session_pr` Tank tool, and
 their `github.pull_request.*` control-action records). It is therefore gated on
 an explicit, audited, TTL-bounded grant and surfaced in the approval prompt,
 the admin panel, and the audit ledger so the approving human accepts it
