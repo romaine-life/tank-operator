@@ -571,25 +571,6 @@ func recordSessionImageOverrideWrite(action string) {
 	sessionImageOverrideWriteTotal.WithLabelValues(action).Inc()
 }
 
-// staticOverridePushTotal counts outcomes of the live-preview static-override
-// receiver on a test slot, by result. This is the "for seeing" data-plane lane
-// (a session pod streaming its built dist/ to a slot it is co-watching), not
-// the fingerprinted image-deploy promotion path. result is a closed set:
-// ok | reverted | denied | too_large | bad_archive | disabled | error. The
-// surface is test-env-gated, so a non-zero count in a prod scrape would itself
-// be a signal that the gate leaked.
-var staticOverridePushTotal = promauto.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "tank_static_override_push_total",
-		Help: "Live-preview static-override receiver outcomes on a test slot, by result.",
-	},
-	[]string{"result"},
-)
-
-func recordStaticOverridePush(result string) {
-	staticOverridePushTotal.WithLabelValues(result).Inc()
-}
-
 // sessionReposSelectedTotal counts every session-create call by the
 // coarse repo-count bucket (none | one | many). Bounded cardinality
 // (3 series) keeps Prometheus happy while still surfacing the

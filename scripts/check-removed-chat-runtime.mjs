@@ -16,6 +16,10 @@ import {
   collectRemovedPRLaneFailures,
   REMOVED_PR_LANE_FAILURE_HINT,
 } from "./check-removed-pr-lane.mjs";
+import {
+  collectLivePreviewV1Failures,
+  LIVE_PREVIEW_V1_FAILURE_HINT,
+} from "./check-removed-live-preview-v1.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -1001,6 +1005,18 @@ for (const failure of await collectHotSwapGateFailures()) {
 // scripts/**) without a separate workflow step.
 for (const failure of await collectRemovedPRLaneFailures()) {
   failures.push(`${failure} — ${REMOVED_PR_LANE_FAILURE_HINT}`);
+}
+
+// Retired tank-operator v1 in-app live-preview surface (static-override receiver
+// + override-first serving, control stream, in-pod daemon, per-session sender,
+// owner toggle, durable test_state.live_preview state, metric, and chart
+// wiring), superseded by the generic v2 lane (k8s/session-config/live-preview-
+// push.sh + Glimmung's preview edge). Scoped scan lives in its own module;
+// merged here so it rides this guard's CI wiring (backend-go/**, frontend/**,
+// k8s/**, docs/**, scripts/**) without a separate workflow step (the governed
+// session push cannot edit workflow files).
+for (const failure of await collectLivePreviewV1Failures()) {
+  failures.push(`${failure} — ${LIVE_PREVIEW_V1_FAILURE_HINT}`);
 }
 
 if (failures.length > 0) {
