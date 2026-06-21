@@ -353,34 +353,47 @@ fi
 
 post_clone_state
 
-RPC_PAYLOAD="$(
-  jq -nc --argjson repos "$REPOS_JSON" --argjson write "$restricted_git" '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "mint_clone_token",
-      "arguments": {"repos": $repos, "write": $write}
-    }
-  }'
-)"
-MCP_RESPONSE="$(
-  curl -fsS -X POST "${MCP_GITHUB_URL%/}/" \
-    -H "Authorization: Bearer ${AUTH_TOKEN}" \
-    -H "Content-Type: application/json" \
-    -H "Accept: application/json, text/event-stream" \
-    -d "$RPC_PAYLOAD"
-)"
-MCP_JSON="$(printf '%s\n' "$MCP_RESPONSE" | sed -n 's/^data: //p' | head -n1)"
-if [ -z "$MCP_JSON" ]; then
-  MCP_JSON="$MCP_RESPONSE"
-fi
-if [ "$(jq -r 'has("error")' <<<"$MCP_JSON")" = "true" ]; then
-  fail_all_repos "mcp-github returned an error: $(jq -r '.error.message // "unknown error"' <<<"$MCP_JSON")"
-fi
-GITHUB_TOKEN="$(jq -r '.result.structuredContent.token // empty' <<<"$MCP_JSON")"
-if [ -z "$GITHUB_TOKEN" ]; then
-  fail_all_repos "mcp-github mint_clone_token returned no token"
+# Git credential for clone + the session-start push. In egress-proxy mode the
+# wall is the GitHub minter: present the pod's RAW auth.romaine.life SA token —
+# exactly what the agent's credential helper presents — and the wall exchanges
+# it, mints the right-scoped + lane-confined credential, and RECORDS the push,
+# all server-side, with no GitHub token in the pod. Out of egress mode (no wall;
+# legacy/degraded) repo-cloner mints a token in-pod via mcp-github as before.
+if [ "$egress_proxy_git" = "true" ]; then
+  GITHUB_TOKEN="$(cat "$AUTH_TOKEN_PATH" 2>/dev/null || true)"
+  if [ -z "$GITHUB_TOKEN" ]; then
+    fail_all_repos "auth.romaine.life SA token unreadable at $AUTH_TOKEN_PATH"
+  fi
+else
+  RPC_PAYLOAD="$(
+    jq -nc --argjson repos "$REPOS_JSON" --argjson write "$restricted_git" '{
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "tools/call",
+      "params": {
+        "name": "mint_clone_token",
+        "arguments": {"repos": $repos, "write": $write}
+      }
+    }'
+  )"
+  MCP_RESPONSE="$(
+    curl -fsS -X POST "${MCP_GITHUB_URL%/}/" \
+      -H "Authorization: Bearer ${AUTH_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -H "Accept: application/json, text/event-stream" \
+      -d "$RPC_PAYLOAD"
+  )"
+  MCP_JSON="$(printf '%s\n' "$MCP_RESPONSE" | sed -n 's/^data: //p' | head -n1)"
+  if [ -z "$MCP_JSON" ]; then
+    MCP_JSON="$MCP_RESPONSE"
+  fi
+  if [ "$(jq -r 'has("error")' <<<"$MCP_JSON")" = "true" ]; then
+    fail_all_repos "mcp-github returned an error: $(jq -r '.error.message // "unknown error"' <<<"$MCP_JSON")"
+  fi
+  GITHUB_TOKEN="$(jq -r '.result.structuredContent.token // empty' <<<"$MCP_JSON")"
+  if [ -z "$GITHUB_TOKEN" ]; then
+    fail_all_repos "mcp-github mint_clone_token returned no token"
+  fi
 fi
 
 ASKPASS="$(mktemp)"
@@ -447,12 +460,13 @@ for slug in "${REPOS[@]}"; do
     mv "$tmp_target" "$target"
     if [ "$restricted_git" = "true" ]; then
       # Leave NO local credential.helper override so the clone inherits the
-      # global mode-aware helper, which mints READ-ONLY tokens in restricted
-      # mode — so clone/fetch/pull keep working for reads. (An empty local value
-      # clears the helper list and would disable those reads; that was the old
-      # behavior.) Writes stay governed regardless: the pre-push hook blocks
-      # pushes and a read-only token cannot push, so the one-shot write token
-      # used for this clone is not reusable from the agent shell.
+      # global mode-aware helper for the agent's later git. In egress-proxy mode
+      # that helper hands the wall the SA token and the wall mints per operation —
+      # read for clone/fetch, write only for an in-lane push, every push recorded —
+      # so the agent shell never holds a reusable write credential. Out of egress
+      # mode the helper mints read-only tokens and the pre-push hook blocks direct
+      # pushes. (An empty local value clears the helper list and would disable
+      # reads; that was the old behavior.)
       git -C "$target" config --local --unset-all credential.helper 2>/dev/null || true
       if [ "$egress_proxy_git" = "true" ]; then
         # The agent pushes this repo directly through the wall, so its git must trust
