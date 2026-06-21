@@ -750,45 +750,6 @@ def parse_exchange_result(body: dict[str, Any]) -> tuple[str, float]:
     return token, exp
 
 
-# -- exchange retry policy (pure) ------------------------------------------
-# The wall exchanges the pod's RAW k8s SA token for the session's role=service
-# JWT (parse_exchange_result above) before it can mint. At the very start of a
-# pod's life the IdP can transiently reject that exchange — a startup race where
-# the just-created session is not yet resolvable. It is observed as an instant
-# 401 (~1-2ms, ~5% of exchanges) that heals within seconds: the SAME pod
-# exchanges 200 moments later. Silently failing it turned the race into a hard
-# `git push` failure (the raw SA token fell through to GitHub; the agent saw a
-# confusing 500 / "proxy going down" — romaine-life/tank-operator session 1194).
-# The wall now retries a transient exchange with bounded backoff so the race is
-# absorbed before it surfaces.
-#
-# EXCHANGE_RETRY_BACKOFFS_S is the sleep BETWEEN attempts: N backoffs => N+1
-# total attempts. Combined with EXCHANGE_ATTEMPT_TIMEOUT_S it is sized to stay
-# under the egress Envoy's 10s ext_proc message_timeout even after the
-# egress-context fetch + mint that follow in the same header phase
-# (test_exchange_retry_budget_fits_envoy pins that headroom).
-EXCHANGE_RETRY_BACKOFFS_S: tuple[float, ...] = (0.3, 0.8, 1.5)
-EXCHANGE_ATTEMPT_TIMEOUT_S: float = 1.2
-
-
-def is_retryable_exchange_status(status: int) -> bool:
-    """Should the wall retry an exchange that returned this HTTP status (or 0 for a
-    network/timeout error before any response)? The startup race shows up as an
-    instant 401, an over-eager throttle as 429, and an IdP hiccup as 5xx/timeout —
-    all transient, all retried. A 400 is the only non-retryable error class (a
-    malformed request will not fix itself, and the wall always POSTs a fixed empty
-    body so it never provokes one). A 2xx never reaches here on success (the caller
-    returns the token); a 2xx WITHOUT a token is treated as non-retryable here and
-    fails closed, since it signals an IdP contract break, not a race."""
-    if status == 0:  # connect/read timeout, DNS, reset — transient
-        return True
-    if status == 400:  # malformed request — deterministic, do not retry
-        return False
-    if status in (401, 403, 408, 429):  # startup race / auth-not-ready / throttle
-        return True
-    return status >= 500  # IdP 5xx — transient
-
-
 def first_json_object(text: str) -> dict[str, Any]:
     """Pull the first JSON-RPC object out of an mcp-github reply, tolerating both
     bare JSON and SSE `data: {json}` framing — the same two shapes

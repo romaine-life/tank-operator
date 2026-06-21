@@ -218,7 +218,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-440a5a3a895d481d8a9371edabbc4ec1067ce8d29da7f78515cc8444658f93b3"
+    tag: "api-proxy-f9b03c12831cfe5671d4ed644774eedbf792d98193e9bcdc5bd414b724df6ebf"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   # Replica count shared by all provider proxy Deployments. HOLD AT 1 until the refresh
@@ -268,7 +268,7 @@ agentEgressProxy:
   # claude/codex proxies — e.g. a dark-deploy smoke that must not roll them.
   image:
     repository: ""
-    tag: "api-proxy-440a5a3a895d481d8a9371edabbc4ec1067ce8d29da7f78515cc8444658f93b3"
+    tag: "api-proxy-f9b03c12831cfe5671d4ed644774eedbf792d98193e9bcdc5bd414b724df6ebf"
     pullPolicy: ""
   # Stage 1 GitHub egress lockdown (k8s/templates/restricted-git-egress-policy.yaml):
   # a NetworkPolicy denying RESTRICTED egress-proxy sessions (pods labeled
