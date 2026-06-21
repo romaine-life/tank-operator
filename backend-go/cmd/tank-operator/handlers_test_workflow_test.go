@@ -35,6 +35,10 @@ func testWorkflowApp(t *testing.T, record sessionmodel.SessionRecord, gh *provis
 		mcpGitHub:     gh,
 		glimmung:      glim,
 		sessionEvents: events,
+		// Image readiness is the durable ci_image_available row; default the gate's
+		// store to "image present" so a ready PR provisions. Tests that want to model
+		// a still-propagating image override this field on the returned appServer.
+		ciImageAvailable: &fakeCIImageAvailable{},
 		mgr: sessions.NewManager(
 			fake.NewSimpleClientset(activitySessionPod(record.ID, record.Email)),
 			nil,

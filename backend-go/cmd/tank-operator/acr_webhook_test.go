@@ -29,7 +29,7 @@ func (s *fakeCIImageAvailableStore) UpsertCIImageAvailable(_ context.Context, re
 	return nil
 }
 
-func (s *fakeCIImageAvailableStore) ImageAvailableForCommit(_ context.Context, _, _, _ string) (bool, error) {
+func (s *fakeCIImageAvailableStore) ImageAvailableForCommit(_ context.Context, _, _ string) (bool, error) {
 	return s.availableResult, s.availableErr
 }
 

@@ -198,14 +198,6 @@ func (c *Client) CheckoutTestSlot(ctx context.Context, actorEmail string, body C
 	return result, nil
 }
 
-// ErrCIImagePending is returned by DeployImageToTestSlot when Glimmung reports
-// (HTTP 409) that the commit's CI image is not built yet — docker-build-check is
-// still running. It is retryable: the image appears once the build publishes its
-// sha-<commit> alias, so the provision gate waits and re-deploys rather than
-// failing, since the readiness gate can greenlight in the window before the
-// image is published.
-var ErrCIImagePending = errors.New("glimmung deploy-image: CI image not ready")
-
 func (c *Client) DeployImageToTestSlot(ctx context.Context, actorEmail string, body DeployImageToTestSlotRequest) (DeployImageToTestSlotResult, error) {
 	token, err := c.mintToken(ctx, actorEmail)
 	if err != nil {
@@ -226,9 +218,6 @@ func (c *Client) DeployImageToTestSlot(ctx context.Context, actorEmail string, b
 		return DeployImageToTestSlotResult{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusConflict {
-		return DeployImageToTestSlotResult{}, fmt.Errorf("%w: %s", ErrCIImagePending, responseDetail(resp))
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return DeployImageToTestSlotResult{}, fmt.Errorf("glimmung deploy-image returned %d: %s", resp.StatusCode, responseDetail(resp))
 	}

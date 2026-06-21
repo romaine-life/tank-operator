@@ -95,7 +95,8 @@ and [../README.md](../README.md) for how capability ledgers are used.
 ## gated-test-slot-provisioning
 
 - **Status:** shipped (shared server-side gate + orchestration-review path + interactive
-  endpoint); agent-tool retirement lands in a later slice.
+  endpoint); the image precondition is now a durable, event-driven read of
+  `ci_image_available` (stage-2 cutover, 2026-06-21), not a GitHub poll.
 - **Intent:** Provisioning a Tank test slot is deterministic and gated with **zero LLM
   involvement**. The shared `appServer.provisionTestSlotForSession` helper validates a
   session's PR-readiness through a **one-shot live read** (no durable `session_ci_watches`
@@ -110,36 +111,45 @@ and [../README.md](../README.md) for how capability ledgers are used.
   a background context, never a blocked HTTP handler. `checkoutAndDeployOrchestrationReview`
   is the first caller — its previously **ungated** checkout+deploy now runs behind this
   gate.
-- **Image-build precondition (gate-time):** a `ready` reducer verdict
+- **Image precondition (gate-time, durable + event-driven):** a `ready` reducer verdict
   (`mergeable_state=clean` + check rollup green) is necessary but **not sufficient** to
   provision. The check rollup reads "≥1 check observed, none failing, none pending", which
   goes green the moment a fast *unrelated* check passes — possibly before the head SHA's
-  `docker-build-check.yaml` run has even registered. Provisioning then would deploy a commit
-  whose CI image does not exist yet. So before greenlighting, the gate calls
-  `mcpgithub.ImageBuildSucceededForHead` (a GitHub `actions/workflows/docker-build-check.yaml/runs?head_sha=…&status=success`
-  lookup) and only stays `ready` once that workflow has a `conclusion=success` run for the
-  **exact** head SHA; otherwise it demotes `ready → watching` and keeps polling until the
-  build succeeds or the settle cap trips (`watching_timeout`). The image-build workflow name
-  is `testSlotImageBuildWorkflow` in `provision_test_slot.go`. A GitHub read error fails the
-  gate closed (`error` verdict), not open. This closes the window where "some check is green"
-  let the gate provision before the deployable image was produced. The build-wait is
-  **observable, not silent**: each held poll logs `provision gate awaiting image build`
-  (`session_id`, `repo`, `head_sha`, `workflow`) and increments
-  `tank_test_slot_validate_total{outcome="awaiting_image_build"}`, so a green-but-not-built
-  PR is distinguishable in prod from ordinary check-waiting.
-- **CI-image readiness (deploy-time backstop):** even past the gate's image-build
-  precondition, the image's `sha-<commit>` alias can still be propagating when the deploy
-  fires. When the deploy reports the CI image is not built yet (Glimmung `409` →
-  `glimmung.ErrCIImagePending`), the gate holds the checked-out slot and re-deploys on the
-  settle interval until the image lands, bounded by the settle cap — so the race self-heals
-  instead of failing the provision. A non-pending deploy error or the image-wait timeout
-  still releases the slot (no leak). See `deployImageWaitingForCI` and
-  `glimmung.ErrCIImagePending`; the resolution half (a clear `409` instead of a fabricated
-  registry miss) is `romaine-life/glimmung#873`.
-- **Durable source:** no new durable row — the gate is a transient in-memory
-  `pgstore.CIWatch` fed to the reducer against live `mcpgithub.PullRequestState`. Outcomes
+  `docker-build-check.yaml` run has even registered, let alone published its `sha-<commit>`
+  image. Provisioning then would deploy a commit whose CI image does not exist yet. So before
+  greenlighting, the gate reads the **durable, event-driven** image-readiness fact: the ACR
+  `push` webhook writes a `ci_image_available` row (ci-image-availability receiver, below) the
+  instant the `sha-<commit>` tag lands in the registry, and the gate calls
+  `ciImageAvailable.ImageAvailableForCommit(repo, head_sha)` — matched on `(repo_name,
+  commit_sha)` only (there is exactly one registry, so the ACR host is not part of the
+  existence check). A `ready` verdict stays `ready` only once that row exists for the **exact**
+  head SHA; otherwise it demotes `ready → watching` and keeps watching until the registry
+  reports the image or the settle cap trips (`watching_timeout`). This is **not a poll racing
+  propagation** — it is a durable fact set by the registry event, so the gate never has to
+  re-query GitHub or retry the registry for image readiness. If the `ci_image_available` store
+  is unavailable, or its read errors, the gate fails **closed** (`error` verdict), not open.
+  This closes the window where "some check is green" let the gate provision before the
+  deployable image was produced. The retired GitHub image-build poll
+  (`mcpgithub.ImageBuildSucceededForHead`) and its observability — the
+  `provision gate awaiting image build` log and the
+  `tank_test_slot_validate_total{outcome="awaiting_image_build"}` race-metric — are **removed**;
+  a green-but-not-yet-imaged PR is simply a `watching` verdict (and, on the settle cap,
+  `watching_timeout`).
+- **Deploy assumes image presence (no pending-retry):** because the gate only reaches deploy
+  once `ci_image_available` confirms the image is in the registry for this exact commit, there
+  is no pending-image window left at deploy time. `provisionSlotAfterReady` deploys directly via
+  `glimmung.DeployImageToTestSlot` — the deploy-time 409 retry loop is **removed** (the
+  `deployImageWaitingForCI` re-poll and the `glimmung.ErrCIImagePending` sentinel are deleted;
+  a Glimmung `409`, like any non-2xx, is now a plain deploy error). A deploy failure still
+  releases the checked-out slot (no leak). The resolution half of the underlying race (a clear
+  `409` instead of a fabricated registry miss) is `romaine-life/glimmung#873`.
+- **Durable source:** the gate writes **no new durable row** — PR-readiness is a transient
+  in-memory `pgstore.CIWatch` fed to the reducer against live `mcpgithub.PullRequestState`.
+  The image precondition **reads** the durable `ci_image_available` row written by the ACR
+  `push` webhook (ci-image-availability receiver) via `ImageAvailableForCommit`. Outcomes
   are observable via `tank_test_slot_validate_total{outcome}` and
-  `tank_test_slot_provision_total{outcome}`.
+  `tank_test_slot_provision_total{outcome}`; the image signal itself rides
+  `ci_image_available` + `tank_acr_webhooks_total` (no separate gate-side race-metric).
 
 ## interactive-test-workflow
 
@@ -525,7 +535,8 @@ and [../README.md](../README.md) for how capability ledgers are used.
 
 ## ci-image-availability receiver
 
-- **Status:** stage 1 shipped (additive receiver + durable record; no consumer yet)
+- **Status:** shipped (stage 1 receiver + durable record; stage 2 gate consumer,
+  2026-06-21)
 - **Intent:** Records the durable "the deployable image for this commit now exists
   in the registry" signal. Azure ACR fires a `push` webhook the instant a
   `sha-<commit>` image tag lands; the public `POST /webhooks/acr` receiver
@@ -537,13 +548,17 @@ and [../README.md](../README.md) for how capability ledgers are used.
   delivery is at-least-once, so a repeat push refreshes the tag/digest/observed_at
   on the existing row; a store error returns `500` so ACR retries rather than
   dropping the signal. This is the event-driven replacement for the test-slot
-  provisioning gate's image-build polling wait. **Stage 1 is additive only:** the
-  receiver writes the table but nothing reads it yet — `ImageAvailableForCommit`
-  exists for the stage-2 gate cutover and is exercised by the upsert idempotency
-  test until then. The fail-closed posture mirrors the GitHub receiver: an empty
-  configured secret rejects every delivery.
+  provisioning gate's image-build polling wait. **Stage 2 (the cutover) consumes
+  it:** the gated-test-slot-provisioning gate reads `ImageAvailableForCommit(repo,
+  commit_sha)` as its image precondition, replacing — and deleting — the GitHub
+  `docker-build-check` poll (`ImageBuildSucceededForHead`) and the deploy-time 409
+  retry. The read matches on `(repo_name, commit_sha)` only, not registry: there is
+  exactly one registry, so keying on the ACR host would risk silent brittleness if
+  `request.host` ever varied. The fail-closed posture mirrors the GitHub receiver:
+  an empty configured secret rejects every delivery.
 - **Durable source:** `ci_image_available` table (PK `(registry, repo_name,
-  commit_sha)`, migration `0183`), written by `UpsertCIImageAvailable`.
+  commit_sha)`, migration `0183`), written by `UpsertCIImageAvailable` and read by
+  `ImageAvailableForCommit` (the stage-2 provisioning-gate existence check).
 - **Observability:** `tank_acr_webhooks_total{result}` — `received` (every
   delivery, before auth), `rejected_auth`, `parse_error`, `ignored_action`,
   `ignored_tag`, `recorded`, `error`.

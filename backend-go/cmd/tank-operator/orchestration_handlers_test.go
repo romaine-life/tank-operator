@@ -224,11 +224,12 @@ func TestCheckoutAndDeployOrchestrationReviewUsesIntegrationBranch(t *testing.T)
 		URL: &slotURL, Lease: "lease-1", Usable: true,
 	}}
 	// The orchestration-review path is now gated by the shared deterministic
-	// provisioning helper: a green/mergeable live verdict is required before
-	// checkout+deploy run. Provide a ready PR state so the gate greenlights and
-	// the integration-branch deploy assertions below still hold.
+	// provisioning helper: a green/mergeable live verdict AND the durable
+	// ci_image_available row are required before checkout+deploy run. Provide a
+	// ready PR state and a default-available image store so the gate greenlights
+	// and the integration-branch deploy assertions below still hold.
 	gh := &provisionFakeGitHub{states: []mcpgithub.PullRequestState{readyState("sha-ready")}}
-	app := &appServer{glimmung: glim, mcpGitHub: gh}
+	app := &appServer{glimmung: glim, mcpGitHub: gh, ciImageAvailable: &fakeCIImageAvailable{}}
 	orch := pgstore.Orchestration{
 		OrchestrationID:   "orch-1",
 		OwnerEmail:        "owner@example.test",

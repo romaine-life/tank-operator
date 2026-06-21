@@ -330,13 +330,14 @@ type ciWatchStore interface {
 
 // ciImageAvailableStore is the durable image-readiness signal store
 // (docs/event-driven-rollout.md). The ACR webhook receiver upserts one row per
-// (registry, repo, commit) when a sha-<commit> image tag lands; the stage-2
-// provisioning-gate consumer will read ImageAvailableForCommit. Satisfied by
-// *pgstore.CIImageAvailableStore; an interface so the receiver test can fake it
-// without Postgres.
+// (registry, repo, commit) when a sha-<commit> image tag lands; the
+// provisioning gate reads ImageAvailableForCommit by (repo, commit) — there is
+// one registry, so the host is not part of the existence check. Satisfied by
+// *pgstore.CIImageAvailableStore; an interface so the receiver test and the gate
+// test can fake it without Postgres.
 type ciImageAvailableStore interface {
 	UpsertCIImageAvailable(context.Context, pgstore.CIImageAvailable) error
-	ImageAvailableForCommit(ctx context.Context, registry, repoName, commitSHA string) (bool, error)
+	ImageAvailableForCommit(ctx context.Context, repoName, commitSHA string) (bool, error)
 }
 
 type pendingLaunchStore interface {
