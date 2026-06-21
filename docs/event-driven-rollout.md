@@ -74,7 +74,7 @@ This yields four edges. Three are infra-only; one invokes the agent:
 ## Architecture
 
 ```
-agent: push → publish_current_head → watch_current_session_pr → STOP (turn ends)
+agent: git push (governed by the wall) → watch_current_session_pr → STOP (turn ends)
                                               │
                                               ▼
                              register PR handoff row
@@ -124,7 +124,7 @@ The skill stops instructing the agent to poll. Proposed replacement for steps 3�
 
 New tool `watch_current_session_pr`, added to the Tank governed-tool surface in
 `claude-container/mcp-auth-proxy/src/mcp_auth_proxy/server.py` (same place as
-`merge_current_session_pr` / `publish_current_head`: schema in
+`merge_current_session_pr`: schema in
 `_append_tank_publish_tool_to_json` ~L493–725, handler ~L2315–2562, dispatch ~L4405–4430):
 
 ```jsonc
@@ -196,7 +196,8 @@ Handler behavior (handoff is synchronous; live state is backend-owned):
 
 Webhooks identify a repo + PR + SHA; we need the owning session. The association data
 already exists in `control_action_events` (`repo_owner`, `repo_name`, `pr_number`,
-`result_sha`, `session_id`, written by `publish_current_head` and the PR tools), but
+`result_sha`, `session_id`, written by the wall's governed push records and the PR
+tools — historical rows also carry the retired `publish_current_head` action), but
 there is **no index** for reverse lookup and no place to hold watch lifecycle. Add a
 dedicated table rather than scanning the ledger:
 
@@ -347,7 +348,7 @@ so the agent's next turn is productive without a round-trip:
 - red: failing check name(s), conclusion, a `get_workflow_job_logs` excerpt, head SHA.
 - conflict: `mergeable_state`, the base branch, "rebase onto base and re-publish."
 
-The agent fixes, re-publishes (post-commit hook → `publish_current_head` updates
+The agent fixes and re-pushes (the wall records the new push and updates
 `ci_watches.head_sha`), and the watch resumes on the new SHA. The agent is in the loop
 on every red, out of it on every green.
 

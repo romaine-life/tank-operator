@@ -65,8 +65,10 @@ resurrection" below) — that is a new lifecycle, not a revival of the old pod.
 
 - A restricted (`TANK_RESTRICTED_GIT=true`) session has exactly one git-write
   escalation: the break-glass branch-lane grant. There is no separate PR-lane
-  mechanism. Normal commits auto-publish through `publish_current_head`; no agent
-  action is required for the session's own branch.
+  mechanism. Normal commits reach GitHub through a plain `git push` governed by
+  the agent-egress proxy (the wall), which mints the credential server-side,
+  records the push, and starts CI/mergeability watching; no agent action beyond
+  `git push` is required for the session's own branch.
 - A break-glass git grant is permission to do work on a branch (existing or not):
   create + push/force-push it **and** open + own its draft PR through review.
   Grant scope (`named` / `count` / `unlimited`) bounds *which* branches a grant

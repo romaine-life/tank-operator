@@ -125,12 +125,17 @@ test("session activity is not refreshed by a steady interval", () => {
 test("Glimmung app image deploys stay fingerprint-first", () => {
   expect(dockerBuildCheckWorkflowSource.includes("Compute image fingerprint")).toBe(true);
   expect(dockerBuildCheckWorkflowSource.includes("Build and push proof image")).toBe(true);
-  expect(dockerBuildCheckWorkflowSource.includes("Tag app image by CI run lookup")).toBe(true);
+  // App image is published by fingerprint, then aliased by sha-<commit> of the
+  // fingerprint manifest so Glimmung's resolver looks it up by verified commit.
+  // The CI-run lookup-tag mechanism was retired in #1418: assert the current
+  // commit-alias step is present and the retired lookup tags stay out (below).
+  expect(dockerBuildCheckWorkflowSource.includes("Tag app image by commit")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes('commit_tag="sha-${SOURCE_SHA}"')).toBe(true);
   expect(dockerBuildCheckWorkflowSource).toMatch(/if: matrix\.name == 'app' &&/);
-  expect(dockerBuildCheckWorkflowSource.includes("ci-pr-${PR_NUMBER}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
-  expect(dockerBuildCheckWorkflowSource.includes("ci-ref-${short_ref_hash}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-pr-${PR_NUMBER}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(false);
+  expect(dockerBuildCheckWorkflowSource.includes("ci-ref-${short_ref_hash}-run-${RUN_ID}-attempt-${RUN_ATTEMPT}")).toBe(false);
   expect(dockerBuildCheckWorkflowSource.includes("--source \"romainecr.azurecr.io/${{ matrix.image-repo }}:${src}\"")).toBe(true);
-  expect(dockerBuildCheckWorkflowSource.includes("--image \"${{ matrix.image-repo }}:${lookup_tag}\"")).toBe(true);
+  expect(dockerBuildCheckWorkflowSource.includes("--image \"${{ matrix.image-repo }}:${commit_tag}\"")).toBe(true);
   expect(dockerBuildCheckWorkflowSource.includes("Tag image by commit SHA")).toBe(false);
   expect(dockerBuildCheckWorkflowSource.includes("commit-SHA tag")).toBe(false);
   expect(dockerBuildCheckWorkflowSource.includes("sha='${{ github.event.pull_request.head.sha || github.sha }}'")).toBe(false);

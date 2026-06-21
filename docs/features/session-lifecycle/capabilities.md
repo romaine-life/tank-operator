@@ -674,8 +674,10 @@ Contract impact:
   audited capability set (`push_current_head`, `mint_full_git_token`, and
   `full_github_api` present only on `unlimited` grants). The
   `unlimited` / `full_api` whole-repo escape hatch, server-side branch-scope
-  enforcement, `publish_current_head` normal session-branch auto-publish, and the
-  restricted-mode raw-mcp-github write denylist are all unchanged.
+  enforcement, and the restricted-mode raw-mcp-github write denylist are all
+  unchanged. The normal session-branch push is now governed by the wall (plain
+  `git push`); the `publish_current_head` post-commit auto-publish it once used
+  is retired.
 - **Retired (no live route, tool, event, UI, or test may remain):** the
   `request_pr_lane` / `create_pr_lane` MCP tools + handlers + routes; the
   `github.pr_lane.*` event family and its reader/writer/auto-approval logic; the
@@ -882,7 +884,11 @@ egress. The wall now fronts **every** session (non-slot and slot — test slots
 share the prod wall), and the in-pod credential-helper / `gh`-wrapper mint path
 and break-glass broker routes ("Restricted Session Read-Only Git Access" above)
 have been retired: the wrappers hand the wall the raw token and the wall is the
-sole governed GitHub chokepoint.
+sole governed GitHub chokepoint. Exchange resilience — the wall retries the
+transient IdP startup race and fails closed (503) on a persistent identity
+failure rather than passing an unauthenticated write through — and wall
+metrics/alerts (`egress_exchange_total`, `TankEgressExchange*`) have since
+hardened it.
 
 Intent:
 EVERY session must reach GitHub through ONE governed outbound chokepoint — the
@@ -964,9 +970,27 @@ Contract impact:
 - **Asset hosts.** `codeload.github.com` and `*.githubusercontent.com` are
   fronted by the wall with `Authorization` / `Cookie` stripped (public asset
   fetches need no mint), so clone and release-asset paths work end to end.
-- **Fail-soft during cutover.** A request with no parseable credential, or whose
-  credential does not exchange to a session identity, passes through untouched;
-  enforcement that unidentified egress is rejected is the NetworkPolicy layer.
+- **Exchange resilience; fail closed on identity.** The pod's raw SA token is
+  exchanged for the session JWT before any mint. At pod boot the IdP can
+  transiently 401 that exchange — a startup race where the just-created session is
+  not yet resolvable (observed ~5% of exchanges, an instant 401 healed within
+  seconds; the same pod exchanges 200 moments later). The wall retries a transient
+  exchange with bounded backoff (`EXCHANGE_RETRY_BACKOFFS_S`, kept under Envoy's
+  10s ext_proc `message_timeout`) so the race never surfaces as a failed `git
+  push`. A request with NO parseable credential still passes through untouched —
+  that is git's anonymous `info/refs` probe, which GitHub 401s so git retries with
+  the credential helper. But a credential that, after retry, still does not
+  exchange to a session identity now FAILS CLOSED with 503 (was a soft-cutover
+  pass-through): the in-pod token fallback is gone (C2), so passing through would
+  only leak the raw SA token to GitHub and surface as a confusing upstream error
+  (the session-1194 "proxy going down" report). 503 is honest and retryable, and
+  unidentified egress is still also denied by the NetworkPolicy layer.
+- **The wall is observed.** The `agent-egress-proxy` joins the `tank-api-proxy`
+  ServiceMonitor (`provider=github`) — its `/metrics`:9100 was exposed but
+  previously unscraped — and emits `tank_api_proxy_egress_exchange_total{result=
+  ok|retried|failed}` (cache hits excluded). `TankEgressExchangeFailing`
+  (sustained `failed` → git/gh failing closed) and `TankEgressExchangeRaceElevated`
+  (>25% `retried` → IdP registration lagging) alert on it.
 
 Evidence:
 - `api-proxy/tests/test_github_governor.py` — the pure governor contract:
@@ -974,7 +998,10 @@ Evidence:
   REST/GraphQL → read, every ungoverned REST write → read), `is_graphql`,
   `is_rest_write` excluding `/graphql`, `session_repos_url`,
   `parse_session_repos_response` (fail-closed), multi-repo mint payload, the
-  `token`/`Bearer`/Basic auth schemes, and break-glass grant matching.
+  `token`/`Bearer`/Basic auth schemes, break-glass grant matching, and the
+  exchange retry policy (`is_retryable_exchange_status` transient-vs-permanent
+  classification + the guard that the retry budget fits Envoy's 10s ext_proc
+  timeout).
 - `backend-go/cmd/tank-operator/handlers_internal_test.go`
   (`TestHandleInternalSessionReposReturnsDurableRepos`,
   `TestHandleInternalSessionReposNotFoundForUnknownSession`) — the session-repos
@@ -984,6 +1011,11 @@ Evidence:
   session against the deployed wall — gh REST + GraphQL succeed, an ungoverned
   REST write and a GraphQL mutation are refused, in-lane push succeeds and
   out-of-lane is denied absent a grant.
+- `k8s/templates/observability.yaml` adds `agent-egress-proxy` to the
+  `tank-api-proxy` ServiceMonitor and the `TankEgressExchangeFailing` /
+  `TankEgressExchangeRaceElevated` alerts (helm-template render + YAML parse
+  confirm both). Exchange resilience is validated post-deploy by the metric: the
+  startup race shows as `retried` (not a failed push) and `failed` stays ≈ 0.
 
 ## Break-glass full GitHub API elevation (unlimited grants)
 
@@ -1003,8 +1035,8 @@ automatically, with no manual `GH_TOKEN` juggling. Branch/count-scoped grants
 are unchanged — they stay least-privilege on the governed push path.
 
 This is a deliberate, admin-consented blast-radius widening: a full raw GitHub
-App token bypasses the governed PR ledger (the `rename_current_session_pr` /
-`update_current_session_pr_body` / `merge_current_session_pr` Tank tools and
+App token bypasses the governed PR ledger (the wall-recorded `gh pr create` /
+`gh pr edit` title/body writes and the `merge_current_session_pr` Tank tool, and
 their `github.pull_request.*` control-action records). It is therefore gated on
 an explicit, audited, TTL-bounded grant and surfaced in the approval prompt,
 the admin panel, and the audit ledger so the approving human accepts it
@@ -1061,8 +1093,8 @@ Contract impact:
   `channel: wrapper`, `full_github_api: true`), counted by
   `tank_control_action_events_total`.
 - **Least privilege preserved.** Branch/count-scoped grants never get
-  `full_github_api`, never mint a raw full token, and stay on the governed
-  `publish_current_head` / `push_current_head` path.
+  `full_github_api`, never mint a raw full token, and stay on the wall-governed
+  `git push` path (lane-confined, fast-forward-only).
 
 Deploy caveat:
 - This changes the session image (wrappers), the `mcp-auth-proxy` sidecar, and

@@ -10,8 +10,9 @@ fi
 
 cat <<'EOF'
 
-[tank-agent] Local commit created, but the Tank auto-publish hook script was
-not available. In a Tank session, every commit must be published through the
-Tank MCP publish_current_head tool and watched until CI is green and mergeable.
+[tank-agent] Local commit created. Push your branch with `git push` — Tank's
+agent-egress proxy (the wall) governs the push, mints the credential
+server-side, records the commit, and starts CI/mergeability watching. There is
+no separate publish step.
 
 EOF

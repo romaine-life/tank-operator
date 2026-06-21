@@ -40,10 +40,12 @@ spec:
       scrapeTimeout: 10s
 ---
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
-# ServiceMonitor: api-proxy deployments. All
-# Services expose the metrics sidecar port; the `provider` label on each metric
-# distinguishes them at query time. The provider-generic TankApiProxy* alerts
-# below fire per-provider via {{`{{ $labels.provider }}`}}.
+# ServiceMonitor: api-proxy deployments AND the agent-egress-proxy (the GitHub
+# wall). All reuse the same image + metrics sidecar port, so one ServiceMonitor
+# covers them; the `provider` label distinguishes them at query time (the wall is
+# provider=github). The provider-generic TankApiProxy* alerts below fire
+# per-provider via {{`{{ $labels.provider }}`}}; the wall's egress-specific
+# series (egress_exchange_total) drive the TankEgressExchange* alerts.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -56,7 +58,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [claude-api-proxy, claude-secondary-api-proxy, codex-api-proxy]
+        values: [claude-api-proxy, claude-secondary-api-proxy, codex-api-proxy, agent-egress-proxy]
   endpoints:
     - port: metrics
       path: /metrics
@@ -1694,6 +1696,36 @@ spec:
           annotations:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot scrape pod-local Envoy SDS stats"
             runbook: "The ext_proc metrics sidecar cannot read http://127.0.0.1:9901/stats from the Envoy sidecar. Check that Envoy admin is still bound to localhost:9901 and that the Envoy container is healthy. Prometheus cannot see SDS rotation health until this recovers."
+
+        # The wall (agent-egress-proxy, provider=github) exchanges each pod's SA
+        # token for a session JWT before minting. A `failed` exchange means it could
+        # not, so the request fails CLOSED with 503 — a git push/clone or gh call is
+        # being rejected. The bounded retry already absorbs the transient IdP startup
+        # race (counted `retried`), so a SUSTAINED `failed` rate is a real, persistent
+        # fault, not the race. Steady-state is zero. (romaine-life/tank-operator
+        # session 1194: a startup-race exchange-401 surfaced as a "proxy going down"
+        # push failure before this retry + fail-closed path existed.)
+        - alert: TankEgressExchangeFailing
+          expr: rate(tank_api_proxy_egress_exchange_total{result="failed"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "the GitHub egress wall cannot exchange SA tokens — git/gh requests are failing closed (503)"
+            runbook: "The wall's POST auth.romaine.life/api/auth/exchange/k8s is failing past retry, so it returns 503 and the raw token never reaches GitHub. Broad failure across sessions (with TankEgressExchangeRaceElevated also firing) = an auth.romaine.life outage — check the `auth` namespace pods + JWKS. Failure isolated to one session = a bad/expired SA token for that pod. Grep agent-egress-proxy ext-proc logs for `token exchange failed`."
+
+        # Leading indicator: the fraction of exchanges that only succeeded on retry.
+        # The startup race is normally a small, self-healing slice; a sustained high
+        # ratio means the IdP is making new sessions resolvable slowly (degrading
+        # toward TankEgressExchangeFailing). clamp_min guards the divide when idle.
+        - alert: TankEgressExchangeRaceElevated
+          expr: sum(rate(tank_api_proxy_egress_exchange_total{result="retried"}[15m])) by (provider) / clamp_min(sum(rate(tank_api_proxy_egress_exchange_total[15m])) by (provider), 0.001) > 0.25
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "the GitHub egress wall is retrying >25% of SA-token exchanges — the IdP startup race is elevated"
+            runbook: "More than a quarter of exchanges only succeed on retry. The race is self-healing per-request (NOT user-visible failures yet), but a sustained high ratio means auth.romaine.life is slow to make a new session resolvable. Check `auth` namespace pod health/latency and exchange p99 before it tips into TankEgressExchangeFailing."
 
     - name: tank-operator.provider-credential-health
       rules:
