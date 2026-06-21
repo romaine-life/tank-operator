@@ -12,6 +12,20 @@ var (
 		Help: "GitHub webhook deliveries seen by the CI-watch receiver, by event and result.",
 	}, []string{"event", "result"})
 
+	// ACR image-readiness receiver (acr_webhook.go). One increment per inbound
+	// Azure ACR `push` webhook delivery, by bounded result:
+	//   received       — body read, before auth (every delivery counts once here)
+	//   rejected_auth  — empty configured secret or bearer mismatch (fail-closed)
+	//   parse_error    — body was not the expected JSON shape
+	//   ignored_action — action != "push" (manifest deletes, etc.)
+	//   ignored_tag    — tag is not a sha-<commit> tag (app-/claude-/api-proxy-/…)
+	//   recorded       — a sha-<commit> push was upserted into ci_image_available
+	//   error          — the durable upsert failed
+	acrWebhookTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_acr_webhooks_total",
+		Help: "Azure ACR webhook deliveries seen by the image-readiness receiver, by result.",
+	}, []string{"result"})
+
 	ciTerminalTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_ci_terminal_total",
 		Help: "CI-watch terminal transitions applied from webhooks, by state.",
@@ -147,6 +161,13 @@ func recordCIWebhook(event, result string) {
 		event = "unknown"
 	}
 	ciWebhookTotal.WithLabelValues(event, result).Inc()
+}
+
+func recordACRWebhook(result string) {
+	if result == "" {
+		result = "error"
+	}
+	acrWebhookTotal.WithLabelValues(result).Inc()
 }
 
 func recordCITerminal(state string) {

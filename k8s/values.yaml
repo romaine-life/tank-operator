@@ -464,6 +464,17 @@ externalSecret:
     secretName: github-webhook-secret
     secretKey: secret
     kvKey: tank-operator-github-webhook-secret
+  # Static bearer secret for the inbound Azure ACR image-readiness webhook
+  # (POST /webhooks/acr). The orchestrator reads it as ACR_WEBHOOK_SECRET and
+  # rejects every delivery when empty (fail-closed), so the durable
+  # ci_image_available signal never lands until this is set. Seeded out-of-band:
+  # the SAME value must be configured as the custom Authorization header on the
+  # ACR webhook (Authorization: Bearer <secret>). Production only — test slots
+  # receive no deliveries, so the deployment env reference is optional.
+  acrWebhook:
+    secretName: acr-webhook-secret
+    secretKey: secret
+    kvKey: tank-operator-acr-webhook-secret
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

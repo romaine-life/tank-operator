@@ -152,6 +152,20 @@ type appServer struct {
 	// POST /webhooks/github route. Empty -> the receiver fails closed.
 	githubWebhookSecret string
 
+	// acrWebhookSecret authenticates the public POST /webhooks/acr route. Azure
+	// ACR sends a static custom `Authorization: Bearer <secret>` header (not an
+	// HMAC signature), compared with constant-time equality. Empty -> the
+	// receiver fails closed (rejects every delivery), same posture as the GitHub
+	// receiver. See acr_webhook.go.
+	acrWebhookSecret string
+
+	// ciImageAvailable is the durable backend-owned store of the image-readiness
+	// signal (docs/event-driven-rollout.md): the ACR webhook receiver records one
+	// row per (registry, repo, commit) the instant a sha-<commit> image tag lands
+	// in the registry. Stage 1 only writes it; the provisioning-gate consumer is a
+	// later stage. nil in stub mode / when pgPool is unset.
+	ciImageAvailable ciImageAvailableStore
+
 	// provisionSettleInterval / provisionSettleTimeout tune the deterministic
 	// test-slot provisioning gate's settle-wait (provision_test_slot.go): how
 	// often it re-polls a still-'watching' PR and the hard cap before it
@@ -312,6 +326,17 @@ type ciWatchStore interface {
 	MarkMerged(context.Context, string, string) (pgstore.CIWatch, error)
 	HasActiveForSession(context.Context, string, string) (bool, error)
 	ListStaleWatching(context.Context, time.Duration, int) ([]pgstore.CIWatch, error)
+}
+
+// ciImageAvailableStore is the durable image-readiness signal store
+// (docs/event-driven-rollout.md). The ACR webhook receiver upserts one row per
+// (registry, repo, commit) when a sha-<commit> image tag lands; the stage-2
+// provisioning-gate consumer will read ImageAvailableForCommit. Satisfied by
+// *pgstore.CIImageAvailableStore; an interface so the receiver test can fake it
+// without Postgres.
+type ciImageAvailableStore interface {
+	UpsertCIImageAvailable(context.Context, pgstore.CIImageAvailable) error
+	ImageAvailableForCommit(ctx context.Context, registry, repoName, commitSHA string) (bool, error)
 }
 
 type pendingLaunchStore interface {
@@ -670,6 +695,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/orchestration/blocked", s.handleInternalOrchestrationBlocked)
 	// Public inbound GitHub webhook; authenticated by HMAC inside the handler.
 	mux.HandleFunc("POST /webhooks/github", s.handleGitHubWebhook)
+	// Public inbound Azure ACR webhook; authenticated by a static bearer secret
+	// inside the handler. Records the durable image-readiness signal.
+	mux.HandleFunc("POST /webhooks/acr", s.handleACRWebhook)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes/cancel", s.handleInternalCancelBackgroundTaskWake)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/background-tasks/unresolved", s.handleInternalUnresolvedBackgroundTasks)

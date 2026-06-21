@@ -522,3 +522,35 @@ and [../README.md](../README.md) for how capability ledgers are used.
   a hung run. Per-replica idempotent — every effect is a guarded write.
 - **Durable source:** `orchestrations` (state `approved`/`running`) +
   `orchestration_phases`; `runOrchestrationReconcileLoop`.
+
+## ci-image-availability receiver
+
+- **Status:** stage 1 shipped (additive receiver + durable record; no consumer yet)
+- **Intent:** Records the durable "the deployable image for this commit now exists
+  in the registry" signal. Azure ACR fires a `push` webhook the instant a
+  `sha-<commit>` image tag lands; the public `POST /webhooks/acr` receiver
+  (`acr_webhook.go`) authenticates a static `Authorization: Bearer <secret>`
+  (constant-time compare; **not** an HMAC — ACR sends a fixed custom header),
+  parses the ACR push payload, ignores non-`push` actions and non-`sha-` tags
+  (`app-`/`claude-`/`api-proxy-`/…), then upserts one row per
+  `(registry, repo_name, commit_sha)`. Idempotent and safe to re-deliver: ACR
+  delivery is at-least-once, so a repeat push refreshes the tag/digest/observed_at
+  on the existing row; a store error returns `500` so ACR retries rather than
+  dropping the signal. This is the event-driven replacement for the test-slot
+  provisioning gate's image-build polling wait. **Stage 1 is additive only:** the
+  receiver writes the table but nothing reads it yet — `ImageAvailableForCommit`
+  exists for the stage-2 gate cutover and is exercised by the upsert idempotency
+  test until then. The fail-closed posture mirrors the GitHub receiver: an empty
+  configured secret rejects every delivery.
+- **Durable source:** `ci_image_available` table (PK `(registry, repo_name,
+  commit_sha)`, migration `0183`), written by `UpsertCIImageAvailable`.
+- **Observability:** `tank_acr_webhooks_total{result}` — `received` (every
+  delivery, before auth), `rejected_auth`, `parse_error`, `ignored_action`,
+  `ignored_tag`, `recorded`, `error`.
+- **Deployment:** delivery requires `ACR_WEBHOOK_SECRET` (KV
+  `tank-operator-acr-webhook-secret` → `externalsecret-acr-webhook.yaml`) AND an
+  ACR webhook pointed at `https://tank.romaine.life/webhooks/acr` carrying the
+  SAME value as its `Authorization: Bearer <secret>` header. With either missing
+  the receiver fails closed and no `recorded` signal lands. Production only; the
+  deployment env reference is `optional: true` so test slots start cleanly with
+  the receiver disabled. The KV secret value itself is seeded by tofu separately.
