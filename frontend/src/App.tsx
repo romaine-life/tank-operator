@@ -446,6 +446,7 @@ import {
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
 import { isTranscriptMessageAvatarContinuation } from "./transcriptAvatarGrouping";
+import { isActivityOnlyMainTranscriptEntry } from "./transcriptReasoningPlacement";
 import {
   collectGlimmungRunsFromEntries,
   type GlimmungRunLink,
@@ -7132,6 +7133,10 @@ function groupTranscriptEntries(
         continue;
       }
       if (activityHiddenEntryIds.has(entry.id)) continue;
+      // Promotion-only: reasoning is Turn-activity material, never a settled
+      // main-transcript row. It renders inside the turn-activity disclosure
+      // (RunTurnActivityGroup) and the Turns view, not the conversation surface.
+      if (isActivityOnlyMainTranscriptEntry(entry)) continue;
       pushTranscriptEntryGroup(groups, entry, bucket);
     }
     flushTranscriptToolBucket(groups, bucket);
@@ -7142,6 +7147,9 @@ function groupTranscriptEntries(
     );
   }
   for (const entry of entries) {
+    // Promotion-only: reasoning never settles in the main transcript, even when
+    // no turn-activity shell is projected (degenerate/no-shell timelines).
+    if (isActivityOnlyMainTranscriptEntry(entry)) continue;
     pushTranscriptEntryGroup(groups, entry, bucket);
   }
   flushTranscriptToolBucket(groups, bucket);
@@ -16365,9 +16373,13 @@ export function RunMessages({
         );
       }
       if (g.kind === "reasoning") {
-        return (
-          <RunReasoningBlock entry={g.entry} showThinking={showThinking} />
-        );
+        // Promotion-only: reasoning is Turn-activity material and never a
+        // settled main-transcript row. groupTranscriptEntries already excludes
+        // it (isActivityOnlyMainTranscriptEntry); this keeps the invariant
+        // explicit at the render boundary so a grouping regression can't
+        // resurface reasoning as a conversation row. Reasoning renders through
+        // RunReasoningBlock inside the turn-activity disclosure and Turns view.
+        return null;
       }
       if (g.kind === "meta") {
         if (g.entry.metaKind === "awaiting_input") {

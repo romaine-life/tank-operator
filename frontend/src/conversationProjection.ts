@@ -302,7 +302,10 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
   }
 
   if (item.kind === "reasoning") {
-    const text = item.text?.trim() || stringPayload(item, "text") || "";
+    // Empty/redacted reasoning carries nothing to show — drop it. Trim BOTH the
+    // item text and the payload fallback so a whitespace-only summary is skipped
+    // too (matches the Go projection's reasoning skip).
+    const text = item.text?.trim() || stringPayload(item, "text")?.trim() || "";
     if (!text) return null;
     return {
       id: item.id,

@@ -265,6 +265,18 @@ answer; it must not visibly move a rendered row from one surface to the other.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
+- Reasoning is a populated Turn-activity display item. A durable
+  `kind:"reasoning"` event (actor `assistant`, emitted by the runners) carries
+  the agent's summarized thinking as `payload.text`. The server projection folds
+  it into the owning turn's Turn activity — the compacted disclosure and the
+  Turns view — exactly like tool output and the context-compaction notice:
+  intra-turn material the same tier as tool calls, never the settled
+  conversation a reader scans. It is therefore never promoted to a settled
+  main-transcript row. An empty or whitespace-only (redacted) reasoning summary
+  carries nothing to show and is skipped at projection, so it never becomes a
+  row on any surface. The frontend renders it through the existing collapsible
+  reasoning block inside Turn activity, gated by the "Show reasoning" preference;
+  it does not add a new reasoning surface to the main transcript.
 - Copy links, unread counts, latest-message state, and fork-from-message actions
   must target the settled transcript projection, not duplicate activity-log
   copies or the Turns view's context copy of the initiating instruction.
@@ -383,6 +395,12 @@ answer; it must not visibly move a rendered row from one surface to the other.
 - A completed turn may show the final assistant prose in the main transcript
   while also retaining a log copy in Turn activity, without counting it as two
   transcript messages.
+- A populated `kind:"reasoning"` display item renders inside Turn activity (the
+  compacted turn disclosure and the Turns view) and is folded into the turn's
+  activity shell; it never appears as a settled main-transcript row.
+- An empty or whitespace-only (redacted) reasoning summary is skipped at
+  projection and appears on no surface — not as a settled row, not as a Turn
+  activity child, and not in the compacted shell's child ids.
 - A background-task wake continuation writes no durable main-transcript user
   message, renders no wake activity shell in the main transcript, folds the
   system-user wake prompt into the originating turn in the Turns view, and still

@@ -381,6 +381,43 @@ test("AskUserQuestion renders the question widget inline in the main transcript"
   );
 });
 
+test("reasoning is Turn-activity material, never a settled main-transcript row", () => {
+  // Promotion-only (docs/features/transcript/contract.md): a populated
+  // kind:"reasoning" display item belongs in Turn activity, not the settled
+  // conversation surface. The classification lives in one pure gate that the
+  // main-transcript grouper consults.
+  expect(appSource.includes('from "./transcriptReasoningPlacement"')).toBe(true);
+  expect(appSource.includes("isActivityOnlyMainTranscriptEntry")).toBe(true);
+
+  // The main transcript (RunMessages) renders NO reasoning block: reasoning is
+  // dropped from settled groups and the render boundary returns null for it.
+  const messagesMatch = appSource.match(
+    /export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/,
+  );
+  expect(messagesMatch, "RunMessages source should be present").toBeTruthy();
+  expect(messagesMatch![0].includes("<RunReasoningBlock")).toBe(false);
+
+  // The compacted turn disclosure (RunTurnActivityGroup) renders reasoning.
+  const activityMatch = appSource.match(
+    /function RunTurnActivityGroup\([\s\S]*?\n}\n\nfunction RunTurnActivityScreen/,
+  );
+  expect(
+    activityMatch,
+    "RunTurnActivityGroup source should be present",
+  ).toBeTruthy();
+  expect(activityMatch![0].includes("<RunReasoningBlock")).toBe(true);
+
+  // The dedicated Turns view (RunTurnActivityScreen) renders reasoning too.
+  const turnScreenMatch = appSource.match(
+    /function RunTurnActivityScreen\([\s\S]*?\n}\n\nfunction rangeIntersectsNode/,
+  );
+  expect(
+    turnScreenMatch,
+    "RunTurnActivityScreen source should be present",
+  ).toBeTruthy();
+  expect(turnScreenMatch![0].includes("<RunReasoningBlock")).toBe(true);
+});
+
 test("background wake prompts stay hidden from chat but visible in Turns activity", () => {
   expect(appSource.includes("turnOnly?: boolean")).toBe(true);
   expect(appSource.includes("wakePrompt?: boolean")).toBe(true);
