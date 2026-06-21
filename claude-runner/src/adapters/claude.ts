@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import type { TankConversationEvent, TankFinalAnswer } from "../../../runner-shared/conversation.js";
 import { contextCompactedEvent, itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
-import { itemOutcomeTotal, turnUsageEmittedTotal } from "../metrics.js";
+import { itemOutcomeTotal, reasoningItemTotal, turnUsageEmittedTotal } from "../metrics.js";
 
 // ClaudeProviderEvent is the runner's view of the raw Claude SDK message
 // shape consumed by this adapter. Kept loose because the adapter has to
@@ -47,6 +47,25 @@ export function claudeUserMessageText(content: unknown): string {
 
 export function startsClaudeTurn(event: ClaudeProviderEvent): boolean {
   return event.type === "assistant" || event.type === "user" || event.type === "result";
+}
+
+// MAX_REASONING_TEXT_CHARS bounds the summarized-thinking text we copy into a
+// durable kind:"reasoning" DISPLAY event. Reasoning is display material, not the
+// resume-faithful record — the SDK on-disk JSONL snapshot (transcriptCapture.ts)
+// holds the full thinking blocks and their signatures. A pathologically long
+// summary would bloat the durable session_events row and the SSE payload, so we
+// clip it with an explicit marker; the transport-level oversize guard in
+// runner-shared/sessionBus.js is the hard backstop, this is the semantic bound.
+// The cap is generous — far above any real adaptive-thinking summary — so normal
+// reasoning is never clipped.
+const MAX_REASONING_TEXT_CHARS = 16_000;
+const REASONING_TRUNCATION_MARKER = "\n\n… [reasoning summary truncated]";
+
+// boundReasoningText clips an over-long reasoning summary to the configured cap
+// and appends a visible truncation marker so a reader can tell the text was cut.
+function boundReasoningText(text: string): string {
+  if (text.length <= MAX_REASONING_TEXT_CHARS) return text;
+  return text.slice(0, MAX_REASONING_TEXT_CHARS) + REASONING_TRUNCATION_MARKER;
 }
 
 export function canonicalEventsForClaudeMessage(
@@ -111,6 +130,54 @@ export function canonicalEventsForClaudeMessage(
           finalAnswerTimelineIDs.push(event.timeline_id);
           finalAnswerProviderItemIDs.push(providerItemID);
         }
+      } else if (item.type === "thinking") {
+        // Extended-thinking reasoning. With thinking:{display:"summarized"}
+        // (buildSdkQuery) the SDK surfaces human-readable summary TEXT in the
+        // `thinking` field; on Opus 4.8 the default display:"omitted" yields a
+        // signed-but-empty block. We emit only the summary TEXT as a durable
+        // DISPLAY item — never the signature, which is resume-faithful state the
+        // JSONL snapshot owns. Reasoning is interleaved with text/tool blocks by
+        // its block `index`, mirroring the message branch's canonical id, so the
+        // transcript renders self-talk in true order.
+        const reasoningText = typeof item.thinking === "string" ? item.thinking : "";
+        if (!reasoningText.trim()) {
+          // Empty/whitespace summary (display:"omitted", or before the summary
+          // streams in): emit nothing, but count it so a turn that thinks while
+          // `emitted` stays flat is a diagnosable surface regression.
+          reasoningItemTotal.labels("skipped_empty").inc();
+          continue;
+        }
+        const providerItemID = claudeBlockProviderItemID({
+          turnID: turn.turnID,
+          actorPart: "assistant",
+          providerID,
+          blockType: "thinking",
+          index,
+          block: item,
+        });
+        events.push(
+          itemEvent({
+            sessionID: cfg.sessionId,
+            turnID: turn.turnID,
+            source: "claude",
+            type: "item.completed",
+            providerItemID,
+            actor: "assistant",
+            providerEventID: providerID,
+            payload: { kind: "reasoning", title: "reasoning", text: boundReasoningText(reasoningText) },
+          }),
+        );
+        reasoningItemTotal.labels("emitted").inc();
+        // Reasoning is NEVER a final-answer candidate: it is not pushed to
+        // finalAnswer{Timeline,ProviderItem}IDs and does not set
+        // hasNonPausingToolUse/hasPausingToolUse, so it cannot become or clear
+        // turn.finalAnswer. Self-talk must not be promoted into the settled
+        // transcript as the assistant's response.
+      } else if (item.type === "redacted_thinking") {
+        // Encrypted thinking with no readable text — there is nothing safe or
+        // meaningful to display, so emit nothing. Counted so the redacted share
+        // of reasoning is visible without leaking the (opaque) payload.
+        reasoningItemTotal.labels("skipped_redacted").inc();
       } else if (item.type === "tool_use") {
         const providerItemID =
           typeof item.id === "string" && item.id

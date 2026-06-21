@@ -249,6 +249,36 @@ export const itemOutcomeTotal = new Counter({
   registers: [registry],
 });
 
+// reasoningItemTotal counts how the Claude adapter handled each `thinking`
+// content block it saw, so surfacing extended-thinking reasoning in the GUI
+// transcript is observable and regression-proof. It increments exactly once
+// per thinking/redacted_thinking block, bucketed by the bounded `result`:
+//
+//   - `emitted` — a thinking block with non-empty summary TEXT mapped to a
+//     durable kind:"reasoning" item.completed DISPLAY event.
+//   - `skipped_empty` — a thinking block whose summary text was empty or
+//     whitespace (the default on models that omit summaries, or before the
+//     summary streams in); no event is emitted.
+//   - `skipped_redacted` — a `redacted_thinking` block (encrypted, no readable
+//     text); no event is emitted.
+//
+// The regression signature for the reasoning surface is a Claude turn that
+// thinks (the SDK on-disk transcript shows thinking blocks, and
+// tank_runner_provider_rate_limit/usage activity proves the turn ran) while
+// this counter's `emitted` series stays flat — summarized thinking stopped
+// reaching the transcript. A sustained `skipped_empty` with zero `emitted`
+// means display:"summarized" is no longer producing summary text (an SDK or
+// option regression), not that the model stopped thinking. Reasoning is a
+// DISPLAY projection only: it is never a final-answer candidate and the
+// resume-faithful thinking SIGNATURES still flow to the JSONL snapshot, so
+// this counter has no bearing on the thinking_block_modified resume path.
+export const reasoningItemTotal = new Counter({
+  name: "tank_runner_reasoning_item_total",
+  help: "Claude thinking content blocks handled by the adapter, by bounded result: emitted (kind:reasoning DISPLAY event with summary text), skipped_empty (no/whitespace summary text), skipped_redacted (encrypted redacted_thinking block). A turn that thinks while emitted stays flat is the reasoning-surface regression signature.",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
 // turnUsageEmittedTotal counts the durable usage events this runner
 // publishes, split by `kind`. It exists to make the Claude
 // context-window-occupancy fix observable and regression-proof:

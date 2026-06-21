@@ -576,6 +576,157 @@ test("adapter emits no usage snapshot when a Claude assistant message carries no
   assert.equal(events.some((event) => event.type === "turn.usage"), false);
 });
 
+test("adapter maps a Claude thinking block to a durable kind:reasoning item", () => {
+  // With thinking:{display:"summarized"} the SDK surfaces summary TEXT in the
+  // `thinking` field. The adapter emits it as a durable kind:"reasoning"
+  // item.completed DISPLAY event (actor assistant), mirroring the message
+  // branch but carrying the summary text — never the signature.
+  const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+    type: "assistant",
+    uuid: "claude-msg-think",
+    message: {
+      content: [
+        { type: "thinking", thinking: "Let me check the failing test first.", signature: "sig-abc" },
+      ],
+    },
+  });
+
+  assert.deepEqual(events.map((event) => event.type), ["item.completed"]);
+  const event = events[0]!;
+  assertTankEventFixture(event);
+  assert.equal(event.actor, "assistant");
+  assert.equal(event.source, "claude");
+  assert.equal(event.turn_id, "turn-run-123");
+  assert.equal(event.timeline_id, "turn-run-123:item:assistant:claude-msg-think:thinking:0");
+  assert.equal(event.provider_item_id, "assistant:claude-msg-think:thinking:0");
+  assert.equal(event.payload?.kind, "reasoning");
+  assert.equal(event.payload?.title, "reasoning");
+  assert.equal(event.payload?.text, "Let me check the failing test first.");
+  // The signature is resume-faithful state owned by the JSONL snapshot; it must
+  // never appear in the DISPLAY event.
+  assert.equal((event.payload as Record<string, unknown>)?.signature, undefined);
+});
+
+test("adapter emits no reasoning event for an empty or whitespace thinking block", () => {
+  // On Opus 4.8 the default display:"omitted" yields a signed-but-empty
+  // thinking block; before a summary streams in the text can also be blank.
+  // Either way: no event.
+  for (const thinking of ["", "   \n\t  "]) {
+    const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+      type: "assistant",
+      uuid: "claude-msg-empty-think",
+      message: { content: [{ type: "thinking", thinking, signature: "sig-empty" }] },
+    });
+    assert.deepEqual(events, []);
+  }
+});
+
+test("adapter emits no reasoning event for a redacted_thinking block", () => {
+  // Encrypted thinking has no readable text — emit nothing.
+  const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+    type: "assistant",
+    uuid: "claude-msg-redacted-think",
+    message: { content: [{ type: "redacted_thinking", data: "EvQBencryptedblob==" }] },
+  });
+  assert.deepEqual(events, []);
+});
+
+test("adapter never promotes Claude reasoning to the turn final answer", () => {
+  // A thinking-only assistant message produces no final-answer candidate, so a
+  // successful result carries no final_answer — reasoning self-talk is never the
+  // assistant's settled response.
+  const ctx = turn();
+  canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "assistant",
+    uuid: "claude-msg-think-only",
+    message: { content: [{ type: "thinking", thinking: "Reasoning, not an answer.", signature: "s" }] },
+  });
+  assert.equal(ctx.finalAnswer, undefined);
+
+  const result = canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "result",
+    subtype: "success",
+    uuid: "claude-result-after-think",
+  });
+  assert.equal(result[0]?.type, "turn.completed");
+  assert.equal(result[0]?.payload?.final_answer, undefined);
+});
+
+test("adapter does not let Claude reasoning clear an existing final-answer candidate", () => {
+  // A prior assistant text set the final-answer candidate; a trailing
+  // thinking-only message must not affect turn.finalAnswer.
+  const ctx = turn();
+  canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "assistant",
+    uuid: "claude-msg-answer",
+    message: { content: [{ type: "text", text: "The answer is 42." }] },
+  });
+  assert.deepEqual(ctx.finalAnswer, {
+    timelineIDs: ["turn-run-123:item:assistant:claude-msg-answer:text:0"],
+    providerItemIDs: ["assistant:claude-msg-answer:text:0"],
+  });
+
+  canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "assistant",
+    uuid: "claude-msg-trailing-think",
+    message: { content: [{ type: "thinking", thinking: "On reflection that holds.", signature: "s" }] },
+  });
+  assert.deepEqual(ctx.finalAnswer, {
+    timelineIDs: ["turn-run-123:item:assistant:claude-msg-answer:text:0"],
+    providerItemIDs: ["assistant:claude-msg-answer:text:0"],
+  });
+});
+
+test("adapter preserves interleaved order of Claude reasoning, text, and tool blocks", () => {
+  // thinking → text → tool_use in one assistant message yields, in block order:
+  // a reasoning item.completed, a message item.completed, then a tool
+  // item.started. The reasoning is sequenced by its block index like the others.
+  const ctx = turn();
+  const events = canonicalEventsForClaudeMessage(cfg(), ctx, {
+    type: "assistant",
+    uuid: "claude-msg-interleaved",
+    message: {
+      content: [
+        { type: "thinking", thinking: "First I will read, then run it.", signature: "s" },
+        { type: "text", text: "Reading the file, then running the test." },
+        { type: "tool_use", id: "toolu_bash", name: "Bash", input: { command: "npm test" } },
+      ],
+    },
+  });
+
+  assert.deepEqual(
+    events.map((event) => [event.type, event.payload?.kind, event.actor]),
+    [
+      ["item.completed", "reasoning", "assistant"],
+      ["item.completed", "message", "assistant"],
+      ["item.started", "tool", "tool"],
+    ],
+  );
+  for (const event of events) assertTankEventFixture(event);
+  // The non-pausing tool_use clears the final-answer candidate; reasoning and
+  // text never set it back, so this message leaves no final answer.
+  assert.equal(ctx.finalAnswer, undefined);
+});
+
+test("adapter bounds a pathologically long Claude reasoning summary", () => {
+  // Reasoning is display material; an over-long summary is clipped with a
+  // visible marker so the durable row and SSE payload stay bounded.
+  const longThinking = "x".repeat(16_050);
+  const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+    type: "assistant",
+    uuid: "claude-msg-long-think",
+    message: { content: [{ type: "thinking", thinking: longThinking, signature: "s" }] },
+  });
+  assert.equal(events.length, 1);
+  const text = events[0]?.payload?.text as string;
+  // Clipped to the 16_000-char cap plus the truncation marker, and the marker
+  // is present so a reader can tell it was cut.
+  assert.ok(text.length < longThinking.length);
+  assert.ok(text.startsWith("x".repeat(16_000)));
+  assert.match(text, /reasoning summary truncated/);
+  assertTankEventFixture(events[0]!);
+});
+
 test("adapter tags the cumulative Claude result terminal as claude.result", () => {
   // result.usage is cumulative across the turn; it drives cost, not the
   // context gauge. The claude.result tag tells the reader to ignore it for
