@@ -2,7 +2,7 @@ import type { Config } from "../config.js";
 import type { CodexEvent } from "../sessionEvents.js";
 import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
 import { contextCompactedEvent, itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
-import { itemOutcomeTotal } from "../metrics.js";
+import { itemOutcomeTotal, reasoningEmittedTotal } from "../metrics.js";
 
 export interface CodexAdapterTurn {
   turnID: string;
@@ -235,6 +235,20 @@ export class CodexTankEventAdapter {
       fallbackText: event.type === "item.completed" ? this.itemTextByID.get(providerItemID) : undefined,
       outcome: event.type === "item.completed" ? outcome : undefined,
     });
+    // Reasoning is a completed-only DISPLAY item carrying the model's summary.
+    // The transport accumulates the streamed summary deltas and folds them into
+    // the completed item; the live started/updated frames carry no durable
+    // text. Per the transcript contract we persist completed items, not live
+    // deltas — so item.started reasoning is suppressed, and a completed
+    // reasoning item only becomes a durable row once it actually has text. An
+    // empty completed reasoning item is dropped (and counted) rather than
+    // publishing an empty kind:"reasoning" row.
+    if (itemRecord.type === "reasoning") {
+      if (event.type === "item.started") return [];
+      const hasText = typeof payload.text === "string" && payload.text.trim().length > 0;
+      reasoningEmittedTotal.labels(hasText ? "emitted" : "skipped_empty").inc();
+      if (!hasText) return [];
+    }
     if (event.type === "item.completed") itemOutcomeTotal.labels(outcome.kind, outcome.reason ?? "none").inc();
     if (event.type === "item.started") this.rememberItemText(providerItemID, codexItemText(itemRecord));
     if (event.type === "item.completed") this.itemTextByID.delete(providerItemID);

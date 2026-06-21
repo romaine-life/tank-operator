@@ -60,6 +60,45 @@ type QueuedEvent =
   | { kind: "event"; event: CodexEvent }
   | { kind: "error"; error: Error };
 
+// ReasoningAccumulator holds the streamed reasoning summary text for one
+// reasoning item id while the turn is in flight. The Codex app-server does NOT
+// put the reasoning summary on the completed reasoning item — it streams it as
+// item/reasoning notifications: summaryPartAdded marks (and may seed) a new
+// summary section, summaryTextDelta appends to a section, and textDelta streams
+// the raw reasoning content. We aggregate those deltas here and fold the result
+// into the completed item so the durable kind:"reasoning" display row is not
+// empty (verified regression: payload.text="" / raw_item.text="").
+type ReasoningAccumulator = {
+  summaryParts: string[];
+  rawText: string;
+};
+
+// Codex reasoning summaries are normally a few short paragraphs, but a
+// pathological turn can stream an effectively unbounded chain-of-thought. The
+// folded reasoning text is bounded here so a single reasoning row cannot
+// dominate the per-event transport budget; the runner's generic event
+// truncation is the outer backstop, but bounding at the fold keeps the cut on a
+// defined marker instead of a mid-word slice deep inside the payload.
+const MAX_REASONING_TEXT_CHARS = 16_000;
+const REASONING_TRUNCATION_MARKER = "\n\n[reasoning summary truncated]";
+
+function boundReasoningText(text: string): string {
+  if (text.length <= MAX_REASONING_TEXT_CHARS) return text;
+  return `${text.slice(0, MAX_REASONING_TEXT_CHARS)}${REASONING_TRUNCATION_MARKER}`;
+}
+
+// summaryPartIndex resolves which summary section a reasoning delta lands in.
+// summaryPartAdded defaults to a brand-new section (append); summaryTextDelta
+// defaults to the current (last) section. A provider-supplied summaryIndex
+// always wins. Sparse holes are tolerated — accumulatedReasoningText filters
+// empty/undefined sections before joining.
+function summaryPartIndex(raw: unknown, partsLength: number, isNewPart: boolean): number {
+  const provided = finiteNumber(raw);
+  if (provided !== undefined && provided >= 0) return Math.floor(provided);
+  if (isNewPart) return partsLength;
+  return Math.max(0, partsLength - 1);
+}
+
 type CodexUsage = {
   input_tokens: number;
   cached_input_tokens: number;
@@ -185,6 +224,7 @@ export class CodexAppServerTransport {
     interruptSent: boolean;
   } | null = null;
   private readonly itemsByID = new Map<string, JsonRecord>();
+  private readonly reasoningByItemID = new Map<string, ReasoningAccumulator>();
   private readonly latestUsageByProviderTurnID = new Map<string, ObservedCodexUsage>();
   private reportedContextWindowTokens: number | null = null;
   private readonly compactedProviderTurnIDs = new Set<string>();
@@ -277,6 +317,7 @@ export class CodexAppServerTransport {
     };
     this.activeTurnControl = turnControl;
     this.itemsByID.clear();
+    this.reasoningByItemID.clear();
     let terminalSeen = false;
     let abortRequested = false;
     const onAbort = () => {
@@ -341,6 +382,7 @@ export class CodexAppServerTransport {
         this.activeProviderTurnID = null;
       }
       this.itemsByID.clear();
+      this.reasoningByItemID.clear();
       this.latestUsageByProviderTurnID.clear();
       this.compactedProviderTurnIDs.clear();
       queue.close();
@@ -535,6 +577,9 @@ export class CodexAppServerTransport {
       method === "item/completed" ||
       method === "item/updated" ||
       method === "item/commandExecution/outputDelta" ||
+      method === "item/reasoning/summaryPartAdded" ||
+      method === "item/reasoning/summaryTextDelta" ||
+      method === "item/reasoning/textDelta" ||
       method === "error";
     if (!KNOWN_NOTIFICATION) {
       unmappedProviderEventTotal.labels(method, "none").inc();
@@ -664,6 +709,9 @@ export class CodexAppServerTransport {
       }
       const codexItem = appServerItemToCodexItem(item as JsonRecord);
       const itemID = typeof codexItem.id === "string" ? codexItem.id : "";
+      if (codexItem.type === "reasoning" && method === "item/completed") {
+        this.finalizeReasoningItem(codexItem, itemID);
+      }
       if (itemID) this.itemsByID.set(itemID, codexItem);
       queue.push({
         kind: "event",
@@ -696,6 +744,17 @@ export class CodexAppServerTransport {
       };
       this.itemsByID.set(itemID, next);
       queue.push({ kind: "event", event: { type: "item.updated", item: next } });
+      return;
+    }
+    if (
+      method === "item/reasoning/summaryPartAdded" ||
+      method === "item/reasoning/summaryTextDelta" ||
+      method === "item/reasoning/textDelta"
+    ) {
+      // Accumulate the streamed reasoning summary; no Tank event is emitted
+      // here. The completed reasoning item folds this text in
+      // (finalizeReasoningItem) — we persist completed items, not live deltas.
+      this.accumulateReasoningDelta(method, params);
       return;
     }
     if (method === "error") {
@@ -794,6 +853,56 @@ export class CodexAppServerTransport {
     if (this.compactedProviderTurnIDs.has(providerTurnID)) return false;
     this.compactedProviderTurnIDs.add(providerTurnID);
     return true;
+  }
+
+  // accumulateReasoningDelta folds one streamed reasoning notification into the
+  // per-item accumulator. summaryTextDelta/summaryPartAdded build the summary
+  // section-by-section; textDelta builds the raw reasoning content stream.
+  private accumulateReasoningDelta(method: string, params?: JsonRecord): void {
+    const itemID = nonEmptyString(params?.itemId);
+    if (!itemID) return;
+    const acc = this.reasoningByItemID.get(itemID) ?? { summaryParts: [], rawText: "" };
+    const delta = typeof params?.delta === "string" ? params.delta : "";
+    if (method === "item/reasoning/textDelta") {
+      acc.rawText += delta;
+    } else {
+      const idx = summaryPartIndex(
+        params?.summaryIndex,
+        acc.summaryParts.length,
+        method === "item/reasoning/summaryPartAdded",
+      );
+      acc.summaryParts[idx] = `${acc.summaryParts[idx] ?? ""}${delta}`;
+    }
+    this.reasoningByItemID.set(itemID, acc);
+  }
+
+  // accumulatedReasoningText renders the accumulated reasoning text for an item,
+  // preferring the section summary (the user-facing reasoning summary) and
+  // falling back to the raw reasoning content when no summary was streamed.
+  private accumulatedReasoningText(itemID: string): string {
+    const acc = this.reasoningByItemID.get(itemID);
+    if (!acc) return "";
+    const summary = acc.summaryParts
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+      .map((part) => part.trim())
+      .join("\n\n");
+    if (summary.length > 0) return summary;
+    return acc.rawText.trim();
+  }
+
+  // finalizeReasoningItem folds the streamed summary into a completed reasoning
+  // item whose own text is empty, then bounds the result. The accumulator is
+  // dropped once consumed.
+  private finalizeReasoningItem(codexItem: JsonRecord, itemID: string): void {
+    const existing = typeof codexItem.text === "string" ? codexItem.text : "";
+    const text =
+      existing.trim().length > 0
+        ? existing
+        : itemID
+          ? this.accumulatedReasoningText(itemID)
+          : "";
+    codexItem.text = boundReasoningText(text);
+    if (itemID) this.reasoningByItemID.delete(itemID);
   }
 }
 
@@ -920,9 +1029,15 @@ export function appServerItemToCodexItem(item: JsonRecord): JsonRecord {
     return { id: item.id, type: "agent_message", text: item.text };
   }
   if (type === "reasoning") {
-    const summary = Array.isArray(item.summary) ? item.summary.join("\n") : undefined;
+    // The completed reasoning item normally carries no aggregated text — the
+    // app-server streams the summary as item/reasoning/* deltas, which the
+    // transport folds in (finalizeReasoningItem) when this is empty. We still
+    // map whatever IS present: a populated summary/content array, or a direct
+    // `text` field (the SDK ReasoningItem shape) when the provider sets one.
+    const summary = Array.isArray(item.summary) ? item.summary.join("\n\n") : undefined;
     const content = Array.isArray(item.content) ? item.content.join("\n") : undefined;
-    return { id: item.id, type: "reasoning", text: content || summary };
+    const direct = typeof item.text === "string" ? item.text : undefined;
+    return { id: item.id, type: "reasoning", text: content || summary || direct || "" };
   }
   if (type === "commandExecution") {
     return {

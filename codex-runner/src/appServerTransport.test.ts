@@ -220,6 +220,168 @@ test("runTurn maps Codex contextCompaction item frames once", async () => {
   assert.equal(terminal.value.type, "turn.completed");
 });
 
+test("runTurn folds streamed reasoning summary into the completed reasoning item", async () => {
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    start: () => Promise<void>;
+    ensureThread: (threadOptions: ThreadOptions) => Promise<string>;
+    request: (method: string, params: unknown) => Promise<unknown>;
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+  internals.start = async () => {};
+  internals.ensureThread = async () => "thread-1";
+  internals.request = async () => ({ turn: { id: "turn-provider-1" } });
+
+  const iter = transport.runTurn("explain", {} as ThreadOptions);
+  const first = iter.next();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // The completed reasoning item carries no aggregated text; the summary is
+  // streamed as item/reasoning notifications. The live item.started frame
+  // therefore has empty text.
+  internals.handleNotification("item/started", { item: { id: "rsn-1", type: "reasoning" } });
+  const started = await first;
+  assert.equal(started.done, false);
+  if (started.done) throw new Error("expected item.started");
+  assert.equal(started.value.type, "item.started");
+  assert.deepEqual(started.value.item, { id: "rsn-1", type: "reasoning", text: "" });
+
+  internals.handleNotification("item/reasoning/summaryPartAdded", { itemId: "rsn-1", summaryIndex: 0 });
+  internals.handleNotification("item/reasoning/summaryTextDelta", {
+    itemId: "rsn-1",
+    summaryIndex: 0,
+    delta: "Investigating ",
+  });
+  internals.handleNotification("item/reasoning/summaryTextDelta", {
+    itemId: "rsn-1",
+    summaryIndex: 0,
+    delta: "the failure.",
+  });
+  internals.handleNotification("item/reasoning/summaryPartAdded", { itemId: "rsn-1", summaryIndex: 1 });
+  internals.handleNotification("item/reasoning/summaryTextDelta", {
+    itemId: "rsn-1",
+    summaryIndex: 1,
+    delta: "Then fixing it.",
+  });
+
+  internals.handleNotification("item/completed", { item: { id: "rsn-1", type: "reasoning" } });
+  const completed = await iter.next();
+  assert.equal(completed.done, false);
+  if (completed.done) throw new Error("expected item.completed");
+  assert.equal(completed.value.type, "item.completed");
+  assert.deepEqual(completed.value.item, {
+    id: "rsn-1",
+    type: "reasoning",
+    text: "Investigating the failure.\n\nThen fixing it.",
+  });
+
+  internals.handleNotification("turn/completed", {
+    threadId: "thread-1",
+    turn: { id: "turn-provider-1", status: "completed" },
+  });
+  const terminal = await iter.next();
+  assert.equal(terminal.done, false);
+  if (terminal.done) throw new Error("expected terminal event");
+  assert.equal(terminal.value.type, "turn.completed");
+});
+
+test("runTurn falls back to streamed raw reasoning text when no summary streamed", async () => {
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    start: () => Promise<void>;
+    ensureThread: (threadOptions: ThreadOptions) => Promise<string>;
+    request: (method: string, params: unknown) => Promise<unknown>;
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+  internals.start = async () => {};
+  internals.ensureThread = async () => "thread-1";
+  internals.request = async () => ({ turn: { id: "turn-provider-1" } });
+
+  const iter = transport.runTurn("explain", {} as ThreadOptions);
+  const first = iter.next();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  internals.handleNotification("item/reasoning/textDelta", { itemId: "rsn-2", delta: "raw chain " });
+  internals.handleNotification("item/reasoning/textDelta", { itemId: "rsn-2", delta: "of thought" });
+  internals.handleNotification("item/completed", { item: { id: "rsn-2", type: "reasoning" } });
+
+  const completed = await first;
+  assert.equal(completed.done, false);
+  if (completed.done) throw new Error("expected item.completed");
+  assert.equal(completed.value.type, "item.completed");
+  assert.deepEqual(completed.value.item, {
+    id: "rsn-2",
+    type: "reasoning",
+    text: "raw chain of thought",
+  });
+});
+
+test("runTurn bounds a pathological reasoning summary with a truncation marker", async () => {
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    start: () => Promise<void>;
+    ensureThread: (threadOptions: ThreadOptions) => Promise<string>;
+    request: (method: string, params: unknown) => Promise<unknown>;
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+  internals.start = async () => {};
+  internals.ensureThread = async () => "thread-1";
+  internals.request = async () => ({ turn: { id: "turn-provider-1" } });
+
+  const iter = transport.runTurn("explain", {} as ThreadOptions);
+  const first = iter.next();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const huge = "x".repeat(20_000);
+  internals.handleNotification("item/reasoning/summaryTextDelta", {
+    itemId: "rsn-big",
+    summaryIndex: 0,
+    delta: huge,
+  });
+  internals.handleNotification("item/completed", { item: { id: "rsn-big", type: "reasoning" } });
+
+  const completed = await first;
+  assert.equal(completed.done, false);
+  if (completed.done) throw new Error("expected item.completed");
+  const text = (completed.value.item as { text: string }).text;
+  const marker = "\n\n[reasoning summary truncated]";
+  assert.equal(text.length, 16_000 + marker.length);
+  assert.equal(text.startsWith("x".repeat(16_000)), true);
+  assert.equal(text.endsWith(marker), true);
+});
+
+test("streamed reasoning notifications are recognized, not counted as unmapped", async () => {
+  await registry.resetMetrics();
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+  for (const method of [
+    "item/reasoning/summaryPartAdded",
+    "item/reasoning/summaryTextDelta",
+    "item/reasoning/textDelta",
+  ]) {
+    internals.handleNotification(method, { itemId: "rsn-1", summaryIndex: 0, delta: "x" });
+  }
+  const metrics = await registry.metrics();
+  assert.doesNotMatch(
+    metrics,
+    /tank_runner_unmapped_provider_event_total\{[^}]*type="item\/reasoning/,
+  );
+});
+
 test("runTurn abort cuts ahead of queued events and interrupts once turn id is known", async () => {
   const ctrl = new AbortController();
   const transport = new CodexAppServerTransport({

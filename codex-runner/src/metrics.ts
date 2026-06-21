@@ -139,6 +139,25 @@ export const itemOutcomeTotal = new Counter({
   registers: [registry],
 });
 
+// reasoningEmittedTotal classifies each COMPLETED Codex reasoning item by
+// whether it carried display text once the transport folded the streamed
+// summary deltas (item/reasoning/summaryPartAdded + summaryTextDelta +
+// textDelta) into the otherwise-empty completed item. `emitted` is a durable
+// kind:"reasoning" row written to the ledger; `skipped_empty` is a completed
+// reasoning item that STILL had no text after folding — so no empty reasoning
+// row is published. The bug this fixes shipped reasoning rows with
+// payload.text="" because the completed item carries no aggregated text and the
+// streamed summary was dropped; a sustained `skipped_empty` rate on turns that
+// clearly reason is the regression signature that streamed-summary capture
+// broke again. Reasoning is a completed-only display item, so item.started /
+// item.updated reasoning frames are not counted here.
+export const reasoningEmittedTotal = new Counter({
+  name: "tank_runner_reasoning_emitted_total",
+  help: "Completed Codex reasoning items classified by whether they carried display text (emitted) or were dropped as empty after folding the streamed summary (skipped_empty).",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
 // unmappedProviderEventTotal — sibling of the claude-runner counter. On the
 // codex runner the unit is an app-server JSONRPC notification method that
 // handleNotification recognized no branch for (type=method, subtype="none").
