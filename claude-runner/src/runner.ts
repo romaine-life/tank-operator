@@ -1506,6 +1506,19 @@ export class Runner {
       // renders stream_event deltas live and snapshots to the canonical
       // assistant message when it arrives.
       includePartialMessages: true,
+      // Surface Claude's extended-thinking reasoning in the GUI transcript.
+      // display:"summarized" asks for API-side thinking SUMMARIES (human-
+      // readable text) on each thinking block; the adapter
+      // (canonicalEventsForClaudeMessage) maps those into durable
+      // kind:"reasoning" DISPLAY events. type:"adaptive" leaves the model to
+      // decide WHEN and HOW MUCH to think — summarized only changes whether the
+      // summary text is surfaced, not the thinking itself, so this does not slow
+      // or change turns. Resume safety: the full thinking blocks + signatures
+      // still flow to the SDK on-disk JSONL that transcriptCapture.ts ships, and
+      // that snapshot — not session_events — is the resume source, so the
+      // thinking_block_modified resume path (classifyProviderFailure) is
+      // unaffected and must stay at zero.
+      thinking: { type: "adaptive", display: "summarized" },
       mcpServers,
       // Bare mode would skip CLAUDE.md / skills / hooks; we want those.
       model,
