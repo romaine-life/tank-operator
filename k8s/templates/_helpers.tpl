@@ -132,6 +132,19 @@ codex-credentials
 {{- .Values.codexApiProxy.serviceHost -}}
 {{- end -}}
 
+{{- /*
+agent-egress-proxy ("the wall") host. Returns the FIXED production wall FQDN for
+EVERY render — production AND test slots — exactly like apiProxyHost /
+oauthGatewayHost above. Slots do NOT render their own wall (agent-egress-proxy.yaml
+stays `not isTestEnv`); they SHARE the production wall so slot session GitHub egress
+is observed by the same chokepoint. A slot-namespace-derived host would resolve to a
+non-existent Service (empty ClusterIP -> egressProxyGit=false -> legacy in-pod path),
+so this must never be the orchestratorNamespace-derived host.
+*/}}
+{{- define "tank-operator.agentEgressProxyHost" -}}
+{{- .Values.agentEgressProxy.serviceHost -}}
+{{- end -}}
+
 {{- define "tank-operator.codexCredentialsSecret" -}}
 {{- .Values.externalSecret.codexCredentials.secretName -}}
 {{- end -}}
