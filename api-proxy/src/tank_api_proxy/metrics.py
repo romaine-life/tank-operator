@@ -88,6 +88,16 @@ single_flight_waits_total = Counter(
     ["provider"],
 )
 
+egress_exchange_total = Counter(
+    "tank_api_proxy_egress_exchange_total",
+    "SA-token -> session-JWT exchanges performed by the GitHub egress governor "
+    "(the wall) before minting. result=ok (succeeded first try), retried "
+    "(succeeded only after a bounded retry — the IdP startup-race signature), "
+    "failed (exhausted retries; the request then fails closed with 503). Cache "
+    "hits do not increment. Only the github (egress) provider emits this series.",
+    ["provider", "result"],
+)
+
 envoy_sds_ssl_context_updates = Gauge(
     "tank_api_proxy_envoy_sds_ssl_context_updates",
     "Current Envoy downstream SSL context updates performed through SDS, "
@@ -113,6 +123,13 @@ envoy_sds_stats_scrape_total = Counter(
 def record_ext_proc_request(outcome: str) -> None:
     """outcome is one of: injected, passthrough, missing_token."""
     ext_proc_requests_total.labels(provider=PROVIDER, outcome=outcome).inc()
+
+
+def record_exchange(result: str) -> None:
+    """result is one of: ok, retried, failed. Emitted by the egress governor's
+    SA-token exchange (the GitHub wall); a `failed` exchange fails the request
+    closed with 503, and a rising `retried` rate is the IdP startup-race signal."""
+    egress_exchange_total.labels(provider=PROVIDER, result=result).inc()
 
 
 def record_upstream_status(status: int | None) -> None:

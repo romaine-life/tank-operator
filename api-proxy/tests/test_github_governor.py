@@ -232,6 +232,31 @@ def test_parse_exchange_result() -> None:
     assert gg.parse_exchange_result("nope") == ("", 0.0)
 
 
+def test_is_retryable_exchange_status_classifies_transient_vs_permanent() -> None:
+    # Transient: the IdP startup race (instant 401), auth-not-ready (403), request
+    # timeout (408), throttle (429), any 5xx, and a network/timeout error (0 — no
+    # HTTP response at all) all heal on retry.
+    for transient in (0, 401, 403, 408, 429, 500, 502, 503, 504):
+        assert gg.is_retryable_exchange_status(transient), transient
+    # Permanent: a 400 is a malformed request (the wall sends a fixed empty body, so
+    # it never provokes one) and a 2xx is success — neither is retried here.
+    for permanent in (200, 201, 204, 400):
+        assert not gg.is_retryable_exchange_status(permanent), permanent
+
+
+def test_exchange_retry_budget_fits_envoy_message_timeout() -> None:
+    # The retry runs inside the ext_proc header phase, which Envoy bounds at the
+    # agent-egress-proxy's 10s message_timeout. The egress-context fetch + mint run
+    # in the same phase after it, so the worst-case exchange time must leave headroom.
+    backoffs = gg.EXCHANGE_RETRY_BACKOFFS_S
+    assert len(backoffs) >= 2, "must actually retry, not single-shot"
+    assert all(b > 0 for b in backoffs), "backoffs are real sleeps"
+    attempts = len(backoffs) + 1
+    worst_case_s = attempts * gg.EXCHANGE_ATTEMPT_TIMEOUT_S + sum(backoffs)
+    # < 9s leaves >1s of the 10s budget for the egress-context fetch + mint.
+    assert worst_case_s < 9.0, f"exchange worst case {worst_case_s}s eats the 10s Envoy budget"
+
+
 def test_jwt_from_authorization_token_bearer_and_basic() -> None:
     # `gh` and the GitHub REST API default to the `token` scheme — this is the leg that
     # was missing, leaving every gh API call unminted and 401'd in restricted sessions.

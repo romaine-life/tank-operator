@@ -27,6 +27,7 @@ unidentified egress) is the later NetworkPolicy phase, not this code.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import time
@@ -41,6 +42,7 @@ from envoy.service.ext_proc.v3 import external_processor_pb2_grpc as ext_proc_gr
 from envoy.type.v3 import http_status_pb2
 
 from . import github_governor as gg
+from . import metrics
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +87,21 @@ def _deny(reason: str) -> "ext_proc_pb2.ProcessingResponse":
         immediate_response=ext_proc_pb2.ImmediateResponse(
             status=http_status_pb2.HttpStatus(code=403),
             body=f"blocked by Tank restricted git: {reason}\n".encode(),
+        )
+    )
+
+
+def _unavailable(reason: str) -> "ext_proc_pb2.ProcessingResponse":
+    """Fail CLOSED with 503 when the wall cannot establish the caller's session
+    identity (the SA-token exchange is unavailable even after bounded retry). 503 is
+    honest and retryable: the raw SA token never reaches GitHub, git's smart-HTTP
+    transport and gh surface a clear status, and the next attempt succeeds once the
+    IdP catches up. Replaces the soft-cutover pass-through (the in-pod token fallback
+    that C2 deleted — the wall is the only egress path now)."""
+    return ext_proc_pb2.ProcessingResponse(
+        immediate_response=ext_proc_pb2.ImmediateResponse(
+            status=http_status_pb2.HttpStatus(code=503),
+            body=f"tank egress: {reason}\n".encode(),
         )
     )
 
@@ -188,13 +205,21 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
         # The pod presents its RAW k8s SA token; exchange it for the session's
         # role=service JWT (auto-resolved owner) before parsing identity / minting.
+        # _exchange already absorbs the transient IdP startup race with bounded
+        # retry, so a credential that STILL doesn't resolve to a session identity
+        # here is a persistent failure (bad token or IdP down), not a race.
         service_jwt = await self._exchange(raw_token)
         ident = gg.identity_from_jwt(service_jwt)
         if not ident.ok:
-            # Soft cutover: a credential that doesn't exchange to a session identity
-            # passes through untouched (the in-pod token still works during cutover).
-            log.info("egress: pass-through (no session identity from exchange) %s %s", method, path)
-            return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
+            # Fail CLOSED. Pre-C2 this passed through so the in-pod token could still
+            # reach GitHub during the cutover; that fallback is gone — the wall is the
+            # only egress path now. Passing through would leak the raw SA token to
+            # GitHub and surface as a confusing upstream error (the 1194 "proxy going
+            # down" report); a 503 is honest and retryable. The anonymous case (no
+            # credential at all — git's first info/refs probe) is handled above and is
+            # still passed through, so git's own auth negotiation is unaffected.
+            log.warning("egress: DENY (session identity unavailable from exchange) %s %s", method, path)
+            return _unavailable("session identity unavailable; retry shortly")
         st.ident = ident
 
         # EVERY session routes through the wall now. Fetch its egress context (repos +
@@ -343,20 +368,38 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         hit = self._xchg.get(raw_token)
         if hit and hit[1] > time.time() + 30:
             return hit[0]
-        try:
-            r = await self._http.post(
-                self._exchange_url,
-                headers={"Authorization": f"Bearer {raw_token}", "Content-Type": "application/json"},
-                json={},
+        backoffs = gg.EXCHANGE_RETRY_BACKOFFS_S
+        for attempt in range(len(backoffs) + 1):
+            status, detail = 0, ""
+            try:
+                r = await self._http.post(
+                    self._exchange_url,
+                    headers={"Authorization": f"Bearer {raw_token}", "Content-Type": "application/json"},
+                    json={},
+                    timeout=gg.EXCHANGE_ATTEMPT_TIMEOUT_S,
+                )
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                status, detail = exc.response.status_code, str(exc)
+            except Exception as exc:  # connect/read timeout, DNS, reset
+                status, detail = 0, str(exc)
+            else:
+                token, expires_at = gg.parse_exchange_result(r.json())
+                if token:
+                    self._xchg[raw_token] = (token, expires_at or (time.time() + 600))
+                    metrics.record_exchange("retried" if attempt else "ok")
+                    return token
+                status, detail = r.status_code, "2xx without a token in body"
+            if attempt < len(backoffs) and gg.is_retryable_exchange_status(status):
+                await asyncio.sleep(backoffs[attempt])
+                continue
+            log.warning(
+                "egress: token exchange failed (status=%s) after %d attempt(s): %s",
+                status, attempt + 1, detail,
             )
-            r.raise_for_status()
-            token, expires_at = gg.parse_exchange_result(r.json())
-        except Exception as exc:
-            log.warning("egress: token exchange failed: %s", exc)
+            metrics.record_exchange("failed")
             return ""
-        if token:
-            self._xchg[raw_token] = (token, expires_at or (time.time() + 600))
-        return token
+        return ""  # unreachable (loop always returns); satisfies the type checker
 
     async def _mint(self, ident: gg.SessionIdentity, repos: list[str], decision: gg.Decision) -> str:
         payload = gg.mint_call_payload(repos, decision)
