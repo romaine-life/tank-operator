@@ -377,6 +377,11 @@ Evidence:
   ("reasoning is Turn-activity material, never a settled main-transcript row")
   pins that `RunMessages` renders no reasoning block while
   `RunTurnActivityGroup` and `RunTurnActivityScreen` do.
+- Observability: both runners emit
+  `tank_runner_reasoning_emitted_total{result=emitted|skipped_empty}` — completed
+  reasoning display items counted by whether they carried text; a rising
+  `skipped_empty` rate is the regression signature that reasoning capture broke.
+  Documented in `docs/observability.md` (tank_runner_* taxonomy).
 
 ## Background Wake Continuation Projection
 

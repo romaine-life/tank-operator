@@ -462,6 +462,13 @@ All metric names are prefixed `tank_`. The full namespace:
   terminal. A regression signature for usage observability is a Claude
   turn (`mode="claude"`) with assistant messages but zero `snapshot`
   increments; compare against `tank_runner_turn_duration_seconds_count`.
+  `tank_runner_reasoning_emitted_total{result}` counts completed reasoning
+  display items by whether they carried text — `result` ∈ {`emitted`,
+  `skipped_empty`}. Reasoning is a populated Turn-activity display item
+  (docs/features/transcript/contract.md; the "Reasoning Display In Turn
+  Activity" capability), so a rising `skipped_empty` rate relative to `emitted`
+  is the regression signature that reasoning capture broke (empty/redacted
+  summaries are dropped at projection and never reach the UI).
   `tank_runner_input_reply_answer_shape_total{shape}` counts AskUserQuestion
   `input_reply` answers at the runner/provider boundary after durable
   annotations have been applied. `shape` is a closed set:
