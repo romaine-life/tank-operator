@@ -5,6 +5,7 @@ import type { Config } from "../config.js";
 import type { CodexEvent } from "../sessionEvents.js";
 import { isTankConversationEvent } from "../../../runner-shared/conversation.js";
 import { stampTankEvent } from "../../../runner-shared/conversation-builders.js";
+import { registry } from "../metrics.js";
 import {
   CodexTankEventAdapter,
   canonicalEventsForCodexEvent,
@@ -47,15 +48,95 @@ function mappedEvent(adapter: CodexTankEventAdapter, event: CodexEvent) {
 
 test("emits no Tank event for Codex item.updated frames (live-only retired)", () => {
   const adapter = new CodexTankEventAdapter(cfg());
-  const events = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
-    type: "item.updated",
+  // GUARD: the live-only-retired invariant must hold WITH the reasoning-capture
+  // change. Streaming reasoning partials surface as item.updated frames; even
+  // as the transport accumulates and folds the summary into the completed item,
+  // an item.updated frame must NEVER become a durable Tank event — only the
+  // folded item.completed does.
+  for (const text of ["think", "think harder", "think hardest"]) {
+    const events = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+      type: "item.updated",
+      item: {
+        id: "item_reasoning_1",
+        type: "reasoning",
+        text,
+      },
+    });
+    assert.deepEqual(events, [], `item.updated (${text}) must not produce a Tank event`);
+  }
+});
+
+test("folds completed Codex reasoning summary into a durable assistant reasoning row", () => {
+  const summary = "**Investigating the failure**\n\nThe summary the transport folded in.";
+  const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.completed",
     item: {
       id: "item_reasoning_1",
       type: "reasoning",
-      text: "think",
+      text: summary,
     },
   });
+
+  assert.equal(event.type, "item.completed");
+  assert.equal(event.source, "codex");
+  assert.equal(event.actor, "assistant");
+  assert.equal(event.timeline_id, "turn-run-123:item:item_reasoning_1");
+  assert.equal(event.provider_item_id, "item_reasoning_1");
+  assert.equal(event.visibility, "durable");
+  assert.equal(event.payload?.kind, "reasoning");
+  assert.equal(event.payload?.text, summary);
+});
+
+test("drops an empty completed Codex reasoning item without a Tank event", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  for (const variant of [{ text: "" }, { text: "   \n  " }, {}]) {
+    const events = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+      type: "item.completed",
+      item: { id: "item_reasoning_empty", type: "reasoning", ...variant },
+    });
+    assert.deepEqual(
+      events,
+      [],
+      `empty reasoning (${JSON.stringify(variant)}) must not produce a Tank event`,
+    );
+  }
+});
+
+test("suppresses live Codex reasoning item.started frames (completed-only display)", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const events = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+    type: "item.started",
+    item: { id: "item_reasoning_live", type: "reasoning", text: "partial thought" },
+  });
   assert.deepEqual(events, []);
+});
+
+test("counts completed reasoning items as emitted vs skipped_empty", async () => {
+  await registry.resetMetrics();
+  const adapter = new CodexTankEventAdapter(cfg());
+  adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+    type: "item.completed",
+    item: { id: "r1", type: "reasoning", text: "Real reasoning summary." },
+  });
+  adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+    type: "item.completed",
+    item: { id: "r2", type: "reasoning", text: "" },
+  });
+  // A live item.started reasoning frame is suppressed and NOT counted.
+  adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+    type: "item.started",
+    item: { id: "r3", type: "reasoning", text: "thinking" },
+  });
+
+  const metrics = await registry.metrics();
+  assert.match(
+    metrics,
+    /tank_runner_reasoning_emitted_total\{(?=[^}]*result="emitted")(?=[^}]*mode="codex")[^}]*\} 1/,
+  );
+  assert.match(
+    metrics,
+    /tank_runner_reasoning_emitted_total\{(?=[^}]*result="skipped_empty")(?=[^}]*mode="codex")[^}]*\} 1/,
+  );
 });
 
 test("suppresses Codex userMessage provider echoes from the durable Tank transcript", () => {
