@@ -252,6 +252,13 @@ agentEgressProxy:
   # role=service JWT to mcp-github (mint) and to the control-actions endpoint
   # (record), so authority rides the caller's token, not this SA.
   serviceAccount: agent-egress-proxy
+  # Fixed production wall FQDN, consumed via tank-operator.agentEgressProxyHost and
+  # stamped as AGENT_EGRESS_PROXY_HOST on EVERY orchestrator render (production AND
+  # test slots) — mirrors apiProxy.serviceHost / oauthGateway.serviceHost. Slots do
+  # NOT render their own wall (agent-egress-proxy.yaml is `not isTestEnv`); they share
+  # this production Service so slot session GitHub egress is observed by the same
+  # chokepoint. Must stay a fixed prod host, never a per-slot/namespace-derived one.
+  serviceHost: agent-egress-proxy.tank-operator.svc.cluster.local
   # In-cluster mcp-github service (clusterIP port 80) the handler relay-calls to
   # mint the session-owner's App token (mcp-github routes by the JWT's actor_email).
   mcpGithubMintUrl: http://mcp-github.mcp-github.svc.cluster.local:80/

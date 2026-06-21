@@ -149,11 +149,17 @@ spec:
             - name: CODEX_API_PROXY_HOST
               value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
             {{- if .Values.agentEgressProxy.enabled }}
-            # Restricted-git sessions pin github.com / api.github.com at this Service so
+            # Wall-routed sessions pin github.com / api.github.com at this Service so
             # git/gh egress goes through the wall. Resolved to a ClusterIP at
             # session-create time (sessions/manager.go); absent -> no github routing.
+            #
+            # FIXED production wall FQDN for every render incl. slots (see
+            # tank-operator.agentEgressProxyHost). Slots share the production wall —
+            # they do not render one of their own — so a slot orchestrator must point
+            # here, NOT at its own (empty) namespace, or AgentEgressProxyIP resolves ""
+            # and slot sessions silently fall back to the legacy in-pod git path.
             - name: AGENT_EGRESS_PROXY_HOST
-              value: "agent-egress-proxy.{{ include "tank-operator.orchestratorNamespace" . }}.svc.cluster.local"
+              value: {{ include "tank-operator.agentEgressProxyHost" . | quote }}
             {{- end }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
