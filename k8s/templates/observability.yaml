@@ -2052,23 +2052,5 @@ spec:
           annotations:
             summary: "a retired PR-lane control action was written to the durable ledger"
             runbook: "The PR-lane mechanism was deleted end to end and unified into the break-glass branch-lane grant. controlActionFromJSON rejects the retired PR-lane action family and increments tank_break_glass_retired_path_total. A nonzero value means live code (a proxy handler, a Go writer, or a re-added MCP tool) is emitting the retired action again — find and remove the emitter, and confirm scripts/check-removed-pr-lane.mjs (merged into the removed-chat-runtime-guard CI job) still guards the source surface. See docs/branch-lane-grants.md → Migration."
-
-        # Genuine broker faults on the in-pod governed push / PR-write routes —
-        # an installation-token mint failure, the git push itself failing, or a
-        # GitHub API 5xx — as opposed to a refusal (no_grant / branch_out_of_scope
-        # / dirty), which is a normal protocol answer the wrapper acts on and is
-        # dashboard-only. When this fires, a granted agent's git push / gh pr ...
-        # is failing on the governed rail: it is infrastructure, not the agent.
-        - alert: TankBranchLaneBrokerErrors
-          expr: |
-            increase(tank_break_glass_push_total{result="error"}[15m]) > 0
-              or increase(tank_break_glass_pr_open_total{result="error"}[15m]) > 0
-              or increase(tank_break_glass_pr_write_total{result="error"}[15m]) > 0
-          for: 0m
-          labels:
-            severity: warning
-          annotations:
-            summary: "branch-lane governed push/PR-write is failing for an approved grant"
-            runbook: "The mcp-auth-proxy /push-head or /pr-write route returned result=error (HTTP 500) for a session that HOLDS an approved break-glass grant, so a granted agent's `git push` / `gh pr create|edit|ready|comment` is failing on the governed rail. Inspect the session pod's mcp-auth-proxy sidecar logs for `break-glass push-head route failed` / `break-glass pr-write route failed`, cross-check mcp-github health, and read the tank_break_glass_*_total{result} breakdown. Refusals (no_grant, branch_out_of_scope, dirty, detached) are NOT errors — they are expected protocol answers, excluded here by design and visible on the branch-lane dashboard panels."
 {{- end }}
 {{- end }}

@@ -104,6 +104,18 @@ const ignoredRelativePaths = new Set([
   // runbook understands what was retired and why.
   "k8s/templates/observability.yaml",
   "k8s/templates/grafana-dashboard.yaml",
+  // The in-pod git/PR broker routes + their counters (token-mint, push,
+  // pr-write, session-PR-open on the :9999 break-glass listener) were retired
+  // once the agent-egress proxy (the wall) became the GitHub boundary for every
+  // session. These three docs are the design/observability/ledger record of
+  // that retirement and name the retired routes + counters in retirement prose
+  // — documentation of the deletion target, not a resurrection. Same exemption
+  // shape as the sibling guards above. The live wiring (mcp-auth-proxy
+  // server.py, the session-config/session-images scripts, dashboards, alerts,
+  // and the test suites) is cleaned and still checked by this guard.
+  "docs/branch-lane-grants.md",
+  "docs/observability.md",
+  "docs/features/session-lifecycle/capabilities.md",
 ]);
 
 const blocked = [
@@ -907,6 +919,46 @@ const blocked = [
     name: "retired pi-container image identifier",
     pattern: /\bpi-container\b/,
   },
+  // In-pod git/PR write brokers, retired once the agent-egress proxy (the wall)
+  // became the GitHub boundary for EVERY session. The wall mints the scoped
+  // credential server-side and the in-pod wrappers hand it the raw
+  // auth.romaine.life token, so the sidecar's broker HTTP routes
+  // (token-mint / push / pr-write / session-PR-open on the :9999 break-glass
+  // listener), the governed-publish + PR-mutation MCP tools
+  // (publish_current_head / rename_current_session_pr /
+  // update_current_session_pr_body, implemented IN the mcp-auth-proxy sidecar),
+  // and the read-only mint_clone_token carve-out all have no remaining consumer.
+  // Block reintroduction of the handler/helper symbols, the broker route
+  // strings, the wrapper env vars, and the dead per-result counters so a future
+  // change cannot quietly rebuild the in-pod minting/brokering path beside the
+  // wall. KEPT (not blocked): the break-glass MCP server tools
+  // (mint_full_git_token / push_current_head), merge_current_session_pr, and
+  // request_git_break_glass. See docs/features/session-lifecycle/capabilities.md
+  // → "Restricted Session Read-Only Git Access — RETIRED".
+  { name: "retired sidecar publish_current_head handler", pattern: /\b_handle_tank_publish_tool\b/ },
+  { name: "retired sidecar rename_current_session_pr handler", pattern: /\b_handle_tank_rename_pr_tool\b/ },
+  { name: "retired sidecar update_current_session_pr_body handler", pattern: /\b_handle_tank_update_pr_body_tool\b/ },
+  { name: "retired governed gh-pr-create broker handler", pattern: /\b_handle_create_session_pr_wrapper\b/ },
+  { name: "retired in-pod break-glass wrapper-mint broker handler", pattern: /\b_handle_break_glass_wrapper_mint\b/ },
+  { name: "retired in-pod break-glass push-head broker route handler", pattern: /\b_handle_break_glass_push_head_route\b/ },
+  { name: "retired in-pod break-glass pr-write broker route handler", pattern: /\b_handle_break_glass_pr_write_route\b/ },
+  { name: "retired broker pr-write refusal helper", pattern: /\b_pr_write_refusal\b/ },
+  { name: "retired read-only mint_clone_token carve-out predicate", pattern: /\b_is_read_only_clone_token_request\b/ },
+  { name: "retired read-only mintable tool constant", pattern: /\b_GITHUB_READ_ONLY_MINTABLE_TOOL\b/ },
+  { name: "retired in-pod broker route: session-PR-open", pattern: /\/create-session-pr\b/ },
+  { name: "retired in-pod broker route: token-mint", pattern: /\/mint-git-token\b/ },
+  { name: "retired in-pod broker route: push-head", pattern: /\/push-head\b/ },
+  { name: "retired in-pod broker route: pr-write", pattern: /\/pr-write\b/ },
+  { name: "retired broker wrapper env var TANK_CREATE_SESSION_PR_URL", pattern: /\bTANK_CREATE_SESSION_PR_URL\b/ },
+  { name: "retired broker wrapper env var TANK_BREAK_GLASS_PR_WRITE_URL", pattern: /\bTANK_BREAK_GLASS_PR_WRITE_URL\b/ },
+  { name: "retired broker push counter", pattern: /\btank_break_glass_push_total\b/ },
+  { name: "retired broker pr-open counter", pattern: /\btank_break_glass_pr_open_total\b/ },
+  { name: "retired broker pr-write counter", pattern: /\btank_break_glass_pr_write_total\b/ },
+  { name: "retired read-only-mint decision counter", pattern: /\btank_mcp_auth_proxy_github_write_tool_decision_total\b/ },
+  { name: "retired record_break_glass_push helper", pattern: /\brecord_break_glass_push\b/ },
+  { name: "retired record_break_glass_pr_open helper", pattern: /\brecord_break_glass_pr_open\b/ },
+  { name: "retired record_break_glass_pr_write helper", pattern: /\brecord_break_glass_pr_write\b/ },
+  { name: "retired record_github_write_tool_decision helper", pattern: /\brecord_github_write_tool_decision\b/ },
 ];
 
 const failures = [];

@@ -391,7 +391,17 @@ Evidence:
 
 ## Governed Git publish path
 
-Status: in progress
+Status: superseded by the wall. The in-pod governed-publish mechanism described
+below — the `publish_current_head` MCP tool (and the post-commit auto-publish
+hook that drove it), the governed `gh pr create` broker route, and the
+`rename_current_session_pr` / `update_current_session_pr_body` PR-mutation MCP
+tools — was **removed** once the agent-egress proxy (the wall) became the GitHub
+boundary for every session. A plain `git push` / `gh pr create|edit|ready|comment`
+now flows through the wall, which mints the credential server-side, records the
+PR/commit control action, and the CI/mergeability watch is registered via
+`watch_current_session_pr` (and the governed-merge gate). `merge_current_session_pr`
+is unchanged. The text below is retained as the design record of the retired
+in-pod path.
 
 Intent:
 Tank sessions should not rely on an agent remembering to push, open a PR, or
@@ -597,6 +607,19 @@ Open hardening:
 Status: complete (Stages 0–3 — unified model + brokering primitives, the atomic
 cutover that retired the separate PR-lane surface, and observability). Full
 design: [docs/branch-lane-grants.md](../../branch-lane-grants.md).
+
+> **In-pod brokers retired (the wall).** The in-pod broker HTTP routes that
+> delivered branch-lane pushes/PR-writes (token-mint / push / pr-write on the
+> `:9999` break-glass listener) and their per-result counters
+> (`tank_break_glass_push_total` / `tank_break_glass_pr_open_total` /
+> `tank_break_glass_pr_write_total`, plus the `TankBranchLaneBrokerErrors` alert
+> and dashboard panel) were removed once the agent-egress proxy (the wall)
+> became the GitHub boundary for every session: under an approved grant a plain
+> `git push` / `gh pr …` is governed server-side by the wall. The grant model
+> (`request_git_break_glass` → admin approval → scope-bounded, audited writes),
+> the `github.break_glass.*` durable audit ledger, and the
+> `tank_break_glass_retired_path_total` PR-lane reintroduction guard are
+> unchanged. The text below is the design record of the retired broker delivery.
 
 Intent:
 Unify the two parallel governed-write mechanisms a restricted
@@ -817,111 +840,49 @@ Evidence:
   (`TestGitCredentialTankHelperMintsToken`) covers the helper's mode-aware mint
   request shape (full vs read-only), SSE reply parsing, and non-github bail.
 
-## Restricted Session Read-Only Git Access
+## Restricted Session Read-Only Git Access — RETIRED (superseded by the wall)
 
-Status: complete (in-pod path; now reached only by sessions the wall does NOT front
-— test slots, which have no per-slot wall, plus the rare wall-IP-unresolved
-fallback. Every non-slot session — restricted or not — routes through "GitHub
-Egress Proxy (the wall)" below, which observes and governs server-side and
-supersedes this in-pod minting for them. Retiring this path for slots is tracked
-under the egress lockdown work.)
+Status: retired. This capability described the in-pod, mode-aware credential
+helper / `gh` wrapper that minted a read-only `mint_clone_token` for restricted
+sessions (and elevated to a full token under an unlimited break-glass grant via
+the in-pod break-glass server's `mint-git-token` route). It was **removed** once
+the agent-egress proxy (the wall) became the GitHub boundary for **every**
+session — non-slot and slot alike (test slots share the prod wall). The wall
+mints the right-scoped credential server-side from the pod's relayed
+auth.romaine.life token, so the in-pod wrappers now hand the wall the **raw**
+token and do not mint at all. See "GitHub Egress Proxy (the wall)" below.
 
-Intent:
-A restricted session (`TANK_RESTRICTED_GIT=true`) governs *writes* — pushes go
-through `publish_current_head` / break-glass, not a raw token in the shell — but
-it must not feel like *reads* are disabled. The agent already has full GitHub
-read access through the GitHub read MCP tools and the pre-cloned `/workspace`
-repos; restricted sessions additionally get automatic **read-only** git/`gh`
-access so the familiar tools (`gh pr view`, `gh run view`, `git fetch`/`clone`)
-just work and an agent does not wrongly conclude "read is disabled here". A
-read-only token grants nothing the session can't already do via the read MCP
-tools and cannot push, so it does not weaken the governed-write invariant.
+What was removed (mcp-auth-proxy + session-config / session-images):
+- The in-pod `mint_clone_token` paths in `git-credential-tank.sh` and the `gh`
+  wrapper (both restricted read-only and non-restricted full); the wrappers are
+  now egress-only (egress shim hands the raw token, no in-pod mint).
+- The in-pod break-glass broker HTTP routes on the `:9999` listener
+  (token-mint, push, PR-write, session-PR-open) and the wrapper/hook branches
+  that called them.
+- The read-only `mint_clone_token` carve-out in the mcp-auth-proxy github proxy
+  (`_is_read_only_clone_token_request`) and its
+  `tank_mcp_auth_proxy_github_write_tool_decision_total` counter. `mint_clone_token`
+  now stays fully blocked in restricted mode — the wall, not an in-pod mint, is
+  how `gh`/`git` reads work.
 
-Affected contracts:
-- Session Lifecycle
-- Agent Runners
-- Observability
-
-Contract impact:
-- `git-credential-tank.sh` and the `gh` wrapper are **mode-aware**: in restricted
-  mode they request `mint_clone_token` with no `write`/`workflows`/`full`, so
-  mcp-github mints a `{contents: read, metadata: read}` token. Non-restricted
-  mode is unchanged (full read/write).
-- **Break-glass elevation (restricted mode).** Before the read-only mint, both
-  wrappers first POST to the in-pod break-glass server's `POST /mint-git-token`
-  endpoint (`:9999`, the grant source of truth). If an active, repo-covering,
-  **unlimited-branch** break-glass grant exists, that endpoint mints the App's
-  FULL permission set (`full=true`) and audits the use, so the wrappers hand the
-  shell a full token and `gh pr edit`/`ready`/merge, issues, and `git push`
-  "just work" automatically while the grant is live. With no qualifying grant
-  the endpoint returns `{"active": false}` and the wrappers keep the read-only
-  default unchanged. See "Break-glass full GitHub API elevation (unlimited
-  grants)" below.
-  **Retired by Branch Lane Grants (see below):** the description that a
-  *branch-scoped* grant stays read-only for raw `git`/`gh` and only an
-  unlimited-branch grant lets a session push or run `gh pr edit|ready` no longer
-  holds. Under the unified branch lane, a branch-scoped grant pushes
-  (fast-forward) and opens + owns its PR for the granted branches through Tank's
-  server-side brokering — no raw token required for the scoped case. `unlimited`
-  is reserved for the whole-repo / full raw GitHub API need, not as the
-  precondition for branch work. With no grant at all, restricted sessions remain
-  read-only exactly as described here.
-- **Fail loud, never silent (elevation).** The wrappers treat only a clean
-  `{"active": true, "token": …}` (elevate) or `{"active": false}` over HTTP 200
-  (quiet, expected no-grant) as recognized answers. Any other shape — a JSON-RPC
-  error such as `{"error": {"code": -32600, "message": "invalid MCP request"}}`
-  (what the `:9999` MCP catch-all returns when the `mcp-auth-proxy` sidecar
-  predates the `/mint-git-token` route, i.e. an image/version skew), an HTTP
-  error, a timeout, or any unrecognized body — is reported to **stderr** before
-  the read-only fallback, instead of being silently collapsed to read-only. A
-  silent downgrade here is what made the sidecar-skew regression undiagnosable
-  (an active grant produced a read-only token with no signal, so `gh pr close`
-  failed with `Resource not accessible by integration`); the silent collapse is
-  treated as part of the bug, not an acceptable fallback. The break-glass
-  curl also uses a timeout with headroom (`-m 8`) so the cold full-mint path
-  (Tank grant lookup + GitHub App mint) is not misread as "no grant".
-- `install-agent-git-template.sh` installs the credential helper in **both**
-  modes; the elevated cluster kubeconfig stays non-restricted-only.
-- `repo-cloner.sh` no longer writes an empty local `credential.helper` in
-  restricted mode, so cloned repos inherit the global read-only helper.
-- The mcp-auth-proxy keeps `mint_clone_token` and the file/PR write tools on the
-  restricted-mode denylist, but **allows a read-only `mint_clone_token`** through
-  to mcp-github (`_is_read_only_clone_token_request`); `write`/`workflows`/`full`
-  mints are still blocked with the governed-path error. This carve-out is the
-  only thing that lets the mode-aware helper/wrapper mint at all.
-- Writes stay governed regardless: the `pre-push` hook still fails direct pushes
-  and a read-only token cannot push even if the hook is bypassed.
-- Observability:
-  `tank_mcp_auth_proxy_github_write_tool_decision_total{tool,decision}` counts
-  `allowed_read_only` vs `blocked` decisions on the denylist.
-
-Evidence:
-- `claude-container/mcp-auth-proxy/tests/test_server.py`
-  (`test_read_only_mint_clone_token_is_forwarded_in_restricted_mode`,
-  `test_write_mint_clone_token_is_blocked_in_restricted_mode`,
-  `test_is_read_only_clone_token_request`).
-- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
-  (`TestGitCredentialTankHelperMintsToken`, `TestGhTankWrapperMintsModeAwareToken`
-  assert the read-only request shape in restricted mode;
-  `TestInstallAgentGitTemplateScriptRunsUnderSh` asserts the helper installs in
-  restricted mode).
-- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
-  (`TestGitCredentialTankHelperBreakGlassElevation`,
-  `TestGhTankWrapperBreakGlassElevation`) cover all three elevation cases against
-  a live mock break-glass server: active grant → full token (no read-only
-  fallback), no grant → quiet read-only fallback, and `error mint response fails
-  loud and falls back to read-only` (the JSON-RPC `invalid MCP request` shape →
-  stderr diagnostic + read-only fallback, the fail-loud guard).
+What remains: the mcp-auth-proxy still keeps the GitHub MCP file/PR write tools
+on the restricted-mode denylist (so the agent uses governed `git`/`gh` through
+the wall, not raw MCP write tools); the break-glass *grant* model
+(`request_git_break_glass` + the durable grant) and the merge path
+(`merge_current_session_pr`) are unchanged. Reads/writes for restricted sessions
+are governed by the wall (next entry).
 
 ## GitHub Egress Proxy (the wall): server-side governed GitHub access
 
-Status: in progress (per-request mint governance, the REST/GraphQL write-hole
+Status: complete. Per-request mint governance, the REST/GraphQL write-hole
 closure, gh REST + GraphQL, break-glass, asset hosts, and — as of the
-observation/restriction decoupling — universal observation of EVERY non-slot
-session have shipped and are enforced by the Calico NetworkPolicy that denies
-direct GitHub egress; the remaining scope is bringing test slots under a wall and
-retiring the in-pod credential-helper / `gh`-wrapper mint path — "Restricted
-Session Read-Only Git Access" above — both tracked under the egress lockdown work).
+observation/restriction decoupling — universal observation of EVERY session have
+shipped and are enforced by the Calico NetworkPolicy that denies direct GitHub
+egress. The wall now fronts **every** session (non-slot and slot — test slots
+share the prod wall), and the in-pod credential-helper / `gh`-wrapper mint path
+and break-glass broker routes ("Restricted Session Read-Only Git Access" above)
+have been retired: the wrappers hand the wall the raw token and the wall is the
+sole governed GitHub chokepoint.
 
 Intent:
 EVERY session must reach GitHub through ONE governed outbound chokepoint — the
@@ -944,8 +905,9 @@ JWT to mcp-github's `mint_clone_token` (actor→installation routing mints the
 owner's App token), overwrites `Authorization`, and records `github.*` control
 actions. The agent's JWT never reaches GitHub and the minted App token never
 reaches the agent. This is the server-side evolution of the in-pod "Restricted
-Session Read-Only Git Access" model, which it supersedes for non-slot sessions
-(test slots still exclude the wall and keep the in-pod path during migration).
+Session Read-Only Git Access" model, which it has fully superseded for every
+session (non-slot and slot — test slots share the prod wall); the retired in-pod
+mint/broker path is gone.
 
 Affected contracts:
 - Session Lifecycle
