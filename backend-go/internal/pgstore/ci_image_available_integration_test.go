@@ -8,8 +8,8 @@ import (
 // signal is idempotent under ACR's at-least-once redelivery: two upserts of the
 // same (registry, repo, commit) leave exactly one row, with the tag/digest/
 // observed_at refreshed from the latest delivery. It also exercises
-// ImageAvailableForCommit (the currently-unused stage-2 existence check) so it
-// does not rot before the provisioning-gate cutover reads it. Skips when
+// ImageAvailableForCommit — the provisioning-gate cutover's existence check,
+// keyed by (repo, commit). Skips when
 // TANK_TEST_POSTGRES_DSN is unset (local runs); CI's postgres service sets it.
 func TestCIImageAvailableUpsertIdempotency(t *testing.T) {
 	ctx, pool := newTurnNumberTestPool(t)
@@ -22,7 +22,7 @@ func TestCIImageAvailableUpsertIdempotency(t *testing.T) {
 	)
 
 	// Existence check is false before any push is recorded.
-	if ok, err := store.ImageAvailableForCommit(ctx, registry, repo, commit); err != nil {
+	if ok, err := store.ImageAvailableForCommit(ctx, repo, commit); err != nil {
 		t.Fatalf("ImageAvailableForCommit (pre): %v", err)
 	} else if ok {
 		t.Fatal("ImageAvailableForCommit reported true before any upsert")
@@ -72,12 +72,12 @@ func TestCIImageAvailableUpsertIdempotency(t *testing.T) {
 	}
 
 	// Existence check now reports true; a different commit stays false.
-	if ok, err := store.ImageAvailableForCommit(ctx, registry, repo, commit); err != nil {
+	if ok, err := store.ImageAvailableForCommit(ctx, repo, commit); err != nil {
 		t.Fatalf("ImageAvailableForCommit (post): %v", err)
 	} else if !ok {
 		t.Fatal("ImageAvailableForCommit reported false after upsert")
 	}
-	if ok, err := store.ImageAvailableForCommit(ctx, registry, repo, "different"); err != nil {
+	if ok, err := store.ImageAvailableForCommit(ctx, repo, "different"); err != nil {
 		t.Fatalf("ImageAvailableForCommit (other): %v", err)
 	} else if ok {
 		t.Fatal("ImageAvailableForCommit reported true for an unrecorded commit")

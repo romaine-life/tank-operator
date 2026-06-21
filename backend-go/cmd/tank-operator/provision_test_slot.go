@@ -29,13 +29,6 @@ const (
 	provisionVerdictWatchingTimeout provisionVerdict = "watching_timeout"
 	provisionVerdictHeadMoved       provisionVerdict = "head_moved"
 	provisionVerdictError           provisionVerdict = "error"
-	// provisionVerdictAwaitingImageBuild is recorded each poll the gate holds an
-	// otherwise-ready PR in `watching` because the head SHA's image-build workflow
-	// (docker-build-check) has not succeeded yet — the deployable image for this
-	// exact commit does not exist, so provisioning would deploy a phantom. It is
-	// the observable counterpart of the build-success precondition: a green
-	// reducer verdict that does NOT provision surfaces here instead of silently.
-	provisionVerdictAwaitingImageBuild provisionVerdict = "awaiting_image_build"
 	// provisionVerdictRef is a direct deploy-by-ref (e.g. main) with no PR to
 	// validate — the escape hatch that keeps test-slot provisioning from being a
 	// dead-end when there is no open PR to grab. Provisions immediately.
@@ -62,16 +55,6 @@ const (
 	// derives a background-context timeout for the whole gate+provision run.
 	provisionDeployGrace = 5 * time.Minute
 )
-
-// testSlotImageBuildWorkflow is the repo-owned image-build workflow whose
-// success on the EXACT head SHA the gate requires before provisioning. The
-// CI-watch reducer's `ready` verdict (mergeable + check rollup green) can read
-// true in the window after a PR opens but before docker-build-check has even
-// registered, when a fast unrelated check is already green — so a green reducer
-// verdict is necessary but not sufficient. Gating on this workflow's head-SHA
-// success makes "ready to provision" mean "the deployable image for this commit
-// exists", which is the gated-test-slot-provisioning intent.
-const testSlotImageBuildWorkflow = "docker-build-check.yaml"
 
 // provisionTestSlotRequest carries the coordinates the gate validates and the
 // slot it provisions on success. Built as a struct (rather than a long
@@ -209,32 +192,33 @@ func (s *appServer) provisionTestSlotForSession(ctx context.Context, req provisi
 
 		result := classifyCIWatchState(watch, state)
 		// The reducer's `ready` (mergeable + check rollup green) can be true before
-		// the head SHA's image-build workflow has even registered — a fast unrelated
-		// check goes green first. Provisioning then would deploy a commit whose CI
-		// image does not exist yet. So a `ready` reducer verdict only stays `ready`
-		// once docker-build-check has actually SUCCEEDED for this exact head;
-		// otherwise demote to `watching` and keep polling (the build is still
-		// in-flight, not failed). The deploy-by-ref path returns before this loop,
-		// so it is unaffected.
+		// the head SHA's deployable image exists: the check rollup goes green the
+		// moment a fast unrelated check passes, possibly before docker-build-check
+		// has even published the `sha-<commit>` image. Provisioning then would deploy
+		// a commit whose CI image does not exist yet. So a `ready` reducer verdict
+		// only stays `ready` once the registry has reported the deployable image for
+		// this exact commit — the durable `ci_image_available` row the ACR `push`
+		// webhook writes the instant the tag lands (stage 1). This is an event-driven
+		// fact set by the registry, not a poll racing propagation: once it exists the
+		// gate provisions, and the deploy below can assume the image is present. The
+		// deploy-by-ref path returns before this loop, so it is unaffected.
 		status := result.Status
 		if status == pgstore.CIWatchReady {
-			built, buildErr := s.mcpGitHub.ImageBuildSucceededForHead(ctx, req.OwnerEmail, repoOwner, repoName, testSlotImageBuildWorkflow, result.HeadSHA)
-			if buildErr != nil {
+			if s.ciImageAvailable == nil {
 				recordTestSlotValidate(string(provisionVerdictError))
-				return provisionOutcome{Verdict: provisionVerdictError}, buildErr
+				return provisionOutcome{Verdict: provisionVerdictError}, errors.New("provision gate: image-availability store unavailable")
 			}
-			if !built {
-				// Green per reducer, but the image for this commit isn't built yet —
-				// keep watching, don't provision. Emit an observable signal (log + the
-				// awaiting_image_build verdict counter) so this precondition is visible
-				// in prod rather than a silent demotion indistinguishable from ordinary
-				// check-waiting.
-				slog.Info("provision gate awaiting image build",
-					"session_id", req.SessionID,
-					"repo", repoOwner+"/"+repoName,
-					"head_sha", result.HeadSHA,
-					"workflow", testSlotImageBuildWorkflow)
-				recordTestSlotValidate(string(provisionVerdictAwaitingImageBuild))
+			available, availErr := s.ciImageAvailable.ImageAvailableForCommit(ctx, repoName, result.HeadSHA)
+			if availErr != nil {
+				recordTestSlotValidate(string(provisionVerdictError))
+				return provisionOutcome{Verdict: provisionVerdictError}, availErr
+			}
+			if !available {
+				// Reducer-green, but the registry has not yet reported the deployable
+				// image for this exact commit (the ACR push webhook writes
+				// ci_image_available). Keep watching — this is a durable fact set by the
+				// registry event, not a poll racing propagation. Once it lands the gate
+				// provisions, and the deploy below can assume the image is present.
 				status = pgstore.CIWatchWatching
 			}
 		}
@@ -326,7 +310,11 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 	if strings.TrimSpace(req.DeployRef) != "" {
 		imageSource = "chart"
 	}
-	deploy, err := s.deployImageWaitingForCI(ctx, req, glimmung.DeployImageToTestSlotRequest{
+	// The gate only reaches here once ci_image_available confirms the deployable
+	// image for this commit is in the registry (the durable signal the ACR push
+	// webhook writes), so the deploy can assume image presence — there is no
+	// pending-image window left to retry. A deploy failure here is a real failure.
+	deploy, err := s.glimmung.DeployImageToTestSlot(ctx, req.OwnerEmail, glimmung.DeployImageToTestSlotRequest{
 		Project:     req.Project,
 		SlotIndex:   checkout.SlotIndex,
 		SlotName:    checkout.SlotName,
@@ -365,36 +353,6 @@ func (s *appServer) provisionSlotAfterReady(ctx context.Context, req provisionTe
 	}
 	recordTestSlotProvision(provisionStepProvisioned)
 	return out, nil
-}
-
-// deployImageWaitingForCI dispatches the slot deploy, re-polling while Glimmung
-// reports the commit's CI image is not built yet (ErrCIImagePending). The
-// readiness gate can greenlight in the window before docker-build-check has
-// published the image's sha-<commit> alias, so a not-ready image is a transient
-// condition the gate waits out — bounded by the settle timeout — rather than a
-// terminal provision failure. The checked-out slot is held across retries; the
-// caller releases it only on the non-pending error or timeout this returns.
-func (s *appServer) deployImageWaitingForCI(ctx context.Context, req provisionTestSlotRequest, deployReq glimmung.DeployImageToTestSlotRequest) (glimmung.DeployImageToTestSlotResult, error) {
-	deadline := s.provisionNowTime().Add(s.provisionSettleTimeoutDuration())
-	for {
-		deploy, err := s.glimmung.DeployImageToTestSlot(ctx, req.OwnerEmail, deployReq)
-		if err == nil {
-			return deploy, nil
-		}
-		if !errors.Is(err, glimmung.ErrCIImagePending) {
-			return glimmung.DeployImageToTestSlotResult{}, err
-		}
-		if req.progress != nil {
-			req.progress("waiting")
-		}
-		if !s.provisionNowTime().Before(deadline) {
-			minutes := int(s.provisionSettleTimeoutDuration().Round(time.Minute) / time.Minute)
-			return glimmung.DeployImageToTestSlotResult{}, fmt.Errorf("CI image for %s did not become ready within %d min: %w", strings.TrimSpace(deployReq.GitRef), minutes, err)
-		}
-		if sleepErr := s.provisionSleep(ctx, s.provisionSettleIntervalDuration()); sleepErr != nil {
-			return glimmung.DeployImageToTestSlotResult{}, sleepErr
-		}
-	}
 }
 
 // releaseCheckedOutSlot returns a slot that was checked out but failed before

@@ -2,7 +2,7 @@ package glimmung
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,53 +19,46 @@ func newTestDeployClient(srv *httptest.Server) *Client {
 	}
 }
 
-// TestDeployImageToTestSlotReturnsErrCIImagePendingOn409 pins the retry contract
-// with Glimmung: a 409 (CI image not built yet) surfaces as the typed, retryable
-// ErrCIImagePending so the provision gate waits instead of failing.
-func TestDeployImageToTestSlotReturnsErrCIImagePendingOn409(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/exchange"):
-			_, _ = w.Write([]byte(`{"token":"gtok"}`))
-		case strings.HasSuffix(r.URL.Path, "/v1/test-slots/deploy-image"):
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"detail":"resolve commit sha to CI image: CI image for commit abc is not ready yet; retry once the build completes"}`))
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	_, err := newTestDeployClient(srv).DeployImageToTestSlot(context.Background(), "user@romaine.life", DeployImageToTestSlotRequest{Project: "p", GitRef: "abc"})
-	if !errors.Is(err, ErrCIImagePending) {
-		t.Fatalf("err=%v, want ErrCIImagePending", err)
+// TestDeployImageToTestSlotNon2xxSurfacesStatusAndDetail pins the deploy error
+// contract after the stage-2 cutover: the provision gate only reaches deploy once
+// the durable ci_image_available row confirms the image is in the registry, so
+// there is no "CI image not ready" pending state to special-case — every non-2xx
+// (including a 409) surfaces as a plain `glimmung deploy-image returned <code>`
+// error with Glimmung's detail preserved. The previously-special 409 mapping and
+// its retryable sentinel were deleted with the gate's image-build polling wait.
+func TestDeployImageToTestSlotNon2xxSurfacesStatusAndDetail(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+	}{
+		{"conflict", http.StatusConflict},
+		{"unprocessable", http.StatusUnprocessableEntity},
 	}
-	if !strings.Contains(err.Error(), "not ready yet") {
-		t.Fatalf("err=%v, want Glimmung's detail preserved in the message", err)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/exchange"):
+					_, _ = w.Write([]byte(`{"token":"gtok"}`))
+				case strings.HasSuffix(r.URL.Path, "/v1/test-slots/deploy-image"):
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(`{"detail":"no CI image for commit abc"}`))
+				default:
+					t.Fatalf("unexpected path %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
 
-// TestDeployImageToTestSlotNon409StaysGenericError: a 422 (genuinely unresolvable
-// commit) must NOT be treated as retryable.
-func TestDeployImageToTestSlotNon409StaysGenericError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/exchange"):
-			_, _ = w.Write([]byte(`{"token":"gtok"}`))
-		case strings.HasSuffix(r.URL.Path, "/v1/test-slots/deploy-image"):
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			_, _ = w.Write([]byte(`{"detail":"no CI image for commit abc"}`))
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-	}))
-	defer srv.Close()
-
-	_, err := newTestDeployClient(srv).DeployImageToTestSlot(context.Background(), "user@romaine.life", DeployImageToTestSlotRequest{Project: "p", GitRef: "abc"})
-	if errors.Is(err, ErrCIImagePending) {
-		t.Fatalf("a 422 must not be ErrCIImagePending: %v", err)
-	}
-	if err == nil || !strings.Contains(err.Error(), "returned 422") {
-		t.Fatalf("err=%v, want a generic non-2xx error", err)
+			_, err := newTestDeployClient(srv).DeployImageToTestSlot(context.Background(), "user@romaine.life", DeployImageToTestSlotRequest{Project: "p", GitRef: "abc"})
+			if err == nil {
+				t.Fatalf("want a non-2xx error for status %d", tc.status)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("returned %d", tc.status)) {
+				t.Fatalf("err=%v, want the status code surfaced", err)
+			}
+			if !strings.Contains(err.Error(), "no CI image for commit abc") {
+				t.Fatalf("err=%v, want Glimmung's detail preserved in the message", err)
+			}
+		})
 	}
 }

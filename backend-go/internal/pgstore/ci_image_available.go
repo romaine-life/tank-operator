@@ -78,12 +78,15 @@ func (s *CIImageAvailableStore) UpsertCIImageAvailable(ctx context.Context, rec 
 }
 
 // ImageAvailableForCommit reports whether the deployable image for a commit has
-// been observed in the registry. This is the stage-2 consumer's existence
-// check — the event-driven replacement for the provisioning gate's image-build
-// poll. It is currently unreferenced by production code on purpose: stage 1 only
-// records the signal; the gate cutover that reads it is a later stage. Exercised
-// now by TestCIImageAvailableUpsertIdempotency so it does not rot before then.
-func (s *CIImageAvailableStore) ImageAvailableForCommit(ctx context.Context, registry, repoName, commitSHA string) (bool, error) {
+// been observed in the registry. This is the stage-2 provisioning-gate consumer's
+// existence check — the event-driven replacement for the gate's image-build poll.
+//
+// It matches on (repo_name, commit_sha) only, deliberately NOT on registry: there
+// is exactly one registry, and matching on the ACR host risks silent brittleness
+// if ACR's `request.host` ever varies between the value the webhook recorded and
+// any value a caller might pass. The gate knows the repo and the commit, not the
+// registry host, so keying on what it actually has is both correct and robust.
+func (s *CIImageAvailableStore) ImageAvailableForCommit(ctx context.Context, repoName, commitSHA string) (bool, error) {
 	if s == nil || s.pool == nil {
 		return false, errors.New("ci image available store unavailable")
 	}
@@ -91,9 +94,9 @@ func (s *CIImageAvailableStore) ImageAvailableForCommit(ctx context.Context, reg
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM ci_image_available
-			WHERE registry = $1 AND repo_name = $2 AND commit_sha = $3
+			WHERE repo_name = $1 AND commit_sha = $2
 		)
-	`, strings.TrimSpace(registry), strings.TrimSpace(repoName), strings.TrimSpace(commitSHA)).Scan(&exists)
+	`, strings.TrimSpace(repoName), strings.TrimSpace(commitSHA)).Scan(&exists)
 	return exists, err
 }
 
