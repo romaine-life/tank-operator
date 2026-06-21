@@ -11,7 +11,9 @@ spec:
          single-user ephemeral environment that needs no HA, and the hot-swap
          backend writes to a per-pod emptyDir so a swap must hit the one pod.
          Prod (non-test-env) keeps orchestrator.replicas. */}}
-  replicas: {{ if (eq (include "tank-operator.isTestEnv" .) "true") }}{{ .Values.testEnv.orchestratorReplicas }}{{ else }}{{ .Values.orchestrator.replicas }}{{ end }}
+  {{- /* On a live-preview lease the override is a per-pod emptyDir, so the
+         edge helper pins a single serving pod (and fails the render on >1). */}}
+  replicas: {{ if .Values.livePreview.enabled }}{{ include "live-preview-edge.replicas" (dict "spec" .Values.livePreview "requested" .Values.testEnv.orchestratorReplicas) }}{{ else }}{{ if (eq (include "tank-operator.isTestEnv" .) "true") }}{{ .Values.testEnv.orchestratorReplicas }}{{ else }}{{ .Values.orchestrator.replicas }}{{ end }}{{ end }}
   revisionHistoryLimit: 0
   strategy:
     type: RollingUpdate
@@ -360,6 +362,12 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 30
+        {{- /* Live-preview edge sidecar — only on a preview lease (Glimmung
+               vendors the partial + sets livePreview.*). Fronts the app
+               backend on :8000; inert/absent otherwise. */}}
+        {{- if .Values.livePreview.enabled }}
+        {{- include "live-preview-edge.container" .Values.livePreview | nindent 8 }}
+        {{- end }}
       volumes:
         - name: oauth-gateway-tls
           secret:
@@ -397,6 +405,9 @@ spec:
         - name: hot-backend
           emptyDir: {}
         {{- end }}
+        {{- if .Values.livePreview.enabled }}
+        {{- include "live-preview-edge.volume" .Values.livePreview | nindent 8 }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -411,5 +422,7 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: http
+      {{- /* Served port: the edge when a live-preview lease is active, the app
+             backend (http:8000) otherwise. Off-render is byte-for-byte unchanged. */}}
+      targetPort: {{ if .Values.livePreview.enabled }}{{ include "live-preview-edge.servedPortName" (dict "spec" .Values.livePreview "appPortName" "http") }}{{ else }}http{{ end }}
 {{- end }}

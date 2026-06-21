@@ -44,6 +44,46 @@ hotSwapBackend:
   target: /var/run/tank-operator-hot/tank-operator-go
   childCommand: /app/tank-operator-go
 
+# Live-preview edge (Stage 5 onboarding — tank-operator as a v2 preview consumer).
+# OFF by default, so this is inert in every normal/prod/validation render: the
+# guards in deployment.yaml skip the partial entirely when disabled, and the
+# chart declares NO Helm dependency on it. On a PREVIEW lease, Glimmung vendors
+# the glimmung-live-preview-edge partial into charts/ and overrides
+# enabled/image.tag/authorizedSubject/upstream.url/backendPrefixes. The edge is
+# an override-first reverse proxy in front of the app backend (:8000): it serves
+# a freshly-pushed frontend bundle and proxies backendPrefixes to the stable
+# backend. See docs/live-preview-sender.md and glimmung docs/live-preview-plan.md
+# ("Stage 4a landed contracts"). NOT the faithful image-deploy validation lane.
+livePreview:
+  enabled: false
+  image:
+    repository: romainecr.azurecr.io/glimmung-live-preview-edge
+    tag: ""
+    pullPolicy: IfNotPresent
+  # `port`/`servedPortName` are the edge's own port. The name is deliberately
+  # distinct from the app container's `http` port so the Service can target the
+  # edge unambiguously when enabled (the app keeps `http`:8000 unchanged).
+  port: 8080
+  servedPortName: edge-http
+  upstream:
+    # The app backend, reached on localhost inside the single serving pod.
+    url: "http://127.0.0.1:8000"
+  # Request prefixes ALWAYS proxied to the backend (never served from the pushed
+  # override bundle); everything else (the SPA shell, /assets, /fonts,
+  # /manifest.webmanifest, /_styleguide) is served override-first. The
+  # authoritative list is the project's live_preview.backend_prefixes metadata
+  # that Glimmung passes per lease; this is the standalone default.
+  backendPrefixes:
+    - /api
+    - /healthz
+    - /metrics
+    - /webhooks
+  authorizedSubject: ""
+  override:
+    volumeName: live-preview-override
+    mountPath: /var/run/glimmung-live-preview
+  resources: {}
+
 namespaces:
   orchestrator: tank-operator
   sessions: tank-operator-sessions
