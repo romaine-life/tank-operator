@@ -1478,7 +1478,10 @@ func projectProjectionItem(item *projectionItem) map[string]any {
 		return entry
 	}
 	if item.Kind == "reasoning" {
-		text := projectionFirstNonEmpty(strings.TrimSpace(item.Text), transcriptMapString(item.Payload, "text"))
+		// Empty/redacted reasoning carries nothing to show — drop it. Trim the
+		// combined result so a whitespace-only summary is skipped too (the
+		// frontend conversationProjection mirror does the same).
+		text := strings.TrimSpace(projectionFirstNonEmpty(strings.TrimSpace(item.Text), transcriptMapString(item.Payload, "text")))
 		if text == "" {
 			return nil
 		}

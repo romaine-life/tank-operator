@@ -14,10 +14,14 @@ Session pods are `emptyDir`-backed and ephemeral. When a node drains
 (AKS node-image upgrade, spot eviction, scale-down) every session pod on it
 dies, and with it the agent's conversation. The durable chat ledger
 (`session_events`) survives, but it is a **display projection**: the Claude
-adapter persists only `text` and `tool_use`/`tool_result` items and discards
-`thinking`/`redacted_thinking` blocks. The provider-faithful transcript the
-SDK needs to *resume* a conversation lives only in the SDK's on-disk JSONL
-inside the dead pod.
+adapter persists `text`, `tool_use`/`tool_result` items, and a `kind:"reasoning"`
+display summary (the human-readable Turn-activity "Thinking..." text), but it
+does NOT persist the provider-faithful `thinking`/`redacted_thinking` blocks or
+their cryptographic signatures. The reasoning display text is a lossy summary for
+the UI; it is not resume-faithful. The provider-faithful transcript the SDK needs
+to *resume* a conversation — the raw thinking blocks and signatures — lives only
+in the SDK's on-disk JSONL inside the dead pod, which is why capture (§3+) is a
+separate snapshot sink and not derivable from `session_events`.
 
 Result: today a node roll is total conversation loss for every live session,
 and there is no path back even though the user does **not** care about
@@ -108,8 +112,16 @@ exists."
 ### Observability Contract — extend
 - New counters/alerts for capture freshness and restore outcomes (§9).
 
-### Transcript Contract — no change
-The display transcript is untouched; capture is a parallel sink.
+### Transcript Contract — display-only addition; capture unaffected
+The display transcript now carries reasoning DISPLAY text: a populated
+`kind:"reasoning"` Turn-activity item rendered in the turn's activity disclosure
+and the Turns view (see the "Reasoning Display In Turn Activity" capability in
+`features/transcript/capabilities.md`). That text is a lossy summary for the UI,
+not a resume artifact: the resume-faithful `thinking`/`redacted_thinking` blocks
+and their signatures are still NOT in `session_events` and remain snapshot-only,
+captured byte-faithfully to the blob. Capture stays a parallel sink — it is not
+derived from the reasoning display text, and the reasoning display text is not
+derived from the capture.
 
 ## 5. Architecture
 

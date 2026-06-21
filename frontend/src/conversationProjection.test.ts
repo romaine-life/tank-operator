@@ -540,6 +540,73 @@ test("projects canonical user and assistant events into chat messages", () => {
   expect(projection.runStatus).toBe("ready");
 });
 
+test("projects a reasoning item with text as a reasoning entry", () => {
+  // Reasoning is a populated display item: the durable kind:"reasoning" event
+  // carries the agent's "Thinking..." summary text. The projection surfaces it
+  // (placement into Turn activity is downstream of this flat projection).
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-reasoning",
+        payload: { text: "think first" },
+      }),
+      ev("2", "turn.started", { source: "claude" }),
+      ev("3", "item.completed", {
+        actor: "assistant",
+        source: "claude",
+        timeline_id: "reasoning-1",
+        payload: { kind: "reasoning", text: "considering the options" },
+      }),
+      ev("4", "item.completed", {
+        actor: "assistant",
+        source: "claude",
+        timeline_id: "assistant-1",
+        payload: { kind: "message", text: "the answer" },
+      }),
+      ev("5", "turn.completed", { source: "claude" }),
+    ]),
+  );
+
+  const reasoning = projection.entries.find((entry) => entry.kind === "reasoning");
+  expect(reasoning, "a reasoning entry should be projected").toBeTruthy();
+  if (reasoning?.kind === "reasoning") {
+    expect(reasoning.reasoning.text).toBe("considering the options");
+  }
+});
+
+test("drops an empty or whitespace-only reasoning item at projection", () => {
+  // An empty/redacted reasoning summary carries nothing to show, so it is
+  // skipped at projection — it never becomes an entry on any surface.
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-empty-reasoning",
+        payload: { text: "think first" },
+      }),
+      ev("2", "turn.started", { source: "claude" }),
+      ev("3", "item.completed", {
+        actor: "assistant",
+        source: "claude",
+        timeline_id: "reasoning-empty",
+        payload: { kind: "reasoning", text: "   " },
+      }),
+      ev("4", "item.completed", {
+        actor: "assistant",
+        source: "claude",
+        timeline_id: "assistant-1",
+        payload: { kind: "message", text: "the answer" },
+      }),
+      ev("5", "turn.completed", { source: "claude" }),
+    ]),
+  );
+
+  expect(projection.entries.some((entry) => entry.kind === "reasoning")).toBe(
+    false,
+  );
+});
+
 test("projects turn terminal metadata onto completed turn entries", () => {
   const projection = projectConversationState(
     reduceConversationEvents([

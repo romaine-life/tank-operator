@@ -269,6 +269,135 @@ func TestProjectTranscriptEventsRecordsContextCompactedAsTurnActivity(t *testing
 	}
 }
 
+func TestProjectTranscriptEventsRecordsReasoningAsTurnActivity(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "weigh the options",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("reasoning", "002", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:reasoning-1", map[string]any{
+			"kind": "reasoning",
+			"text": "weighing the trade-offs",
+		}),
+		projectionTestEvent("final", "003", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:msg-1", map[string]any{
+			"kind": "message",
+			"text": "done",
+		}),
+		projectionTestEvent("terminal", "004", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:msg-1")),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	// Promotion-only (docs/features/transcript/contract.md): reasoning is
+	// Turn-activity material — provider activity, reasoning, and tool output must
+	// not default into the settled main transcript. A standalone reasoning row in
+	// projection.Entries would be the promotion bug this slice guards against.
+	for _, entry := range projection.Entries {
+		if transcriptMapString(entry, "kind") == "reasoning" {
+			t.Fatalf("reasoning leaked into the settled transcript as a top-level row: %#v", entry)
+		}
+	}
+	// The settled transcript keeps the user message, the turn-activity shell, and
+	// the promoted final answer — but not the reasoning.
+	if got, want := len(projection.Entries), 3; got != want {
+		t.Fatalf("settled entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if projection.Entries[2]["kind"] != "message" || projection.Entries[2]["text"] != "done" {
+		t.Fatalf("final settled row = %#v, want promoted assistant answer", projection.Entries[2])
+	}
+
+	// Reasoning lives in the turn's Turn-activity body, folded into the collapsed
+	// shell like any other non-final-answer activity row, carrying its text.
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("turn-1 has no activity body: %#v", projection.ActivityBodies)
+	}
+	var reasoning map[string]any
+	for _, entry := range body.Entries {
+		if transcriptMapString(entry, "kind") == "reasoning" {
+			reasoning = entry
+			break
+		}
+	}
+	if reasoning == nil {
+		t.Fatalf("reasoning was not recorded as a turn-activity child: %#v", body.Entries)
+	}
+	reasoningPayload, _ := reasoning["reasoning"].(map[string]any)
+	if got := transcriptMapString(reasoningPayload, "text"); got != "weighing the trade-offs" {
+		t.Fatalf("reasoning text = %q, want the durable summary", got)
+	}
+
+	// Folded into the shell: its id is among the turn's compacted entry ids so it
+	// is collapsed out of the settled transcript and only revealed when the
+	// Turn-activity disclosure loads. The promoted final answer is NOT compacted.
+	reasoningID := transcriptMapString(reasoning, "id")
+	compacted := false
+	finalCompacted := false
+	for _, id := range body.CompactedEntryIDs {
+		if id == reasoningID {
+			compacted = true
+		}
+		if id == "turn-1:item:msg-1" {
+			finalCompacted = true
+		}
+	}
+	if !compacted {
+		t.Fatalf("reasoning %q was not folded into the turn-activity shell: %#v", reasoningID, body.CompactedEntryIDs)
+	}
+	if finalCompacted {
+		t.Fatalf("promoted final answer must stay settled, not compacted: %#v", body.CompactedEntryIDs)
+	}
+}
+
+func TestProjectTranscriptEventsDropsEmptyReasoning(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "weigh the options",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		// Empty/redacted reasoning (whitespace-only) carries nothing to show.
+		projectionTestEvent("reasoning", "002", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:reasoning-empty", map[string]any{
+			"kind": "reasoning",
+			"text": "   ",
+		}),
+		projectionTestEvent("tool-start", "003", "item.started", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":  "tool",
+			"title": "Bash",
+		}),
+		projectionTestEvent("tool-done", "004", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":   "tool_result",
+			"output": "ok",
+		}),
+		projectionTestEvent("final", "005", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:msg-1", map[string]any{
+			"kind": "message",
+			"text": "done",
+		}),
+		projectionTestEvent("terminal", "006", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:msg-1")),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	for _, entry := range projection.Entries {
+		if transcriptMapString(entry, "kind") == "reasoning" {
+			t.Fatalf("empty reasoning was projected as a settled row: %#v", entry)
+		}
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("turn-1 has no activity body: %#v", projection.ActivityBodies)
+	}
+	for _, entry := range body.Entries {
+		if transcriptMapString(entry, "kind") == "reasoning" {
+			t.Fatalf("empty reasoning was recorded as a turn-activity child: %#v", entry)
+		}
+	}
+	for _, id := range body.CompactedEntryIDs {
+		if id == "turn-1:item:reasoning-empty" {
+			t.Fatalf("empty reasoning id was folded into the shell: %#v", body.CompactedEntryIDs)
+		}
+	}
+}
+
 func TestProjectTranscriptEventsCarriesUserAttachments(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

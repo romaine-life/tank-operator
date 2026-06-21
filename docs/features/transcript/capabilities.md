@@ -312,6 +312,72 @@ Codex-specific notes:
   manual/auto trigger or pre-token metadata on these surfaces, so the runner
   defaults `payload.trigger` to `auto`.
 
+## Reasoning Display In Turn Activity
+
+Status: active
+
+Intent:
+Surface the agent's reasoning — its summarized "Thinking..." prose — as a
+populated, durable Turn-activity display item, so a user inspecting a turn can
+read what the agent was reasoning about. Reasoning is intra-turn system material
+(the same tier as tool calls and the context-compaction notice), so it belongs
+in the turn's activity disclosure and the Turns view, NOT the settled
+conversation surface. Previously the durable `kind:"reasoning"` event existed but
+its display was effectively empty (Codex dropped empties; Claude reasoning text
+arrives via a parallel runner slice); once the text is populated, the question is
+strictly placement, and the transcript contract's promotion-only rule answers it:
+reasoning must not default into the main transcript.
+
+Affected contracts:
+- Transcript
+- Tank Conversation Protocol
+
+Contract impact:
+- The durable event shape is `{ kind:"reasoning", title:"reasoning",
+  text:<summary> }`, actor `assistant`, emitted by both runners. The durable
+  `session_events` ledger records the reasoning DISPLAY text; the
+  resume-faithful provider thinking blocks and their signatures remain a
+  snapshot-only concern of `docs/session-transcript-capture.md`, not this
+  display projection.
+- The server projection (`projectProjectionItem` /
+  `compactProjectedTranscript`) records reasoning as an ordinary mid-turn
+  Turn-activity child, folded into the turn's collapsed activity shell
+  (`CompactedEntryIDs`) like any other non-final-answer row, and absent from the
+  settled transcript — satisfying the Transcript contract's promotion-only /
+  no-bounce invariant. This mirrors the Context Compaction Notice placement.
+- Empty or whitespace-only (redacted) reasoning is skipped at projection (both
+  the Go projection and the `conversationProjection.ts` mirror trim the combined
+  text and drop when empty), so it never becomes a row on any surface.
+- The frontend renders reasoning through the existing collapsible
+  `RunReasoningBlock` primitive, gated by the "Show reasoning" preference
+  (`showThinking`), inside the Turn-activity disclosure (`RunTurnActivityGroup`)
+  and the dedicated Turns view (`RunTurnActivityScreen`). The main-transcript
+  grouper (`groupTranscriptEntries`) excludes reasoning from settled groups via
+  the pure `isActivityOnlyMainTranscriptEntry` gate, and the main-transcript
+  render boundary (`RunMessages` `renderItem`) never settles a reasoning block —
+  so a grouping regression cannot resurface reasoning as a conversation row.
+
+Evidence:
+- Contract/docs: `docs/features/transcript/contract.md` (promotion-only
+  reasoning bullet + acceptance checks) and
+  `docs/tank-conversation-protocol.md` (reasoning as Turn-activity material).
+- Projection: `backend-go/cmd/tank-operator/transcript_projection.go`
+  (`projectProjectionItem` reasoning branch + empty skip);
+  `transcript_projection_test.go`
+  (`TestProjectTranscriptEventsRecordsReasoningAsTurnActivity` proves it is a
+  compacted turn-activity child absent from the settled transcript, and
+  `TestProjectTranscriptEventsDropsEmptyReasoning` proves the empty skip).
+- Frontend gate (pure, unit tested):
+  `frontend/src/transcriptReasoningPlacement.ts` +
+  `frontend/src/transcriptReasoningPlacement.test.ts`.
+- Frontend projection: `frontend/src/conversationProjection.ts` reasoning
+  branch; `frontend/src/conversationProjection.test.ts` proves a populated
+  reasoning item projects with its text and an empty one is dropped.
+- Frontend placement guard: `frontend/src/migrationPolicy.test.ts`
+  ("reasoning is Turn-activity material, never a settled main-transcript row")
+  pins that `RunMessages` renders no reasoning block while
+  `RunTurnActivityGroup` and `RunTurnActivityScreen` do.
+
 ## Background Wake Continuation Projection
 
 Status: active
