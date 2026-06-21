@@ -249,18 +249,25 @@ export const itemOutcomeTotal = new Counter({
   registers: [registry],
 });
 
-// reasoningItemTotal counts how the Claude adapter handled each `thinking`
-// content block it saw, so surfacing extended-thinking reasoning in the GUI
-// transcript is observable and regression-proof. It increments exactly once
-// per thinking/redacted_thinking block, bucketed by the bounded `result`:
+// reasoningEmittedTotal counts how the adapter handled each reasoning
+// (`thinking`) content block it saw, so surfacing extended-thinking reasoning
+// in the GUI transcript is observable and regression-proof. Name and label
+// shape are SHARED CROSS-RUNNER with codex-runner's identical
+// `tank_runner_reasoning_emitted_total{result}` so the two runners' separate
+// /metrics endpoints roll up into one coherent metric (Prometheus distinguishes
+// them by job/service labels). It increments exactly once per reasoning block,
+// bucketed by the bounded `result` — whether the completed reasoning item
+// carried text:
 //
 //   - `emitted` — a thinking block with non-empty summary TEXT mapped to a
 //     durable kind:"reasoning" item.completed DISPLAY event.
-//   - `skipped_empty` — a thinking block whose summary text was empty or
-//     whitespace (the default on models that omit summaries, or before the
-//     summary streams in); no event is emitted.
-//   - `skipped_redacted` — a `redacted_thinking` block (encrypted, no readable
-//     text); no event is emitted.
+//   - `skipped_empty` — a thinking block that carried no usable text, so no
+//     event is emitted. This covers an empty/whitespace summary (the default on
+//     models that omit summaries, or before the summary streams in) AND a
+//     Claude `redacted_thinking` block (encrypted, no readable text). Folding
+//     redacted into skipped_empty keeps the label shape identical to
+//     codex-runner, which has no redacted concept; redacted is just one more
+//     "reasoning block with no displayable text" case.
 //
 // The regression signature for the reasoning surface is a Claude turn that
 // thinks (the SDK on-disk transcript shows thinking blocks, and
@@ -272,9 +279,9 @@ export const itemOutcomeTotal = new Counter({
 // DISPLAY projection only: it is never a final-answer candidate and the
 // resume-faithful thinking SIGNATURES still flow to the JSONL snapshot, so
 // this counter has no bearing on the thinking_block_modified resume path.
-export const reasoningItemTotal = new Counter({
-  name: "tank_runner_reasoning_item_total",
-  help: "Claude thinking content blocks handled by the adapter, by bounded result: emitted (kind:reasoning DISPLAY event with summary text), skipped_empty (no/whitespace summary text), skipped_redacted (encrypted redacted_thinking block). A turn that thinks while emitted stays flat is the reasoning-surface regression signature.",
+export const reasoningEmittedTotal = new Counter({
+  name: "tank_runner_reasoning_emitted_total",
+  help: "Reasoning (thinking) content blocks handled by the adapter, by bounded result: emitted (kind:reasoning DISPLAY event with summary text) or skipped_empty (no displayable text — empty/whitespace summary or an encrypted redacted_thinking block). Shared cross-runner with codex-runner. A turn that thinks while emitted stays flat is the reasoning-surface regression signature.",
   labelNames: ["result"],
   registers: [registry],
 });

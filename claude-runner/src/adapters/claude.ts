@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import type { TankConversationEvent, TankFinalAnswer } from "../../../runner-shared/conversation.js";
 import { contextCompactedEvent, itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
-import { itemOutcomeTotal, reasoningItemTotal, turnUsageEmittedTotal } from "../metrics.js";
+import { itemOutcomeTotal, reasoningEmittedTotal, turnUsageEmittedTotal } from "../metrics.js";
 
 // ClaudeProviderEvent is the runner's view of the raw Claude SDK message
 // shape consumed by this adapter. Kept loose because the adapter has to
@@ -144,7 +144,7 @@ export function canonicalEventsForClaudeMessage(
           // Empty/whitespace summary (display:"omitted", or before the summary
           // streams in): emit nothing, but count it so a turn that thinks while
           // `emitted` stays flat is a diagnosable surface regression.
-          reasoningItemTotal.labels("skipped_empty").inc();
+          reasoningEmittedTotal.labels("skipped_empty").inc();
           continue;
         }
         const providerItemID = claudeBlockProviderItemID({
@@ -167,7 +167,7 @@ export function canonicalEventsForClaudeMessage(
             payload: { kind: "reasoning", title: "reasoning", text: boundReasoningText(reasoningText) },
           }),
         );
-        reasoningItemTotal.labels("emitted").inc();
+        reasoningEmittedTotal.labels("emitted").inc();
         // Reasoning is NEVER a final-answer candidate: it is not pushed to
         // finalAnswer{Timeline,ProviderItem}IDs and does not set
         // hasNonPausingToolUse/hasPausingToolUse, so it cannot become or clear
@@ -175,9 +175,11 @@ export function canonicalEventsForClaudeMessage(
         // transcript as the assistant's response.
       } else if (item.type === "redacted_thinking") {
         // Encrypted thinking with no readable text — there is nothing safe or
-        // meaningful to display, so emit nothing. Counted so the redacted share
-        // of reasoning is visible without leaking the (opaque) payload.
-        reasoningItemTotal.labels("skipped_redacted").inc();
+        // meaningful to display, so emit nothing. Counted under skipped_empty
+        // (a reasoning block that carried no displayable text), keeping the
+        // result label shape identical to codex-runner, which has no redacted
+        // concept. The (opaque) payload is never read or leaked.
+        reasoningEmittedTotal.labels("skipped_empty").inc();
       } else if (item.type === "tool_use") {
         const providerItemID =
           typeof item.id === "string" && item.id
