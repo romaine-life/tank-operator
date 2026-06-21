@@ -10,14 +10,6 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from aiohttp import ClientSession, ClientTimeout, web
 from aiohttp.test_utils import TestClient, TestServer
-from prometheus_client import REGISTRY
-
-
-def _bg_metric(name: str, result: str) -> float:
-    """Current value of a branch-lane brokered-path counter sample, 0.0 if the
-    series has not been observed yet. Counters persist across tests in-process,
-    so assertions use before/after deltas."""
-    return REGISTRY.get_sample_value(name, {"result": result}) or 0.0
 
 from mcp_auth_proxy.server import (
     LISTENERS,
@@ -38,28 +30,20 @@ from mcp_auth_proxy.server import (
     _activate_break_glass_mcp_config,
     _checks_state,
     _effective_listeners,
-    _feature_contracts_body_status,
     _first_pr_from_response,
     _grant_branch_allows,
     _sanitize_branch_scope_name,
     _filter_github_write_tools,
     _github_tool_block_response,
-    _is_read_only_clone_token_request,
     _handle_tank_break_glass_tool,
     _handle_tank_azure_break_glass_tool,
     _handle_query_tank_db_tool,
     _handle_tank_merge_tool,
-    _handle_tank_rename_pr_tool,
-    _handle_tank_update_pr_body_tool,
     _active_break_glass_grant_cached,
     _handle_break_glass_mcp,
     _handle_break_glass_mint_token,
-    _handle_break_glass_push_head_route,
-    _handle_break_glass_pr_write_route,
-    _handle_break_glass_wrapper_mint,
     _break_glass_operations,
     _BREAK_GLASS_FULL_API_OPERATION,
-    _BREAK_GLASS_PR_WRITE_TOOL,
     _json_objects_from_mcp_body,
     _make_handler,
     _mint_github_installation_token,
@@ -663,167 +647,6 @@ def test_break_glass_operations_appends_full_api_only_when_unlimited() -> None:
     assert _BREAK_GLASS_FULL_API_OPERATION in _break_glass_operations(workflows=True, unlimited=True)
 
 
-def _wrapper_mint_request(body: dict):
-    payload = json.dumps(body).encode("utf-8")
-    return type("Request", (), {"read": lambda self: asyncio.sleep(0, result=payload)})()
-
-
-def test_break_glass_wrapper_mint_full_token_for_active_unlimited_grant(monkeypatch) -> None:
-    # An active, repo-covering, unlimited grant elevates the in-pod gh/git
-    # wrappers to a FULL token automatically and records the use in the audit
-    # ledger.
-    minted: list[dict] = []
-    audits: list[dict] = []
-
-    async def fake_active(_http, _service_token, repo_slug):
-        assert repo_slug == "romaine-life/tank-operator"
-        return {
-            "event_id": "grant-1",
-            "operations": ["mint_full_git_token", "full_github_api"],
-            "repo_scope": {"kind": "all_repos"},
-            "branch_scope": {"kind": "unlimited"},
-            "expires_at": "2026-06-12T23:00:00Z",
-        }
-
-    async def fake_mint(_http, _service_token, repos, *, workflows=False, full=False):
-        minted.append({"repos": list(repos), "workflows": workflows, "full": full})
-        return "ghs_fulltoken"
-
-    async def fake_record(_http, _service_token, **kwargs):
-        audits.append(kwargs)
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token_for_repos", fake_mint)
-    monkeypatch.setattr("mcp_auth_proxy.server._record_break_glass_use", fake_record)
-
-    response = asyncio.run(
-        _handle_break_glass_wrapper_mint(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _wrapper_mint_request({"repos": ["romaine-life/tank-operator", "romaine-life/auth"]}),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["active"] is True
-    assert payload["token"] == "ghs_fulltoken"
-    assert payload["full_github_api"] is True
-    assert minted == [
-        {"repos": ["romaine-life/tank-operator", "romaine-life/auth"], "workflows": False, "full": True}
-    ]
-    # The full-API mint is audited as a break-glass token use.
-    assert len(audits) == 1
-    assert audits[0]["action"] == "github.break_glass.token"
-    assert audits[0]["status"] == "succeeded"
-    assert audits[0]["payload"]["full_github_api"] is True
-    assert audits[0]["payload"]["channel"] == "wrapper"
-
-
-def test_break_glass_wrapper_mint_inactive_without_grant(monkeypatch) -> None:
-    async def fake_active(_http, _service_token, _repo_slug):
-        return None
-
-    async def fake_mint(*_args, **_kwargs):
-        raise AssertionError("no grant -> must not mint")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token_for_repos", fake_mint)
-
-    response = asyncio.run(
-        _handle_break_glass_wrapper_mint(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _wrapper_mint_request({"repos": ["romaine-life/tank-operator"]}),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["active"] is False
-    assert "token" not in payload
-
-
-def test_break_glass_wrapper_mint_inactive_for_branch_restricted_grant(monkeypatch) -> None:
-    # Branch/count-scoped grants must NOT elevate the wrappers — they stay on the
-    # governed push path. The grant lacks full_github_api so the wrapper falls
-    # back to read-only.
-    async def fake_active(_http, _service_token, _repo_slug):
-        return {
-            "event_id": "grant-1",
-            "operations": ["mint_full_git_token", "push_current_head"],
-            "repo_scope": {"kind": "current_repo", "repo": "romaine-life/tank-operator"},
-            "branch_scope": {"kind": "count", "count": 2},
-        }
-
-    async def fake_mint(*_args, **_kwargs):
-        raise AssertionError("branch-restricted grant must not mint a full token")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token_for_repos", fake_mint)
-
-    response = asyncio.run(
-        _handle_break_glass_wrapper_mint(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _wrapper_mint_request({"repos": ["romaine-life/tank-operator"]}),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["active"] is False
-
-
-def test_break_glass_wrapper_mint_inactive_when_repo_outside_grant_scope(monkeypatch) -> None:
-    async def fake_active(_http, _service_token, _repo_slug):
-        return {
-            "event_id": "grant-1",
-            "operations": ["mint_full_git_token", "full_github_api"],
-            "repo_scope": {"kind": "repos", "repos": ["romaine-life/tank-operator"]},
-            "branch_scope": {"kind": "unlimited"},
-        }
-
-    async def fake_mint(*_args, **_kwargs):
-        raise AssertionError("repo outside grant scope must not mint")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token_for_repos", fake_mint)
-
-    response = asyncio.run(
-        _handle_break_glass_wrapper_mint(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _wrapper_mint_request({"repos": ["romaine-life/tank-operator", "romaine-life/other"]}),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["active"] is False
-
-
-def test_break_glass_wrapper_mint_negative_result_is_cached(monkeypatch) -> None:
-    # The no-grant hot path must hit Tank once per TTL window, not once per
-    # git/`gh` op. Two wrapper-mint calls -> one underlying grant lookup.
-    monkeypatch.setattr("mcp_auth_proxy.server._BREAK_GLASS_GRANT_CACHE", {})
-    calls = {"n": 0}
-
-    async def fake_active(_http, _service_token, _repo_slug):
-        calls["n"] += 1
-        return None
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-
-    async def run_once():
-        return await _handle_break_glass_wrapper_mint(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _wrapper_mint_request({"repos": ["romaine-life/tank-operator"]}),
-        )
-
-    first = json.loads(asyncio.run(run_once()).text)
-    second = json.loads(asyncio.run(run_once()).text)
-    assert first["active"] is False and second["active"] is False
-    assert calls["n"] == 1  # second served from the negative cache
-
-
 def test_active_break_glass_grant_cached_serves_positive_within_ttl(monkeypatch) -> None:
     monkeypatch.setattr("mcp_auth_proxy.server._BREAK_GLASS_GRANT_CACHE", {})
     calls = {"n": 0}
@@ -949,176 +772,6 @@ def test_tank_merge_tool_merges_verified_session_branch(monkeypatch, tmp_path) -
     assert actions == ["github.pull_request.merge", "github.pull_request.merge"]
 
 
-def test_tank_rename_pr_tool_renames_verified_session_pr(monkeypatch, tmp_path) -> None:
-    workspace = tmp_path
-    repo = workspace / "tank-operator"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
-    (repo / "README.md").write_text("test\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
-    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    http = _GovernedMergeHTTP(sha)
-    response = asyncio.run(
-        _handle_tank_rename_pr_tool(
-            http,
-            _StaticTokenProvider("service-token"),
-            17,
-            {"repo_path": str(repo), "pr_number": 1113, "title": "Tank session 95: governed rename"},
-        )
-    )
-
-    payload = json.loads(response.text)
-    structured = payload["result"]["structuredContent"]
-    assert structured["title"] == "Tank session 95: governed rename"
-    assert structured["pr_number"] == 1113
-    patch_requests = [call for call in http.requests if call["method"] == "PATCH" and "/issues/1113" in call["url"]]
-    assert patch_requests[0]["kwargs"]["json"] == {"title": "Tank session 95: governed rename"}
-    actions = [call["json"]["action"] for call in http.posts if "control-actions" in call["url"]]
-    assert actions == ["github.pull_request.rename", "github.pull_request.rename"]
-
-
-def test_tank_update_pr_body_tool_updates_verified_session_pr(monkeypatch, tmp_path) -> None:
-    workspace = tmp_path
-    repo = workspace / "tank-operator"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
-    (repo / "README.md").write_text("test\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    body = (
-        "## Summary\n\n- Add governed PR body tool.\n\n"
-        "## Feature Contracts\n\nAffected contracts:\n"
-        "- [x] Session Lifecycle\n- [ ] Observability\n\n"
-        "Evidence:\n- New control-action ledger entry github.pull_request.update_body.\n"
-    )
-    http = _GovernedMergeHTTP("unused")
-    response = asyncio.run(
-        _handle_tank_update_pr_body_tool(
-            http,
-            _StaticTokenProvider("service-token"),
-            18,
-            {"repo_path": str(repo), "pr_number": 1113, "body": body},
-        )
-    )
-
-    payload = json.loads(response.text)
-    structured = payload["result"]["structuredContent"]
-    assert structured["pr_number"] == 1113
-    assert structured["body_length"] == len(body)
-    assert structured["feature_contracts_ready"] is True
-    assert structured["feature_contracts_missing"] == []
-    patch_requests = [call for call in http.requests if call["method"] == "PATCH" and "/issues/1113" in call["url"]]
-    assert patch_requests[0]["kwargs"]["json"] == {"body": body}
-    posts = [call for call in http.posts if "control-actions" in call["url"]]
-    actions = [call["json"]["action"] for call in posts]
-    assert actions == ["github.pull_request.update_body", "github.pull_request.update_body"]
-    # The governed ledger payload must stay small (backend caps it at 16 KiB):
-    # it records body metadata, not the full body text.
-    assert posts[0]["json"]["payload"]["body_length"] == len(body)
-    assert posts[0]["json"]["payload"]["feature_contracts_ready"] is True
-    assert "body" not in posts[0]["json"]["payload"]
-
-
-def test_tank_update_pr_body_tool_flags_incomplete_feature_contracts(monkeypatch, tmp_path) -> None:
-    workspace = tmp_path
-    repo = workspace / "tank-operator"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
-    (repo / "README.md").write_text("test\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
-    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    # A body the agent might write that does NOT satisfy check-pr-body.
-    http = _GovernedMergeHTTP("unused")
-    response = asyncio.run(
-        _handle_tank_update_pr_body_tool(
-            http,
-            _StaticTokenProvider("service-token"),
-            19,
-            {"repo_path": str(repo), "pr_number": 1113, "body": "Just a plain description.\n"},
-        )
-    )
-
-    payload = json.loads(response.text)
-    structured = payload["result"]["structuredContent"]
-    # The body is still updated (the tool is a general PR-body editor), but the
-    # advisory flags it as not satisfying the gate.
-    assert structured["feature_contracts_ready"] is False
-    assert structured["feature_contracts_missing"]
-    posts = [call for call in http.posts if "control-actions" in call["url"]]
-    assert posts[0]["json"]["payload"]["feature_contracts_ready"] is False
-
-
-def test_tank_update_pr_body_tool_requires_body(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    http = _GovernedMergeHTTP("unused")
-    response = asyncio.run(
-        _handle_tank_update_pr_body_tool(
-            http,
-            _StaticTokenProvider("service-token"),
-            20,
-            {"repo_path": str(tmp_path), "body": "   "},
-        )
-    )
-    payload = json.loads(response.text)
-    assert payload["error"]["code"] == -32017
-    assert "body is required" in payload["error"]["message"]
-    assert http.posts == []
-    assert http.requests == []
-
-
-def test_feature_contracts_body_status_accepts_filled_section() -> None:
-    body = (
-        "## Feature Contracts\n\nAffected contracts:\n"
-        "- [x] Session Lifecycle\n- [ ] None\n\n"
-        "Evidence:\n- Concrete evidence line.\n"
-    )
-    ready, missing = _feature_contracts_body_status(body)
-    assert ready is True
-    assert missing == []
-
-
-def test_feature_contracts_body_status_rejects_default_template() -> None:
-    # Mirrors .github/pull_request_template.md with nothing filled in.
-    body = (
-        "## Summary\n\n-\n\n## Feature Contracts\n\nAffected contracts:\n"
-        "- [ ] Transcript\n- [ ] None\n\nEvidence:\n-\n"
-    )
-    ready, missing = _feature_contracts_body_status(body)
-    assert ready is False
-    assert any("affected contract" in reason for reason in missing)
-    assert any("Evidence" in reason for reason in missing)
-
-
-def test_feature_contracts_body_status_reports_missing_markers() -> None:
-    ready, missing = _feature_contracts_body_status("no contracts here")
-    assert ready is False
-    assert any("## Feature Contracts" in reason for reason in missing)
-    assert any("Affected contracts:" in reason for reason in missing)
-    assert any("Evidence:" in reason for reason in missing)
-
-
 def test_tank_merge_tool_rejects_non_session_branch(monkeypatch, tmp_path) -> None:
     workspace = tmp_path
     repo = workspace / "tank-operator"
@@ -1160,17 +813,23 @@ def test_append_tank_publish_tool_augments_event_prefixed_sse_tools_list() -> No
     augmented = _append_tank_publish_tool(raw).decode()
 
     assert "event: message" in augmented
-    assert "publish_current_head" in augmented
     assert "request_git_break_glass" in augmented
-    # The retired PR-lane tools must NOT be injected any more. (Token fragments
-    # are joined at runtime so this absence assertion does not itself trip the
-    # scripts/check-removed-pr-lane.mjs textual reintroduction guard.)
-    retired_lane_tools = ["_".join(["request", "pr", "lane"]), "_".join(["create", "pr", "lane"])]
-    for retired in retired_lane_tools:
+    assert "watch_current_session_pr" in augmented
+    # The in-pod governed-publish / PR-mutation tools were retired once the
+    # agent-egress proxy (the wall) became the GitHub boundary: a plain
+    # git push / gh edits the governed PR. (Token fragments are joined at
+    # runtime so these absence assertions do not themselves trip the
+    # scripts/check-removed-* reintroduction guards.)
+    retired_tools = [
+        "_".join(["publish", "current", "head"]),
+        "_".join(["rename", "current", "session", "pr"]),
+        "_".join(["update", "current", "session", "pr", "body"]),
+        "_".join(["request", "pr", "lane"]),
+        "_".join(["create", "pr", "lane"]),
+    ]
+    for retired in retired_tools:
         assert retired not in augmented
     assert "merge_current_session_pr" in augmented
-    assert "rename_current_session_pr" in augmented
-    assert "update_current_session_pr_body" in augmented
 
 
 def test_tank_publish_tool_is_added_to_tools_list() -> None:
@@ -1179,35 +838,31 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     augmented = json.loads(_append_tank_publish_tool(raw))
 
     names = [tool["name"] for tool in augmented["result"]["tools"]]
-    # The retired PR-lane tools are no longer injected; break-glass alone covers
-    # branch push + PR-own work. The exact-list assertion below is the absence
-    # proof (the retired names simply are not in the set).
+    # In-pod governed-publish (publish_current_head) and the governed PR-mutation
+    # tools (rename/update_body) are no longer injected: the wall governs pushes
+    # and gh PR edits. watch + merge + provision + break-glass remain. The
+    # exact-list assertion below is the absence proof.
     assert names == [
         "read_transcript",
-        "publish_current_head",
         "watch_current_session_pr",
         "merge_current_session_pr",
-        "rename_current_session_pr",
-        "update_current_session_pr_body",
         "provision_test_slot",
         "request_git_break_glass",
     ]
-    for retired in ["_".join(["request", "pr", "lane"]), "_".join(["create", "pr", "lane"])]:
+    for retired in [
+        "_".join(["publish", "current", "head"]),
+        "_".join(["rename", "current", "session", "pr"]),
+        "_".join(["update", "current", "session", "pr", "body"]),
+        "_".join(["request", "pr", "lane"]),
+        "_".join(["create", "pr", "lane"]),
+    ]:
         assert retired not in names
-    publish = augmented["result"]["tools"][1]
-    assert publish["inputSchema"]["properties"]["repo_path"]["type"] == "string"
-    watch = augmented["result"]["tools"][2]
+    watch = augmented["result"]["tools"][1]
     assert watch["inputSchema"]["properties"]["pr_number"]["type"] == "integer"
-    merge = augmented["result"]["tools"][3]
+    merge = augmented["result"]["tools"][2]
     assert "pr_number" in merge["inputSchema"]["properties"]
     assert "session branch" in merge["description"]
-    rename = augmented["result"]["tools"][4]
-    assert rename["inputSchema"]["required"] == ["title"]
-    update_body = augmented["result"]["tools"][5]
-    assert update_body["inputSchema"]["required"] == ["body"]
-    assert "body" in update_body["inputSchema"]["properties"]
-    assert "Feature Contracts" in update_body["description"]
-    provision_test_slot = augmented["result"]["tools"][6]
+    provision_test_slot = augmented["result"]["tools"][3]
     # Optional disambiguation/selection knobs, none required (the backend resolves
     # the governed coordinates from durable session state).
     assert provision_test_slot["inputSchema"].get("required", []) == []
@@ -1216,7 +871,7 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert provision_test_slot["inputSchema"]["properties"]["drive"]["type"] == "boolean"
     assert provision_test_slot["inputSchema"]["properties"]["ref"]["type"] == "string"
     assert "test slot" in provision_test_slot["description"].lower()
-    break_glass = augmented["result"]["tools"][7]
+    break_glass = augmented["result"]["tools"][4]
     assert "approval URL" in break_glass["description"]
     assert break_glass["inputSchema"]["required"] == ["repo_scope", "branch_scope", "reason"]
     assert "token" not in break_glass["inputSchema"]["properties"]
@@ -1613,406 +1268,6 @@ def test_tank_break_glass_tool_records_all_repo_branch_scope(monkeypatch) -> Non
     assert "branch_scope" not in query
 
 
-def _json_post_request(body: dict):
-    """Duck-typed aiohttp web.Request whose read() yields the JSON body, matching
-    what the grant-aware /push-head and /pr-write routes consume."""
-    payload = json.dumps(body).encode("utf-8")
-    return type("Request", (), {"read": lambda self: asyncio.sleep(0, result=payload)})()
-
-
-def _push_head_repo(tmp_path):
-    """Create a workspace repo dir (with a .git marker) under tmp_path so
-    _repo_path_from_arguments resolves it for the /push-head route tests."""
-    repo = tmp_path / "tank-operator"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    return repo
-
-
-def _branch_scoped_grant(*, branches, repo="romaine-life/tank-operator"):
-    return {
-        "event_id": "grant-1",
-        "operations": ["mint_full_git_token", "push_current_head"],
-        "repo_scope": {"kind": "current_repo", "repo": repo},
-        "branch_scope": {"kind": "named", "branches": list(branches)},
-        "expires_at": "2026-06-20T00:00:00Z",
-    }
-
-
-def _patch_push_head_git(monkeypatch, *, branch, dirty=False):
-    async def fake_git_output(path, *args):
-        if args == ("branch", "--show-current"):
-            return branch
-        if args == ("rev-parse", "HEAD"):
-            return "c" * 40
-        if args == ("config", "--get", "remote.origin.url"):
-            return "https://github.com/romaine-life/tank-operator.git"
-        raise AssertionError(f"unexpected git output call: {args}")
-
-    async def fake_run_git(path, *args, **kwargs):
-        if args == ("status", "--porcelain"):
-            return (0, "M file\n" if dirty else "", "")
-        raise AssertionError(f"unexpected run_git call: {args}")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._git_output", fake_git_output)
-    monkeypatch.setattr("mcp_auth_proxy.server._run_git", fake_run_git)
-
-
-def test_break_glass_push_head_route_pushes_in_scope_branch(monkeypatch, tmp_path) -> None:
-    # A grant that allows push and whose branch scope includes the current branch
-    # performs the governed push, audits it, and starts CI watching.
-    repo = _push_head_repo(tmp_path)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
-    _patch_push_head_git(monkeypatch, branch="feature/work")
-
-    pushes: list[dict] = []
-    audits: list[dict] = []
-    tasks: list = []
-
-    async def fake_active_cached(_http, _service_token, repo_slug):
-        assert repo_slug == "romaine-life/tank-operator"
-        return _branch_scoped_grant(branches=["feature/work"])
-
-    async def fake_mint(_http, _service_token, repo_slug, *, workflows=False, full=False):
-        assert full is False  # push uses contents scope, never the full API token
-        return "ghs_pushtoken"
-
-    async def fake_push(path, branch, token):
-        pushes.append({"path": str(path), "branch": branch, "token": token})
-
-    async def fake_record(_http, _service_token, **kwargs):
-        audits.append(kwargs)
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant_cached", fake_active_cached)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
-    monkeypatch.setattr("mcp_auth_proxy.server._push_head_with_token", fake_push)
-    monkeypatch.setattr("mcp_auth_proxy.server._record_break_glass_use", fake_record)
-    monkeypatch.setattr("mcp_auth_proxy.server.asyncio.create_task", lambda coro: tasks.append(coro))
-
-    before = _bg_metric("tank_break_glass_push_total", "succeeded")
-    try:
-        response = asyncio.run(
-            _handle_break_glass_push_head_route(
-                _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-                _StaticTokenProvider("service-token"),
-                _json_post_request({"repo": "romaine-life/tank-operator", "repo_path": str(repo)}),
-            )
-        )
-    finally:
-        for coro in tasks:
-            coro.close()
-
-    payload = json.loads(response.text)
-    assert payload == {"ok": True, "branch": "feature/work", "sha": "c" * 40, "repo": "romaine-life/tank-operator"}
-    assert pushes == [{"path": str(repo.resolve()), "branch": "feature/work", "token": "ghs_pushtoken"}]
-    assert len(audits) == 1
-    assert audits[0]["action"] == "github.break_glass.push"
-    assert audits[0]["status"] == "succeeded"
-    assert audits[0]["payload"]["branch"] == "feature/work"
-    assert len(tasks) == 1  # CI watch started
-    assert _bg_metric("tank_break_glass_push_total", "succeeded") == before + 1
-
-
-def test_break_glass_push_head_route_refuses_branch_out_of_scope(monkeypatch, tmp_path) -> None:
-    # SECURITY BOUNDARY: a branch NOT in the grant's named scope is refused and
-    # nothing is pushed, even though the grant allows push for the repo.
-    repo = _push_head_repo(tmp_path)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
-    _patch_push_head_git(monkeypatch, branch="feature/not-granted")
-
-    async def fake_active_cached(_http, _service_token, _repo_slug):
-        return _branch_scoped_grant(branches=["feature/only-this"])
-
-    async def fake_mint(*_args, **_kwargs):
-        raise AssertionError("out-of-scope branch must not mint a token")
-
-    async def fake_push(*_args, **_kwargs):
-        raise AssertionError("out-of-scope branch must not push")
-
-    async def fake_record(*_args, **_kwargs):
-        raise AssertionError("a refused push records no success audit")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant_cached", fake_active_cached)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
-    monkeypatch.setattr("mcp_auth_proxy.server._push_head_with_token", fake_push)
-    monkeypatch.setattr("mcp_auth_proxy.server._record_break_glass_use", fake_record)
-
-    before = _bg_metric("tank_break_glass_push_total", "branch_out_of_scope")
-    response = asyncio.run(
-        _handle_break_glass_push_head_route(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _json_post_request({"repo_path": str(repo)}),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["ok"] is False
-    assert payload["reason"] == "branch_out_of_scope"
-    assert "feature/not-granted" in payload["detail"]
-    # The scope boundary firing must be observable even though it writes no
-    # control-action ledger row — the counter is its only signal.
-    assert _bg_metric("tank_break_glass_push_total", "branch_out_of_scope") == before + 1
-
-
-def test_break_glass_push_head_route_refuses_without_grant(monkeypatch, tmp_path) -> None:
-    # No active grant -> refuse with reason no_grant, no push.
-    repo = _push_head_repo(tmp_path)
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
-    _patch_push_head_git(monkeypatch, branch="feature/work")
-
-    async def fake_active_cached(_http, _service_token, _repo_slug):
-        return None
-
-    async def fake_push(*_args, **_kwargs):
-        raise AssertionError("no grant must not push")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant_cached", fake_active_cached)
-    monkeypatch.setattr("mcp_auth_proxy.server._push_head_with_token", fake_push)
-
-    response = asyncio.run(
-        _handle_break_glass_push_head_route(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _json_post_request({"repo_path": str(repo)}),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["ok"] is False
-    assert payload["reason"] == "no_grant"
-
-
-def test_break_glass_pr_write_route_opens_in_scope_pr(monkeypatch) -> None:
-    # action=open with the head branch inside the grant scope brokers a draft PR
-    # and audits both github.break_glass.pr_write and github.pull_request.open.
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    before_open = _bg_metric("tank_break_glass_pr_open_total", "succeeded")
-
-    github_calls: list[dict] = []
-    audits: list[dict] = []
-    control_actions: list[dict] = []
-
-    async def fake_active(_http, _service_token, repo_slug):
-        assert repo_slug == "romaine-life/tank-operator"
-        return _branch_scoped_grant(branches=["feature/work"])
-
-    async def fake_call(_http, _service_token, name, arguments):
-        github_calls.append({"name": name, "arguments": arguments})
-        return [
-            {
-                "result": {
-                    "content": [
-                        {"type": "text", "text": "Opened https://github.com/romaine-life/tank-operator/pull/321"}
-                    ]
-                }
-            }
-        ]
-
-    async def fake_record(_http, _service_token, **kwargs):
-        audits.append(kwargs)
-
-    async def fake_control(_http, _headers, payload):
-        control_actions.append(payload)
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._call_mcp_github_tool", fake_call)
-    monkeypatch.setattr("mcp_auth_proxy.server._record_break_glass_use", fake_record)
-    monkeypatch.setattr("mcp_auth_proxy.server._post_tank_control_action", fake_control)
-
-    response = asyncio.run(
-        _handle_break_glass_pr_write_route(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _json_post_request(
-                {
-                    "repo": "romaine-life/tank-operator",
-                    "action": "open",
-                    "head": "feature/work",
-                    "base": "main",
-                    "title": "My change",
-                    "body": "why",
-                }
-            ),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["ok"] is True
-    assert payload["pr_number"] == 321
-    assert payload["pr_url"] == "https://github.com/romaine-life/tank-operator/pull/321"
-    assert github_calls[0]["name"] == "create_pull_request"
-    assert github_calls[0]["arguments"]["draft"] is True
-    assert github_calls[0]["arguments"]["head"] == "feature/work"
-    assert github_calls[0]["arguments"]["base"] == "main"
-    assert [a["action"] for a in audits] == ["github.break_glass.pr_write"]
-    assert audits[0]["status"] == "succeeded"
-    assert audits[0]["payload"]["pr_action"] == "open"
-    assert [c["action"] for c in control_actions] == ["github.pull_request.open"]
-    assert control_actions[0]["pr_number"] == 321
-    assert control_actions[0]["source_tool"] == _BREAK_GLASS_PR_WRITE_TOOL
-    assert _bg_metric("tank_break_glass_pr_open_total", "succeeded") == before_open + 1
-
-
-def test_break_glass_pr_write_route_refuses_open_out_of_scope(monkeypatch) -> None:
-    # SECURITY BOUNDARY: opening a PR for a head branch OUTSIDE the grant scope is
-    # refused before any mcp-github call.
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    async def fake_active(_http, _service_token, _repo_slug):
-        return _branch_scoped_grant(branches=["feature/only-this"])
-
-    async def fake_call(*_args, **_kwargs):
-        raise AssertionError("out-of-scope PR open must not call mcp-github")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._call_mcp_github_tool", fake_call)
-
-    response = asyncio.run(
-        _handle_break_glass_pr_write_route(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _json_post_request(
-                {"repo": "romaine-life/tank-operator", "action": "open", "head": "feature/sneaky", "base": "main"}
-            ),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["ok"] is False
-    assert payload["reason"] == "branch_out_of_scope"
-    assert "feature/sneaky" in payload["detail"]
-
-
-def test_break_glass_pr_write_route_refuses_edit_when_resolved_head_out_of_scope(monkeypatch) -> None:
-    # SECURITY BOUNDARY for edit/ready/comment: the PR is resolved to its head ref
-    # via GitHub and that ref must be in scope. A PR whose head is outside the
-    # grant scope is refused even though the grant is active for the repo.
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    async def fake_active(_http, _service_token, _repo_slug):
-        return _branch_scoped_grant(branches=["feature/only-this"])
-
-    async def fake_mint(_http, _service_token, _repo_slug, *, workflows=False, full=False):
-        return "ghs_resolvetoken"
-
-    async def fake_api(_http, _token, method, path, *, json_body=None):
-        assert method == "GET"
-        assert path == "/repos/romaine-life/tank-operator/pulls/77"
-        return 200, {"number": 77, "head": {"ref": "feature/someone-elses"}}
-
-    async def fake_call(*_args, **_kwargs):
-        raise AssertionError("out-of-scope PR edit must not call mcp-github")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
-    monkeypatch.setattr("mcp_auth_proxy.server._github_api_json", fake_api)
-    monkeypatch.setattr("mcp_auth_proxy.server._call_mcp_github_tool", fake_call)
-
-    response = asyncio.run(
-        _handle_break_glass_pr_write_route(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _json_post_request(
-                {"repo": "romaine-life/tank-operator", "action": "edit", "pr_number": 77, "title": "new title"}
-            ),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["ok"] is False
-    assert payload["reason"] == "branch_out_of_scope"
-    assert "feature/someone-elses" in payload["detail"]
-
-
-def test_break_glass_pr_write_route_marks_ready_in_scope(monkeypatch) -> None:
-    # action=ready resolves the PR head, confirms it is in scope, then brokers
-    # mark_pull_request_ready_for_review with {owner, name, number}.
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-    before_ready = _bg_metric("tank_break_glass_pr_write_total", "succeeded")
-
-    github_calls: list[dict] = []
-    audits: list[dict] = []
-
-    async def fake_active(_http, _service_token, _repo_slug):
-        return _branch_scoped_grant(branches=["feature/work"])
-
-    async def fake_mint(_http, _service_token, _repo_slug, *, workflows=False, full=False):
-        return "ghs_resolvetoken"
-
-    async def fake_api(_http, _token, method, path, *, json_body=None):
-        return 200, {"number": 88, "head": {"ref": "feature/work"}}
-
-    async def fake_call(_http, _service_token, name, arguments):
-        github_calls.append({"name": name, "arguments": arguments})
-        return [{"result": {"content": [{"type": "text", "text": "ok"}]}}]
-
-    async def fake_record(_http, _service_token, **kwargs):
-        audits.append(kwargs)
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._mint_github_installation_token", fake_mint)
-    monkeypatch.setattr("mcp_auth_proxy.server._github_api_json", fake_api)
-    monkeypatch.setattr("mcp_auth_proxy.server._call_mcp_github_tool", fake_call)
-    monkeypatch.setattr("mcp_auth_proxy.server._record_break_glass_use", fake_record)
-
-    response = asyncio.run(
-        _handle_break_glass_pr_write_route(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _json_post_request({"repo": "romaine-life/tank-operator", "action": "ready", "pr_number": 88}),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["ok"] is True
-    assert payload["pr_number"] == 88
-    assert github_calls == [
-        {
-            "name": "mark_pull_request_ready_for_review",
-            "arguments": {"owner": "romaine-life", "name": "tank-operator", "number": 88},
-        }
-    ]
-    assert [a["action"] for a in audits] == ["github.break_glass.pr_write"]
-    assert audits[0]["payload"]["pr_action"] == "ready"
-    assert _bg_metric("tank_break_glass_pr_write_total", "succeeded") == before_ready + 1
-
-
-def test_break_glass_pr_write_route_refuses_without_grant(monkeypatch) -> None:
-    # No active grant -> refuse with reason no_grant; no PR is resolved or written.
-    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
-
-    async def fake_active(_http, _service_token, _repo_slug):
-        return None
-
-    async def fake_call(*_args, **_kwargs):
-        raise AssertionError("no grant must not call mcp-github")
-
-    async def fake_api(*_args, **_kwargs):
-        raise AssertionError("no grant must not resolve a PR")
-
-    monkeypatch.setattr("mcp_auth_proxy.server._active_break_glass_grant", fake_active)
-    monkeypatch.setattr("mcp_auth_proxy.server._call_mcp_github_tool", fake_call)
-    monkeypatch.setattr("mcp_auth_proxy.server._github_api_json", fake_api)
-
-    response = asyncio.run(
-        _handle_break_glass_pr_write_route(
-            _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}')),
-            _StaticTokenProvider("service-token"),
-            _json_post_request(
-                {"repo": "romaine-life/tank-operator", "action": "open", "head": "feature/work", "base": "main"}
-            ),
-        )
-    )
-
-    payload = json.loads(response.text)
-    assert payload["ok"] is False
-    assert payload["reason"] == "no_grant"
-
-
 def test_github_write_tool_block_response_returns_mcp_error() -> None:
     body = json.dumps({
         "jsonrpc": "2.0",
@@ -2027,7 +1282,10 @@ def test_github_write_tool_block_response_returns_mcp_error() -> None:
     payload = json.loads(response.text)
     assert payload["id"] == 7
     assert "restricted Git mode" in payload["error"]["message"]
-    assert payload["error"]["data"]["replacement_tool"] == "publish_current_head"
+    # No in-pod governed-publish tool to point at anymore: the message tells the
+    # agent to use normal git/gh (governed by the wall). No replacement_tool key.
+    assert "replacement_tool" not in payload["error"]["data"]
+    assert "git push" in payload["error"]["message"]
     assert payload["error"]["data"]["break_glass_tool"] == "request_git_break_glass"
 
 
@@ -2047,7 +1305,7 @@ def test_github_merge_tool_block_response_points_to_governed_merge() -> None:
     assert "merge_current_session_pr" in payload["error"]["message"]
 
 
-def test_github_update_issue_block_response_points_to_governed_rename() -> None:
+def test_github_update_issue_block_response_points_to_wall_governed_gh() -> None:
     body = json.dumps({
         "jsonrpc": "2.0",
         "id": 18,
@@ -2059,11 +1317,12 @@ def test_github_update_issue_block_response_points_to_governed_rename() -> None:
 
     assert response is not None
     payload = json.loads(response.text)
-    assert payload["error"]["data"]["replacement_tool"] == "rename_current_session_pr"
-    assert payload["error"]["data"]["body_tool"] == "update_current_session_pr_body"
-    assert "rename_current_session_pr" in payload["error"]["message"]
-    assert "update_current_session_pr_body" in payload["error"]["message"]
-    assert "Feature Contracts" in payload["error"]["message"]
+    # PR title/body edits are no longer governed by an in-pod MCP tool: the agent
+    # uses `gh pr edit`, which the wall governs. No replacement_tool / body_tool.
+    assert "replacement_tool" not in payload["error"]["data"]
+    assert "body_tool" not in payload["error"]["data"]
+    assert "gh pr create|edit|ready|comment" in payload["error"]["message"]
+    assert payload["error"]["data"]["break_glass_tool"] == "request_git_break_glass"
 
 
 def test_filter_github_write_tools_removes_denied_tools_from_sse_list() -> None:
@@ -2083,19 +1342,6 @@ def test_filter_github_write_tools_removes_denied_tools_from_sse_list() -> None:
     names = [tool["name"] for tool in payload["result"]["tools"]]
 
     assert names == ["get_pull_request", "list_pull_requests"]
-
-
-def test_is_read_only_clone_token_request() -> None:
-    # No write-capability flags → read-only (mcp-github mints contents:read).
-    assert _is_read_only_clone_token_request({"repos": ["a/b"]}) is True
-    assert _is_read_only_clone_token_request({"repos": ["a/b"], "write": False}) is True
-    assert _is_read_only_clone_token_request({}) is True
-    # Any write-capability flag → not read-only.
-    assert _is_read_only_clone_token_request({"write": True}) is False
-    assert _is_read_only_clone_token_request({"workflows": True}) is False
-    assert _is_read_only_clone_token_request({"full": True}) is False
-    # Defensive: non-dict args are not read-only.
-    assert _is_read_only_clone_token_request("nope") is False  # type: ignore[arg-type]
 
 
 def _mint_clone_token_body(**arguments: object) -> bytes:
@@ -2156,16 +1402,19 @@ async def _run_github_write_block_proxy(call_body: bytes) -> tuple[int, str, int
         await upstream_server.close()
 
 
-def test_read_only_mint_clone_token_is_forwarded_in_restricted_mode() -> None:
-    # The read-only mint is what makes `gh`/`git fetch` work for reads: it must
-    # reach mcp-github, not get blocked.
+def test_read_only_mint_clone_token_is_blocked_in_restricted_mode() -> None:
+    # The read-only carve-out is gone: with the agent-egress proxy (the wall)
+    # fronting every session's GitHub traffic, the in-pod credential helper no
+    # longer mints tokens, so mint_clone_token stays blocked in any shape and
+    # never reaches mcp-github.
     status, body, upstream_calls = asyncio.run(
         _run_github_write_block_proxy(_mint_clone_token_body())
     )
-    assert status == 200
-    assert upstream_calls == 1
+    assert status == 200  # JSON-RPC error rides an HTTP 200
+    assert upstream_calls == 0
     payload = json.loads(body)
-    assert payload["result"]["structuredContent"]["token"] == "ro-token"
+    assert payload["error"]["code"] == -32010
+    assert "restricted Git mode" in payload["error"]["message"]
 
 
 def test_write_mint_clone_token_is_blocked_in_restricted_mode() -> None:
@@ -2363,6 +1612,7 @@ def test_watch_published_commit_records_clean_mergeability_via_single_pr(monkeyp
                 "tank/session/95/tank-operator",
                 "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
                 "tank-publish-test",
+                "push_current_head",
             ),
             timeout=10,
         )

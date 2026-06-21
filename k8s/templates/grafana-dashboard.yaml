@@ -547,28 +547,6 @@ data:
           ]
         },
         {
-          "id": 28,
-          "title": "Branch-lane brokered push/PR outcomes (5m rate)",
-          "description": "Outcomes of the in-pod governed /push-head and /pr-write broker routes for break-glass branch-lane grants, by result. A 'succeeded' op also lands a github.break_glass.* control-action audit row, but refusals (no_grant, branch_out_of_scope, dirty, detached, ...) write no ledger row — so this is their only signal. A branch_out_of_scope series is the branch/PR scope boundary firing; a wave of no_grant is agents tripping on the grant wall (the symptom this redesign exists to kill). result=error is a genuine broker fault and pages via TankBranchLaneBrokerErrors.",
-          "type": "timeseries",
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 120 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [
-            {
-              "expr": "sum(rate(tank_break_glass_push_total[5m])) by (result)",
-              "legendFormat": "push {{`{{ result }}`}}"
-            },
-            {
-              "expr": "sum(rate(tank_break_glass_pr_open_total[5m])) by (result)",
-              "legendFormat": "pr_open {{`{{ result }}`}}"
-            },
-            {
-              "expr": "sum(rate(tank_break_glass_pr_write_total[5m])) by (result)",
-              "legendFormat": "pr_write {{`{{ result }}`}}"
-            }
-          ]
-        },
-        {
           "id": 29,
           "title": "Branch-lane grants & retired-path guard (15m increase)",
           "description": "Left: break-glass grant lifecycle via the durable control-action ledger (tank_control_action_events_total{action=\"github.break_glass.grant|request\"}). Right: tank_break_glass_retired_path_total — any nonzero value is a retired PR-lane action reaching the ledger (a migration reintroduction; pages via TankBranchLaneRetiredPathUsed). Steady-state for the retired guard is exactly zero.",

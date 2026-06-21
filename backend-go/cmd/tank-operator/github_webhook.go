@@ -254,12 +254,12 @@ func (s *appServer) wakeSessionForCI(ctx context.Context, watch pgstore.CIWatch,
 	if source == "ci-conflict" {
 		verb = "conflict"
 		prompt = "Your governed PR " + repoPR + " has a merge conflict (" + sig.detail + "). " +
-			"Rebase the session branch onto its base, resolve the conflict, re-publish with publish_current_head, " +
+			"Rebase the session branch onto its base, resolve the conflict, push the branch (git push, governed by the agent-egress proxy), " +
 			"then call watch_current_session_pr again."
 	} else {
 		verb = "failed"
 		prompt = "CI reported a failure on your governed PR " + repoPR + " (" + sig.detail + "). " +
-			"Inspect the failing check's logs, fix the cause, commit, and re-publish with publish_current_head, " +
+			"Inspect the failing check's logs, fix the cause, commit, and push the branch (git push, governed by the agent-egress proxy), " +
 			"then call watch_current_session_pr again. If the failure is unrelated or flaky and the PR is actually " +
 			"fine, just call watch_current_session_pr to re-verify and resume waiting."
 	}

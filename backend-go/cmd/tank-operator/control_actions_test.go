@@ -588,10 +588,10 @@ func TestHandleInternalAppendControlActionRetiredPRLaneIncrementsCounter(t *test
 }
 
 // TestHandleInternalAppendControlActionAcceptsBreakGlassPRWrite proves the
-// ledger admits the brokered PR-own audit action. The mcp-auth-proxy /pr-write
-// route records action=github.break_glass.pr_write for every gh pr
+// ledger admits the brokered PR-own audit action. A break-glass PR-own write
+// records action=github.break_glass.pr_write for every gh pr
 // edit/ready/comment; if the accept-list omits it the audit is silently dropped
-// (the proxy logs and continues on a 4xx), breaking the audit guarantee the
+// (the writer logs and continues on a 4xx), breaking the audit guarantee the
 // branch-lane design relies on.
 func TestHandleInternalAppendControlActionAcceptsBreakGlassPRWrite(t *testing.T) {
 	store := &fakeControlActionStore{}

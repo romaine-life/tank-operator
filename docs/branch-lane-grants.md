@@ -1,15 +1,31 @@
 # Branch Lane Grants — unifying break-glass git and PR lanes
 
+> **Superseded (in-pod brokers retired).** The in-pod governed broker HTTP
+> routes (`push-head` / `pr-write` / `mint-git-token`) and their
+> `tank_break_glass_push_total` / `tank_break_glass_pr_open_total` /
+> `tank_break_glass_pr_write_total` counters described below were **removed**
+> once the agent-egress proxy (the wall) became the GitHub boundary for every
+> session. The wall now mints the scoped credential server-side and governs the
+> push / PR write directly — so under an approved grant a plain `git push` /
+> `gh pr create|edit|ready|comment` "just works", with no in-pod sidecar
+> brokering. The break-glass *grant* model in this doc (request → admin approval
+> → scope-bounded, audited writes) is unchanged; only the in-pod delivery
+> mechanism moved to the wall. The `github.break_glass.*` durable audit ledger
+> and the `request_git_break_glass` MCP tool remain. The sections below are
+> retained as the design record of the retired broker routes.
+
 Status: complete (Stages 0–3). Stage 0 (plan) and Stage 1 (unified model +
 server-side brokering primitives) landed first; Stage 2 was the atomic cutover —
-the governed `/push-head` + `/pr-write` routes go live through the pre-push hook
+the governed push / PR-write broker routes went live through the pre-push hook
 and `gh` wrapper, and the PR-lane mechanism (`request_pr_lane` / `create_pr_lane`
 / `github.pr_lane.*`) is retired end-to-end with a reintroduction guard. Stage 3
-completes the observability: per-result counters for the brokered paths, a
+completed the observability: per-result counters for the brokered paths, a
 retired-path guard counter, the `tank-operator.branch-lane` alerts, and dashboard
 panels — on top of the durable `github.break_glass.*` audit ledger that records
 every brokered op (its accept-list admits `github.break_glass.pr_write`, so PR-own
-audits land rather than being silently dropped).
+audits land rather than being silently dropped). The per-result broker counters
+and broker routes were later retired with the in-pod brokers (see the Superseded
+note above); the audit ledger and retired-path guard counter remain.
 
 ## Problem
 

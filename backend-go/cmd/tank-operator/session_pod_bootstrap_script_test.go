@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -362,7 +360,13 @@ func TestInstallAgentGitTemplateScriptInstallsCredentialHelperOutsideRestrictedG
 // parse the SSE-framed MCP reply, bail on non-github hosts, and request a
 // mode-aware scope: the App's full/write set in non-restricted mode, and a
 // read-only token (write:false, no full) in restricted mode.
-func TestGitCredentialTankHelperMintsToken(t *testing.T) {
+// In egress-proxy mode (the wall fronts every Tank session) the credential
+// helper hands git the pod's RAW auth.romaine.life token and the wall mints the
+// scoped GitHub App token server-side. The helper must NOT mint a token in-pod
+// (no mcp-github call) and must emit no credential for non-github hosts. With no
+// egress proxy it refuses to mint in-pod (fail-loud, no credential) so the wall
+// stays mandatory.
+func TestGitCredentialTankHelperHandsRawTokenViaWall(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("credential helper script test runs on POSIX only")
 	}
@@ -372,13 +376,11 @@ func TestGitCredentialTankHelperMintsToken(t *testing.T) {
 		t.Fatalf("resolve credential helper path: %v", err)
 	}
 
-	var gotBody string
+	// A recording server that must never be hit: the wall path does no in-pod mint.
+	minted := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		// MCP streamable-HTTP frames the JSON-RPC result as an SSE event.
-		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_testtoken\",\"expires_at\":\"2099-01-01T00:00:00Z\"}}}\n\n"))
+		minted = true
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -387,12 +389,15 @@ func TestGitCredentialTankHelperMintsToken(t *testing.T) {
 		t.Fatalf("write token file: %v", err)
 	}
 
-	run := func(reqPath, host string, restricted bool) string {
+	run := func(reqPath, host string, egress bool, restricted bool) string {
 		cmd := exec.Command("sh", helperSrc, "get")
 		cmd.Env = []string{
 			"TANK_GIT_CRED_MCP_URL=" + srv.URL,
 			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
 			"PATH=" + os.Getenv("PATH"),
+		}
+		if egress {
+			cmd.Env = append(cmd.Env, "TANK_GIT_EGRESS_PROXY=true")
 		}
 		if restricted {
 			cmd.Env = append(cmd.Env, "TANK_RESTRICTED_GIT=true")
@@ -405,41 +410,37 @@ func TestGitCredentialTankHelperMintsToken(t *testing.T) {
 		return string(out)
 	}
 
-	// Non-restricted: the helper mints the App's full/write scope.
-	out := run("romaine-life/tank-operator.git", "github.com", false)
-	if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_testtoken") {
-		t.Fatalf("helper output missing credential, got:\n%s", out)
+	// Egress mode (restricted and non-restricted): hand git the RAW pod token.
+	for _, restricted := range []bool{false, true} {
+		out := run("romaine-life/tank-operator.git", "github.com", true, restricted)
+		if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=fake-sa-token") {
+			t.Fatalf("egress helper did not hand the raw token (restricted=%v), got:\n%s", restricted, out)
+		}
 	}
-	if !strings.Contains(gotBody, "\"mint_clone_token\"") ||
-		!strings.Contains(gotBody, "romaine-life/tank-operator") ||
-		!strings.Contains(gotBody, "\"full\":true") {
-		t.Fatalf("non-restricted mint request body unexpected: %s", gotBody)
-	}
-
-	// Restricted: the helper mints a read-only token (write:false, no full) so
-	// reads work without a push-capable credential in the shell.
-	out = run("romaine-life/tank-operator.git", "github.com", true)
-	if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_testtoken") {
-		t.Fatalf("restricted helper output missing credential, got:\n%s", out)
-	}
-	if !strings.Contains(gotBody, "\"mint_clone_token\"") ||
-		!strings.Contains(gotBody, "romaine-life/tank-operator") ||
-		!strings.Contains(gotBody, "\"write\":false") ||
-		strings.Contains(gotBody, "\"full\":true") {
-		t.Fatalf("restricted mint request body should be read-only, got: %s", gotBody)
+	if minted {
+		t.Fatalf("egress helper minted a token in-pod; the wall must do the minting")
 	}
 
-	// Non-github host: the helper must produce no credential (either mode).
-	if out := run("romaine-life/tank-operator.git", "example.com", false); strings.TrimSpace(out) != "" {
+	// Non-github host: no credential, regardless of mode.
+	if out := run("romaine-life/tank-operator.git", "example.com", true, false); strings.TrimSpace(out) != "" {
 		t.Fatalf("helper emitted credential for non-github host: %q", out)
+	}
+
+	// No egress proxy: the wall is mandatory, so the helper refuses to mint
+	// in-pod and emits no credential (a diagnostic goes to stderr).
+	out := run("romaine-life/tank-operator.git", "github.com", false, true)
+	if strings.Contains(out, "password=") {
+		t.Fatalf("helper must not emit a credential without the egress proxy, got:\n%s", out)
+	}
+	if minted {
+		t.Fatalf("helper must not mint a token in-pod without the egress proxy")
 	}
 }
 
-// The gh wrapper (/usr/local/bin/gh) mints a fresh token via the in-pod MCP and
-// execs the real gh with it. Scope is mode-aware: full/write when non-restricted,
-// read-only (write:false, no full) when restricted — so `gh` reads work in
-// restricted mode without handing the shell a push-capable credential.
-func TestGhTankWrapperMintsModeAwareToken(t *testing.T) {
+// In egress-proxy mode the gh wrapper hands the real gh the pod's RAW
+// auth.romaine.life token (GH_TOKEN) and lets the wall govern the GitHub call;
+// it does NOT mint a token via the in-pod MCP.
+func TestGhTankWrapperHandsRawTokenViaWall(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("gh wrapper script test runs on POSIX only")
 	}
@@ -449,12 +450,10 @@ func TestGhTankWrapperMintsModeAwareToken(t *testing.T) {
 		t.Fatalf("resolve gh wrapper path: %v", err)
 	}
 
-	var gotBody string
+	minted := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		gotBody = string(body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_testtoken\",\"expires_at\":\"2099-01-01T00:00:00Z\"}}}\n\n"))
+		minted = true
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -467,17 +466,16 @@ func TestGhTankWrapperMintsModeAwareToken(t *testing.T) {
 	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'GH_TOKEN=%s\\n' \"$GH_TOKEN\"\n"), 0o755); err != nil {
 		t.Fatalf("write fake gh: %v", err)
 	}
-	// Empty workspace so repo scope comes only from the explicit --repo arg,
-	// making the test independent of the ambient /workspace.
 	emptyWorkspace := t.TempDir()
 
-	run := func(restricted bool) (string, string) {
-		gotBody = ""
+	run := func(restricted bool) string {
 		env := []string{
 			"TANK_REAL_GH=" + fakeGh,
 			"TANK_GIT_CRED_MCP_URL=" + srv.URL,
 			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
 			"TANK_WORKSPACE_DIR=" + emptyWorkspace,
+			"TANK_GIT_EGRESS_PROXY=true",
+			"HOME=" + t.TempDir(),
 			"PATH=" + os.Getenv("PATH"),
 		}
 		if restricted {
@@ -489,811 +487,17 @@ func TestGhTankWrapperMintsModeAwareToken(t *testing.T) {
 		if err != nil {
 			t.Fatalf("wrapper failed (restricted=%v): %v\noutput:\n%s", restricted, err, string(out))
 		}
-		return string(out), gotBody
-	}
-
-	// Non-restricted: full/write scope, token handed to gh.
-	out, body := run(false)
-	if !strings.Contains(out, "GH_TOKEN=ghs_testtoken") {
-		t.Fatalf("non-restricted wrapper did not export minted token to gh: %s", out)
-	}
-	if !strings.Contains(body, "\"mint_clone_token\"") ||
-		!strings.Contains(body, "romaine-life/tank-operator") ||
-		!strings.Contains(body, "\"full\":true") {
-		t.Fatalf("non-restricted gh mint request unexpected: %s", body)
-	}
-
-	// Restricted: read-only scope, but gh is still authenticated for reads.
-	out, body = run(true)
-	if !strings.Contains(out, "GH_TOKEN=ghs_testtoken") {
-		t.Fatalf("restricted wrapper did not export minted token to gh: %s", out)
-	}
-	if !strings.Contains(body, "\"mint_clone_token\"") ||
-		!strings.Contains(body, "romaine-life/tank-operator") ||
-		!strings.Contains(body, "\"write\":false") ||
-		strings.Contains(body, "\"full\":true") {
-		t.Fatalf("restricted gh mint should be read-only, got: %s", body)
-	}
-}
-
-// `gh pr create` on a Tank session branch is delegated to the governed sidecar
-// endpoint (the agent shell never receives a write token); every other gh verb,
-// and pr create off a non-session branch, falls through to the real gh.
-func TestGhTankWrapperDelegatesPrCreate(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("gh wrapper script test runs on POSIX only")
-	}
-	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
-	if err != nil {
-		t.Fatalf("resolve gh wrapper path: %v", err)
-	}
-
-	var prBody string
-	var prHits int
-	prSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		prHits++
-		b, _ := io.ReadAll(r.Body)
-		prBody = string(b)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"created":true,"pr_url":"https://github.com/romaine-life/tank-operator/pull/77","pr_number":77}`))
-	}))
-	defer prSrv.Close()
-
-	// Fake mint server for the fall-through (non-delegated) path.
-	mintSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_ro\"}}}\n\n"))
-	}))
-	defer mintSrv.Close()
-
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-	// Fake real gh marks the fall-through path so we can assert non-delegation.
-	fakeGh := filepath.Join(t.TempDir(), "gh")
-	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'REALGH %s\\n' \"$*\"\n"), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-
-	// A real git repo on a Tank session branch with a GitHub origin.
-	repo := t.TempDir()
-	git := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repo
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	git("init", "-q")
-	git("config", "user.email", "a@b.test")
-	git("config", "user.name", "A")
-	git("checkout", "-q", "-b", "tank/session/95/tank-operator")
-	git("commit", "-q", "--allow-empty", "-m", "start")
-	git("remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git")
-
-	runWrapper := func(branch string, args ...string) string {
-		co := exec.Command("git", "checkout", "-q", "-B", branch)
-		co.Dir = repo
-		if out, err := co.CombinedOutput(); err != nil {
-			t.Fatalf("checkout %s: %v\n%s", branch, err, out)
-		}
-		cmd := exec.Command("sh", append([]string{wrapperSrc}, args...)...)
-		cmd.Dir = repo
-		cmd.Env = []string{
-			"TANK_RESTRICTED_GIT=true",
-			"TANK_REAL_GH=" + fakeGh,
-			"TANK_GIT_CRED_MCP_URL=" + mintSrv.URL + "/",
-			"TANK_CREATE_SESSION_PR_URL=" + prSrv.URL + "/create-session-pr",
-			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
-			"TANK_WORKSPACE_DIR=" + t.TempDir(),
-			"PATH=" + os.Getenv("PATH"),
-		}
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("wrapper %v failed: %v\n%s", args, err, out)
-		}
 		return string(out)
 	}
 
-	// pr create on the session branch -> delegated; prints the PR URL; no real gh.
-	prHits = 0
-	out := runWrapper("tank/session/95/tank-operator", "pr", "create", "--title", "My PR", "--body", "Why")
-	if !strings.Contains(out, "https://github.com/romaine-life/tank-operator/pull/77") {
-		t.Fatalf("delegated pr create did not print the PR URL: %q", out)
-	}
-	if strings.Contains(out, "REALGH") {
-		t.Fatalf("pr create should not fall through to real gh: %q", out)
-	}
-	if prHits != 1 {
-		t.Fatalf("expected exactly one delegation request, got %d", prHits)
-	}
-	var sent map[string]any
-	if err := json.Unmarshal([]byte(prBody), &sent); err != nil {
-		t.Fatalf("delegation body not JSON: %v (%q)", err, prBody)
-	}
-	if sent["title"] != "My PR" || sent["body"] != "Why" {
-		t.Fatalf("delegation did not forward title/body: %v", sent)
-	}
-	if rp, _ := sent["repo_path"].(string); rp == "" {
-		t.Fatalf("delegation did not send repo_path: %v", sent)
-	}
-
-	// pr view is not a create -> falls through to real gh, no delegation.
-	prHits = 0
-	out = runWrapper("tank/session/95/tank-operator", "pr", "view")
-	if prHits != 0 {
-		t.Fatalf("pr view must not hit the create endpoint, got %d", prHits)
-	}
-	if !strings.Contains(out, "REALGH") {
-		t.Fatalf("pr view should fall through to real gh: %q", out)
-	}
-
-	// pr create on a non-session branch -> falls through, no delegation.
-	prHits = 0
-	out = runWrapper("feature/x", "pr", "create", "--title", "X")
-	if prHits != 0 {
-		t.Fatalf("pr create on a non-session branch must not delegate, got %d", prHits)
-	}
-	if !strings.Contains(out, "REALGH") {
-		t.Fatalf("non-session pr create should fall through to real gh: %q", out)
-	}
-}
-
-// In restricted mode, the git credential helper first consults the in-pod
-// break-glass server (the grant source of truth). An active unlimited grant
-// yields a FULL token automatically (no read-only fallback); no grant falls
-// back to the read-only mint exactly as before.
-func TestGitCredentialTankHelperBreakGlassElevation(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("credential helper script test runs on POSIX only")
-	}
-	helperSrc, err := filepath.Abs("../../../k8s/session-config/git-credential-tank.sh")
-	if err != nil {
-		t.Fatalf("resolve credential helper path: %v", err)
-	}
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-
-	run := func(breakGlassURL, readOnlyURL string) string {
-		cmd := exec.Command("sh", helperSrc, "get")
-		cmd.Env = []string{
-			"TANK_RESTRICTED_GIT=true",
-			"TANK_BREAK_GLASS_MINT_URL=" + breakGlassURL,
-			"TANK_GIT_CRED_MCP_URL=" + readOnlyURL,
-			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
-			"PATH=" + os.Getenv("PATH"),
+	for _, restricted := range []bool{false, true} {
+		out := run(restricted)
+		if !strings.Contains(out, "GH_TOKEN=fake-sa-token") {
+			t.Fatalf("egress wrapper did not hand the raw token to gh (restricted=%v): %s", restricted, out)
 		}
-		cmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\npath=romaine-life/tank-operator.git\n\n")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("helper failed: %v\noutput:\n%s", err, string(out))
-		}
-		return string(out)
 	}
-
-	t.Run("active grant mints full token without read-only fallback", func(t *testing.T) {
-		var bgBody string
-		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
-			bgBody = string(body)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"active":true,"token":"ghs_fulltoken","full_github_api":true}`))
-		}))
-		defer bg.Close()
-		readOnlyHit := false
-		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			readOnlyHit = true
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer ro.Close()
-
-		out := run(bg.URL, ro.URL)
-		if !strings.Contains(out, "username=x-access-token") || !strings.Contains(out, "password=ghs_fulltoken") {
-			t.Fatalf("expected full break-glass token, got:\n%s", out)
-		}
-		if readOnlyHit {
-			t.Fatalf("read-only mint must not be hit when a grant is active")
-		}
-		if !strings.Contains(bgBody, "romaine-life/tank-operator") {
-			t.Fatalf("break-glass request missing repo: %s", bgBody)
-		}
-	})
-
-	t.Run("no grant falls back to read-only mint", func(t *testing.T) {
-		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"active":false}`))
-		}))
-		defer bg.Close()
-		var roBody string
-		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
-			roBody = string(body)
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
-		}))
-		defer ro.Close()
-
-		out := run(bg.URL, ro.URL)
-		if !strings.Contains(out, "password=ghs_readonly") {
-			t.Fatalf("expected read-only fallback token, got:\n%s", out)
-		}
-		if !strings.Contains(roBody, "\"write\":false") || strings.Contains(roBody, "\"full\":true") {
-			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
-		}
-	})
-
-	// FAIL LOUD, never silent. When the break-glass mint returns an
-	// unrecognized/error shape — e.g. the JSON-RPC `invalid MCP request` (HTTP
-	// 200) the :9999 MCP catch-all emits when the mcp-auth-proxy sidecar predates
-	// the /mint-git-token route (image/version skew) — the helper must NOT
-	// silently collapse to read-only. It surfaces a diagnostic to stderr AND
-	// still mints the read-only token so reads keep working. The silent collapse
-	// is the bug that made the live regression undiagnosable.
-	t.Run("error mint response fails loud and falls back to read-only", func(t *testing.T) {
-		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid MCP request"}}`))
-		}))
-		defer bg.Close()
-		roHit := false
-		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			roHit = true
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
-		}))
-		defer ro.Close()
-
-		out := run(bg.URL, ro.URL)
-		if !roHit {
-			t.Fatalf("read-only mint must be hit as fallback when the break-glass mint errors")
-		}
-		if !strings.Contains(out, "password=ghs_readonly") {
-			t.Fatalf("expected read-only fallback token after error mint response, got:\n%s", out)
-		}
-		if !strings.Contains(out, "break-glass elevation FAILED") {
-			t.Fatalf("expected a loud diagnostic on an error mint response, got:\n%s", out)
-		}
-	})
-}
-
-// The gh wrapper mirrors the credential helper: an active unlimited grant makes
-// the in-pod break-glass server hand `gh` a FULL token; no grant falls back to
-// the read-only mint.
-func TestGhTankWrapperBreakGlassElevation(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("gh wrapper script test runs on POSIX only")
-	}
-	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
-	if err != nil {
-		t.Fatalf("resolve gh wrapper path: %v", err)
-	}
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-	fakeGh := filepath.Join(t.TempDir(), "gh")
-	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'GH_TOKEN=%s\\n' \"$GH_TOKEN\"\n"), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-	emptyWorkspace := t.TempDir()
-
-	run := func(breakGlassURL, readOnlyURL string) string {
-		cmd := exec.Command("sh", wrapperSrc, "pr", "view", "--repo", "romaine-life/tank-operator")
-		cmd.Env = []string{
-			"TANK_RESTRICTED_GIT=true",
-			"TANK_REAL_GH=" + fakeGh,
-			"TANK_BREAK_GLASS_MINT_URL=" + breakGlassURL,
-			"TANK_GIT_CRED_MCP_URL=" + readOnlyURL,
-			"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
-			"TANK_WORKSPACE_DIR=" + emptyWorkspace,
-			"PATH=" + os.Getenv("PATH"),
-		}
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("wrapper failed: %v\noutput:\n%s", err, string(out))
-		}
-		return string(out)
-	}
-
-	t.Run("active grant exports full token without read-only fallback", func(t *testing.T) {
-		var bgBody string
-		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
-			bgBody = string(body)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"active":true,"token":"ghs_fulltoken"}`))
-		}))
-		defer bg.Close()
-		readOnlyHit := false
-		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			readOnlyHit = true
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer ro.Close()
-
-		out := run(bg.URL, ro.URL)
-		if !strings.Contains(out, "GH_TOKEN=ghs_fulltoken") {
-			t.Fatalf("expected gh to receive full break-glass token, got:\n%s", out)
-		}
-		if readOnlyHit {
-			t.Fatalf("read-only mint must not be hit when a grant is active")
-		}
-		if !strings.Contains(bgBody, "romaine-life/tank-operator") {
-			t.Fatalf("break-glass request missing repo: %s", bgBody)
-		}
-	})
-
-	t.Run("no grant falls back to read-only mint", func(t *testing.T) {
-		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"active":false}`))
-		}))
-		defer bg.Close()
-		var roBody string
-		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
-			roBody = string(body)
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
-		}))
-		defer ro.Close()
-
-		out := run(bg.URL, ro.URL)
-		if !strings.Contains(out, "GH_TOKEN=ghs_readonly") {
-			t.Fatalf("expected read-only fallback token, got:\n%s", out)
-		}
-		if !strings.Contains(roBody, "\"write\":false") || strings.Contains(roBody, "\"full\":true") {
-			t.Fatalf("fallback mint should be read-only, got: %s", roBody)
-		}
-	})
-
-	// FAIL LOUD, never silent — mirror of the credential-helper guard. A
-	// JSON-RPC error (HTTP 200) from the :9999 MCP catch-all (sidecar predating
-	// the /mint-git-token route) must produce a stderr diagnostic, not a silent
-	// downgrade, while gh still gets a read-only token for reads.
-	t.Run("error mint response fails loud and falls back to read-only", func(t *testing.T) {
-		bg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"invalid MCP request"}}`))
-		}))
-		defer bg.Close()
-		roHit := false
-		ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			roHit = true
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
-		}))
-		defer ro.Close()
-
-		out := run(bg.URL, ro.URL)
-		if !roHit {
-			t.Fatalf("read-only mint must be hit as fallback when the break-glass mint errors")
-		}
-		if !strings.Contains(out, "GH_TOKEN=ghs_readonly") {
-			t.Fatalf("expected read-only fallback token after error mint response, got:\n%s", out)
-		}
-		if !strings.Contains(out, "break-glass elevation FAILED") {
-			t.Fatalf("expected a loud diagnostic on an error mint response, got:\n%s", out)
-		}
-	})
-}
-
-// The pre-push hook brokers a branch-scoped push through Tank's in-pod
-// break-glass server (:9999). When /push-head returns ok:true the commits are
-// already on the remote (Tank pushed server-side); the hook reports the
-// governed push SUCCEEDED and then exits non-zero so git's own credential-less
-// push does not run and confuse the user. A branch_out_of_scope refusal also
-// blocks with an explanatory message; anything else (incl. no_grant) falls
-// through to the preserved "Direct git push is disabled" block + exit 1.
-func TestAgentPrePushHookGovernedPush(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("pre-push hook script test runs on POSIX only")
-	}
-	hookSrc, err := filepath.Abs("../../../k8s/session-config/agent-pre-push-hook.sh")
-	if err != nil {
-		t.Fatalf("resolve pre-push hook path: %v", err)
-	}
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-
-	// A temp git repo with a committed HEAD on a named branch and an https
-	// github.com origin, so the hook can derive repo root + branch + slug.
-	newRepo := func(home string) string {
-		repoDir := t.TempDir()
-		env := isolatedGitEnv(home)
-		mustRunEnv(t, repoDir, env, "git", "init", "-q")
-		mustRunEnv(t, repoDir, env, "git", "config", "user.email", "a@b.c")
-		mustRunEnv(t, repoDir, env, "git", "config", "user.name", "tester")
-		mustRunEnv(t, repoDir, env, "git", "checkout", "-q", "-b", "feature-x")
-		mustRunEnv(t, repoDir, env, "git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git")
-		if err := os.WriteFile(filepath.Join(repoDir, "f.txt"), []byte("hi"), 0o644); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
-		mustRunEnv(t, repoDir, env, "git", "add", "f.txt")
-		mustRunEnv(t, repoDir, env, "git", "commit", "-q", "-m", "init")
-		return repoDir
-	}
-
-	// runHook runs the pre-push hook in repoDir with the break-glass mint + push
-	// endpoints pointed at the test servers, returning combined output + exit code.
-	runHook := func(repoDir, home, mintURL, pushURL string) (string, int) {
-		cmd := exec.Command("sh", hookSrc, "origin", "https://github.com/romaine-life/tank-operator.git")
-		cmd.Dir = repoDir
-		cmd.Env = append(isolatedGitEnv(home),
-			"TANK_BREAK_GLASS_MINT_URL="+mintURL,
-			"TANK_BREAK_GLASS_PUSH_HEAD_URL="+pushURL,
-			"AUTH_ROMAINE_TOKEN_PATH="+tokenFile,
-		)
-		out, err := cmd.CombinedOutput()
-		code := 0
-		if ee, ok := err.(*exec.ExitError); ok {
-			code = ee.ExitCode()
-		} else if err != nil {
-			t.Fatalf("hook run errored unexpectedly: %v\noutput:\n%s", err, string(out))
-		}
-		return string(out), code
-	}
-
-	t.Run("scoped grant brokers the push and blocks git", func(t *testing.T) {
-		home := t.TempDir()
-		repoDir := newRepo(home)
-		// Unlimited probe: no token (scoped grant, not unlimited).
-		mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"active":false}`))
-		}))
-		defer mint.Close()
-		var pushBody string
-		push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
-			pushBody = string(body)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":true,"branch":"feature-x","sha":"abc1234","repo":"romaine-life/tank-operator"}`))
-		}))
-		defer push.Close()
-
-		out, code := runHook(repoDir, home, mint.URL, push.URL)
-		if code == 0 {
-			t.Fatalf("hook must exit non-zero to stop git's own push; got 0\noutput:\n%s", out)
-		}
-		if !strings.Contains(out, "Push SUCCEEDED via Tank's governed branch-lane path") {
-			t.Fatalf("hook did not report the governed push success:\n%s", out)
-		}
-		if !strings.Contains(out, "EXPECTED") {
-			t.Fatalf("hook did not explain the expected git failure line:\n%s", out)
-		}
-		if !strings.Contains(out, "feature-x") || !strings.Contains(out, "abc1234") {
-			t.Fatalf("hook output missing branch/sha echo:\n%s", out)
-		}
-		if !strings.Contains(pushBody, "\"repo\":\"romaine-life/tank-operator\"") {
-			t.Fatalf("/push-head body missing repo slug: %s", pushBody)
-		}
-		if !strings.Contains(pushBody, "\"repo_path\":\""+repoDir+"\"") {
-			t.Fatalf("/push-head body missing repo_path: %s", pushBody)
-		}
-		// The preserved no-grant block must NOT appear on the governed-push path.
-		if strings.Contains(out, "Direct git push is disabled in Tank normal mode") {
-			t.Fatalf("governed push path should not print the no-grant block:\n%s", out)
-		}
-	})
-
-	t.Run("branch out of scope blocks with explanation", func(t *testing.T) {
-		home := t.TempDir()
-		repoDir := newRepo(home)
-		mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"active":false}`))
-		}))
-		defer mint.Close()
-		push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":false,"reason":"branch_out_of_scope","detail":"feature-x not in scope"}`))
-		}))
-		defer push.Close()
-
-		out, code := runHook(repoDir, home, mint.URL, push.URL)
-		if code == 0 {
-			t.Fatalf("out-of-scope push must exit non-zero; got 0\noutput:\n%s", out)
-		}
-		if !strings.Contains(out, "does not\ncover this branch") && !strings.Contains(out, "does not cover this branch") {
-			t.Fatalf("hook did not explain the out-of-scope refusal:\n%s", out)
-		}
-	})
-
-	t.Run("no grant falls through to preserved block", func(t *testing.T) {
-		home := t.TempDir()
-		repoDir := newRepo(home)
-		mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"active":false}`))
-		}))
-		defer mint.Close()
-		push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok":false,"reason":"no_grant"}`))
-		}))
-		defer push.Close()
-
-		out, code := runHook(repoDir, home, mint.URL, push.URL)
-		if code != 1 {
-			t.Fatalf("no-grant push must exit 1; got %d\noutput:\n%s", code, out)
-		}
-		if !strings.Contains(out, "[tank-agent] Direct git push is disabled") {
-			t.Fatalf("no-grant path must preserve the historical block:\n%s", out)
-		}
-	})
-}
-
-// When an unlimited break-glass grant is active, the pre-push hook detects it
-// via /mint-git-token and exits 0 so git's native push proceeds with the full
-// token the credential helper provides. /push-head must not be consulted.
-func TestAgentPrePushHookUnlimitedGrantAllowsNativePush(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("pre-push hook script test runs on POSIX only")
-	}
-	hookSrc, err := filepath.Abs("../../../k8s/session-config/agent-pre-push-hook.sh")
-	if err != nil {
-		t.Fatalf("resolve pre-push hook path: %v", err)
-	}
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-
-	home := t.TempDir()
-	repoDir := t.TempDir()
-	env := isolatedGitEnv(home)
-	mustRunEnv(t, repoDir, env, "git", "init", "-q")
-	mustRunEnv(t, repoDir, env, "git", "config", "user.email", "a@b.c")
-	mustRunEnv(t, repoDir, env, "git", "config", "user.name", "tester")
-	mustRunEnv(t, repoDir, env, "git", "checkout", "-q", "-b", "feature-x")
-	mustRunEnv(t, repoDir, env, "git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git")
-	if err := os.WriteFile(filepath.Join(repoDir, "f.txt"), []byte("hi"), 0o644); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-	mustRunEnv(t, repoDir, env, "git", "add", "f.txt")
-	mustRunEnv(t, repoDir, env, "git", "commit", "-q", "-m", "init")
-
-	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"active":true,"token":"ghs_fulltoken"}`))
-	}))
-	defer mint.Close()
-	pushHit := false
-	push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pushHit = true
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer push.Close()
-
-	cmd := exec.Command("sh", hookSrc, "origin", "https://github.com/romaine-life/tank-operator.git")
-	cmd.Dir = repoDir
-	cmd.Env = append(isolatedGitEnv(home),
-		"TANK_BREAK_GLASS_MINT_URL="+mint.URL,
-		"TANK_BREAK_GLASS_PUSH_HEAD_URL="+push.URL,
-		"AUTH_ROMAINE_TOKEN_PATH="+tokenFile,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("unlimited-grant pre-push hook must exit 0; got error %v\noutput:\n%s", err, string(out))
-	}
-	if !strings.Contains(string(out), "unlimited break-glass grant active") {
-		t.Fatalf("hook did not report the unlimited grant:\n%s", string(out))
-	}
-	if pushHit {
-		t.Fatalf("/push-head must not be consulted when an unlimited grant is active")
-	}
-}
-
-// In restricted mode with a scoped (non-unlimited) grant, `gh pr comment <n>
-// --body x` routes to the governed /pr-write endpoint and prints the returned
-// pr_url. The unlimited /mint-git-token probe returns no token (so we do not
-// exec real gh early), and the read-only mint is never reached because the
-// PR-write succeeds and the wrapper exits 0.
-func TestGhTankWrapperPrWriteComment(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("gh wrapper script test runs on POSIX only")
-	}
-	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
-	if err != nil {
-		t.Fatalf("resolve gh wrapper path: %v", err)
-	}
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-	// Fake real gh: if reached, it would print a sentinel. The PR-write path must
-	// NOT fall through to it on success.
-	fakeGh := filepath.Join(t.TempDir(), "gh")
-	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'NATIVE_GH_REACHED\\n'\n"), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-	emptyWorkspace := t.TempDir()
-
-	// Unlimited probe returns no token -> scoped path.
-	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"active":false}`))
-	}))
-	defer mint.Close()
-	var prBody string
-	prWrite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		prBody = string(body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"pr_number":42,"pr_url":"https://github.com/romaine-life/tank-operator/pull/42","action":"comment"}`))
-	}))
-	defer prWrite.Close()
-	// Read-only mint must not be hit on a successful PR write.
-	roHit := false
-	ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		roHit = true
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ro.Close()
-
-	cmd := exec.Command("sh", wrapperSrc, "pr", "comment", "42", "--repo", "romaine-life/tank-operator", "--body", "hello from tank")
-	cmd.Env = []string{
-		"TANK_RESTRICTED_GIT=true",
-		"TANK_REAL_GH=" + fakeGh,
-		"TANK_BREAK_GLASS_MINT_URL=" + mint.URL,
-		"TANK_BREAK_GLASS_PR_WRITE_URL=" + prWrite.URL,
-		"TANK_GIT_CRED_MCP_URL=" + ro.URL,
-		"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
-		"TANK_WORKSPACE_DIR=" + emptyWorkspace,
-		"PATH=" + os.Getenv("PATH"),
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("wrapper failed: %v\noutput:\n%s", err, string(out))
-	}
-	if !strings.Contains(string(out), "https://github.com/romaine-life/tank-operator/pull/42") {
-		t.Fatalf("wrapper did not print the pr_url:\n%s", string(out))
-	}
-	if strings.Contains(string(out), "NATIVE_GH_REACHED") {
-		t.Fatalf("PR-write success must not fall through to native gh:\n%s", string(out))
-	}
-	if roHit {
-		t.Fatalf("read-only mint must not be hit on a successful PR write")
-	}
-	if !strings.Contains(prBody, "\"action\":\"comment\"") {
-		t.Fatalf("/pr-write body wrong action: %s", prBody)
-	}
-	if !strings.Contains(prBody, "\"pr_number\":42") {
-		t.Fatalf("/pr-write body missing pr_number: %s", prBody)
-	}
-	if !strings.Contains(prBody, "\"comment\":\"hello from tank\"") {
-		t.Fatalf("/pr-write body did not map --body to comment: %s", prBody)
-	}
-	if !strings.Contains(prBody, "\"repo\":\"romaine-life/tank-operator\"") {
-		t.Fatalf("/pr-write body missing repo: %s", prBody)
-	}
-}
-
-// A `gh pr comment` whose PR write returns no_grant must name
-// request_git_break_glass on stderr and then fall through to native gh so the
-// user also sees gh's own result.
-func TestGhTankWrapperPrWriteNoGrantFallsThrough(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("gh wrapper script test runs on POSIX only")
-	}
-	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
-	if err != nil {
-		t.Fatalf("resolve gh wrapper path: %v", err)
-	}
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-	fakeGh := filepath.Join(t.TempDir(), "gh")
-	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'NATIVE_GH GH_TOKEN=%s\\n' \"$GH_TOKEN\"\n"), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-	emptyWorkspace := t.TempDir()
-
-	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"active":false}`))
-	}))
-	defer mint.Close()
-	prWrite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":false,"reason":"no_grant"}`))
-	}))
-	defer prWrite.Close()
-	// Read-only mint IS reached on the fall-through, so it must still serve a token.
-	ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
-	}))
-	defer ro.Close()
-
-	cmd := exec.Command("sh", wrapperSrc, "pr", "comment", "42", "--repo", "romaine-life/tank-operator", "--body", "x")
-	cmd.Env = []string{
-		"TANK_RESTRICTED_GIT=true",
-		"TANK_REAL_GH=" + fakeGh,
-		"TANK_BREAK_GLASS_MINT_URL=" + mint.URL,
-		"TANK_BREAK_GLASS_PR_WRITE_URL=" + prWrite.URL,
-		"TANK_GIT_CRED_MCP_URL=" + ro.URL,
-		"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
-		"TANK_WORKSPACE_DIR=" + emptyWorkspace,
-		"PATH=" + os.Getenv("PATH"),
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("wrapper failed: %v\noutput:\n%s", err, string(out))
-	}
-	if !strings.Contains(string(out), "request_git_break_glass") {
-		t.Fatalf("no_grant PR write must name request_git_break_glass:\n%s", string(out))
-	}
-	if !strings.Contains(string(out), "NATIVE_GH GH_TOKEN=ghs_readonly") {
-		t.Fatalf("no_grant PR write must fall through to native gh with the read-only token:\n%s", string(out))
-	}
-}
-
-// `gh pr view` (a READ subcommand) must never touch /pr-write — it stays on the
-// existing read-only mint + native gh path, even in restricted mode.
-func TestGhTankWrapperPrReadNotIntercepted(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("gh wrapper script test runs on POSIX only")
-	}
-	wrapperSrc, err := filepath.Abs("../../../session-images/gh-tank-wrapper.sh")
-	if err != nil {
-		t.Fatalf("resolve gh wrapper path: %v", err)
-	}
-	tokenFile := filepath.Join(t.TempDir(), "auth-token")
-	if err := os.WriteFile(tokenFile, []byte("fake-sa-token\n"), 0o600); err != nil {
-		t.Fatalf("write token file: %v", err)
-	}
-	fakeGh := filepath.Join(t.TempDir(), "gh")
-	if err := os.WriteFile(fakeGh, []byte("#!/bin/sh\nprintf 'NATIVE_GH GH_TOKEN=%s\\n' \"$GH_TOKEN\"\n"), 0o755); err != nil {
-		t.Fatalf("write fake gh: %v", err)
-	}
-	emptyWorkspace := t.TempDir()
-
-	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"active":false}`))
-	}))
-	defer mint.Close()
-	prWriteHit := false
-	prWrite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		prWriteHit = true
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer prWrite.Close()
-	ro := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"structuredContent\":{\"token\":\"ghs_readonly\"}}}\n\n"))
-	}))
-	defer ro.Close()
-
-	cmd := exec.Command("sh", wrapperSrc, "pr", "view", "42", "--repo", "romaine-life/tank-operator")
-	cmd.Env = []string{
-		"TANK_RESTRICTED_GIT=true",
-		"TANK_REAL_GH=" + fakeGh,
-		"TANK_BREAK_GLASS_MINT_URL=" + mint.URL,
-		"TANK_BREAK_GLASS_PR_WRITE_URL=" + prWrite.URL,
-		"TANK_GIT_CRED_MCP_URL=" + ro.URL,
-		"AUTH_ROMAINE_TOKEN_PATH=" + tokenFile,
-		"TANK_WORKSPACE_DIR=" + emptyWorkspace,
-		"PATH=" + os.Getenv("PATH"),
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("wrapper failed: %v\noutput:\n%s", err, string(out))
-	}
-	if prWriteHit {
-		t.Fatalf("`gh pr view` (a read) must not hit /pr-write")
-	}
-	if !strings.Contains(string(out), "NATIVE_GH GH_TOKEN=ghs_readonly") {
-		t.Fatalf("`gh pr view` must reach native gh with the read-only token:\n%s", string(out))
+	if minted {
+		t.Fatalf("egress wrapper minted a token in-pod; the wall must do the minting")
 	}
 }
 
