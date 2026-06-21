@@ -218,8 +218,14 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             # "proxy going down" report). A 503 is honest and retryable. The anonymous
             # case (no credential at all — git's first info/refs probe) is handled above
             # and still passes through, so git's own auth negotiation is unaffected.
-            log.warning("egress: DENY (session identity unavailable from exchange) %s %s", method, path)
-            return _unavailable("session identity unavailable; retry shortly")
+            log.warning("egress: DENY (no session identity from exchange) %s %s", method, path)
+            return _unavailable(
+                "could not establish your session identity. The wall mints GitHub "
+                "tokens itself from the pod's auth.romaine.life SA token — a "
+                "self-minted GitHub token is rejected here. Use the git-credential-tank "
+                "helper (it presents the SA token); if this persists with the SA token, "
+                "the IdP is unavailable."
+            )
         st.ident = ident
 
         # EVERY session routes through the wall now. Fetch its egress context (repos +
@@ -378,8 +384,20 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             )
             r.raise_for_status()
             token, expires_at = gg.parse_exchange_result(r.json())
+        except httpx.HTTPStatusError as exc:
+            # Surface the IdP's OWN reason, not just the status. auth returns
+            # {"error": "<verifier detail>", "reason": "denied_token", ...} in the
+            # body; the overwhelmingly common cause is a NON-SA credential reaching
+            # the wall (e.g. a self-minted GitHub token), which is not a cluster JWT
+            # and fails verification. Logging the body turns a black-box 401 into a
+            # one-line diagnosis (and pairs with auth's own denial-reason logging).
+            body = (exc.response.text or "").strip()[:300] if exc.response is not None else ""
+            status = exc.response.status_code if exc.response is not None else 0
+            log.warning("egress: token exchange rejected by IdP (status=%s): %s", status, body)
+            metrics.record_exchange("failed")
+            return ""
         except Exception as exc:
-            log.warning("egress: token exchange failed: %s", exc)
+            log.warning("egress: token exchange failed (no IdP response): %s", exc)
             metrics.record_exchange("failed")
             return ""
         if token:
