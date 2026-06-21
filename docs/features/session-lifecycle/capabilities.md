@@ -674,8 +674,10 @@ Contract impact:
   audited capability set (`push_current_head`, `mint_full_git_token`, and
   `full_github_api` present only on `unlimited` grants). The
   `unlimited` / `full_api` whole-repo escape hatch, server-side branch-scope
-  enforcement, `publish_current_head` normal session-branch auto-publish, and the
-  restricted-mode raw-mcp-github write denylist are all unchanged.
+  enforcement, and the restricted-mode raw-mcp-github write denylist are all
+  unchanged. The normal session-branch push is now governed by the wall (plain
+  `git push`); the `publish_current_head` post-commit auto-publish it once used
+  is retired.
 - **Retired (no live route, tool, event, UI, or test may remain):** the
   `request_pr_lane` / `create_pr_lane` MCP tools + handlers + routes; the
   `github.pr_lane.*` event family and its reader/writer/auto-approval logic; the
@@ -1033,8 +1035,8 @@ automatically, with no manual `GH_TOKEN` juggling. Branch/count-scoped grants
 are unchanged — they stay least-privilege on the governed push path.
 
 This is a deliberate, admin-consented blast-radius widening: a full raw GitHub
-App token bypasses the governed PR ledger (the `rename_current_session_pr` /
-`update_current_session_pr_body` / `merge_current_session_pr` Tank tools and
+App token bypasses the governed PR ledger (the wall-recorded `gh pr create` /
+`gh pr edit` title/body writes and the `merge_current_session_pr` Tank tool, and
 their `github.pull_request.*` control-action records). It is therefore gated on
 an explicit, audited, TTL-bounded grant and surfaced in the approval prompt,
 the admin panel, and the audit ledger so the approving human accepts it
@@ -1091,8 +1093,8 @@ Contract impact:
   `channel: wrapper`, `full_github_api: true`), counted by
   `tank_control_action_events_total`.
 - **Least privilege preserved.** Branch/count-scoped grants never get
-  `full_github_api`, never mint a raw full token, and stay on the governed
-  `publish_current_head` / `push_current_head` path.
+  `full_github_api`, never mint a raw full token, and stay on the wall-governed
+  `git push` path (lane-confined, fast-forward-only).
 
 Deploy caveat:
 - This changes the session image (wrappers), the `mcp-auth-proxy` sidecar, and

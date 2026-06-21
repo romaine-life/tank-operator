@@ -7,9 +7,12 @@ fi
 
 cat <<'EOF'
 
-[tank-agent] Direct git push is disabled in Tank normal mode. Use the Tank MCP
-publish_current_head tool so Tank owns the branch, credential, CI watcher, and
-mergeability check.
+[tank-agent] Direct git push is disabled outside the agent-egress proxy (the
+wall). Tank routes every session's GitHub traffic through the wall, which mints
+the credential server-side, records the push, and — for restricted sessions —
+rejects pushes to main and merges. With the wall enabled, `git push` and
+`gh pr create|edit|ready|comment` just work; this defensive block only fires in
+a worktree set up without the wall, where there is no governed path.
 
 EOF
 exit 1

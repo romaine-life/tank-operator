@@ -2698,8 +2698,9 @@ async def _handle_tank_break_glass_tool(
                 "Break-glass GitHub access request recorded.\n"
                 f"Approval URL: {approval_url}\n"
                 "This tool did not mint or reveal a GitHub token. Until approval is "
-                "completed, keep using publish_current_head and do not attempt raw "
-                "GitHub writes."
+                "completed, do not attempt the out-of-lane GitHub writes you are "
+                "requesting; in-lane `git push` on your session branch still works "
+                "through the wall."
             )
             structured = {
                 "repo_scope": repo_scope,
