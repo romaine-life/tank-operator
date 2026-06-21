@@ -44,10 +44,10 @@ bash /opt/tank/session-config/live-preview-watch.sh --watch-cmd 'npm run build -
 bash /opt/tank/session-config/live-preview-push.sh --revert
 ```
 
-> The v1 tank-operator-specific sender (`push-frontend.sh` +
-> `live-preview-daemon.sh`, which target the retired in-app static-override
-> receiver) is **left untouched**; Stage 5 deletes it and cuts tank-operator
-> over to these generic scripts. These are additive.
+> The v1 tank-operator-specific in-app sender and receiver have been **deleted
+> end-to-end** (the Stage 5 cutover): tank-operator is now an ordinary consumer
+> of these generic scripts, with no parallel path left behind. The migration
+> guard `scripts/check-removed-live-preview-v1.mjs` keeps that surface deleted.
 
 ## Per-repo build convention (repo-agnostic)
 

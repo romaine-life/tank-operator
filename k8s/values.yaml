@@ -31,32 +31,12 @@ testEnv:
   wildcardListenerSetNamespace: tank-operator
   sessionsGatewayIP: 172.179.163.96
   # Orchestrator replica count for hot validation slots. 1 by default: a slot is
-  # a single-user, ephemeral environment that needs no HA — and live frontend
-  # preview REQUIRES a single serving pod, because the static-override bundle is
-  # a per-pod emptyDir (a push lands on one replica, so reads must hit the same
-  # one; at 2 replicas the co-watched frontend flickers ~50/50). Prod is
-  # unaffected (it uses orchestrator.replicas and has no override). Bump this
-  # (or expose it per-slot at provision time) only to validate an HA/failover
-  # feature on a slot — a case where live preview does not apply anyway.
+  # a single-user, ephemeral environment that needs no HA, and the hot-swap
+  # backend writes to a per-pod emptyDir (a swap must land on the one pod that
+  # serves). Prod is unaffected (it uses orchestrator.replicas). Bump this (or
+  # expose it per-slot at provision time) only to validate an HA/failover
+  # feature on a slot.
   orchestratorReplicas: 1
-
-# Live-preview static-override scratch volume mounted on the orchestrator in
-# test envs. The orchestrator receives pushes directly (handlers_static_override.go),
-# so there is no writer sidecar — only the emptyDir + the orchestrator mount and
-# the TANK_OPERATOR_STATIC_OVERRIDE_DIR/ROOT env are load-bearing.
-staticOverride:
-  enabled: true
-  mountPath: /var/run/tank-operator-static-override
-
-# In-pod live frontend preview daemon (the sender side). When enabled, GUI
-# session pods spawned by this orchestrator get a `live-preview` sidecar that
-# watches frontend/, builds on the owner's toggle, and streams the built dist/
-# to the session's test slot static-override receiver — agent fully out of the
-# loop. Off by default: it adds an (idle-cheap) sidecar to every GUI session
-# pod and the live push loop should be activated deliberately after an
-# end-to-end validation. Flip to true to turn the feature on fleet-wide.
-livePreview:
-  daemonEnabled: false
 
 hotSwapBackend:
   enabled: true

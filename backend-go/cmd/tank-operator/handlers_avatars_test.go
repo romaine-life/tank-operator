@@ -216,7 +216,6 @@ func TestDefaultAvatarImageFallsBackToBundledStatic(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("TANK_OPERATOR_STATIC_DIR", root)
-	t.Setenv("TANK_OPERATOR_STATIC_OVERRIDE_DIR", "")
 
 	store := avatarassets.NewMemoryStore()
 	if err := store.Ensure(t.Context(), avatarassets.NewAsset{

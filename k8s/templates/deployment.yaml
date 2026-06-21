@@ -7,9 +7,10 @@ metadata:
   labels:
     app.kubernetes.io/name: tank-operator
 spec:
-  {{- /* Hot validation slots run a single orchestrator replica: the
-         live-preview static-override is a per-pod emptyDir, so push+read must
-         hit the same pod. Prod (non-test-env) keeps orchestrator.replicas. */}}
+  {{- /* Hot validation slots run a single orchestrator replica: a slot is a
+         single-user ephemeral environment that needs no HA, and the hot-swap
+         backend writes to a per-pod emptyDir so a swap must hit the one pod.
+         Prod (non-test-env) keeps orchestrator.replicas. */}}
   replicas: {{ if (eq (include "tank-operator.isTestEnv" .) "true") }}{{ .Values.testEnv.orchestratorReplicas }}{{ else }}{{ .Values.orchestrator.replicas }}{{ end }}
   revisionHistoryLimit: 0
   strategy:
@@ -102,23 +103,6 @@ spec:
               value: /etc/tank-operator/app-config/initial-mode-go-long.md
             - name: TANK_INITIAL_MODE_TEST_FILE
               value: /etc/tank-operator/app-config/initial-mode-test.md
-            {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.staticOverride.enabled }}
-            # The static file server reads the override through the `current`
-            # symlink so the live-preview receiver can flip releases atomically
-            # (a request never sees a half-written bundle). The receiver manages
-            # the releases/ + current layout under the volume ROOT.
-            - name: TANK_OPERATOR_STATIC_OVERRIDE_DIR
-              value: {{ printf "%s/current" .Values.staticOverride.mountPath | quote }}
-            - name: TANK_OPERATOR_STATIC_OVERRIDE_ROOT
-              value: {{ .Values.staticOverride.mountPath | quote }}
-            {{- end }}
-            {{- if .Values.livePreview.daemonEnabled }}
-            # Stamps the in-pod live-preview daemon sidecar onto GUI session
-            # pods this orchestrator spawns (sessionmodel.ManifestOptions
-            # .LivePreviewDaemon). Off by default; see values.yaml livePreview.
-            - name: SESSION_LIVE_PREVIEW_DAEMON_ENABLED
-              value: "true"
-            {{- end }}
             {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.hotSwapBackend.enabled }}
             - name: GLIMMUNG_SUPERVISOR_CHILD
               value: {{ .Values.hotSwapBackend.childCommand | quote }}
@@ -346,10 +330,6 @@ spec:
             - name: hot-backend
               mountPath: {{ .Values.hotSwapBackend.mountPath | quote }}
             {{- end }}
-            {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.staticOverride.enabled }}
-            - name: static-override
-              mountPath: {{ .Values.staticOverride.mountPath | quote }}
-            {{- end }}
           # Burstable QoS (issue #1079 item 6): with no resources at all the
           # orchestrator ran BestEffort — first evicted under node pressure
           # and with zero CPU guarantee for the persister. Requests are the
@@ -413,15 +393,6 @@ spec:
                   audience: "https://auth.romaine.life"
                   expirationSeconds: 3600
                   path: token
-        {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.staticOverride.enabled }}
-        # Live-preview override scratch. The orchestrator receives static-override
-        # pushes directly (handlers_static_override.go writes the releases/ +
-        # current layout under the volume ROOT itself), so this emptyDir needs no
-        # writer sidecar — the orchestrator's own mount + the DIR/ROOT env above
-        # are the only load-bearing wiring.
-        - name: static-override
-          emptyDir: {}
-        {{- end }}
         {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.hotSwapBackend.enabled }}
         - name: hot-backend
           emptyDir: {}
