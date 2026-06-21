@@ -35,24 +35,22 @@ Kubernetes, use or propose a dedicated builder path (GitHub Actions, ACR Tasks,
 BuildKit/Kaniko/buildah in an appropriately privileged builder pod), not ad hoc
 Docker-in-this-session-pod.
 
-Some sessions are created with `TANK_RESTRICTED_GIT=true` (governed Git). When
-`TANK_GIT_EGRESS_PROXY=true` as well (the default for restricted sessions), all your
-GitHub traffic is routed through a governed egress proxy, and the workflow is:
+Some sessions are created with `TANK_RESTRICTED_GIT=true` (governed Git). Every
+Tank session routes its GitHub traffic through the agent-egress proxy (the
+wall) — it is the one governed GitHub egress path, and the workflow is:
 
 - Your repos are checked out on a Tank-owned branch (`tank/session/<id>/<repo>`) with
   a draft PR already open. **Ship work by pushing that branch directly with plain
-  `git push`** — the proxy mints the GitHub write token server-side, records every
-  action, and confines you to your own branch. Do NOT reach for `publish_current_head`
-  in this mode; just commit and push, and the PR updates.
-- You CANNOT push to `main` or merge a PR — the proxy rejects both with HTTP 403.
+  `git push`** — the wall mints the GitHub write token server-side, records every
+  action, confines you to your own branch, and starts CI/mergeability watching.
+  There is no separate publish step; just commit and push, and the PR updates.
+- You CANNOT push to `main` or merge a PR — the wall rejects both with HTTP 403.
   Landing to `main` is the human/automated path. To request access beyond your own
   branch, use the Tank MCP `request_git_break_glass` approval flow; never bypass it
   with a raw GitHub token.
 
-Legacy restricted sessions (`TANK_RESTRICTED_GIT=true` without the egress proxy)
-instead block direct `git push` and publish local commits through the Tank MCP
-`publish_current_head` tool. If `TANK_RESTRICTED_GIT` is not true, use the normal repo
-workflow available in the session.
+If `TANK_RESTRICTED_GIT` is not true, use the normal repo workflow available in
+the session.
 
 You need to install from the lockfile before doing frontend builds if you just cloned the repo.
 

@@ -674,8 +674,10 @@ Contract impact:
   audited capability set (`push_current_head`, `mint_full_git_token`, and
   `full_github_api` present only on `unlimited` grants). The
   `unlimited` / `full_api` whole-repo escape hatch, server-side branch-scope
-  enforcement, `publish_current_head` normal session-branch auto-publish, and the
-  restricted-mode raw-mcp-github write denylist are all unchanged.
+  enforcement, and the restricted-mode raw-mcp-github write denylist are all
+  unchanged. The normal session-branch push is now governed by the wall (plain
+  `git push`); the `publish_current_head` post-commit auto-publish it once used
+  is retired.
 - **Retired (no live route, tool, event, UI, or test may remain):** the
   `request_pr_lane` / `create_pr_lane` MCP tools + handlers + routes; the
   `github.pr_lane.*` event family and its reader/writer/auto-approval logic; the
@@ -1061,8 +1063,8 @@ Contract impact:
   `channel: wrapper`, `full_github_api: true`), counted by
   `tank_control_action_events_total`.
 - **Least privilege preserved.** Branch/count-scoped grants never get
-  `full_github_api`, never mint a raw full token, and stay on the governed
-  `publish_current_head` / `push_current_head` path.
+  `full_github_api`, never mint a raw full token, and stay on the wall-governed
+  `git push` path (lane-confined, fast-forward-only).
 
 Deploy caveat:
 - This changes the session image (wrappers), the `mcp-auth-proxy` sidecar, and
