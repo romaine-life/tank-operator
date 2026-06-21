@@ -45,7 +45,7 @@ spec:
 # covers them; the `provider` label distinguishes them at query time (the wall is
 # provider=github). The provider-generic TankApiProxy* alerts below fire
 # per-provider via {{`{{ $labels.provider }}`}}; the wall's egress-specific
-# series (egress_exchange_total) drive the TankEgressExchange* alerts.
+# series (egress_exchange_total) drives the TankEgressExchangeFailing alert.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -1700,11 +1700,12 @@ spec:
         # The wall (agent-egress-proxy, provider=github) exchanges each pod's SA
         # token for a session JWT before minting. A `failed` exchange means it could
         # not, so the request fails CLOSED with 503 — a git push/clone or gh call is
-        # being rejected. The bounded retry already absorbs the transient IdP startup
-        # race (counted `retried`), so a SUSTAINED `failed` rate is a real, persistent
-        # fault, not the race. Steady-state is zero. (romaine-life/tank-operator
-        # session 1194: a startup-race exchange-401 surfaced as a "proxy going down"
-        # push failure before this retry + fail-closed path existed.)
+        # being rejected. There is no application-level retry: every session presents
+        # its own SA token (repo-cloner included), which the IdP verifies locally
+        # against the cluster JWKS in ~1ms, so steady-state is zero and a SUSTAINED
+        # `failed` rate is a real, persistent fault. (romaine-life/tank-operator
+        # session 1194: an exchange failure surfaced as a "proxy going down" push
+        # failure before this fail-closed path made it an honest, retryable 503.)
         - alert: TankEgressExchangeFailing
           expr: rate(tank_api_proxy_egress_exchange_total{result="failed"}[10m]) > 0
           for: 10m
@@ -1712,20 +1713,7 @@ spec:
             severity: warning
           annotations:
             summary: "the GitHub egress wall cannot exchange SA tokens — git/gh requests are failing closed (503)"
-            runbook: "The wall's POST auth.romaine.life/api/auth/exchange/k8s is failing past retry, so it returns 503 and the raw token never reaches GitHub. Broad failure across sessions (with TankEgressExchangeRaceElevated also firing) = an auth.romaine.life outage — check the `auth` namespace pods + JWKS. Failure isolated to one session = a bad/expired SA token for that pod. Grep agent-egress-proxy ext-proc logs for `token exchange failed`."
-
-        # Leading indicator: the fraction of exchanges that only succeeded on retry.
-        # The startup race is normally a small, self-healing slice; a sustained high
-        # ratio means the IdP is making new sessions resolvable slowly (degrading
-        # toward TankEgressExchangeFailing). clamp_min guards the divide when idle.
-        - alert: TankEgressExchangeRaceElevated
-          expr: sum(rate(tank_api_proxy_egress_exchange_total{result="retried"}[15m])) by (provider) / clamp_min(sum(rate(tank_api_proxy_egress_exchange_total[15m])) by (provider), 0.001) > 0.25
-          for: 15m
-          labels:
-            severity: warning
-          annotations:
-            summary: "the GitHub egress wall is retrying >25% of SA-token exchanges — the IdP startup race is elevated"
-            runbook: "More than a quarter of exchanges only succeed on retry. The race is self-healing per-request (NOT user-visible failures yet), but a sustained high ratio means auth.romaine.life is slow to make a new session resolvable. Check `auth` namespace pod health/latency and exchange p99 before it tips into TankEgressExchangeFailing."
+            runbook: "The wall's POST auth.romaine.life/api/auth/exchange/k8s is failing, so it returns 503 and the raw token never reaches GitHub. Broad failure across sessions = an auth.romaine.life outage — check the `auth` namespace pods + JWKS (including a cluster signing-key rotation the IdP's cached JWKS has not yet picked up). Failure isolated to one session = a bad/expired SA token for that pod. Grep agent-egress-proxy ext-proc logs for `token exchange failed`."
 
     - name: tank-operator.provider-credential-health
       rules:

@@ -90,5 +90,24 @@ class RecordEnvoySdsStatsTest(unittest.TestCase):
         )
 
 
+class RecordExchangeTest(unittest.TestCase):
+    def _exchange_count(self, result: str) -> float:
+        return proxy_metrics.egress_exchange_total.labels(
+            provider=proxy_metrics.PROVIDER, result=result
+        )._value.get()
+
+    def test_ok_and_failed_increment_their_own_result_series(self) -> None:
+        before_ok = self._exchange_count("ok")
+        before_failed = self._exchange_count("failed")
+
+        proxy_metrics.record_exchange("ok")
+        self.assertEqual(self._exchange_count("ok"), before_ok + 1)
+        self.assertEqual(self._exchange_count("failed"), before_failed)
+
+        proxy_metrics.record_exchange("failed")
+        self.assertEqual(self._exchange_count("failed"), before_failed + 1)
+        self.assertEqual(self._exchange_count("ok"), before_ok + 1)
+
+
 if __name__ == "__main__":
     unittest.main()

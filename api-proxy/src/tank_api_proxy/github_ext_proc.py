@@ -20,9 +20,11 @@ Per stream:
                       response is the whole packfile), so git pushes mint+inject but
                       record no PR, which is correct — a push is not a PR.
 
-Soft by construction: if a request carries no parseable JWT we pass it through
-untouched (the in-pod token still works during cutover). Enforcement (reject
-unidentified egress) is the later NetworkPolicy phase, not this code.
+Fail-closed on identity: a request with NO credential at all is passed through
+(git's anonymous info/refs probe, which negotiates auth on its own next), but a
+credential that does not exchange to a session identity is rejected with 503 —
+the wall is the only egress path now (the in-pod token fallback is gone), so
+passing it through would leak the raw SA token to GitHub ungoverned.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from envoy.service.ext_proc.v3 import external_processor_pb2_grpc as ext_proc_gr
 from envoy.type.v3 import http_status_pb2
 
 from . import github_governor as gg
+from . import metrics
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +88,23 @@ def _deny(reason: str) -> "ext_proc_pb2.ProcessingResponse":
         immediate_response=ext_proc_pb2.ImmediateResponse(
             status=http_status_pb2.HttpStatus(code=403),
             body=f"blocked by Tank restricted git: {reason}\n".encode(),
+        )
+    )
+
+
+def _unavailable(reason: str) -> "ext_proc_pb2.ProcessingResponse":
+    """Fail CLOSED with 503 when the wall cannot establish the caller's session
+    identity (the SA-token exchange is unavailable, or returns no usable identity).
+    503 is honest and retryable: the raw SA token never reaches GitHub, git's
+    smart-HTTP transport and gh surface a clear status, and the caller retries. The
+    wall is the only egress path now (the in-pod token fallback C2 deleted is gone),
+    so the alternative — passing the request through — would leak the raw SA token to
+    GitHub ungoverned. The anonymous case (no credential at all) is handled earlier
+    and still passes through, so git's own auth negotiation is unaffected."""
+    return ext_proc_pb2.ProcessingResponse(
+        immediate_response=ext_proc_pb2.ImmediateResponse(
+            status=http_status_pb2.HttpStatus(code=503),
+            body=f"tank egress: {reason}\n".encode(),
         )
     )
 
@@ -191,10 +211,15 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
         service_jwt = await self._exchange(raw_token)
         ident = gg.identity_from_jwt(service_jwt)
         if not ident.ok:
-            # Soft cutover: a credential that doesn't exchange to a session identity
-            # passes through untouched (the in-pod token still works during cutover).
-            log.info("egress: pass-through (no session identity from exchange) %s %s", method, path)
-            return ext_proc_pb2.ProcessingResponse(request_headers=ext_proc_pb2.HeadersResponse())
+            # Fail CLOSED. The wall is the only egress path now (the in-pod token
+            # fallback C2 deleted is gone), so a credential that does not exchange to a
+            # session identity must NOT pass through — that would leak the raw SA token
+            # to GitHub ungoverned and surface as a confusing upstream error (the 1194
+            # "proxy going down" report). A 503 is honest and retryable. The anonymous
+            # case (no credential at all — git's first info/refs probe) is handled above
+            # and still passes through, so git's own auth negotiation is unaffected.
+            log.warning("egress: DENY (session identity unavailable from exchange) %s %s", method, path)
+            return _unavailable("session identity unavailable; retry shortly")
         st.ident = ident
 
         # EVERY session routes through the wall now. Fetch its egress context (repos +
@@ -339,7 +364,9 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
     async def _exchange(self, raw_token: str) -> str:
         """Exchange the pod's raw k8s SA token for the session's role=service JWT.
         Empty-body POST to /api/auth/exchange/k8s; the IdP resolves the session's own
-        owner. Cached per raw token until ~30s before expiry."""
+        owner. Cached per raw token until ~30s before expiry. Every non-cache-hit
+        attempt records its outcome to egress_exchange_total; an empty result fails
+        the request closed with 503 (see _unavailable)."""
         hit = self._xchg.get(raw_token)
         if hit and hit[1] > time.time() + 30:
             return hit[0]
@@ -353,10 +380,14 @@ class GitHubGovernor(ext_proc_grpc.ExternalProcessorServicer):
             token, expires_at = gg.parse_exchange_result(r.json())
         except Exception as exc:
             log.warning("egress: token exchange failed: %s", exc)
+            metrics.record_exchange("failed")
             return ""
         if token:
             self._xchg[raw_token] = (token, expires_at or (time.time() + 600))
-        return token
+            metrics.record_exchange("ok")
+            return token
+        metrics.record_exchange("failed")
+        return ""
 
     async def _mint(self, ident: gg.SessionIdentity, repos: list[str], decision: gg.Decision) -> str:
         payload = gg.mint_call_payload(repos, decision)

@@ -88,6 +88,15 @@ single_flight_waits_total = Counter(
     ["provider"],
 )
 
+egress_exchange_total = Counter(
+    "tank_api_proxy_egress_exchange_total",
+    "SA-token -> session-JWT exchanges performed by the GitHub egress governor "
+    "(the wall) before minting. result=ok (exchanged to a session identity) or "
+    "failed (no usable identity; the request then fails closed with 503). Cache "
+    "hits do not increment. Only the github (egress) provider emits this series.",
+    ["provider", "result"],
+)
+
 envoy_sds_ssl_context_updates = Gauge(
     "tank_api_proxy_envoy_sds_ssl_context_updates",
     "Current Envoy downstream SSL context updates performed through SDS, "
@@ -113,6 +122,14 @@ envoy_sds_stats_scrape_total = Counter(
 def record_ext_proc_request(outcome: str) -> None:
     """outcome is one of: injected, passthrough, missing_token."""
     ext_proc_requests_total.labels(provider=PROVIDER, outcome=outcome).inc()
+
+
+def record_exchange(result: str) -> None:
+    """result is one of: ok, failed. Emitted by the egress governor's SA-token
+    exchange (the GitHub wall); a `failed` exchange fails the request closed with
+    503, so a sustained `failed` rate is the wall-can't-identify-sessions alarm
+    (TankEgressExchangeFailing). Cache hits do not call this."""
+    egress_exchange_total.labels(provider=PROVIDER, result=result).inc()
 
 
 def record_upstream_status(status: int | None) -> None:
@@ -318,6 +335,7 @@ async def start_metrics_server(
 __all__ = [
     "PROVIDER",
     "record_ext_proc_request",
+    "record_exchange",
     "record_envoy_sds_stats",
     "record_kv_persist",
     "record_refresh",
