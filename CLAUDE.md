@@ -63,26 +63,32 @@ the test directly proves the contract invariant. Do not mark a PR ready, ask
 for merge, or merge it yourself when the Feature Contracts section is missing
 or incomplete.
 
-In restricted Git mode (`TANK_RESTRICTED_GIT=true`) the PR body is not directly
-editable through the raw GitHub MCP tools. Set it — including the filled Feature
-Contracts section — with the Tank MCP `update_current_session_pr_body` tool,
-which writes the body of this session's governed PR and previews whether the
-`check-pr-body` workflow will pass. A PR comment does not satisfy that check; it
-only reads `pull_request.body`. Do not file a break-glass request just to edit
-the PR body.
+Set the PR body — including the filled Feature Contracts section — with
+`gh pr edit --body` (or `--body-file`). It flows through the agent-egress proxy
+(the wall), which mints the credential server-side and records the edit, so it
+works for this session's in-lane PR with no break-glass. Match the PR template's
+Feature Contracts section exactly — an `Affected contracts:` list with a checked
+`- [x]` box and an `Evidence:` block — so the `check-pr-body` workflow passes;
+the markers are literal and `gh pr edit` does not preview the result. A PR
+comment does not satisfy that check; it only reads `pull_request.body`. Do not
+file a break-glass request just to edit the PR body or title.
 
 Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main. This includes the PR body checklist check (check-pr-body) — do not bypass or ignore these failures.
 
 Tank session repos use a governed Git flow. `repo-cloner` creates a
 Tank-owned `tank/session/<session-id>/<repo>` branch and draft PR at session
-start. The post-commit hook auto-publishes every local commit through the Tank
-MCP `publish_current_head` tool so Tank can record the commit and watch
-GitHub CI/mergeability from the first SHA. Direct `git push` is blocked in
-normal mode; use the Tank MCP publish tool to retry a failed auto-publish.
-The governed PR itself is mutated only through Tank MCP tools, each recorded in
-the control-action ledger: `rename_current_session_pr` (title),
-`update_current_session_pr_body` (body/description), and
-`merge_current_session_pr` (merge after CI/mergeability verification).
+start. Every session's GitHub traffic flows through the agent-egress proxy (the
+wall): a plain `git push` to the session branch hands the wall the pod's raw
+auth.romaine.life token, and the wall mints the right-scoped GitHub credential
+server-side, lane-confines it to `tank/session/<id>/<repo>`, records the commit
+as a control action, and starts Tank's CI/mergeability watching from the first
+SHA. There is no separate publish step and no in-pod write token.
+The governed PR's title and body are edited with `gh pr create` / `gh pr edit`
+through the wall (which records each write in the control-action ledger as a
+`github.pull_request.*` event); merging stays on the Tank MCP
+`merge_current_session_pr` tool (merge after CI/mergeability verification). The
+retired `rename_current_session_pr` / `update_current_session_pr_body` MCP tools
+are no longer the path — use `gh pr edit`.
 For ad-hoc existing worktrees that predate the template, run:
 
 ```sh
@@ -90,10 +96,11 @@ scripts/install-agent-post-commit-reminder.sh
 ```
 
 The hook templates live at `.githooks/post-commit` and `.githooks/pre-push`.
-The post-commit hook is an auto-publish trigger, not a reminder. The pre-push
-hook intentionally fails direct pushes so GitHub write credentials stay inside
-Tank-controlled MCP/server paths. CI and mergeability failures must be treated
-as unfinished work unless explicitly called out in the final handoff.
+In egress-proxy mode neither hook is installed — the wall is the only push
+policy. The templates remain only as defensive notes for any worktree set up
+without the wall: post-commit reminds you to `git push`, and pre-push fails a
+push that would otherwise bypass the wall. CI and mergeability failures must be
+treated as unfinished work unless explicitly called out in the final handoff.
 
 ### Restricted-git decision tree (what to call, once)
 
@@ -101,17 +108,17 @@ There is exactly one git-write escalation in a restricted
 (`TANK_RESTRICTED_GIT=true`) session — the break-glass grant — and it covers
 the whole life of a branch's work. Pick the row that matches what you need:
 
-- **Just committing on this session's branch** → do nothing. The post-commit
-  hook auto-publishes every commit via `publish_current_head`; Tank records the
-  SHA and watches CI/mergeability. Retry a failed auto-publish by calling
-  `publish_current_head` again. Opening this branch's PR needs no grant either:
-  `gh pr create` on the session branch is delegated to a governed sidecar route
-  that holds the credential and opens (or idempotently re-opens — e.g. after a
-  squash-merge deletes the branch) its draft PR, the same boundary as the
-  read-only mint, so the agent never receives a write token. The governed PR's
-  title/body/merge are still mutated only through the Tank MCP tools above
-  (`rename_current_session_pr` / `update_current_session_pr_body` /
-  `merge_current_session_pr`) — do **not** break-glass just to edit the PR body.
+- **Just committing on this session's branch** → do nothing special: commit and
+  `git push`. The push flows through the wall, which mints the credential
+  server-side, lane-confines it to the session branch, records the SHA, and
+  starts CI/mergeability watching — there is no separate publish step. Opening
+  this branch's PR needs no grant either: `gh pr create` on the session branch
+  goes through the same wall, which holds the credential and opens (or
+  idempotently re-opens — e.g. after a squash-merge deletes the branch) its draft
+  PR, so the agent never receives a write token. The PR's title and body are
+  edited the same way — `gh pr edit` through the wall — and merging stays on the
+  Tank MCP `merge_current_session_pr` tool; do **not** break-glass just to edit
+  the PR title or body.
 
 - **Need to work on a branch — push it and open or edit its PR** → call the Tank
   MCP `request_git_break_glass` tool **once**. It
@@ -121,9 +128,8 @@ the whole life of a branch's work. Pick the row that matches what you need:
   human approves once, plain `git push` and
   `gh pr create|edit|ready|comment` just work for the granted branches** — Tank
   provisions the branch + draft PR on approval and brokers the writes
-  server-side, scope-enforced and audited. There is no second `request_*` call,
-  no MCP-registry reload, and no choice to make between `push_current_head` /
-  `publish_current_head` / a separate PR-lane tool: the scope you were granted
+  server-side, scope-enforced and audited. There is no second `request_*` call
+  and no MCP-registry reload: the scope you were granted
   bounds *which* branches you may touch, never *whether* push and PR-open work.
   Scoped (`named`/`count`) pushes are fast-forward-only; to rewrite history
   (rebase/amend) request `unlimited`, or just forward-fix with a new commit — the
@@ -341,12 +347,13 @@ validated by the orchestrator and scoped to `actor_email`). Currently:
 
 Every mutation in `romaine-life/mcp-github/src/mcp_github/tools.py` resolves base refs and blob shas server-side at call time â€” `create_branch(base="main")`, `create_or_update_file(branch=â€¦)`, `delete_file(branch=â€¦)`, `commit_to_branch(branch=â€¦, base="main", files=â€¦)`. There is intentionally no `from_sha` / `sha` parameter on the public surface. The reason this matters: a prior Claude session reverted a merged PR by branching off a *cached* SHA â€” it had read `main`'s HEAD early in the session, merged a PR, then made a second PR from the cached pre-merge SHA. The narrow fix (caller still supplies SHA, but tool requires it) doesn't help, because the caller's cache is the bug. The actual fix is to never let the caller supply identifiers for "where am I branching from" or "what version of the file am I overwriting" â€” the server reads fresh on every call. `commit_to_branch` is the preferred path for any multi-file change because it lands one coherent commit instead of N consecutive `create_or_update_file` calls.
 
-Pair with: normal Tank sessions no longer expose raw GitHub write tokens to the
-agent shell. The Tank-owned `publish_current_head` MCP path owns session branch
-pushes, records each commit, and starts CI/mergeability watching. Direct
-`git push`, write-capable `mint_clone_token` (write/workflows/full), and GitHub
-MCP file/PR write tools are blocked in restricted mode so there is one governed
-path from commit to CI evidence. Reads are NOT blocked: a read-only
+Pair with: Tank sessions hold no raw GitHub write token in the agent shell.
+Every session's GitHub egress flows through the agent-egress proxy (the wall): a
+plain `git push` to the session branch is minted, lane-confined, recorded, and
+CI/mergeability-watched server-side — one governed path from commit to CI
+evidence. Write-capable `mint_clone_token` (write/workflows/full) and GitHub MCP
+file/PR write tools stay blocked in restricted mode so the wall is the only
+write path. Reads are NOT blocked: a read-only
 `mint_clone_token` is allowed through, so the mode-aware credential helper and
 `gh` wrapper give the agent automatic read-only `git`/`gh` access (and the GitHub
 read MCP tools work as always). See the "Restricted Session Read-Only Git Access"
