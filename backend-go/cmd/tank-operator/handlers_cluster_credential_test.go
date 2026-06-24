@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 )
 
 // clusterCredentialServer builds an appServer whose fake cluster authenticates
@@ -73,6 +75,7 @@ func clusterCredentialServer(t *testing.T, sessionID string, restricted bool) *a
 	})
 	return &appServer{
 		k8s:                   k8s,
+		verifier:              auth.NewVerifier(testJWT(t)),
 		namespace:             "tank-operator-sessions",
 		sessionScope:          "default",
 		sessionServiceAccount: "claude-session",
@@ -80,9 +83,13 @@ func clusterCredentialServer(t *testing.T, sessionID string, restricted bool) *a
 }
 
 func postClusterCredential(t *testing.T, s *appServer) *httptest.ResponseRecorder {
+	return postClusterCredentialWithToken(t, s, "pod-token")
+}
+
+func postClusterCredentialWithToken(t *testing.T, s *appServer, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/session-cluster-credential", nil)
-	req.Header.Set("Authorization", "Bearer pod-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	s.handleInternalClusterCredential(rec, req)
 	return rec
@@ -122,5 +129,30 @@ func TestClusterCredential_RestrictedRefused(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(rec.Body.String()), "restricted") {
 		t.Fatalf("body should explain the restricted refusal: %s", rec.Body.String())
+	}
+}
+
+func TestClusterCredential_AuthRomaineServicePrincipalMintsExecCredential(t *testing.T) {
+	rec := postClusterCredentialWithToken(t, clusterCredentialServer(t, "42", false), signedControlActionServiceToken(t, "svc:tank:42"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Status struct {
+			Token string `json:"token"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nbody: %s", err, rec.Body.String())
+	}
+	if out.Status.Token != "minted-trusted-token" {
+		t.Fatalf("token = %q, want minted-trusted-token", out.Status.Token)
+	}
+}
+
+func TestClusterCredential_AuthRomaineServicePrincipalMustMatchSession(t *testing.T) {
+	rec := postClusterCredentialWithToken(t, clusterCredentialServer(t, "42", false), signedControlActionServiceToken(t, "svc:tank:99"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
 	}
 }

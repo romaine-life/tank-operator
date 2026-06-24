@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { hasInternalAuthConfig, internalBearerToken } from "./internalAuth.js";
 
 // fetchResumeTranscript asks the orchestrator for THIS (resurrected) session's
 // resume transcript. The orchestrator resolves the dead source session from
@@ -20,12 +20,11 @@ function decodeHeader(res, name) {
 
 export async function fetchResumeTranscript(cfg, sourceSessionId) {
   const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
-  const tokenPath = cfg.operatorTokenPath || "";
   const source = String(sourceSessionId || "").trim();
-  if (!baseURL || !tokenPath || !cfg.sessionId || !source) {
+  if (!baseURL || !hasInternalAuthConfig(cfg) || !cfg.sessionId || !source) {
     return null;
   }
-  const token = (await readFile(tokenPath, "utf8")).trim();
+  const token = await internalBearerToken(cfg);
   const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/resume-transcript`;
   const res = await fetch(url, {
     method: "GET",

@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { hasInternalAuthConfig, internalBearerToken } from "./internalAuth.js";
 
 // uploadTranscriptSnapshot ships one whole-file JSONL snapshot to the
 // orchestrator-internal transcript-snapshot endpoint. It mirrors
-// reportRuntimeConfig's auth shape (read the projected tank-operator SA token
-// from disk per call; the orchestrator validates it via TokenReview + live pod
-// lookup). The file bytes ride as the raw request body so a multi-MB
+// reportRuntimeConfig's auth shape (read the pod's internal auth credential
+// from disk per call; the orchestrator validates it against the live pod
+// identity). The file bytes ride as the raw request body so a multi-MB
 // transcript is not base64-inflated; restore metadata rides as ASCII headers.
 //
 // Return contract:
@@ -19,14 +19,13 @@ function trimTrailingSlashes(value) {
 
 export async function uploadTranscriptSnapshot(cfg, snap) {
   const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
-  const tokenPath = cfg.operatorTokenPath || "";
-  if (!baseURL || !tokenPath || !cfg.sessionId) {
+  if (!baseURL || !hasInternalAuthConfig(cfg) || !cfg.sessionId) {
     return false;
   }
   if (!snap || !snap.bytes || !snap.sdkSessionId) {
     return false;
   }
-  const token = (await readFile(tokenPath, "utf8")).trim();
+  const token = await internalBearerToken(cfg);
   const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/transcript-snapshot`;
   const response = await fetch(url, {
     method: "POST",

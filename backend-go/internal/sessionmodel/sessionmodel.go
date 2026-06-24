@@ -774,6 +774,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		map[string]any{"name": "TANK_GLIMMUNG_VALIDATION_URL", "value": glimmungField(opts.GlimmungContextJSON, "validation_url")},
 		map[string]any{"name": "FORCE_HYPERLINK", "value": "1"},
 		map[string]any{"name": "CLAUDE_CODE_NO_FLICKER", "value": "1"},
+		map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+		map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
+		map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
 	}
 	if spireLensMCPEnabled {
 		env = append(env,
@@ -784,7 +787,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "SPIRELENS_TAILSCALE_SOCKET", "value": "/tmp/tailscaled.sock"},
 			map[string]any{"name": "SPIRELENS_TAILSCALE_STATE_DIR", "value": "/workspace/.tailscale-state"},
 			map[string]any{"name": "SPIRELENS_TAILSCALE_OUTBOUND_HTTP_PROXY_LISTEN", "value": "127.0.0.1:1055"},
-			map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
 			map[string]any{
 				"name": "SPIRELENS_TAILSCALE_HOSTNAME",
 				"valueFrom": map[string]any{
@@ -808,13 +810,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	claudeVolumeMounts := append([]any{}, configMounts...)
-	if spireLensMCPEnabled {
-		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
-			"name":      "auth-romaine-sa-token",
-			"mountPath": "/var/run/secrets/auth.romaine.life",
-			"readOnly":  true,
-		})
-	}
+	claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+		"name":      "auth-romaine-sa-token",
+		"mountPath": "/var/run/secrets/auth.romaine.life",
+		"readOnly":  true,
+	})
 	volumes := []any{
 		map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
 		map[string]any{
@@ -1181,6 +1181,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "NATS_USER", "value": storageKey},
 			map[string]any{"name": "NATS_PASSWORD_FILE", "value": "/var/run/secrets/auth.romaine.life/token"},
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
+			map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
@@ -1332,6 +1334,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "NATS_USER", "value": storageKey},
 			map[string]any{"name": "NATS_PASSWORD_FILE", "value": "/var/run/secrets/auth.romaine.life/token"},
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
+			map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "TANK_RESTRICTED_GIT", "value": boolEnv(restrictedGitEnabled)},

@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
@@ -286,6 +289,19 @@ func (s *appServer) requireInternalSessionPodCaller(w http.ResponseWriter, r *ht
 		writeError(w, auth.ErrorStatus(err), err.Error())
 		return internalSessionPodCaller{}, false
 	}
+	if s.verifier != nil && strings.Count(token, ".") == 2 {
+		user, err := s.verifier.Decode(token)
+		if err != nil {
+			writeError(w, auth.ErrorStatus(err), err.Error())
+			return internalSessionPodCaller{}, false
+		}
+		caller, status, message := s.internalSessionPodCallerFromServiceUser(r.Context(), user, r.PathValue("session_id"))
+		if status != 0 {
+			writeError(w, status, message)
+			return internalSessionPodCaller{}, false
+		}
+		return caller, true
+	}
 	subject, err := auth.ValidateSAToken(r.Context(), s.k8s, token, []string{"tank-operator"})
 	if err != nil {
 		writeError(w, auth.ErrorStatus(err), err.Error())
@@ -335,4 +351,100 @@ func (s *appServer) requireInternalSessionPodCaller(w http.ResponseWriter, r *ht
 		PodName:   podName,
 		PodUID:    podUID,
 	}, true
+}
+
+func (s *appServer) internalSessionPodCallerFromServiceUser(ctx context.Context, user auth.User, pathSessionID string) (internalSessionPodCaller, int, string) {
+	if !user.IsService() {
+		return internalSessionPodCaller{}, http.StatusForbidden, "caller is not an auth.romaine.life service principal"
+	}
+	owner := strings.ToLower(strings.TrimSpace(user.ActorEmail))
+	if owner == "" {
+		return internalSessionPodCaller{}, http.StatusUnauthorized, "service-role token missing actor_email"
+	}
+	sessionID := strings.TrimSpace(pathSessionID)
+	if sessionID != "" {
+		if !s.serviceSubjectMatchesSession(user.Sub, sessionID) {
+			return internalSessionPodCaller{}, http.StatusForbidden, "service principal does not match target session"
+		}
+	} else {
+		sessionID = s.sessionIDFromServiceSubject(user.Sub)
+		if sessionID == "" {
+			return internalSessionPodCaller{}, http.StatusForbidden, "service principal is not a Tank session identity"
+		}
+	}
+	pod, status, message := s.findManagedSessionPodForServicePrincipal(ctx, owner, sessionID)
+	if status != 0 {
+		return internalSessionPodCaller{}, status, message
+	}
+	return internalSessionPodCaller{
+		Email:     owner,
+		SessionID: sessionID,
+		PodName:   pod.Name,
+		PodUID:    string(pod.UID),
+	}, 0, ""
+}
+
+func (s *appServer) sessionIDFromServiceSubject(sub string) string {
+	value, ok := strings.CutPrefix(strings.TrimSpace(sub), sessionServiceSubjectPrefix)
+	if !ok {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	scope := s.localSessionScope()
+	if scope == prodSessionScope {
+		if strings.HasPrefix(value, "slot-") {
+			return ""
+		}
+		return value
+	}
+	const slotScopePrefix = "tank-operator-slot-"
+	slot, ok := strings.CutPrefix(scope, slotScopePrefix)
+	if !ok || strings.TrimSpace(slot) == "" {
+		return ""
+	}
+	sessionID, ok := strings.CutPrefix(value, "slot-"+strings.TrimSpace(slot)+"-session-")
+	if !ok || strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	return strings.TrimSpace(sessionID)
+}
+
+func (s *appServer) findManagedSessionPodForServicePrincipal(ctx context.Context, owner, sessionID string) (*corev1.Pod, int, string) {
+	if s.k8s == nil {
+		return nil, http.StatusInternalServerError, "kubernetes client not configured"
+	}
+	namespace := strings.TrimSpace(s.namespace)
+	if namespace == "" {
+		return nil, http.StatusInternalServerError, "session namespace not configured"
+	}
+	pods, err := s.k8s.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.Set{"tank-operator/session-id": sessionID}.String(),
+	})
+	if err != nil {
+		return nil, http.StatusInternalServerError, "session pod lookup failed"
+	}
+	expectedScope := strings.TrimSpace(s.sessionScope)
+	if expectedScope == "" {
+		expectedScope = prodSessionScope
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Spec.ServiceAccountName != s.sessionServiceAccount {
+			continue
+		}
+		if pod.Labels["app.kubernetes.io/managed-by"] != "tank-operator" {
+			continue
+		}
+		if pod.Labels["tank-operator/session-scope"] != expectedScope {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(pod.Annotations["tank-operator/owner-email"])) != owner {
+			continue
+		}
+		return pod, 0, ""
+	}
+	return nil, http.StatusForbidden, "session pod not found"
 }

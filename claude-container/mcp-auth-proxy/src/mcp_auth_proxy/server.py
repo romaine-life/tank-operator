@@ -3217,6 +3217,8 @@ log = logging.getLogger(__name__)
 SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 AZURE_MCP_PORT = 9991
 GITHUB_MCP_PORT = 9992
+K8S_MCP_PORT = 9993
+ARGOCD_MCP_PORT = 9994
 GLIMMUNG_MCP_PORT = 9995
 TANK_OPERATOR_MCP_PORT = 9996
 SPIRELENS_MCP_PORT = 9997
@@ -3230,6 +3232,23 @@ GRAFANA_MCP_PORT = 9998
 # Every other in-cluster MCP still sits behind a kube-rbac-proxy that
 # TokenReviews the SA-token bearer, so they stay on ServiceAccountTokenProvider.
 JWT_BEARER_PORTS = frozenset({GITHUB_MCP_PORT, SPIRELENS_MCP_PORT, TANK_OPERATOR_MCP_PORT})
+
+# Upstreams that receive the auth.romaine.life service JWT in a side header.
+# Some still need the Kubernetes SA token as Authorization because their Service
+# routes through kube-rbac-proxy; the side header lets the upstream app migrate
+# its own authorization to auth.romaine before the transport gate is removed.
+AUTH_ROMAINE_HEADER_PORTS = frozenset(
+    {
+        AZURE_MCP_PORT,
+        GITHUB_MCP_PORT,
+        GLIMMUNG_MCP_PORT,
+        GRAFANA_MCP_PORT,
+        K8S_MCP_PORT,
+        ARGOCD_MCP_PORT,
+        TANK_OPERATOR_MCP_PORT,
+        SPIRELENS_MCP_PORT,
+    }
+)
 
 # Optional tailnet upstream: the SpireLens game-host MCP (spire-lens-mcp's
 # server.py --transport http). Unlike the in-cluster .svc upstreams below it
@@ -3373,9 +3392,9 @@ class AuthRomaineServiceProvider:
     for a `role=service` JWT via auth.romaine.life's
     /api/auth/exchange/k8s. Caches the JWT until ~30s before expiry.
 
-    Used to inject the X-Auth-Romaine-Token header on outbound calls to
-    mcp-tank-operator (port 9996), enabling its spawn_service_session
-    tool. See romaine-life/tank-operator#486.
+    Used as the Authorization bearer for JWT-native MCPs and as the
+    X-Auth-Romaine-Token side header for MCPs still behind kube-rbac-proxy.
+    See romaine-life/tank-operator#486.
     """
 
     def __init__(
@@ -3507,7 +3526,7 @@ def _make_handler(
 
     `extra_header_provider`, when supplied, is awaited per request to
     obtain an additional header value injected on the way out (today:
-    X-Auth-Romaine-Token for mcp-tank-operator). A None return skips
+    X-Auth-Romaine-Token for in-cluster MCPs). A None return skips
     injection so the upstream sees the request without the extra header.
     An exception in the provider is logged at INFO but does NOT fail
     the request — the upstream still receives the normal Bearer-authed
@@ -3811,9 +3830,8 @@ async def run() -> None:
     metrics_port = int(os.environ.get("MCP_AUTH_PROXY_METRICS_PORT", "9990"))
     metrics_runner = await start_metrics_server(metrics_port)
     runners.append(metrics_runner)
-    # Shared across mcp-tank-operator and mcp-github outbound calls so
-    # the cached JWT (15-min TTL) is reused across many tool calls in a
-    # session.
+    # Shared across outbound MCP calls so the cached JWT (15-min TTL) is reused
+    # across many tool calls in a session.
     auth_romaine_provider = AuthRomaineServiceProvider(http)
 
     # The SpireLens game-host MCP is a tailnet upstream, added only when
@@ -3856,22 +3874,16 @@ async def run() -> None:
             else:
                 token_provider = ServiceAccountTokenProvider()
 
-            # mcp-tank-operator, mcp-glimmung, mcp-grafana, and mcp-azure-personal
-            # gate their tool surface on the caller's auth.romaine.life service
-            # JWT, read from X-Auth-Romaine-Token. For mcp-glimmung, mcp-grafana,
-            # and mcp-azure-personal the Authorization bearer carries the SA token
-            # their kube-rbac-proxy sidecar TokenReviews in front of each, so the
-            # JWT has to ride this side header. mcp-tank-operator has no such
-            # sidecar (removed in mcp-tank-operator#31) and already takes the JWT
-            # as its bearer above; the side header stays its identity contract
-            # (CallerIdentityMiddleware reads X-Auth-Romaine-Token, not
-            # Authorization). Inject the header so the upstreams can attribute and
-            # authorize every call to the originating session/user. For
-            # mcp-azure-personal this JWT, plus the caller-session headers below,
-            # is what lets the server look up the session's break-glass grant and
-            # refuse without one.
+            # Inject the auth.romaine.life service JWT side header for every MCP
+            # that either already gates on it or is being prepared to. Some
+            # upstreams still need the Kubernetes SA token as Authorization because
+            # their Service routes through kube-rbac-proxy; for those the JWT rides
+            # beside the transport bearer until the upstream chart drops the proxy.
+            # mcp-tank-operator has no such sidecar (removed in
+            # mcp-tank-operator#31) and already takes the JWT as its bearer above;
+            # the side header stays its identity contract.
             extra_header_provider = None
-            if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT, AZURE_MCP_PORT):
+            if port in AUTH_ROMAINE_HEADER_PORTS:
                 async def _provide_auth_romaine_header(
                     provider=auth_romaine_provider,
                 ) -> tuple[str, str]:

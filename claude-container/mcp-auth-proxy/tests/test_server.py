@@ -14,12 +14,15 @@ from aiohttp.test_utils import TestClient, TestServer
 from mcp_auth_proxy.server import (
     LISTENERS,
     _MAX_UPSTREAM_ATTEMPTS,
+    ARGOCD_MCP_PORT,
+    AUTH_ROMAINE_HEADER_PORTS,
     AuthRomaineServiceProvider,
     AZURE_MCP_PORT,
     GITHUB_MCP_PORT,
     GLIMMUNG_MCP_PORT,
     GRAFANA_MCP_PORT,
     JWT_BEARER_PORTS,
+    K8S_MCP_PORT,
     TANK_OPERATOR_MCP_PORT,
     SPIRELENS_MCP_PORT,
     _append_ci_reminder,
@@ -81,8 +84,24 @@ def test_tank_operator_uses_jwt_bearer_not_sa_token() -> None:
 def test_kube_rbac_proxy_upstreams_keep_sa_token_bearer() -> None:
     # Every other in-cluster MCP still sits behind a kube-rbac-proxy that
     # TokenReviews the SA-token bearer, so they must NOT be on the JWT bearer.
-    for port in (AZURE_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT):
+    for port in (AZURE_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT, K8S_MCP_PORT, ARGOCD_MCP_PORT):
         assert port not in JWT_BEARER_PORTS
+
+
+def test_in_cluster_mcps_receive_auth_romaine_side_header() -> None:
+    # The kube-rbac-proxy-backed MCPs still need the SA bearer at the transport
+    # gate, but forwarding the auth.romaine JWT side header gives their app
+    # containers the migration path before that proxy is removed.
+    for port in (
+        AZURE_MCP_PORT,
+        GITHUB_MCP_PORT,
+        GLIMMUNG_MCP_PORT,
+        GRAFANA_MCP_PORT,
+        K8S_MCP_PORT,
+        ARGOCD_MCP_PORT,
+        TANK_OPERATOR_MCP_PORT,
+    ):
+        assert port in AUTH_ROMAINE_HEADER_PORTS
 
 
 class _FakeResponse:

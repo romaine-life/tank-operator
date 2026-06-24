@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { hasInternalAuthConfig, internalBearerToken } from "./internalAuth.js";
 
 function trimTrailingSlashes(value) {
     return String(value || "").replace(/\/+$/, "");
@@ -6,11 +6,10 @@ function trimTrailingSlashes(value) {
 
 export async function registerScheduledWakeup(cfg, payload) {
     const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
-    const tokenPath = cfg.operatorTokenPath || "";
-    if (!baseURL || !tokenPath || !cfg.sessionId) {
+    if (!baseURL || !hasInternalAuthConfig(cfg) || !cfg.sessionId) {
         return false;
     }
-    const token = (await readFile(tokenPath, "utf8")).trim();
+    const token = await internalBearerToken(cfg);
     const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/scheduled-wakeups`;
     const response = await fetch(url, {
         method: "POST",

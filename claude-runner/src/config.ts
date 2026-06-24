@@ -14,6 +14,8 @@ export interface Config {
   natsStream: string;
   natsCommandStream: string;
   operatorInternalURL: string;
+  authRomaineTokenPath?: string;
+  authRomaineExchangeURL?: string;
   operatorTokenPath: string;
   workspace: string;
   mcpConfig: string;
@@ -47,6 +49,10 @@ export function loadConfig(): Config {
     natsStream: process.env.NATS_STREAM?.trim() || "TANK_SESSION_BUS",
     natsCommandStream: process.env.NATS_COMMAND_STREAM?.trim() || "TANK_SESSION_COMMANDS",
     operatorInternalURL: process.env.TANK_OPERATOR_INTERNAL_URL?.trim() || "",
+    authRomaineTokenPath: process.env.AUTH_ROMAINE_TOKEN_PATH?.trim() || "",
+    authRomaineExchangeURL:
+      process.env.AUTH_ROMAINE_EXCHANGE_URL?.trim() ||
+      "https://auth.romaine.life/api/auth/exchange/k8s",
     operatorTokenPath: process.env.TANK_OPERATOR_TOKEN_PATH?.trim() || "",
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
     mcpConfig: process.env.MCP_CONFIG?.trim() || "/workspace/.mcp.json",

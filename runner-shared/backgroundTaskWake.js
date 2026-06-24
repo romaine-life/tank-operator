@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { hasInternalAuthConfig, internalBearerToken } from "./internalAuth.js";
 
 function trimTrailingSlashes(value) {
     return String(value || "").replace(/\/+$/, "");
@@ -13,11 +13,10 @@ function trimTrailingSlashes(value) {
 // distinctly from "failed".
 export async function registerBackgroundTaskWake(cfg, payload) {
     const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
-    const tokenPath = cfg.operatorTokenPath || "";
-    if (!baseURL || !tokenPath || !cfg.sessionId) {
+    if (!baseURL || !hasInternalAuthConfig(cfg) || !cfg.sessionId) {
         return false;
     }
-    const token = (await readFile(tokenPath, "utf8")).trim();
+    const token = await internalBearerToken(cfg);
     const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/background-task-wakes`;
     const response = await fetch(url, {
         method: "POST",
@@ -53,11 +52,10 @@ export async function registerBackgroundTaskWake(cfg, payload) {
 // Mirrors registerBackgroundTaskWake's disabled-vs-failed semantics.
 export async function cancelBackgroundTaskWake(cfg, payload) {
     const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
-    const tokenPath = cfg.operatorTokenPath || "";
-    if (!baseURL || !tokenPath || !cfg.sessionId) {
+    if (!baseURL || !hasInternalAuthConfig(cfg) || !cfg.sessionId) {
         return false;
     }
-    const token = (await readFile(tokenPath, "utf8")).trim();
+    const token = await internalBearerToken(cfg);
     const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/background-task-wakes/cancel`;
     const response = await fetch(url, {
         method: "POST",
@@ -82,11 +80,10 @@ export async function cancelBackgroundTaskWake(cfg, payload) {
 // this a restart orphaned them — the counted silent-stranding class.
 export async function fetchUnresolvedBackgroundTasks(cfg) {
     const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
-    const tokenPath = cfg.operatorTokenPath || "";
-    if (!baseURL || !tokenPath || !cfg.sessionId) {
+    if (!baseURL || !hasInternalAuthConfig(cfg) || !cfg.sessionId) {
         return [];
     }
-    const token = (await readFile(tokenPath, "utf8")).trim();
+    const token = await internalBearerToken(cfg);
     const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/background-tasks/unresolved`;
     const response = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },

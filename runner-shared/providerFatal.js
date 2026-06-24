@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { hasInternalAuthConfig, internalBearerToken } from "./internalAuth.js";
 
 function trimTrailingSlashes(value) {
     return String(value || "").replace(/\/+$/, "");
@@ -14,12 +14,11 @@ function trimTrailingSlashes(value) {
 // This is NOT a per-turn turn.failed. Use it only when the failure is terminal
 // for the whole session (e.g. a provider-session resume that can never
 // succeed because the on-disk transcript is gone after a container restart).
-// It mirrors runtimeConfig.js's auth/transport so the same SA-token internal
-// path carries it.
+// It mirrors runtimeConfig.js's auth/transport so the same internal service
+// identity path carries it.
 export async function reportProviderFatal(cfg, payload) {
     const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
-    const tokenPath = cfg.operatorTokenPath || "";
-    if (!baseURL || !tokenPath || !cfg.sessionId) {
+    if (!baseURL || !hasInternalAuthConfig(cfg) || !cfg.sessionId) {
         return false;
     }
     const provider = String(payload?.provider ?? "").trim();
@@ -27,7 +26,7 @@ export async function reportProviderFatal(cfg, payload) {
     if (!provider || !reason) {
         throw new Error("reportProviderFatal requires provider and reason");
     }
-    const token = (await readFile(tokenPath, "utf8")).trim();
+    const token = await internalBearerToken(cfg);
     const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/provider-fatal`;
     const response = await fetch(url, {
         method: "POST",
