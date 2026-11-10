@@ -1,7 +1,7 @@
 {{- if eq (include "tank-operator.renderWarm" .) "true" }}
 {{- $mcpSpireLens := (.Files.Get "session-config/mcp.json" | fromJson) -}}
 {{- $mcpSpireLensServers := (get $mcpSpireLens "mcpServers") -}}
-{{- $_ := set $mcpSpireLensServers "spire-lens-mcp" (dict "type" "http" "url" "http://127.0.0.1:9997/mcp") -}}
+{{- $_ := set $mcpSpireLensServers "spirelens-mcp" (dict "type" "http" "url" "http://127.0.0.1:9997/mcp") -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

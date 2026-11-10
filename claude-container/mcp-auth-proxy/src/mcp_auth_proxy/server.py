@@ -3231,7 +3231,7 @@ GRAFANA_MCP_PORT = 9998
 # TokenReviews the SA-token bearer, so they stay on ServiceAccountTokenProvider.
 JWT_BEARER_PORTS = frozenset({GITHUB_MCP_PORT, SPIRELENS_MCP_PORT, TANK_OPERATOR_MCP_PORT})
 
-# Optional tailnet upstream: the SpireLens game-host MCP (spire-lens-mcp's
+# Optional tailnet upstream: the SpireLens game-host MCP (spirelens-mcp's
 # server.py --transport http). Unlike the in-cluster .svc upstreams below it
 # lives on the Tailscale tailnet (tag:spirelens-host), so its requests are
 # routed through tailscaled's userspace outbound HTTP proxy (TAILNET_HTTP_PROXY)

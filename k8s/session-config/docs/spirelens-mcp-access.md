@@ -10,7 +10,7 @@ warm session can rediscover the SpireLens host-control path without cloning
 `spirelens_mcp` is a create-time Tank session capability. A session with this
 capability:
 
-- mounts a `.mcp.json` that includes `spire-lens-mcp`
+- mounts a `.mcp.json` that includes `spirelens-mcp`
 - joins the SpireLens tailnet as `tag:spirelens-orchestrator`
 - exposes the host-side SpireLens MCP through `127.0.0.1:9997/mcp`
 - can mint a short-lived SSH user certificate directly from auth.romaine.life
@@ -20,7 +20,7 @@ The MCP entry is local by design:
 ```json
 {
   "mcpServers": {
-    "spire-lens-mcp": {
+    "spirelens-mcp": {
       "type": "http",
       "url": "http://127.0.0.1:9997/mcp"
     }
@@ -58,6 +58,6 @@ and the expected SpireLens host lifecycle tools:
 - `restart_sts2`
 
 If the MCP server is reachable but lifecycle tools are stale or missing, use
-the SSH path above to update `D:\repos\spire-lens-mcp` on the laptop and restart
+the SSH path above to update `D:\repos\spirelens-mcp` on the laptop and restart
 the `SpireLens MCP HTTP` scheduled task.
 
