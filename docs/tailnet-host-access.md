@@ -13,7 +13,7 @@ live session pod before any of this shipped.
 ## Why this doc exists
 
 Some hosts a session needs live **outside the cluster, on the tailnet** — e.g.
-the Windows laptop that runs Slay the Spire 2 and the `spire-lens-mcp` server.
+the Windows laptop that runs Slay the Spire 2 and the `spirelens-mcp` server.
 Before this, a session pod had no durable path there; access depended on an
 SSH-relay binary hand-copied into `/tmp`, which "may or may not exist in your
 fresh pod." This doc replaces that with a first-class, OIDC-authenticated path.
@@ -148,7 +148,7 @@ session:
 
 ## Reaching the game-host MCP
 
-The game host runs `spire-lens-mcp`'s `server.py --transport http --bind-port
+The game host runs `spirelens-mcp`'s `server.py --transport http --bind-port
 15527` (see that repo's README → "Remote clients"). The agent reaches it like
 any other MCP — a static localhost entry in the session `.mcp.json` →
 `mcp-auth-proxy` → tailnet:
@@ -164,7 +164,7 @@ agent → 127.0.0.1:9997 (mcp-auth-proxy)
 The credential is the same `auth.romaine.life` service token the proxy already
 mints for other MCPs — **no shared secret**. The server validates it against
 `auth.romaine.life`'s JWKS (issuer + `role=service`, optional `actor_email`
-allowlist); see `spire-lens-mcp` `--auth-mode jwt`.
+allowlist); see `spirelens-mcp` `--auth-mode jwt`.
 
 ## Running commands on the host (the IdP SSH CA)
 
@@ -208,7 +208,7 @@ PS
 
 Gotchas learned the hard way (so you don't relearn them):
 - **SSH username = `nelsonlaptopuser`**, cert **principal = `spirelens-agent`** (`scripts/glimmung-native/lib.sh` `native_ssh_user`). Connecting *as* `spirelens-agent` fails auth.
-- The host's `D:\repos\spire-lens-mcp` is **run-managed** — it's only `git pull`ed during a glimmung run and is `reset --hard` per run, so it can sit on a stale commit (it was pre-PR-#11 here) and carry discardable local edits that block `git pull --ff-only`. To update it manually: `git -C D:\repos\spire-lens-mcp fetch origin <ref>; git -C ... reset --hard origin/<ref>`.
+- The host's `D:\repos\spirelens-mcp` is **run-managed** — it's only `git pull`ed during a glimmung run and is `reset --hard` per run, so it can sit on a stale commit (it was pre-PR-#11 here) and carry discardable local edits that block `git pull --ff-only`. To update it manually: `git -C D:\repos\spirelens-mcp fetch origin <ref>; git -C ... reset --hard origin/<ref>`.
 - A pod *without* `openssh-client` baked yet can drive the same flow from Python
   (`paramiko` cert auth + `pysocks` over `tailscaled --socks5-server`).
 
@@ -219,8 +219,8 @@ was validated live against the real game host: mint service JWT + tailnet key +
 SSH cert → join tailnet → SSH the laptop → run `server.py --transport http
 --bind-host <ts-ip> --bind-port 15527 --auth-mode jwt` → MCP `initialize` from the
 pod over the tailnet returned **401 without** the `auth.romaine.life` bearer and
-**200 + `serverInfo{"name":"spire-lens-mcp"}` with** it. Two server-side fixes were
-required and are on `spire-lens-mcp` PR #12: the `--auth-mode jwt` validator, and
+**200 + `serverInfo{"name":"spirelens-mcp"}` with** it. Two server-side fixes were
+required and are on `spirelens-mcp` PR #12: the `--auth-mode jwt` validator, and
 disabling the MCP SDK's DNS-rebinding Host check (it 421s remote binds otherwise).
 
 ## Supervised MCP-server task on the host (installed)
@@ -239,7 +239,7 @@ $ErrorActionPreference='Stop'
 $ts=$null
 for($i=0;$i -lt 60;$i++){ $ts=(& tailscale ip -4 2>$null | Select-Object -First 1); if($ts){break}; Start-Sleep 5 }
 if(-not $ts){ throw 'tailscale IP unavailable' }
-Set-Location 'D:\repos\spire-lens-mcp\mcp'
+Set-Location 'D:\repos\spirelens-mcp\mcp'
 & uv run --frozen python server.py --transport http --bind-host $ts --bind-port 15527 --auth-mode jwt
 ```
 
@@ -257,9 +257,9 @@ New-NetFirewallRule -DisplayName 'SpireLens MCP 15527' -Direction Inbound -Actio
 Start-ScheduledTask -TaskName 'SpireLens MCP HTTP'
 ```
 
-The host's `spire-lens-mcp` checkout must be current (it's run-managed and can lag);
+The host's `spirelens-mcp` checkout must be current (it's run-managed and can lag);
 `--auth-mode jwt` requires PR #12. To-do for full reproducibility: version-control
-this launcher (e.g. `spire-lens-mcp/host/`) instead of only living on the laptop.
+this launcher (e.g. `spirelens-mcp/host/`) instead of only living on the laptop.
 
 ## What is console-managed (outside any repo)
 

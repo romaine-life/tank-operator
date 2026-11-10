@@ -41,7 +41,7 @@ const (
 	// SessionCapabilitySpireLensMCP opts a pod into the SpireLens game-host
 	// MCP path. The default session surface stays cluster-local; this rare
 	// capability joins the tailnet and mounts an MCP config with
-	// spire-lens-mcp on localhost :9997.
+	// spirelens-mcp on localhost :9997.
 	SessionCapabilitySpireLensMCP = "spirelens_mcp"
 	// SessionCapabilityRestrictedGit opts a pod into the experimental
 	// governed Git surface: Tank-owned session branches, guarded MCP writes,
